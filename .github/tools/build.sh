@@ -109,9 +109,10 @@ EOF
 } >tailscale/checksums.txt
 
 # Common exclusions: VCS metadata, build output, docs and lint config do not
-# belong in the flashable zip. tailscale/checksums.txt and tailscale/VERSIONS
-# stay in: the installer reads them.
-EXCLUDES=("*.git*" "dist/*" "*.zip" "*.md" ".shellcheckrc")
+# belong in the flashable zip. The webui/ frontend sources stay out too (the
+# built bundle in webroot/ is what ships); webui/node_modules alone is ~300MB.
+# tailscale/checksums.txt and tailscale/VERSIONS stay in: the installer reads them.
+EXCLUDES=("*.git*" "dist/*" "*.zip" "*.md" ".shellcheckrc" "webui/*")
 
 echo "- Creating ${DIST_DIR}/FoxyTail-${VERSION}-full.zip"
 rm -f "${DIST_DIR}/FoxyTail-${VERSION}-full.zip"
