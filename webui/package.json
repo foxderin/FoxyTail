@@ -13,7 +13,6 @@
   "dependencies": {
     "@material-symbols/svg-400": "^0.47.1",
     "@material/material-color-utilities": "^0.4.0",
-    "@material/web": "^2.5.0",
     "kernelsu": "^3.0.2",
     "solid-js": "^1.9.5"
   },

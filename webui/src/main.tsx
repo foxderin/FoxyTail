@@ -8,7 +8,6 @@
  */
 import { render } from 'solid-js/web';
 import { createSignal } from 'solid-js';
-import './md';
 import './style.css';
 import { initTheme } from './theme';
 import { AppShell, type RouteDef } from './components/AppShell';

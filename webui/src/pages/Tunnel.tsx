@@ -10,6 +10,7 @@ import { latClass } from '../format';
 import { Card, KvRow, StatusDot, SkeletonCard, ErrorState } from '../components/Basics';
 import { TaskButton, TaskProgress } from '../components/TaskProgress';
 import { MdIcon } from '../icons';
+import { Button, LinearProgress } from '../components/ui';
 import type { DerpRelay } from '../types';
 
 const TASK_KEY = 'derp-speedtest';
@@ -112,7 +113,7 @@ export default function Tunnel(): JSX.Element {
       <Card title={t('tun_socks_check')} icon="network_check">
         <Show when={socksBusy()}>
           <div class="progress-row">
-            <md-linear-progress indeterminate />
+            <LinearProgress indeterminate />
             <span class="dim">{t('tun_socks_checking')}</span>
           </div>
         </Show>
@@ -120,12 +121,13 @@ export default function Tunnel(): JSX.Element {
           {(r) => <div class={r().ok ? 'lat-good' : 'lat-bad'}>{r().text}</div>}
         </Show>
         <div class="btn-row">
-          <md-filled-tonal-button
-            disabled={socksBusy() || !hasRoot || undefined}
+          <Button
+            variant="tonal"
+            disabled={socksBusy() || !hasRoot || false}
             onClick={() => void checkSocks()}
           >
             <MdIcon name="network_check" size={18} /> {t('tun_socks_check')}
-          </md-filled-tonal-button>
+          </Button>
         </div>
       </Card>
 

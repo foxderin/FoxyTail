@@ -9,6 +9,7 @@ import { fmtBytes } from '../format';
 import { Card, SkeletonCard, SkeletonRows, EmptyState, ErrorState } from '../components/Basics';
 import { LineChart, chartColors } from '../components/LineChart';
 import { MdIcon } from '../icons';
+import { Select, Switch, Tab, Tabs } from '../components/ui';
 import type { Peer, AppInfo } from '../types';
 
 interface HourSample {
@@ -122,9 +123,9 @@ export default function Traffic(): JSX.Element {
 
   return (
     <>
-      <md-tabs
-        active-tab-index={mode() === 'hourly' ? 0 : 1}
-        on:change={(e: Event) => {
+      <Tabs
+        activeTabIndex={mode() === 'hourly' ? 0 : 1}
+        onChange={(e: Event) => {
           const idx = (e.target as unknown as { activeTabIndex: number }).activeTabIndex;
           const m = idx === 0 ? 'hourly' : 'daily';
           if (m !== mode()) {
@@ -133,9 +134,9 @@ export default function Traffic(): JSX.Element {
           }
         }}
       >
-        <md-primary-tab>{t('traffic_hourly')}</md-primary-tab>
-        <md-primary-tab>{t('traffic_daily')}</md-primary-tab>
-      </md-tabs>
+        <Tab label={t('traffic_hourly')} />
+        <Tab label={t('traffic_daily')} />
+      </Tabs>
 
       <Card title={t('traffic_title')} icon="monitoring">
         <Show when={chart() !== null || chartError() !== null || chartEmpty()} fallback={<SkeletonCard lines={3} />}>

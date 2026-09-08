@@ -1,6 +1,6 @@
 /*
  * Exit Nodes — list (light read), latency speed test as a session-level
- * cancellable task with MD3 progress (never auto-started), one-tap switch.
+ * cancellable task with progress (never auto-started), one-tap switch.
  */
 import { createSignal, onMount, Show, type JSX } from 'solid-js';
 import { createApiScope, hasRoot } from '../api';
@@ -12,6 +12,7 @@ import { Card, StatusDot, SkeletonRows, EmptyState, ErrorState } from '../compon
 import { TaskButton, TaskProgress } from '../components/TaskProgress';
 import { showToast, toastApiError } from '../components/Toast';
 import { MdIcon } from '../icons';
+import { Button } from '../components/ui';
 import type { Peer, ExitNodeProbe } from '../types';
 
 const TASK_KEY = 'speedtest-exitnodes';
@@ -132,14 +133,15 @@ export default function ExitNodes(): JSX.Element {
                         </Show>
                       </div>
                     </div>
-                    <md-filled-tonal-button
+                    <Button
+                      variant="tonal"
                       disabled={
-                        p.id === currentId() || switching() !== null || !hasRoot || undefined
+                        p.id === currentId() || switching() !== null || !hasRoot || false
                       }
                       onClick={() => void useNode(p)}
                     >
                       {p.id === currentId() ? t('exit_current') : t('exit_use')}
-                    </md-filled-tonal-button>
+                    </Button>
                   </div>
                 );
               })}
@@ -163,12 +165,13 @@ export default function ExitNodes(): JSX.Element {
           label={task()?.status === 'running' ? t('exit_testing') : t('exit_test')}
           icon={<MdIcon name="speed" size={18} />}
         />
-        <md-outlined-button
-          disabled={!currentId() || clearing() || !hasRoot || undefined}
+        <Button
+          variant="outlined"
+          disabled={!currentId() || clearing() || !hasRoot || false}
           onClick={() => void clearNode()}
         >
           <MdIcon name="close" size={18} /> {t('exit_clear')}
-        </md-outlined-button>
+        </Button>
       </div>
     </>
   );

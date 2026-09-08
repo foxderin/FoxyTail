@@ -11,6 +11,7 @@ import { Card, SkeletonRows, EmptyState, ErrorState } from '../components/Basics
 import { TaskButton, TaskProgress } from '../components/TaskProgress';
 import { showToast } from '../components/Toast';
 import { MdIcon } from '../icons';
+import { Button, Select, TextField } from '../components/ui';
 import type { InboxFile, Peer } from '../types';
 
 const RECV_KEY = 'file-receive';
@@ -98,39 +99,34 @@ export default function Files(): JSX.Element {
           <ErrorState text={recvTask()?.result?.error || t('error')} />
         </Show>
         <div class="btn-row">
-          <md-outlined-button
-            disabled={recvTask()?.status === 'running' || !hasRoot || undefined}
+          <Button
+            variant="outlined"
+            disabled={recvTask()?.status === 'running' || !hasRoot || false}
             onClick={() => startTask(RECV_KEY, 'file-receive')}
           >
             <MdIcon name="download" size={18} /> {t('files_receive')}
-          </md-outlined-button>
+          </Button>
         </div>
       </Card>
 
       <Card title={t('files_send')} icon="send">
-        <label class="field">
-          <md-outlined-text-field
-            label={t('files_path')}
-            placeholder={t('files_path_hint')}
-            value={path()}
-            onInput={(e: InputEvent) => setPath((e.target as HTMLInputElement).value)}
-          />
-        </label>
-        <label class="field">
-          <md-outlined-select
-            label={t('files_peer')}
-            value={peer()}
-            on:change={(e: Event) => setPeer((e.target as unknown as { value: string }).value)}
-          >
-            {peers().map((p) => (
-              <md-select-option value={p.hostname}>
-                <div slot="headline">
-                  {p.hostname + (p.online ? '' : ' (' + t('offline') + ')')}
-                </div>
-              </md-select-option>
-            ))}
-          </md-outlined-select>
-        </label>
+        <TextField
+          label={t('files_path')}
+          placeholder={t('files_path_hint')}
+          value={path()}
+          onInput={(e: InputEvent) => setPath((e.target as HTMLInputElement).value)}
+        />
+        <Select
+          label={t('files_peer')}
+          value={peer()}
+          onChange={(e: Event) => setPeer((e.target as HTMLSelectElement).value)}
+        >
+          {peers().map((p) => (
+            <option value={p.hostname}>
+              {p.hostname + (p.online ? '' : ' (' + t('offline') + ')')}
+            </option>
+          ))}
+        </Select>
         <TaskProgress taskKey={SEND_KEY} />
         <Show when={sendTask()?.status === 'done'}>
           <div class="banner ok">

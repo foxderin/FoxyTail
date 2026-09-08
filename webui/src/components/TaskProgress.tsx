@@ -6,21 +6,23 @@ import { getTask, cancelTask, startTask } from '../tasks';
 import { t } from '../i18n';
 import { showToast } from './Toast';
 import { hasRoot } from '../api';
+import { Button, LinearProgress } from './ui';
 
 export function TaskProgress(props: { taskKey: string }): JSX.Element {
   const running = () => getTask(props.taskKey)?.status === 'running';
   return (
     <Show when={running()}>
       <div class="progress-row" role="status">
-        <md-linear-progress indeterminate />
-        <md-text-button
+        <LinearProgress indeterminate />
+        <Button
+          variant="text"
           onClick={() => {
             cancelTask(props.taskKey);
             showToast(t('cancelled'), 'info');
           }}
         >
           {t('cancel')}
-        </md-text-button>
+        </Button>
       </div>
     </Show>
   );
@@ -39,8 +41,9 @@ export function TaskButton(props: {
 }): JSX.Element {
   const running = () => getTask(props.taskKey)?.status === 'running';
   return (
-    <md-filled-button
-      disabled={running() || props.disabled || !hasRoot || undefined}
+    <Button
+      variant="filled"
+      disabled={running() || props.disabled || !hasRoot || false}
       onClick={() => {
         if (running()) return;
         startTask(props.taskKey, props.cmd, ...(props.args ?? []));
@@ -48,6 +51,6 @@ export function TaskButton(props: {
     >
       {props.icon}
       {props.label}
-    </md-filled-button>
+    </Button>
   );
 }

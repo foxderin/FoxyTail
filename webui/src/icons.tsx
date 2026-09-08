@@ -25,6 +25,7 @@ import playArrow from '@material-symbols/svg-400/outlined/play_arrow.svg?raw';
 import stop from '@material-symbols/svg-400/outlined/stop.svg?raw';
 import restartAlt from '@material-symbols/svg-400/outlined/restart_alt.svg?raw';
 import checkCircle from '@material-symbols/svg-400/outlined/check_circle.svg?raw';
+import check from '@material-symbols/svg-400/outlined/check.svg?raw';
 import errorIcon from '@material-symbols/svg-400/outlined/error.svg?raw';
 import warning from '@material-symbols/svg-400/outlined/warning.svg?raw';
 import info from '@material-symbols/svg-400/outlined/info.svg?raw';
@@ -45,6 +46,8 @@ import send from '@material-symbols/svg-400/outlined/send.svg?raw';
 import download from '@material-symbols/svg-400/outlined/download.svg?raw';
 import sync from '@material-symbols/svg-400/outlined/sync.svg?raw';
 import language from '@material-symbols/svg-400/outlined/language.svg?raw';
+
+import checkSvg from '@material-symbols/svg-400/outlined/check.svg?raw';
 
 const ICONS = {
   dashboard,
@@ -68,6 +71,7 @@ const ICONS = {
   stop,
   restart_alt: restartAlt,
   check_circle: checkCircle,
+  check: checkSvg,
   error: errorIcon,
   warning,
   info,

@@ -18,6 +18,9 @@ TS_SOCKET="${TS_RUN_DIR}/tailscaled.sock"
 ROUTE_CACHE="${TS_RUN_DIR}/watchdog.route-cache"
 BAD_COUNT_FILE="${TS_RUN_DIR}/watchdog.bad-count"
 RESTARTS_FILE="${TS_RUN_DIR}/watchdog.restarts"
+# Written by foxytail.service stop; removed by start. While present the
+# watchdog must not recover tailscaled — the user asked for it to be down.
+MANUAL_STOP_FILE="${TS_RUN_DIR}/manual-stop"
 RESTART_LIMIT=5
 RESTART_WINDOW=600
 COOLDOWN=300
@@ -103,6 +106,12 @@ bad_count_inc() {
 }
 
 check_once() {
+  # 0. A user-requested stop (WebUI/CLI) is not a crash: stay down.
+  if [ -f "$MANUAL_STOP_FILE" ]; then
+    log Debug "watchdog: manual-stop marker present, not recovering tailscaled"
+    return 0
+  fi
+
   # 1. Process liveness.
   if ! pidof tailscaled >/dev/null 2>&1; then
     log Warning "watchdog: tailscaled process is dead"

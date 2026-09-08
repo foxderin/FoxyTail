@@ -11,6 +11,7 @@ import { Card, SkeletonRows, EmptyState, ErrorState } from '../components/Basics
 import { confirmDialog } from '../components/ConfirmDialog';
 import { showToast, toastApiError } from '../components/Toast';
 import { MdIcon } from '../icons';
+import { Button, Select, Switch, TextField } from '../components/ui';
 
 const BOOL_KEYS = ['MAGIC_DNS', 'IPV6', 'WATCHDOG'];
 const NUM_KEYS = ['SOCKS_PORT', 'DNS_PORT', 'ROUTE_TABLE', 'WATCHDOG_INTERVAL', 'STATS_INTERVAL', 'LOG_MAX_KB'];
@@ -136,10 +137,10 @@ export default function Settings(): JSX.Element {
                   return (
                     <div class="setting-row">
                       <div>{key}</div>
-                      <md-switch
-                        selected={val() === 'on' || undefined}
-                        disabled={!hasRoot || undefined}
-                        on:change={(e: Event) => {
+                      <Switch
+                        selected={val() === 'on'}
+                        disabled={!hasRoot}
+                        onChange={(e: Event) => {
                           const el = e.target as unknown as { selected: boolean };
                           void saveKey(key, el.selected ? 'on' : 'off');
                         }}
@@ -150,11 +151,11 @@ export default function Settings(): JSX.Element {
                 return (
                   <div class="setting-row">
                     <div>{key}</div>
-                    <md-outlined-text-field
+                    <TextField
                       type={NUM_KEYS.includes(key) ? 'number' : 'text'}
                       value={val()}
-                      disabled={!hasRoot || undefined}
-                      on:change={(e: Event) => {
+                      disabled={!hasRoot}
+                      onChange={(e: Event) => {
                         const el = e.target as HTMLInputElement;
                         const v = el.value.trim();
                         if (v === val()) return;
@@ -181,12 +182,13 @@ export default function Settings(): JSX.Element {
           onInput={(e) => setCtxRules(e.currentTarget.value)}
         />
         <div class="btn-row">
-          <md-filled-button
-            disabled={ctxBusy() || !hasRoot || undefined}
+          <Button
+            variant="filled"
+            disabled={ctxBusy() || !hasRoot || false}
             onClick={() => void saveContext()}
           >
             <MdIcon name="check_circle" size={18} /> {t('save')}
-          </md-filled-button>
+          </Button>
         </div>
       </Card>
 
@@ -202,28 +204,28 @@ export default function Settings(): JSX.Element {
 
       <Card title={t('set_backup') + ' / ' + t('set_restore')} icon="backup">
         <div class="btn-row" style={{ 'margin-top': '0' }}>
-          <md-filled-tonal-button
-            disabled={backupBusy() || !hasRoot || undefined}
+          <Button
+            variant="tonal"
+            disabled={backupBusy() || !hasRoot || false}
             onClick={() => void doBackup()}
           >
             <MdIcon name="backup" size={18} /> {t('set_backup')}
-          </md-filled-tonal-button>
+          </Button>
         </div>
-        <label class="field mt">
-          <md-outlined-text-field
-            label={t('set_restore')}
-            placeholder={t('set_restore_hint')}
-            value={restorePath()}
-            onInput={(e: InputEvent) => setRestorePath((e.target as HTMLInputElement).value)}
-          />
-        </label>
+        <TextField
+          label={t('set_restore')}
+          placeholder={t('set_restore_hint')}
+          value={restorePath()}
+          onInput={(e: InputEvent) => setRestorePath((e.target as HTMLInputElement).value)}
+        />
         <div class="btn-row">
-          <md-outlined-button
-            disabled={!restorePath().trim() || !hasRoot || undefined}
+          <Button
+            variant="outlined"
+            disabled={!restorePath().trim() || !hasRoot || false}
             onClick={() => void doRestore()}
           >
             <MdIcon name="refresh" size={18} /> {t('set_restore')}
-          </md-outlined-button>
+          </Button>
         </div>
       </Card>
 
@@ -232,40 +234,32 @@ export default function Settings(): JSX.Element {
           <div>
             <MdIcon name="dark_mode" size={18} class="dim" /> {t('set_theme')}
           </div>
-          <md-outlined-select
+          <Select
             style={{ width: '180px' }}
             value={mode()}
-            on:change={(e: Event) =>
-              applyTheme((e.target as unknown as { value: ThemeMode }).value || 'dark')
+            onChange={(e: Event) =>
+              applyTheme((e.target as HTMLSelectElement).value as ThemeMode || 'dark')
             }
           >
             {(['dark', 'light', 'auto'] as ThemeMode[]).map((m) => (
-              <md-select-option value={m} selected={m === mode() || undefined}>
-                <div slot="headline">
-                  {t(m === 'dark' ? 'set_theme_dark' : m === 'light' ? 'set_theme_light' : 'set_theme_auto')}
-                </div>
-              </md-select-option>
+              <option value={m} selected={m === mode()}>
+                {t(m === 'dark' ? 'set_theme_dark' : m === 'light' ? 'set_theme_light' : 'set_theme_auto')}
+              </option>
             ))}
-          </md-outlined-select>
+          </Select>
         </div>
         <div class="setting-row">
           <div>
             <MdIcon name="translate" size={18} class="dim" /> {t('set_language')}
           </div>
-          <md-outlined-select
+          <Select
             style={{ width: '180px' }}
             value={lang()}
-            on:change={(e: Event) =>
-              setLang(((e.target as unknown as { value: Lang }).value || 'zh') as Lang)
-            }
+            onChange={(e: Event) => setLang((e.target as HTMLSelectElement).value as Lang || 'zh')}
           >
-            <md-select-option value="zh" selected={lang() === 'zh' || undefined}>
-              <div slot="headline">中文</div>
-            </md-select-option>
-            <md-select-option value="en" selected={lang() === 'en' || undefined}>
-              <div slot="headline">English</div>
-            </md-select-option>
-          </md-outlined-select>
+            <option value="zh" selected={lang() === 'zh'}>中文</option>
+            <option value="en" selected={lang() === 'en'}>English</option>
+          </Select>
         </div>
       </Card>
     </>

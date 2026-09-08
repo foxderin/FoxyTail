@@ -10,6 +10,7 @@ import { createApiScope, hasRoot } from '../api';
 import { t } from '../i18n';
 import { MdIcon } from '../icons';
 import { showToast, toastApiError } from './Toast';
+import { Button, CircularProgress, IconButton, LinearProgress, TextField } from './ui';
 
 const DISMISS_KEY = 'foxy.heroDismissed';
 
@@ -127,41 +128,49 @@ export function LoginHero(): JSX.Element {
               <span class="spacer">
                 {st() === 'stopped' ? t('hero_banner_stopped') : t('hero_banner_login')}
               </span>
-              <md-text-button onClick={expand}>{t('hero_expand')}</md-text-button>
+              <Button variant="text" onClick={expand}>{t('hero_expand')}</Button>
             </div>
           }
         >
           <div class="hero-wrap">
             <div class="hero">
-              <md-icon-button class="hero-close" onClick={dismiss} aria-label={t('hero_minimize')}>
+              <IconButton class="hero-close" onClick={dismiss} aria-label={t('hero_minimize')}>
                 <MdIcon name="close" size={20} />
-              </md-icon-button>
+              </IconButton>
               <h2>{st() === 'stopped' ? t('hero_stopped_title') : t('hero_login_title')}</h2>
               <p>{st() === 'stopped' ? t('hero_stopped_desc') : t('hero_login_desc')}</p>
 
               <Show when={st() === 'stopped'}>
                 <div class="hero-actions">
-                  <md-filled-button disabled={startBusy() || !hasRoot || undefined} onClick={startService}>
+                  <Button
+                    variant="filled"
+                    disabled={startBusy() || !hasRoot || false}
+                    onClick={startService}
+                  >
                     <MdIcon name="play_arrow" size={18} /> {t('hero_start_service')}
-                  </md-filled-button>
+                  </Button>
                   <Show when={startBusy()}>
-                    <md-circular-progress indeterminate style={{ width: '28px', height: '28px' }} />
+                    <CircularProgress size={28} />
                   </Show>
                 </div>
               </Show>
 
               <Show when={st() === 'login'}>
                 <div class="hero-actions">
-                  <md-filled-button disabled={waiting() || !hasRoot || undefined} onClick={getLoginLink}>
+                  <Button
+                    variant="filled"
+                    disabled={waiting() || !hasRoot || false}
+                    onClick={getLoginLink}
+                  >
                     <MdIcon name="login" size={18} /> {t('hero_get_link')}
-                  </md-filled-button>
-                  <md-text-button onClick={() => setShowAuthkey(!showAuthkey())}>
+                  </Button>
+                  <Button variant="text" onClick={() => setShowAuthkey(!showAuthkey())}>
                     <MdIcon name="vpn_key" size={18} /> {t('acc_authkey')}
-                  </md-text-button>
+                  </Button>
                 </div>
                 <Show when={waiting()}>
                   <div class="progress-row">
-                    <md-linear-progress indeterminate />
+                    <LinearProgress indeterminate />
                     <span class="dim">{t('acc_waiting')}</span>
                   </div>
                 </Show>
@@ -171,40 +180,40 @@ export function LoginHero(): JSX.Element {
                       <p class="dim">{t('acc_login_url_hint')}</p>
                       <p class="mono">{url()}</p>
                       <div class="btn-row">
-                        <md-filled-tonal-button
+                        <Button
+                          variant="tonal"
                           onClick={() => {
                             if (copyText(url())) showToast(t('copied'), 'ok');
                             else showToast(t('op_failed'), 'err');
                           }}
                         >
                           <MdIcon name="content_copy" size={18} /> {t('copy')}
-                        </md-filled-tonal-button>
-                        <md-filled-tonal-button onClick={() => window.open(url(), '_blank')}>
+                        </Button>
+                        <Button variant="tonal" onClick={() => window.open(url(), '_blank')}>
                           <MdIcon name="open_in_new" size={18} /> {t('open_browser')}
-                        </md-filled-tonal-button>
+                        </Button>
                       </div>
                     </div>
                   )}
                 </Show>
                 <Show when={showAuthkey()}>
                   <div class="mt">
-                    <label class="field">
-                      <md-outlined-text-field
-                        label={t('acc_authkey')}
-                        placeholder={t('acc_authkey_hint')}
-                        type="password"
-                        value={authkey()}
-                        onInput={(e: InputEvent) =>
-                          setAuthkey((e.target as HTMLInputElement).value)
-                        }
-                      />
-                    </label>
-                    <md-filled-tonal-button
-                      disabled={!authkey().trim() || authkeyBusy() || !hasRoot || undefined}
+                    <TextField
+                      label={t('acc_authkey')}
+                      placeholder={t('acc_authkey_hint')}
+                      type="password"
+                      value={authkey()}
+                      onInput={(e: InputEvent) =>
+                        setAuthkey((e.target as HTMLInputElement).value)
+                      }
+                    />
+                    <Button
+                      variant="tonal"
+                      disabled={!authkey().trim() || authkeyBusy() || !hasRoot || false}
                       onClick={loginWithAuthkey}
                     >
                       <MdIcon name="vpn_key" size={18} /> {t('acc_login_authkey')}
-                    </md-filled-tonal-button>
+                    </Button>
                   </div>
                 </Show>
               </Show>

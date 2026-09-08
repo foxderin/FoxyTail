@@ -12,6 +12,7 @@ import { confirmDialog } from '../components/ConfirmDialog';
 import { showToast, toastApiError } from '../components/Toast';
 import { MdIcon } from '../icons';
 import type { AccountEntry } from '../types';
+import { Button, LinearProgress, TextField } from '../components/ui';
 
 export default function Account(): JSX.Element {
   const scope = createApiScope();
@@ -104,7 +105,7 @@ export default function Account(): JSX.Element {
       <Card title={t('acc_login')} icon="login">
         <Show when={waiting()}>
           <div class="progress-row">
-            <md-linear-progress indeterminate />
+            <LinearProgress indeterminate />
             <span class="dim">{t('acc_waiting')}</span>
           </div>
         </Show>
@@ -120,58 +121,56 @@ export default function Account(): JSX.Element {
               <p class="dim">{t('acc_login_url_hint')}</p>
               <p class="mono">{url()}</p>
               <div class="btn-row">
-                <md-filled-tonal-button
+                <Button
+                  variant="tonal"
                   onClick={() => {
                     if (copyText(url())) showToast(t('copied'), 'ok');
                     else showToast(t('op_failed'), 'err');
                   }}
                 >
                   <MdIcon name="content_copy" size={18} /> {t('copy')}
-                </md-filled-tonal-button>
-                <md-filled-tonal-button onClick={() => window.open(url(), '_blank')}>
+                </Button>
+                <Button variant="tonal" onClick={() => window.open(url(), '_blank')}>
                   <MdIcon name="open_in_new" size={18} /> {t('open_browser')}
-                </md-filled-tonal-button>
+                </Button>
               </div>
             </>
           )}
         </Show>
         <div class="btn-row">
-          <md-filled-button disabled={waiting() || !hasRoot || undefined} onClick={() => void doLogin()}>
+          <Button variant="filled" disabled={waiting() || !hasRoot || false} onClick={() => void doLogin()}>
             <MdIcon name="login" size={18} /> {t('acc_login')}
-          </md-filled-button>
+          </Button>
         </div>
       </Card>
 
       <Card title={t('acc_authkey')} icon="vpn_key">
-        <label class="field">
-          <md-outlined-text-field
-            label={t('acc_authkey')}
-            placeholder={t('acc_authkey_hint')}
-            type="password"
-            value={authkey()}
-            onInput={(e: InputEvent) => setAuthkey((e.target as HTMLInputElement).value)}
-          />
-        </label>
-        <md-filled-tonal-button
-          disabled={!authkey().trim() || authkeyBusy() || !hasRoot || undefined}
+        <TextField
+          label={t('acc_authkey')}
+          placeholder={t('acc_authkey_hint')}
+          type="password"
+          value={authkey()}
+          onInput={(e: InputEvent) => setAuthkey((e.target as HTMLInputElement).value)}
+        />
+        <Button
+          variant="tonal"
+          disabled={!authkey().trim() || authkeyBusy() || !hasRoot || false}
           onClick={() => void loginAuthkey()}
         >
           <MdIcon name="vpn_key" size={18} /> {t('acc_login_authkey')}
-        </md-filled-tonal-button>
+        </Button>
       </Card>
 
       <Card title={t('acc_headscale')} icon="dns">
-        <label class="field">
-          <md-outlined-text-field
-            label={t('acc_headscale')}
-            placeholder={t('acc_headscale_hint')}
-            value={hsServer()}
-            onInput={(e: InputEvent) => setHsServer((e.target as HTMLInputElement).value)}
-          />
-        </label>
-        <md-filled-tonal-button disabled={waiting() || !hasRoot || undefined} onClick={loginHeadscale}>
+        <TextField
+          label={t('acc_headscale')}
+          placeholder={t('acc_headscale_hint')}
+          value={hsServer()}
+          onInput={(e: InputEvent) => setHsServer((e.target as HTMLInputElement).value)}
+        />
+        <Button variant="tonal" disabled={waiting() || !hasRoot || false} onClick={loginHeadscale}>
           <MdIcon name="login" size={18} /> {t('acc_login_server')}
-        </md-filled-tonal-button>
+        </Button>
       </Card>
 
       <Card title={t('acc_accounts')} icon="person">
@@ -190,25 +189,26 @@ export default function Account(): JSX.Element {
                     </Show>
                   </div>
                 </div>
-                <md-outlined-button
-                  disabled={a.current || switching() !== null || !hasRoot || undefined}
+                <Button
+                  variant="outlined"
+                  disabled={a.current || switching() !== null || !hasRoot || false}
                   onClick={() => void switchAccount(a.name)}
                 >
                   {t('acc_switch')}
-                </md-outlined-button>
+                </Button>
               </div>
             ))}
           </Show>
         </Show>
         <div class="btn-row">
-          <md-filled-button
+          <Button
+            variant="filled"
             class="danger"
-            style={{ '--md-filled-button-container-color': 'var(--md-sys-color-error)', '--md-filled-button-label-text-color': 'var(--md-sys-color-on-error)' }}
-            disabled={accountsDenied() || !hasRoot || undefined}
+            disabled={accountsDenied() || !hasRoot || false}
             onClick={() => void doLogout()}
           >
             <MdIcon name="logout" size={18} /> {t('acc_logout')}
-          </md-filled-button>
+          </Button>
         </div>
       </Card>
     </>

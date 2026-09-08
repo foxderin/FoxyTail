@@ -12,6 +12,7 @@ import { Card, KvRow, StatusDot, SkeletonCard } from '../components/Basics';
 import { LoginHero } from '../components/LoginHero';
 import { showToast, toastApiError } from '../components/Toast';
 import { MdIcon } from '../icons';
+import { Button, Select, Switch, TextField } from '../components/ui';
 
 export default function Dashboard(): JSX.Element {
   const scope = createApiScope();
@@ -86,7 +87,7 @@ export default function Dashboard(): JSX.Element {
             <div class="state-box">
               <MdIcon name="error" size={20} class="lat-bad" />
               <span class="grow">{t('error')}</span>
-              <md-text-button onClick={() => void refreshStatus()}>{t('retry')}</md-text-button>
+              <Button variant="text" onClick={() => void refreshStatus()}>{t('retry')}</Button>
             </div>
           </Card>
         }>
@@ -105,20 +106,19 @@ export default function Dashboard(): JSX.Element {
                 <div class="kv">
                   <span class="k">{t('dash_mode')}</span>
                   <span class="v">
-                    <md-outlined-select
+                    <Select
+                      label={t('dash_mode')}
                       value={s().mode}
-                      disabled={modeBusy() || !hasRoot || undefined}
-                      on:change={(e: Event) => {
-                        const v = (e.target as unknown as { value: string }).value;
+                      disabled={modeBusy() || !hasRoot || false}
+                      onChange={(e: Event) => {
+                        const v = (e.target as HTMLSelectElement).value;
                         if (v && v !== s().mode) void switchMode(v);
                       }}
                     >
                       {['bridge', 'tun', 'proxy'].map((m) => (
-                        <md-select-option value={m} selected={s().mode === m || undefined}>
-                          <div slot="headline">{m}</div>
-                        </md-select-option>
+                        <option value={m} selected={s().mode === m}>{m}</option>
                       ))}
-                    </md-outlined-select>
+                    </Select>
                   </span>
                 </div>
                 <KvRow k={t('dash_uptime')} v={fmtUptime(s().uptime)} />
@@ -131,24 +131,27 @@ export default function Dashboard(): JSX.Element {
 
               <Card>
                 <div class="btn-row" style={{ 'margin-top': '0' }}>
-                  <md-filled-button
-                    disabled={running() || ctlBusy() || !hasRoot || undefined}
+                  <Button
+                    variant="filled"
+                    disabled={running() || ctlBusy() || !hasRoot || false}
                     onClick={() => void ctl('start')}
                   >
                     <MdIcon name="play_arrow" size={18} /> {t('dash_start')}
-                  </md-filled-button>
-                  <md-filled-tonal-button
-                    disabled={!running() || ctlBusy() || !hasRoot || undefined}
+                  </Button>
+                  <Button
+                    variant="tonal"
+                    disabled={!running() || ctlBusy() || !hasRoot || false}
                     onClick={() => void ctl('stop')}
                   >
                     <MdIcon name="stop" size={18} /> {t('dash_stop')}
-                  </md-filled-tonal-button>
-                  <md-outlined-button
-                    disabled={!running() || ctlBusy() || !hasRoot || undefined}
+                  </Button>
+                  <Button
+                    variant="outlined"
+                    disabled={!running() || ctlBusy() || !hasRoot || false}
                     onClick={() => void ctl('restart')}
                   >
                     <MdIcon name="restart_alt" size={18} /> {t('dash_restart')}
-                  </md-outlined-button>
+                  </Button>
                 </div>
               </Card>
 
@@ -192,3 +195,6 @@ export default function Dashboard(): JSX.Element {
     </>
   );
 }
+
+// Remove unused TextArea placeholder import; UI kit TextField handles rows.
+function TextArea() { return null; }

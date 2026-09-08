@@ -2,6 +2,7 @@
 import { Show, type JSX, type ParentProps } from 'solid-js';
 import { t } from '../i18n';
 import { MdIcon, type IconName } from '../icons';
+import { Button } from './ui';
 
 export function Card(props: ParentProps<{ title?: string; icon?: IconName }>): JSX.Element {
   return (
@@ -73,9 +74,9 @@ export function ErrorState(props: { text: string; onRetry?: () => void }): JSX.E
       <MdIcon name="error" size={20} class="lat-bad" />
       <span class="grow">{props.text}</span>
       <Show when={props.onRetry}>
-        <md-text-button onClick={() => props.onRetry!()}>
+        <Button variant="text" onClick={() => props.onRetry!()}>
           <MdIcon name="refresh" size={18} /> {t('retry')}
-        </md-text-button>
+        </Button>
       </Show>
     </div>
   );

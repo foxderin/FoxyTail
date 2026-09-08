@@ -9,6 +9,7 @@ import { t } from '../i18n';
 import { Card, KvRow, SkeletonRows, EmptyState, ErrorState } from '../components/Basics';
 import { showToast, toastApiError } from '../components/Toast';
 import { MdIcon } from '../icons';
+import { Button, Checkbox, IconButton, TextField } from '../components/ui';
 import type { AppInfo } from '../types';
 
 type Scope = 'all' | 'selected' | 'bypass';
@@ -149,14 +150,12 @@ export default function Routing(): JSX.Element {
 
       <Show when={ownerOk()}>
         <Card title={t('route_apps')} icon="group">
-          <label class="field">
-            <md-outlined-text-field
-              label={t('route_apps_search')}
-              onInput={(e: InputEvent) => onSearch((e.target as HTMLInputElement).value)}
-            >
-              <span slot="leading-icon"><MdIcon name="search" size={20} /></span>
-            </md-outlined-text-field>
-          </label>
+          <TextField
+            label={t('route_apps_search')}
+            value={filter()}
+            onInput={(e: InputEvent) => onSearch((e.target as HTMLInputElement).value)}
+            leading-icon={<MdIcon name="search" size={20} />}
+          />
           <Show when={apps() !== null} fallback={
             <>
               <SkeletonRows rows={5} />
@@ -173,10 +172,10 @@ export default function Routing(): JSX.Element {
               >
                 {visibleApps().map((a) => (
                   <label class="list-row" style={{ cursor: 'pointer' }}>
-                    <md-checkbox
-                      checked={selStrings().includes(String(a.uid)) || undefined}
-                      on:change={(e: Event) =>
-                        toggleUid(a.uid, (e.target as unknown as { checked: boolean }).checked)
+                    <Checkbox
+                      checked={selStrings().includes(String(a.uid))}
+                      onChange={(e: Event) =>
+                        toggleUid(a.uid, (e.target as HTMLInputElement).checked)
                       }
                     />
                     <div class="main">
@@ -197,36 +196,36 @@ export default function Routing(): JSX.Element {
             <div class="main">
               <div class="title mono">{cidr}</div>
             </div>
-            <md-icon-button
+            <IconButton
               aria-label={t('delete')}
               onClick={() => setSubnets(subnets().filter((_, j) => j !== i))}
             >
               <MdIcon name="delete" size={20} />
-            </md-icon-button>
+            </IconButton>
           </div>
         ))}
         <div class="list-row">
           <div class="main">
-            <md-outlined-text-field
+            <TextField
               style={{ width: '100%' }}
               placeholder={t('route_subnets_add_hint')}
               value={newSubnet()}
               onInput={(e: InputEvent) => setNewSubnet((e.target as HTMLInputElement).value)}
             />
           </div>
-          <md-icon-button aria-label={t('add')} onClick={addSubnet}>
+          <IconButton aria-label={t('add')} onClick={addSubnet}>
             <MdIcon name="add" size={20} />
-          </md-icon-button>
+          </IconButton>
         </div>
       </Card>
 
-      <md-filled-button
+      <Button
         style={{ width: '100%' }}
-        disabled={applyBusy() || !hasRoot || undefined}
+        disabled={applyBusy() || !hasRoot || false}
         onClick={() => void apply()}
       >
         <MdIcon name="check_circle" size={18} /> {t('apply')}
-      </md-filled-button>
+      </Button>
     </>
   );
 }

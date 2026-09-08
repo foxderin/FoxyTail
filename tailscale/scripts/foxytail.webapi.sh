@@ -352,6 +352,10 @@ cmd_login() {
   fi
   _cl_tmp="${TS_RUN_DIR}/webapi-login.$$"
   rm -f "${_cl_tmp}"
+  # Stale `tailscale login` clients from earlier attempts make the daemon
+  # answer new attempts with EOF; clear them before starting a fresh one.
+  pkill -f 'tailscale.*login' 2>/dev/null
+  sleep 1
   # The CLI blocks until auth completes; keep it alive after we grab the URL.
   ( timeout 180 tailscale --socket="${TS_SOCKET}" login "$@" >"${_cl_tmp}" 2>&1 ) &
   if wait_for "login URL" _login_probe 20 1; then
@@ -366,7 +370,21 @@ cmd_login() {
   fi
   _cl_err=$(tail -n 3 "${_cl_tmp}" 2>/dev/null | tr '\n' ' ')
   rm -f "${_cl_tmp}"
-  jerr "no login URL within 20s${_cl_err:+: ${_cl_err}}"
+  # Best-effort cleanup: a lingering `tailscale login` process is useless once
+  # we have given up; kill it so the next attempt starts fresh.
+  pkill -f 'tailscale.*login' 2>/dev/null
+  _cl_hint=""
+  # If the daemon logged a control-plane reachability error, surface it so the
+  # user sees *why* the URL never arrived (common cause: proxy/DNS conflict).
+  if [ -f "${TS_LOG_FILE}" ]; then
+    _cl_last=$(tail -n 1 "${TS_LOG_FILE}" 2>/dev/null)
+    case "${_cl_last}" in
+      *'controlplane.tailscale.com'*|*'connect: connection'*|*'context deadline exceeded'*)
+        _cl_hint=$(printf '%s' "${_cl_last}" | sed 's/^.*Received error: //; s/"$//')
+        ;;
+    esac
+  fi
+  jerr "no login URL within 20s${_cl_err:+: ${_cl_err}}${_cl_hint:+ (${_cl_hint})}"
 }
 
 cmd_login_authkey() {

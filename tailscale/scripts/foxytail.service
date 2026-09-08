@@ -105,6 +105,7 @@ start_service() {
   ensure_run_dirs
   load_conf
   log Info "Starting tailscaled service (mode: ${TS_MODE})."
+  rm -f "${TS_RUN_DIR}/manual-stop"
 
   if is_running; then
     log Info "tailscaled is already running."
@@ -177,6 +178,10 @@ stop_service() {
   ensure_run_dirs
   load_conf
   log Info "Stopping tailscaled service."
+  # Remember that this stop was requested (WebUI / CLI / restart). The
+  # watchdog must not resurrect a daemon the user deliberately stopped;
+  # start_service clears the marker again.
+  date +%s >"${TS_RUN_DIR}/manual-stop"
 
   # Tear down companion layers first (best effort, order: dns -> route -> tun).
   [ -x "${TS_SCRIPTS_DIR}/foxytail.dns" ] && "${TS_SCRIPTS_DIR}/foxytail.dns" stop

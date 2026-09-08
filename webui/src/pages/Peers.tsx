@@ -1,6 +1,6 @@
 /*
  * Peers — list tab + canvas topology tab. List auto-refreshes every 8s
- * (page-scoped timer, stops on unmount). Peer details in an md-dialog.
+ * (page-scoped timer, stops on unmount). Peer details in a dialog.
  */
 import { createSignal, onCleanup, onMount, Show, type JSX } from 'solid-js';
 import { createApiScope } from '../api';
@@ -10,6 +10,7 @@ import { fmtBytes } from '../format';
 import { Card, KvRow, StatusDot, SkeletonRows, EmptyState, ErrorState } from '../components/Basics';
 import { TopologyChart } from '../components/TopologyChart';
 import { MdIcon } from '../icons';
+import { Button, Dialog, Tab, Tabs } from '../components/ui';
 import type { Peer } from '../types';
 
 export default function Peers(): JSX.Element {
@@ -40,20 +41,16 @@ export default function Peers(): JSX.Element {
 
   return (
     <>
-      <md-tabs
-        active-tab-index={tab() === 'list' ? 0 : 1}
-        on:change={(e: Event) => {
+      <Tabs
+        activeTabIndex={tab() === 'list' ? 0 : 1}
+        onChange={(e: Event) => {
           const idx = (e.target as unknown as { activeTabIndex: number }).activeTabIndex;
           setTab(idx === 0 ? 'list' : 'topo');
         }}
       >
-        <md-primary-tab>
-          <MdIcon name="group" size={18} /> {t('peers_list')}
-        </md-primary-tab>
-        <md-primary-tab>
-          <MdIcon name="router" size={18} /> {t('peers_topology')}
-        </md-primary-tab>
-      </md-tabs>
+        <Tab icon="group" label={t('peers_list')} />
+        <Tab icon="router" label={t('peers_topology')} />
+      </Tabs>
 
       <Show when={tab() === 'list'}>
         <Card title={t('peers_title')} icon="group">
@@ -102,21 +99,22 @@ export default function Peers(): JSX.Element {
 
       <Show when={detail()}>
         {(p) => (
-          <md-dialog open on:closed={() => setDetail(null)}>
-            <div slot="headline">{t('peers_detail')}</div>
-            <div slot="content">
-              <KvRow k={t('dash_hostname')} v={p().hostname} />
-              <KvRow k="IP" v={p().ip} />
-              <KvRow k="OS" v={p().os} />
-              <KvRow k={t('dash_relay')} v={p().relay} />
-              <KvRow k={t('peers_rx')} v={fmtBytes(p().rxBytes)} />
-              <KvRow k={t('peers_tx')} v={fmtBytes(p().txBytes)} />
-              <KvRow k={t('exit_title')} v={p().exitNodeOption ? '✓' : '✗'} />
+          <Dialog
+            open
+            headline={t('peers_detail')}
+            onClose={() => setDetail(null)}
+          >
+            <KvRow k={t('dash_hostname')} v={p().hostname} />
+            <KvRow k="IP" v={p().ip} />
+            <KvRow k="OS" v={p().os} />
+            <KvRow k={t('dash_relay')} v={p().relay} />
+            <KvRow k={t('peers_rx')} v={fmtBytes(p().rxBytes)} />
+            <KvRow k={t('peers_tx')} v={fmtBytes(p().txBytes)} />
+            <KvRow k={t('exit_title')} v={p().exitNodeOption ? '✓' : '✗'} />
+            <div class="md-dialog-actions">
+              <Button variant="text" onClick={() => setDetail(null)}>{t('close')}</Button>
             </div>
-            <div slot="actions">
-              <md-text-button onClick={() => setDetail(null)}>{t('close')}</md-text-button>
-            </div>
-          </md-dialog>
+          </Dialog>
         )}
       </Show>
     </>

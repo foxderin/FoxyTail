@@ -6,6 +6,7 @@
 import { createSignal, onCleanup, onMount, type JSX } from 'solid-js';
 import { createApiScope } from '../api';
 import { t } from '../i18n';
+import { Select, Switch, Tab, Tabs } from '../components/ui';
 
 type Src = 'daemon' | 'service';
 
@@ -45,9 +46,9 @@ export default function Logs(): JSX.Element {
 
   return (
     <>
-      <md-tabs
-        active-tab-index={src() === 'daemon' ? 0 : 1}
-        on:change={(e: Event) => {
+      <Tabs
+        activeTabIndex={src() === 'daemon' ? 0 : 1}
+        onChange={(e: Event) => {
           const idx = (e.target as unknown as { activeTabIndex: number }).activeTabIndex;
           const s = idx === 0 ? 'daemon' : 'service';
           if (s !== src()) {
@@ -57,33 +58,29 @@ export default function Logs(): JSX.Element {
           }
         }}
       >
-        <md-primary-tab>{t('logs_daemon')}</md-primary-tab>
-        <md-primary-tab>{t('logs_service')}</md-primary-tab>
-      </md-tabs>
+        <Tab label={t('logs_daemon')} />
+        <Tab label={t('logs_service')} />
+      </Tabs>
 
       <div class="btn-row" style={{ 'margin-top': '0', 'justify-content': 'space-between' }}>
-        <md-outlined-select
+        <Select
           style={{ width: '120px' }}
           value={String(lines())}
-          on:change={(e: Event) => {
-            setLines(Number((e.target as unknown as { value: string }).value));
+          onChange={(e: Event) => {
+            setLines(Number((e.target as HTMLSelectElement).value));
             lastText = null;
             void load();
           }}
         >
           {['100', '200', '500'].map((n) => (
-            <md-select-option value={n} selected={n === '200' || undefined}>
-              <div slot="headline">{n}</div>
-            </md-select-option>
+            <option value={n} selected={n === '200'}>{n}</option>
           ))}
-        </md-outlined-select>
+        </Select>
         <label class="setting-row" style={{ border: '0', padding: '0', gap: '8px' }}>
           <span>{t('logs_follow')}</span>
-          <md-switch
-            selected={follow() || undefined}
-            on:change={(e: Event) =>
-              setFollow((e.target as unknown as { selected: boolean }).selected)
-            }
+          <Switch
+            selected={follow()}
+            onChange={(e: Event) => setFollow((e.target as unknown as { selected: boolean }).selected)}
           />
         </label>
       </div>

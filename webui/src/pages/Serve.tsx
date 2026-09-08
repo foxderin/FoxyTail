@@ -9,6 +9,7 @@ import { Card, SkeletonRows, EmptyState } from '../components/Basics';
 import { confirmDialog } from '../components/ConfirmDialog';
 import { showToast, toastApiError } from '../components/Toast';
 import { MdIcon } from '../icons';
+import { Button, IconButton, Select, TextField } from '../components/ui';
 
 interface Mapping {
   proto: string;
@@ -119,13 +120,13 @@ export default function Serve(): JSX.Element {
                     <div class="sub mono">{m.target}</div>
                   </Show>
                 </div>
-                <md-icon-button
+                <IconButton
                   aria-label={t('delete')}
-                  disabled={!hasRoot || undefined}
+                  disabled={!hasRoot || false}
                   onClick={() => void del(k, m)}
                 >
                   <MdIcon name="delete" size={20} />
-                </md-icon-button>
+                </IconButton>
               </div>
             ))}
           </Show>
@@ -140,60 +141,42 @@ export default function Serve(): JSX.Element {
       {section('funnel', 'serve_funnel')}
 
       <Card title={t('serve_add')} icon="add">
-        <label class="field">
-          <md-outlined-select
-            label={t('serve_kind')}
-            value={kind()}
-            on:change={(e: Event) =>
-              setKind((e.target as unknown as { value: Kind }).value || 'serve')
-            }
-          >
-            <md-select-option value="serve" selected>
-              <div slot="headline">serve</div>
-            </md-select-option>
-            <md-select-option value="funnel">
-              <div slot="headline">funnel</div>
-            </md-select-option>
-          </md-outlined-select>
-        </label>
-        <label class="field">
-          <md-outlined-select
-            label={t('serve_proto')}
-            value={proto()}
-            on:change={(e: Event) =>
-              setProto((e.target as unknown as { value: string }).value || 'https')
-            }
-          >
-            {['https', 'http', 'tcp', 'tls-terminated-tcp'].map((p) => (
-              <md-select-option value={p} selected={p === 'https' || undefined}>
-                <div slot="headline">{p}</div>
-              </md-select-option>
-            ))}
-          </md-outlined-select>
-        </label>
-        <label class="field">
-          <md-outlined-text-field
-            label={t('serve_port')}
-            type="number"
-            placeholder="443"
-            value={port()}
-            onInput={(e: InputEvent) => setPort((e.target as HTMLInputElement).value)}
-          />
-        </label>
-        <label class="field">
-          <md-outlined-text-field
-            label={t('serve_target')}
-            placeholder="http://localhost:3000"
-            value={target()}
-            onInput={(e: InputEvent) => setTarget((e.target as HTMLInputElement).value)}
-          />
-        </label>
-        <md-filled-button
-          disabled={!port().trim() || !target().trim() || addBusy() || !hasRoot || undefined}
+        <Select
+          label={t('serve_kind')}
+          value={kind()}
+          onChange={(e: Event) => setKind((e.target as HTMLSelectElement).value as Kind || 'serve')}
+        >
+          <option value="serve" selected={kind() === 'serve'}>serve</option>
+          <option value="funnel" selected={kind() === 'funnel'}>funnel</option>
+        </Select>
+        <Select
+          label={t('serve_proto')}
+          value={proto()}
+          onChange={(e: Event) => setProto((e.target as HTMLSelectElement).value || 'https')}
+        >
+          {['https', 'http', 'tcp', 'tls-terminated-tcp'].map((p) => (
+            <option value={p} selected={p === proto()}>{p}</option>
+          ))}
+        </Select>
+        <TextField
+          label={t('serve_port')}
+          type="number"
+          placeholder="443"
+          value={port()}
+          onInput={(e: InputEvent) => setPort((e.target as HTMLInputElement).value)}
+        />
+        <TextField
+          label={t('serve_target')}
+          placeholder="http://localhost:3000"
+          value={target()}
+          onInput={(e: InputEvent) => setTarget((e.target as HTMLInputElement).value)}
+        />
+        <Button
+          disabled={!port().trim() || !target().trim() || addBusy() || !hasRoot || false}
           onClick={() => void add()}
         >
           <MdIcon name="add" size={18} /> {t('serve_add')}
-        </md-filled-button>
+        </Button>
       </Card>
     </>
   );
