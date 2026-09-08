@@ -111,21 +111,30 @@ check_once() {
   fi
 
   # 2. Backend state health (3 consecutive bad rounds -> restart).
+  # Only an unanswered daemon (timeout/empty) counts as a strike. User-level
+  # states (NeedsLogin/Stopped/Starting/...) mean the daemon is healthy and a
+  # restart cannot fix them, so they reset the counter instead.
   _st=$(ts_status_json)
-  _state=""
-  [ -n "$_st" ] && _state=$(printf '%s' "$_st" | jqr -r '.BackendState // "unknown"' 2>/dev/null)
-  if [ "$_state" != "Running" ]; then
+  if [ -z "$_st" ]; then
     _bad=$(bad_count_inc)
-    log Warning "watchdog: backend state '${_state:-unreachable}' (${_bad}/${BACKEND_BAD_LIMIT})"
+    log Warning "watchdog: tailscaled not answering (${_bad}/${BACKEND_BAD_LIMIT})"
     if [ "$_bad" -ge $BACKEND_BAD_LIMIT ]; then
       echo 0 >"$BAD_COUNT_FILE"
-      recover restart "backend-unhealthy"
+      recover restart "daemon-unreachable"
     fi
   else
+    _state=$(printf '%s' "$_st" | jqr -r '.BackendState // "unknown"' 2>/dev/null)
+    [ "$_state" = "Running" ] || log Debug "watchdog: backend state '${_state}' (user state, no action)"
     echo 0 >"$BAD_COUNT_FILE"
   fi
 
   # 3. Default route change -> verify tailnet connectivity.
+  # Skipped unless the backend is Running: while logged out (NeedsLogin etc.)
+  # the tailnet is unreachable by definition and a restart fixes nothing.
+  if [ "$_state" != "Running" ]; then
+    ip route show default 2>/dev/null | tr '\n' ' ' | tr -s ' ' >"$ROUTE_CACHE"
+    return 0
+  fi
   _route=$(ip route show default 2>/dev/null | tr '\n' ' ' | tr -s ' ')
   _old=$(cat "$ROUTE_CACHE" 2>/dev/null)
   if [ "$_route" != "$_old" ]; then

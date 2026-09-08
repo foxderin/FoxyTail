@@ -13,6 +13,8 @@ DIR=$(dirname "$(realpath "$0")")
 . "$DIR"/../settings.sh
 load_conf
 ensure_run_dirs
+# KSU service context runs with umask 000; keep samples root-only readable.
+umask 027
 
 PID_FILE="${TS_PID_DIR}/foxytail.stats.pid"
 TS_SOCKET="${TS_RUN_DIR}/tailscaled.sock"
@@ -93,6 +95,7 @@ collect_once() {
   _status=$(tmo 10 tailscale --socket="$TS_SOCKET" status --json 2>/dev/null)
   if [ -z "$_status" ] || ! printf '%s' "$_status" | jqr -e . >/dev/null 2>&1; then
     echo "{\"ts\":${_ts},\"error\":\"daemon-unreachable\"}" >>"$_file"
+    chmod 0640 "$_file" 2>/dev/null
     prune_stats
     return 0
   fi
@@ -121,6 +124,7 @@ collect_once() {
   jqr -n -c --argjson ts "$_ts" --argjson peers "$_peers" \
     --argjson iface "$_iface" --argjson uids "$_uids" \
     '{ts:$ts,peers:$peers,iface:$iface,uids:$uids}' >>"$_file"
+  chmod 0640 "$_file" 2>/dev/null
 
   prune_stats
 }

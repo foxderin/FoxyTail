@@ -45,27 +45,26 @@
     resolve(String(res));
   }
 
-  /* Wrap a callback-style exec(cmd, options, cb) implementation. The callback
-   * may be invoked as cb(result) or cb(errno, stdout, stderr). */
-  function wrapCallbackStyle(fn, ctx) {
+  /* KernelSU / MMRL @JavascriptInterface bridge. The real signature is
+   * ksu.exec(command, optionsJsonString, callbackNameString): both extra
+   * arguments must be STRINGS — passing a JS object or function straight to
+   * Java raises "Java exception was raised during method invocation".
+   * We register a one-shot global callback and hand Java its name; the Java
+   * side then calls window[callbackName](errno, stdout, stderr). */
+  var ksuCbCounter = 0;
+  function wrapKsuExec(fn, ctx) {
     return function (cmd) {
       return new Promise(function (resolve, reject) {
-        var settled = false;
-        function once(a, b, c) {
-          if (settled) return;
-          settled = true;
-          if (arguments.length > 1) {
-            /* cb(errno, stdout, stderr) form */
-            if (a == null || a === 0) return resolve(String(b || ''));
-            return reject(new Error(String(c || 'exit code ' + a)));
-          }
-          settle(resolve, reject, a);
-        }
+        var cbName = '__foxy_cb_' + (ksuCbCounter++);
+        window[cbName] = function (errno, stdout, stderr) {
+          delete window[cbName];
+          if (errno == null || errno === 0) return resolve(String(stdout || ''));
+          reject(new Error(String(stderr || 'exit code ' + errno)));
+        };
         try {
-          var ret = fn.call(ctx, cmd, {}, once);
-          if (typeof ret === 'string') once(ret);
-          else if (ret && typeof ret.then === 'function') ret.then(once, reject);
+          fn.call(ctx, cmd, '{}', cbName);
         } catch (e) {
+          delete window[cbName];
           reject(e);
         }
       });
@@ -104,10 +103,10 @@
   function detectExec() {
     try {
       if (window.ksu && typeof window.ksu.exec === 'function') {
-        return wrapCallbackStyle(window.ksu.exec, window.ksu);
+        return wrapKsuExec(window.ksu.exec, window.ksu);
       }
       if (window.kernelsu && typeof window.kernelsu.exec === 'function') {
-        return wrapCallbackStyle(window.kernelsu.exec, window.kernelsu);
+        return wrapKsuExec(window.kernelsu.exec, window.kernelsu);
       }
       if (typeof window.exec === 'function') {
         return wrapGlobalExec(window.exec);

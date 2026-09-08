@@ -21,7 +21,9 @@ ALERT_FILE="${TS_RUN_DIR}/compat-alert"
 # Map a lower-case name to a category: proxy | firewall | vpn (empty = ignore).
 classify() {
   case "$1" in
-    *clash* | *mihomo* | *box*) echo "proxy" ;;
+    # Explicit exclusions: system/vendor apps that merely contain a keyword.
+    *sandbox* | *searchbox*) ;;
+    *clash* | *mihomo* | *sing-box* | *singbox* | *box4magisk* | *box-for-magisk* | *nekobox* | *hiddify* | *surfing*) echo "proxy" ;;
     *afwall*) echo "firewall" ;;
     *netguard*) echo "vpn" ;;
   esac

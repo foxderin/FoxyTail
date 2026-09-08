@@ -190,6 +190,15 @@ route_apply() {
     return 1
   fi
 
+  # Fast idempotence: both the service companion layer and the tun.up hook
+  # call us on start; skip quietly when a previous apply is still in effect.
+  if iptables -t mangle -L "${CHAIN_MARK}" -n >/dev/null 2>&1 &&
+    ip rule 2>/dev/null | grep -qi "fwmark ${FWMARK}" &&
+    ip route show table "${ROUTE_TABLE}" 2>/dev/null | grep -q .; then
+    log Debug "policy routing already applied; skipping."
+    return 0
+  fi
+
   log Info "Applying policy routing (scope=${ROUTE_SCOPE}, table=${ROUTE_TABLE}, fwmark=${FWMARK})."
 
   # Dedicated chains; built-in chains only get one jump each.

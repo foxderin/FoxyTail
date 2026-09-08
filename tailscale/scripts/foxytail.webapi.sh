@@ -299,7 +299,9 @@ cmd_exitnode_clear() {
 cmd_tun() {
   _ct_up=false
   ip link show dev "${TUN_IFACE}" >/dev/null 2>&1 && _ct_up=true
-  _ct_gw=$(ip route show dev "${TUN_IFACE}" 2>/dev/null | awk '/default/ {print $3; exit}')
+  # tailscale0 has no default route by design (policy routing lives in table
+  # ROUTE_TABLE); report the interface's own IPv4 as the gateway instead.
+  _ct_gw=$(ip -o -4 addr show dev "${TUN_IFACE}" 2>/dev/null | awk '{print $4}' | cut -d/ -f1 | head -1)
   _ct_hev=$(pids_of_path "${TS_BIN_DIR}/hev-socks5-tunnel")
   _ct_hev_pid=null
   case "${_ct_hev}" in
