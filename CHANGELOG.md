@@ -1,5 +1,13 @@
 # Changelog
 
+## v1.0.2
+
+- Rebuild WebUI with SolidJS + Material Web (MD3 theme, fox-orange palette)
+- Login hero on Dashboard (non-blocking, dismissible), global status indicator in top bar
+- API timeouts everywhere; heavy operations are cancellable session tasks that survive page switches
+- Instant page switching with skeletons; fast apps listing (single pm call)
+
+
 ## v1.0.1
 
 - Fix KSU/MMRL WebUI exec bridge signature (string options + string callback name)
