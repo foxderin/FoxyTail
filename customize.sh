@@ -39,11 +39,13 @@ TS_CONF_DIR="${TS_DIR}/conf"
 
 case $ARCH in
   arm)
-    F_ARCH="armv7a"
+    # Upstream jq asset names are irregular: only the arm build carries the
+    # -androideabi suffix (verified against the pinned releases).
+    JQ_ASSET="jq-armv7a-linux-androideabi"
     HEV_ARCH="arm32v7"
     ;;
   arm64)
-    F_ARCH="aarch64"
+    JQ_ASSET="jq-aarch64-linux-android"
     HEV_ARCH="arm64"
     ;;
   *)
@@ -161,8 +163,10 @@ wget_tls() {
 
 # gh_download <repo> <tag> <asset-regex> <dest>
 # Downloads ONE pinned-release asset. (On-device we cannot rely on jq yet -
-# it is itself one of the payloads - so the API JSON is scraped for
-# browser_download_url. build.sh uses jq properly.)
+# it is itself one of the payloads - so the API JSON is flattened to one
+# browser_download_url per line with tr/sed and the regex is matched against
+# the URL's last path segment, i.e. the asset name. build.sh uses jq
+# properly.)
 gh_download() {
   _gd_repo="$1"
   _gd_tag="$2"
@@ -174,10 +178,10 @@ gh_download() {
     return 1
   }
   _gd_url=$(printf '%s\n' "$_gd_json" |
-    grep 'browser_download_url' |
-    grep "$_gd_match" |
-    head -n 1 |
-    sed 's/.*"browser_download_url": *"\([^"]*\)".*/\1/')
+    tr ',' '\n' |
+    sed -n 's/.*"browser_download_url": *"\([^"]*\)".*/\1/p' |
+    grep "/${_gd_match}\$" |
+    head -n 1)
   if [ -z "$_gd_url" ]; then
     ui_print "! No asset matching '${_gd_match}' in ${_gd_repo}@${_gd_tag}"
     ui_print "! Check the pins in ${TS_DIR}/VERSIONS"
@@ -235,8 +239,8 @@ ui_print "- Installing binaries"
 unzip -qqjo "$ZIPFILE" "tailscale/bin/*-${ARCH}" -d "$TS_BIN_DIR" 2>/dev/null
 
 install_bin tailscaled "$TAILSCALE_REPO" "$TAILSCALE_VERSION" "tailscale_.*_${ARCH}\\.tgz" tgz
-install_bin jq "$JQ_REPO" "$JQ_VERSION" "jq-${F_ARCH}-linux-android"
-install_bin hev-socks5-tunnel "$HEV_REPO" "$HEV_VERSION" "hev-socks5-tunnel-linux-${HEV_ARCH}\$"
+install_bin jq "$JQ_REPO" "$JQ_VERSION" "$JQ_ASSET"
+install_bin hev-socks5-tunnel "$HEV_REPO" "$HEV_VERSION" "hev-socks5-tunnel-linux-${HEV_ARCH}"
 ln -sf tailscaled "${TS_BIN_DIR}/tailscale"
 
 # --- Scripts, hooks, configuration -------------------------------------------
@@ -285,7 +289,6 @@ set_perm_recursive "$TS_SCRIPTS_DIR" 0 0 0755 0755
 set_perm_recursive "$TS_CONF_DIR" 0 0 0755 0644
 set_perm "${TS_DIR}/settings.sh" 0 0 0644
 
-set_perm_recursive "$MODPATH/system/bin" 0 0 0755 0755 "u:object_r:system_file:s0"
 set_perm "$MODPATH/service.sh" 0 0 0755 "u:object_r:system_file:s0"
 set_perm "$MODPATH/uninstall.sh" 0 0 0755 "u:object_r:system_file:s0"
 [ -d "$MODPATH/webroot" ] &&
@@ -303,6 +306,9 @@ for s in "${TS_SCRIPTS_DIR}"/foxytail.*; do
   esac
   ln -sf "$s" "$MODPATH/system/bin/$(basename "$s")"
 done
+
+# Only now does system/bin exist with its symlinks: set perms/labels last.
+set_perm_recursive "$MODPATH/system/bin" 0 0 0755 0755 "u:object_r:system_file:s0"
 
 # --- Environment probes (advisory only, never abort) --------------------------
 

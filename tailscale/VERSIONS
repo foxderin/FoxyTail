@@ -9,7 +9,10 @@ TAILSCALE_REPO=anasfanani/tailscale-android-cli
 TAILSCALE_VERSION=v1.98.8-android
 
 # Static jq build for Android, used for all JSON parsing on-device.
-# Assets: jq-armv7a-linux-androideabi / jq-aarch64-linux-android.
+# Assets: jq-armv7a-linux-androideabi (arm) / jq-aarch64-linux-android (arm64).
+# The naming is irregular: only the arm build carries the -androideabi suffix;
+# the arm64 asset has no -eabi suffix. Mirrored in customize.sh (JQ_ASSET) and
+# build.sh.
 JQ_REPO=theshoqanebi/jq-build-for-android
 JQ_VERSION=v1.6
 

@@ -17,10 +17,17 @@ monitor_file="$3"
 
 _ctl() {
   # _ctl <start|stop>: best-effort call on every managed component.
+  # stats/watchdog/context `start` are resident loops that never return, so
+  # they must be backgrounded like in start.sh - a foreground call would block
+  # this inotifyd callback forever. `stop` exits immediately either way.
   _op="$1"
   for _s in foxytail.service foxytail.stats foxytail.watchdog foxytail.context; do
     if [ -x "${TS_SCRIPTS_DIR}/${_s}" ]; then
-      "${TS_SCRIPTS_DIR}/${_s}" "$_op" >>"${TS_RUN_LOG_FILE}" 2>&1
+      if [ "$_op" = "start" ] && [ "$_s" != "foxytail.service" ]; then
+        "${TS_SCRIPTS_DIR}/${_s}" "$_op" >>"${TS_RUN_DIR}/${_s}.log" 2>&1 &
+      else
+        "${TS_SCRIPTS_DIR}/${_s}" "$_op" >>"${TS_RUN_LOG_FILE}" 2>&1
+      fi
     else
       log Warning "inotify: ${_s} not found, skipped"
     fi
