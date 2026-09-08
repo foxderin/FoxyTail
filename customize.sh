@@ -297,10 +297,9 @@ if ! unzip -qqjn "$ZIPFILE" 'tailscale/conf/*' -d "$TS_CONF_DIR"; then
 fi
 
 # --- Permissions -------------------------------------------------------------
-# /data/adb is NOT the system partition: plain ownership/modes only, and do
-# NOT relabel these files to system_file (a bug in the original project -
-# Magisk's set_perm_recursive without a context argument leaves the SELinux
-# label untouched). $MODPATH gets the regular systemless labels.
+# /data/adb is NOT the system partition: plain ownership/modes only, no SELinux
+# relabeling. Magisk's set_perm_recursive without a context argument leaves the
+# SELinux label untouched. $MODPATH gets the regular systemless labels.
 
 ui_print "- Setting permissions"
 set_perm_recursive "$TS_BIN_DIR" 0 0 0755 0755

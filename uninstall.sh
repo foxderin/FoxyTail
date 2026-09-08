@@ -44,8 +44,7 @@ for _d in /proc/[0-9]*; do
   [ "$_pid" = "$$" ] && continue
   _cmd=$(tr '\0' ' ' <"${_d}/cmdline" 2>/dev/null)
   case "$_cmd" in
-    *foxytail.stats* | *foxytail.watchdog* | *foxytail.context* | \
-      *foxytail.inotify* | *foxytail.tun* | *foxytail.dns* | *foxytail*)
+    *foxytail*)
       kill -TERM "$_pid" 2>/dev/null
       ;;
   esac
