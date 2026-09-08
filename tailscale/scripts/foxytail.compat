@@ -28,7 +28,7 @@ classify() {
 }
 
 probe() {
-  if ! command -v jq >/dev/null 2>&1; then
+  if ! have_jq; then
     echo '{"modules":[],"apps":[],"warnings":["jq binary not available; probe disabled"]}'
     return 0
   fi
@@ -48,8 +48,9 @@ probe() {
     _l=$(echo "$_n" | tr 'A-Z' 'a-z')
     _k=$(classify "$_l")
     [ -n "$_k" ] || continue
-    _mods="${_mods}$(jq -n -c --arg n "$_n" --arg p "${_d%/}" --arg k "$_k" \
-      '{name:$n,path:$p,kind:$k}')\n"
+    _mods="${_mods}$(jqr -n -c --arg n "$_n" --arg p "${_d%/}" --arg k "$_k" \
+      '{name:$n,path:$p,kind:$k}')
+"
     case "$_k" in
       proxy) _proxy_names="${_proxy_names}${_n} " ;;
       firewall) _firewall_names="${_firewall_names}${_n} " ;;
@@ -63,8 +64,9 @@ probe() {
       _l=$(echo "$_p" | tr 'A-Z' 'a-z')
       _k=$(classify "$_l")
       [ -n "$_k" ] || continue
-      _apps="${_apps}$(jq -n -c --arg p "$_p" --arg k "$_k" \
-        '{package:$p,kind:$k}')\n"
+      _apps="${_apps}$(jqr -n -c --arg p "$_p" --arg k "$_k" \
+        '{package:$p,kind:$k}')
+"
       case "$_k" in
         proxy) _proxy_names="${_proxy_names}${_p} " ;;
         firewall) _firewall_names="${_firewall_names}${_p} " ;;
@@ -73,25 +75,29 @@ probe() {
     done
   fi
 
-  [ -n "$_proxy_names" ] && _warns="${_warns}$(jq -n -c \
-    --arg w "检测到代理工具: ${_proxy_names% }。若开启 MagicDNS 可能与其 DNS 劫持冲突,建议 MAGIC_DNS=off" \
-    '$w')\n"
-  [ -n "$_firewall_names" ] && _warns="${_warns}$(jq -n -c \
-    --arg w "检测到防火墙工具: ${_firewall_names% }。其规则重载可能清除 FOXY_* 链,请定期运行 foxytail.compat check" \
-    '$w')\n"
-  [ -n "$_vpn_names" ] && _warns="${_warns}$(jq -n -c \
-    --arg w "检测到 VPN 应用: ${_vpn_names% }。Android 同时只允许一个 VPN 接口,可能抢占隧道" \
-    '$w')\n"
+  [ -n "$_proxy_names" ] && _warns="${_warns}$(jqr -n -c \
+    --arg w "Proxy tool detected: ${_proxy_names% }. Its DNS hijack may conflict with MagicDNS; consider MAGIC_DNS=off" \
+    '$w')
+"
+  [ -n "$_firewall_names" ] && _warns="${_warns}$(jqr -n -c \
+    --arg w "Firewall tool detected: ${_firewall_names% }. Its rule reloads may wipe the FOXY_* chains; run foxytail.compat check periodically" \
+    '$w')
+"
+  [ -n "$_vpn_names" ] && _warns="${_warns}$(jqr -n -c \
+    --arg w "VPN app detected: ${_vpn_names% }. Android allows only one VPN interface at a time; it may grab the tunnel" \
+    '$w')
+"
   if check_dns_hijack_quiet; then
-    _warns="${_warns}$(jq -n -c \
-      --arg w "nat OUTPUT 链已存在对 53 端口的重定向/TPROXY 规则,启用 MagicDNS 前请确认归属" \
-      '$w')\n"
+    _warns="${_warns}$(jqr -n -c \
+      --arg w "nat OUTPUT already redirects/TPROXYs port 53; confirm the owner before enabling MagicDNS" \
+      '$w')
+"
   fi
 
-  _m_json=$(printf '%b' "$_mods" | jq -s '.')
-  _a_json=$(printf '%b' "$_apps" | jq -s '.')
-  _w_json=$(printf '%b' "$_warns" | jq -s '.')
-  jq -n --argjson m "$_m_json" --argjson a "$_a_json" --argjson w "$_w_json" \
+  _m_json=$(printf '%s' "$_mods" | jqr -s '.')
+  _a_json=$(printf '%s' "$_apps" | jqr -s '.')
+  _w_json=$(printf '%s' "$_warns" | jqr -s '.')
+  jqr -n --argjson m "$_m_json" --argjson a "$_a_json" --argjson w "$_w_json" \
     '{modules:$m,apps:$a,warnings:$w}'
 }
 
@@ -108,14 +114,23 @@ check() {
   fi
 
   _problems=""
-  if ! iptables -L FOXY_MARK -n >/dev/null 2>&1; then
-    _problems="${_problems}- mangle 表 FOXY_MARK 链缺失\n"
+  # Chain homes are defined by foxytail.route: FOXY_MARK lives in mangle,
+  # FOXY_STAT in filter. A bare `iptables -L` probes the filter table only.
+  if ! iptables -t mangle -L FOXY_MARK -n >/dev/null 2>&1; then
+    _problems="${_problems}- FOXY_MARK chain missing in the mangle table
+"
+  fi
+  if ! iptables -t filter -L FOXY_STAT -n >/dev/null 2>&1; then
+    _problems="${_problems}- FOXY_STAT chain missing in the filter table
+"
   fi
   if ! iptables -t mangle -S 2>/dev/null | grep -q 'FOXY_'; then
-    _problems="${_problems}- mangle 表中没有指向 FOXY_* 的跳转\n"
+    _problems="${_problems}- no jump to FOXY_* in the mangle table
+"
   fi
   if ! iptables -S 2>/dev/null | grep -q 'FOXY_'; then
-    _problems="${_problems}- filter 表中没有指向 FOXY_* 的跳转\n"
+    _problems="${_problems}- no jump to FOXY_* in the filter table
+"
   fi
 
   if [ -n "$_problems" ]; then
@@ -123,7 +138,7 @@ check() {
     {
       echo "time: $(date +"%Y-%m-%d %H:%M:%S")"
       echo "problem: FoxyTail iptables chains missing while tailscaled is running"
-      printf '%b' "$_problems"
+      printf '%s' "$_problems"
     } >"$ALERT_FILE"
     return 1
   fi
@@ -142,48 +157,48 @@ check_dns_hijack() {
 
 suggest() {
   _json=$(probe)
-  if ! command -v jq >/dev/null 2>&1; then
-    echo "jq 不可用,无法给出建议"
+  if ! have_jq; then
+    echo "jq is not available; no suggestions can be made"
     return 0
   fi
   _found=0
 
-  _names=$(echo "$_json" | jq -r \
+  _names=$(echo "$_json" | jqr -r \
     '[.modules[] | select(.kind=="proxy") | .name] +
      [.apps[] | select(.kind=="proxy") | .package] | unique | .[]' 2>/dev/null)
   if [ -n "$_names" ]; then
     _found=1
     echo "$_names" | while IFS= read -r _n; do
-      echo "检测到代理工具 ${_n}: 建议 MAGIC_DNS=off,并避免与其 fake-ip/TPROXY 网段重叠"
+      echo "Proxy tool detected (${_n}): consider MAGIC_DNS=off and avoid overlapping its fake-ip/TPROXY subnets"
     done
   fi
 
-  _names=$(echo "$_json" | jq -r \
+  _names=$(echo "$_json" | jqr -r \
     '[.modules[] | select(.kind=="firewall") | .name] +
      [.apps[] | select(.kind=="firewall") | .package] | unique | .[]' 2>/dev/null)
   if [ -n "$_names" ]; then
     _found=1
     echo "$_names" | while IFS= read -r _n; do
-      echo "检测到防火墙工具 ${_n}: 建议将 FoxyTail 加入其白名单;掉链时运行 foxytail.compat check 并重新 foxytail.route apply"
+      echo "Firewall tool detected (${_n}): whitelist FoxyTail; if the chains get wiped, run foxytail.compat check and re-run foxytail.route apply"
     done
   fi
 
-  _names=$(echo "$_json" | jq -r \
+  _names=$(echo "$_json" | jqr -r \
     '[.modules[] | select(.kind=="vpn") | .name] +
      [.apps[] | select(.kind=="vpn") | .package] | unique | .[]' 2>/dev/null)
   if [ -n "$_names" ]; then
     _found=1
     echo "$_names" | while IFS= read -r _n; do
-      echo "检测到 VPN 应用 ${_n}: Android 仅允许单 VPN,建议停用其一或使用 bridge/proxy 模式"
+      echo "VPN app detected (${_n}): Android allows only one VPN; disable one of them or use bridge/proxy mode"
     done
   fi
 
   if check_dns_hijack_quiet; then
     _found=1
-    echo "检测到 53 端口已被重定向: 建议 MAGIC_DNS=off,或确认该规则归属后手动共存"
+    echo "Port 53 is already redirected: consider MAGIC_DNS=off, or confirm the rule's owner before coexisting"
   fi
 
-  [ "$_found" = "0" ] && echo "未检测到已知冲突的模块或应用,无需特殊配置"
+  [ "$_found" = "0" ] && echo "No known conflicting modules or apps detected; no special configuration needed"
 }
 
 case "$1" in

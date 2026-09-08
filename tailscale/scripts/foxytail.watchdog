@@ -13,8 +13,6 @@ DIR=$(dirname "$(realpath "$0")")
 load_conf
 ensure_run_dirs
 
-WATCHDOG_INTERVAL="${WATCHDOG_INTERVAL:-30}"
-
 PID_FILE="${TS_PID_DIR}/foxytail.watchdog.pid"
 TS_SOCKET="${TS_RUN_DIR}/tailscaled.sock"
 ROUTE_CACHE="${TS_RUN_DIR}/watchdog.route-cache"
@@ -27,34 +25,10 @@ BACKEND_BAD_LIMIT=3
 
 SERVICE="${TS_SCRIPTS_DIR}/foxytail.service"
 
-is_running() {
-  [ -f "$PID_FILE" ] || return 1
-  _p=$(cat "$PID_FILE" 2>/dev/null)
-  [ -n "$_p" ] && kill -0 "$_p" 2>/dev/null
-}
-
-tmo() {
-  if command -v timeout >/dev/null 2>&1; then
-    timeout "$@"
-  else
-    _tmo_s=$1
-    shift
-    "$@"
-  fi
-}
-
-# Interruptible sleep: returns promptly on TERM/INT.
-isleep() {
-  sleep "$1" &
-  _isleep_pid=$!
-  wait "$_isleep_pid" 2>/dev/null
-  kill "$_isleep_pid" 2>/dev/null
-}
-
 # tailscale status --json, empty string on timeout/failure.
 ts_status_json() {
   _st=$(tmo 8 tailscale --socket="$TS_SOCKET" status --json 2>/dev/null)
-  if [ -n "$_st" ] && printf '%s' "$_st" | jq -e . >/dev/null 2>&1; then
+  if [ -n "$_st" ] && printf '%s' "$_st" | jqr -e . >/dev/null 2>&1; then
     printf '%s' "$_st"
   fi
 }
@@ -64,7 +38,7 @@ tailnet_reachable() {
   _targets="100.100.100.100"
   _st=$(ts_status_json)
   if [ -n "$_st" ]; then
-    _peer=$(printf '%s' "$_st" | jq -r \
+    _peer=$(printf '%s' "$_st" | jqr -r \
       '[.Peer // {} | .[] | select(.Online == true) | .TailscaleIPs[0]] | .[0] // empty' \
       2>/dev/null)
     [ -n "$_peer" ] && _targets="$_targets $_peer"
@@ -78,6 +52,7 @@ tailnet_reachable() {
 }
 
 # Keep only restart timestamps inside the window; print how many remain.
+# Mutates RESTARTS_FILE (compaction) - use restarts_count_ro for queries.
 restarts_count() {
   _now=$(date +%s)
   if [ -f "$RESTARTS_FILE" ]; then
@@ -88,6 +63,13 @@ restarts_count() {
     : >"$RESTARTS_FILE"
   fi
   wc -l <"$RESTARTS_FILE" 2>/dev/null || echo 0
+}
+
+# Read-only variant for status reporting: never touches RESTARTS_FILE.
+restarts_count_ro() {
+  [ -f "$RESTARTS_FILE" ] || { echo 0; return; }
+  awk -v cut="$(( $(date +%s) - RESTART_WINDOW ))" '$1 >= cut {n++} END {print n+0}' \
+    "$RESTARTS_FILE"
 }
 
 # Recover tailscaled via "start" or "restart", with cooldown accounting.
@@ -131,7 +113,7 @@ check_once() {
   # 2. Backend state health (3 consecutive bad rounds -> restart).
   _st=$(ts_status_json)
   _state=""
-  [ -n "$_st" ] && _state=$(printf '%s' "$_st" | jq -r '.BackendState // "unknown"' 2>/dev/null)
+  [ -n "$_st" ] && _state=$(printf '%s' "$_st" | jqr -r '.BackendState // "unknown"' 2>/dev/null)
   if [ "$_state" != "Running" ]; then
     _bad=$(bad_count_inc)
     log Warning "watchdog: backend state '${_state:-unreachable}' (${_bad}/${BACKEND_BAD_LIMIT})"
@@ -169,11 +151,7 @@ do_start() {
     log Info "watchdog disabled (WATCHDOG=${WATCHDOG})"
     return 0
   fi
-  if is_running; then
-    log Info "foxytail.watchdog already running (pid $(cat "$PID_FILE" 2>/dev/null))"
-    return 0
-  fi
-  echo "$$" >"$PID_FILE"
+  daemon_claim_pidfile foxytail.watchdog || return 0
   _wd_running=1
   trap '_watchdog_stop' TERM INT
   log Info "foxytail.watchdog started (pid $$, interval ${WATCHDOG_INTERVAL}s)"
@@ -187,23 +165,17 @@ do_start() {
 }
 
 do_stop() {
-  if is_running; then
-    kill -TERM "$(cat "$PID_FILE")" 2>/dev/null
-    log Info "foxytail.watchdog stop requested"
-  else
-    rm -f "$PID_FILE"
-    log Info "foxytail.watchdog is not running"
-  fi
+  daemon_stop_pidfile foxytail.watchdog
 }
 
 do_status() {
-  if is_running; then
-    jq -n -c --argjson r true --argjson p "$(cat "$PID_FILE")" \
-      --argjson i "$WATCHDOG_INTERVAL" --argjson n "$(restarts_count)" \
+  if daemon_pid_alive foxytail.watchdog; then
+    jqr -n -c --argjson r true --argjson p "$(cat "$PID_FILE")" \
+      --argjson i "$WATCHDOG_INTERVAL" --argjson n "$(restarts_count_ro)" \
       '{running:$r,pid:$p,interval:$i,restartsRecent:$n}'
   else
-    jq -n -c --argjson r false --argjson i "$WATCHDOG_INTERVAL" \
-      --argjson n "$(restarts_count)" \
+    jqr -n -c --argjson r false --argjson i "$WATCHDOG_INTERVAL" \
+      --argjson n "$(restarts_count_ro)" \
       '{running:$r,pid:null,interval:$i,restartsRecent:$n}'
   fi
 }

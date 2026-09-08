@@ -1,20 +1,22 @@
 #!/system/bin/sh
-# @title FoxyTail MagicDNS Split Resolver
-# @header Split-DNS via a local dnsmasq: tailnet names go to 100.100.100.100,
-# @header everything else to the system resolver. Coexistence-aware.
+# FoxyTail MagicDNS Split Resolver
 #
-# @cmd start | Start dnsmasq split-DNS and the port-53 redirect
-# @desc Requires MAGIC_DNS=on, a dnsmasq binary in $TS_BIN_DIR and MagicDNS
-# @desc enabled on the tailnet. Reads .MagicDNSSuffix from
-# @desc `tailscale --socket=... status --json`. If any prerequisite fails the
-# @desc script logs a Warning, records state "degraded" and exits 0.
-# @desc If `foxytail.compat check-dns-hijack` reports a conflicting global DNS
-# @desc hijack (non-zero exit), the REDIRECT rule is skipped and only dnsmasq
-# @desc runs.
+# Split-DNS via a local dnsmasq: tailnet names go to 100.100.100.100,
+# everything else to the system resolver. Coexistence-aware.
 #
-# @cmd stop | Remove the redirect chain and stop dnsmasq
-#
-# @cmd status | Show running / degraded / stopped state
+# Subcommands:
+#   start   Start dnsmasq split-DNS and the port-53 redirect. Requires
+#           MAGIC_DNS=on, a dnsmasq binary in $TS_BIN_DIR and MagicDNS
+#           enabled on the tailnet. Reads .MagicDNSSuffix from
+#           `tailscale --socket=... status --json`. If any prerequisite fails
+#           the script logs a Warning, records state "degraded" and exits 0.
+#           If `foxytail.compat check-dns-hijack` reports a conflicting global
+#           DNS hijack (non-zero exit), the REDIRECT rule is skipped and only
+#           dnsmasq runs.
+#   stop    Remove the redirect chain and stop dnsmasq.
+#   status  Show running / degraded / stopped state. `status --json` prints
+#           the machine-readable form {"state","suffix","port","pid"} for
+#           foxytail.webapi.sh.
 
 # POSIX sh (Android mksh / busybox). No bashisms, no `set -e`.
 
@@ -27,7 +29,7 @@ TS_SOCKET="${TS_RUN_DIR}/tailscaled.sock"
 DNS_BIN="${TS_BIN_DIR}/dnsmasq"
 DNS_CONF="${TS_RUN_DIR}/dnsmasq.conf"
 DNS_LOG="${TS_RUN_DIR}/dnsmasq.log"
-DNS_PID_FILE="${TS_PID_DIR}/dnsmasq.pid"
+PID_FILE="${TS_PID_DIR}/dnsmasq.pid"
 DNS_STATE_FILE="${TS_RUN_DIR}/dnsmasq.state"
 CHAIN_DNS="FOXY_DNS"
 
@@ -41,7 +43,7 @@ get_state() {
 
 # PIDs of OUR dnsmasq instance only: match the config path in the cmdline.
 dns_pids() {
-  busybox pgrep -f "${DNS_CONF}" 2>/dev/null || pgrep -f "${DNS_CONF}" 2>/dev/null
+  pids_of "${DNS_CONF}"
 }
 
 # True when another module already hijacks port 53 globally; the compat
@@ -97,8 +99,8 @@ dns_start() {
   fi
 
   _ds_json=$(timeout 10 tailscale --socket="${TS_SOCKET}" status --json 2>/dev/null || echo '{}')
-  _ds_suffix=$(echo "${_ds_json}" | "${TS_BIN_DIR}/jq" -r '.MagicDNSSuffix // empty' 2>/dev/null)
-  _ds_enabled=$(echo "${_ds_json}" | "${TS_BIN_DIR}/jq" -r '.CurrentTailnet.MagicDNSEnabled // false' 2>/dev/null)
+  _ds_suffix=$(echo "${_ds_json}" | jqr -r '.MagicDNSSuffix // empty' 2>/dev/null)
+  _ds_enabled=$(echo "${_ds_json}" | jqr -r '.CurrentTailnet.MagicDNSEnabled // false' 2>/dev/null)
   if [ "${_ds_enabled}" != "true" ] || [ -z "${_ds_suffix}" ]; then
     log Warning "MagicDNS not enabled on this tailnet (or daemon unreachable); split DNS degraded."
     set_state degraded
@@ -121,7 +123,7 @@ dns_start() {
   rotate_log "${DNS_LOG}"
   log Info "Starting dnsmasq on 127.0.0.1:${DNS_PORT} (suffix: ${_ds_suffix}, upstream: ${_ds_default_dns})."
   nohup "${DNS_BIN}" --keep-in-foreground --conf-file="${DNS_CONF}" \
-    --pid-file="${DNS_PID_FILE}" >>"${DNS_LOG}" 2>&1 &
+    --pid-file="${PID_FILE}" >>"${DNS_LOG}" 2>&1 &
 
   sleep 1
   if [ -z "$(dns_pids)" ]; then
@@ -147,37 +149,50 @@ dns_stop() {
 
   redirect_teardown
 
+  _dt_rc=0
   _dt_pids=$(dns_pids)
   if [ -n "${_dt_pids}" ]; then
-    log Info "Stopping dnsmasq."
-    # shellcheck disable=SC2086 # intentional: one PID per word
-    for _dt_pid in ${_dt_pids}; do
-      kill -TERM "${_dt_pid}" 2>/dev/null
-    done
-    sleep 2
-    _dt_pids=$(dns_pids)
-    if [ -n "${_dt_pids}" ]; then
-      # shellcheck disable=SC2086 # intentional: one PID per word
-      for _dt_pid in ${_dt_pids}; do
-        kill -KILL "${_dt_pid}" 2>/dev/null
-      done
-    fi
+    stop_by_pids dnsmasq "${_dt_pids}" || _dt_rc=1
   fi
 
-  rm -f "${DNS_PID_FILE}"
+  rm -f "${PID_FILE}"
   set_state stopped
-  return 0
+  return "${_dt_rc}"
 }
 
 dns_status() {
   ensure_run_dirs
   load_conf
 
+  _dst_json=false
+  [ "${1:-}" = "--json" ] && _dst_json=true
+
   _dst_state=$(get_state)
-  if [ -n "$(dns_pids)" ]; then
+  _dst_pids=$(dns_pids)
+  if [ -n "${_dst_pids}" ]; then
     _dst_state="running"
   elif [ "${_dst_state}" = "running" ]; then
     _dst_state="stopped"
+  fi
+
+  _dst_pid=null
+  if [ -n "${_dst_pids}" ]; then
+    # shellcheck disable=SC2086 # intentional: one PID per word
+    set -- ${_dst_pids}
+    _dst_pid="$1"
+  fi
+
+  _dst_suffix=""
+  if [ -f "${DNS_CONF}" ]; then
+    _dst_suffix=$(awk -F/ '/^server=\// {print $2}' "${DNS_CONF}" | head -1)
+  fi
+
+  # Machine-readable form for foxytail.webapi.sh (`status --json`).
+  if [ "${_dst_json}" = true ]; then
+    jqr -n -c --arg s "${_dst_state}" --arg sfx "${_dst_suffix}" \
+      --argjson p "${DNS_PORT}" --argjson pid "${_dst_pid}" \
+      '{state:$s,suffix:$sfx,port:$p,pid:$pid}'
+    return 0
   fi
 
   case "${_dst_state}" in
@@ -193,10 +208,7 @@ dns_status() {
     printf '%s\n' "  ${blue}Redirect:${normal} ${red}inactive${normal}"
   fi
 
-  if [ -f "${DNS_CONF}" ]; then
-    _dst_suffix=$(awk -F/ '/^server=\// {print $2}' "${DNS_CONF}" | head -1)
-    [ -n "${_dst_suffix}" ] && printf '%s\n' "  ${blue}Suffix:${normal} ${yellow}${_dst_suffix}${normal}"
-  fi
+  [ -n "${_dst_suffix}" ] && printf '%s\n' "  ${blue}Suffix:${normal} ${yellow}${_dst_suffix}${normal}"
   return 0
 }
 
@@ -212,7 +224,7 @@ case "$1" in
     dns_stop
     ;;
   status)
-    dns_status
+    dns_status "$2"
     ;;
   *)
     if [ -n "$1" ]; then

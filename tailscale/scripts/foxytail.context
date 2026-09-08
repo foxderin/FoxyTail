@@ -21,22 +21,6 @@ INTERVAL=20
 
 SERVICE="${TS_SCRIPTS_DIR}/foxytail.service"
 
-is_running() {
-  [ -f "$PID_FILE" ] || return 1
-  _p=$(cat "$PID_FILE" 2>/dev/null)
-  [ -n "$_p" ] && kill -0 "$_p" 2>/dev/null
-}
-
-tmo() {
-  if command -v timeout >/dev/null 2>&1; then
-    timeout "$@"
-  else
-    _tmo_s=$1
-    shift
-    "$@"
-  fi
-}
-
 # Best-effort SSID from dumpsys wifi; prints "unknown" on any failure.
 get_ssid() {
   _w=$(dumpsys wifi 2>/dev/null)
@@ -147,20 +131,13 @@ do_start() {
     log Info "context: no rules in context.conf, not starting"
     return 0
   fi
-  if is_running; then
-    log Info "foxytail.context already running (pid $(cat "$PID_FILE" 2>/dev/null))"
-    return 0
-  fi
-  echo "$$" >"$PID_FILE"
+  daemon_claim_pidfile foxytail.context || return 0
   _ctx_running=1
   trap '_context_stop' TERM INT
   log Info "foxytail.context started (pid $$, interval ${INTERVAL}s)"
   while [ "$_ctx_running" = "1" ]; do
     check_once
-    sleep "$INTERVAL" &
-    _sleep_pid=$!
-    wait "$_sleep_pid" 2>/dev/null
-    kill "$_sleep_pid" 2>/dev/null
+    isleep "$INTERVAL"
   done
   rm -f "$PID_FILE"
   log Info "foxytail.context stopped"
@@ -168,22 +145,16 @@ do_start() {
 }
 
 do_stop() {
-  if is_running; then
-    kill -TERM "$(cat "$PID_FILE")" 2>/dev/null
-    log Info "foxytail.context stop requested"
-  else
-    rm -f "$PID_FILE"
-    log Info "foxytail.context is not running"
-  fi
+  daemon_stop_pidfile foxytail.context
 }
 
 do_status() {
   _ctx=$(current_context)
-  if is_running; then
-    jq -n -c --argjson r true --argjson p "$(cat "$PID_FILE")" --arg c "$_ctx" \
+  if daemon_pid_alive foxytail.context; then
+    jqr -n -c --argjson r true --argjson p "$(cat "$PID_FILE")" --arg c "$_ctx" \
       '{running:$r,pid:$p,context:$c}'
   else
-    jq -n -c --argjson r false --arg c "$_ctx" \
+    jqr -n -c --argjson r false --arg c "$_ctx" \
       '{running:$r,pid:null,context:$c}'
   fi
 }

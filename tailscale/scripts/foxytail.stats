@@ -18,38 +18,55 @@ PID_FILE="${TS_PID_DIR}/foxytail.stats.pid"
 TS_SOCKET="${TS_RUN_DIR}/tailscaled.sock"
 RETENTION_DAYS=7
 
-is_running() {
-  [ -f "$PID_FILE" ] || return 1
-  _p=$(cat "$PID_FILE" 2>/dev/null)
-  [ -n "$_p" ] && kill -0 "$_p" 2>/dev/null
-}
-
-# Run <cmd...> under a timeout when toybox/busybox timeout exists.
-tmo() {
-  if command -v timeout >/dev/null 2>&1; then
-    timeout "$@"
-  else
-    _tmo_s=$1
-    shift
-    "$@"
-  fi
-}
-
 # _date_lt <a> <b>: true when date string a sorts before b (YYYY-MM-DD).
 # POSIX-safe: test's \< / \> are undefined in POSIX sh (SC3012).
 _date_lt() {
   [ "$1" != "$2" ] && [ "$(printf '%s\n%s\n' "$1" "$2" | sort | head -n 1)" = "$1" ]
 }
 
-# Delete stats files older than RETENTION_DAYS (compared by file-name date).
+# _in_retention <file> <basename> <cut-epoch> <cut-date>: true when the
+# stats file is inside the retention window. Primary comparison is by the
+# file-name date; when `date -d @epoch` is unavailable (some busybox/toybox
+# builds) fall back to the file mtime, warning instead of silently skipping.
+_in_retention() {
+  _ir_file="$1"
+  _ir_base="$2"
+  _ir_cut_epoch="$3"
+  _ir_cut="$4"
+  if [ -n "${_ir_cut}" ]; then
+    ! _date_lt "${_ir_base}" "${_ir_cut}"
+    return
+  fi
+  _ir_mt=$(stat -c %Y "${_ir_file}" 2>/dev/null)
+  case "${_ir_mt}" in
+    '' | *[!0-9]*)
+      log Warning "stats: cannot determine age of ${_ir_file}; treating it as inside the window."
+      return 0
+      ;;
+  esac
+  [ "${_ir_mt}" -ge "${_ir_cut_epoch}" ]
+}
+
+# Print the retention cutoff: "<epoch> <YYYY-MM-DD>" (date empty when the
+# local date(1) cannot convert epochs).
+_stats_cutoff() {
+  _sco_epoch=$(( $(date +%s) - RETENTION_DAYS * 86400 ))
+  _sco_date=$(date -d "@${_sco_epoch}" +%F 2>/dev/null)
+  echo "${_sco_epoch} ${_sco_date}"
+}
+
+# Delete stats files older than RETENTION_DAYS.
 prune_stats() {
-  _cut_epoch=$(( $(date +%s) - RETENTION_DAYS * 86400 ))
-  _cut=$(date -d "@${_cut_epoch}" +%F 2>/dev/null)
-  [ -n "$_cut" ] || return 0
+  _ps_cut=$(_stats_cutoff)
+  # shellcheck disable=SC2086 # intentional: "<epoch> <date>" splits into $1/$2
+  set -- ${_ps_cut}
+  if [ -z "${2:-}" ]; then
+    log Warning "stats: 'date -d @epoch' unsupported; pruning by file mtime instead."
+  fi
   for _f in "${TS_STATS_DIR}"/????-??-??.jsonl; do
     [ -f "$_f" ] || continue
     _base=$(basename "$_f" .jsonl)
-    if _date_lt "$_base" "$_cut"; then
+    if ! _in_retention "$_f" "$_base" "$1" "${2:-}"; then
       rm -f "$_f"
     fi
   done
@@ -57,12 +74,13 @@ prune_stats() {
 
 # Print the paths of stats files inside the retention window, oldest first.
 stats_recent_files() {
-  _cut_epoch=$(( $(date +%s) - RETENTION_DAYS * 86400 ))
-  _cut=$(date -d "@${_cut_epoch}" +%F 2>/dev/null)
+  _srf_cut=$(_stats_cutoff)
+  # shellcheck disable=SC2086 # intentional: "<epoch> <date>" splits into $1/$2
+  set -- ${_srf_cut}
   for _f in "${TS_STATS_DIR}"/????-??-??.jsonl; do
     [ -f "$_f" ] || continue
     _base=$(basename "$_f" .jsonl)
-    if [ -z "$_cut" ] || ! _date_lt "$_base" "$_cut"; then
+    if _in_retention "$_f" "$_base" "$1" "${2:-}"; then
       echo "$_f"
     fi
   done | sort
@@ -73,12 +91,12 @@ collect_once() {
   _file="${TS_STATS_DIR}/$(date +%F).jsonl"
 
   _status=$(tmo 10 tailscale --socket="$TS_SOCKET" status --json 2>/dev/null)
-  if [ -z "$_status" ] || ! printf '%s' "$_status" | jq -e . >/dev/null 2>&1; then
+  if [ -z "$_status" ] || ! printf '%s' "$_status" | jqr -e . >/dev/null 2>&1; then
     echo "{\"ts\":${_ts},\"error\":\"daemon-unreachable\"}" >>"$_file"
     prune_stats
     return 0
   fi
-  _peers=$(printf '%s' "$_status" | jq -c \
+  _peers=$(printf '%s' "$_status" | jqr -c \
     '[.Peer // {} | .[] | {id:(.ID|tostring),rx:(.RxBytes // 0),tx:(.TxBytes // 0)}]')
 
   _iface="null"
@@ -96,11 +114,11 @@ collect_once() {
   if iptables -L FOXY_STAT -n >/dev/null 2>&1; then
     _uids=$(iptables -nvxL FOXY_STAT 2>/dev/null \
       | awk '/owner UID match/ {print $2, $NF}' \
-      | jq -R -s -c 'split("\n") | map(select(length > 0) | split(" ")
+      | jqr -R -s -c 'split("\n") | map(select(length > 0) | split(" ")
           | {uid:.[1],rx:(.[0] | tonumber),tx:0})')
   fi
 
-  jq -n -c --argjson ts "$_ts" --argjson peers "$_peers" \
+  jqr -n -c --argjson ts "$_ts" --argjson peers "$_peers" \
     --argjson iface "$_iface" --argjson uids "$_uids" \
     '{ts:$ts,peers:$peers,iface:$iface,uids:$uids}' >>"$_file"
 
@@ -112,22 +130,15 @@ _stats_stop() {
 }
 
 do_start() {
-  if is_running; then
-    log Info "foxytail.stats already running (pid $(cat "$PID_FILE" 2>/dev/null))"
-    return 0
-  fi
-  echo "$$" >"$PID_FILE"
+  daemon_claim_pidfile foxytail.stats || return 0
   _stats_running=1
   trap '_stats_stop' TERM INT
   log Info "foxytail.stats started (pid $$, interval ${STATS_INTERVAL}s)"
   while [ "$_stats_running" = "1" ]; do
     collect_once
-    _int="${STATS_INTERVAL:-60}"
+    _int="${STATS_INTERVAL}"
     is_screen_on || _int=$((_int * 5))
-    sleep "$_int" &
-    _sleep_pid=$!
-    wait "$_sleep_pid" 2>/dev/null
-    kill "$_sleep_pid" 2>/dev/null
+    isleep "$_int"
   done
   rm -f "$PID_FILE"
   log Info "foxytail.stats stopped"
@@ -135,22 +146,16 @@ do_start() {
 }
 
 do_stop() {
-  if is_running; then
-    kill -TERM "$(cat "$PID_FILE")" 2>/dev/null
-    log Info "foxytail.stats stop requested"
-  else
-    rm -f "$PID_FILE"
-    log Info "foxytail.stats is not running"
-  fi
+  daemon_stop_pidfile foxytail.stats
 }
 
 do_status() {
-  if is_running; then
-    jq -n -c --argjson r true --argjson p "$(cat "$PID_FILE")" \
-      --argjson i "${STATS_INTERVAL:-60}" --arg d "$TS_STATS_DIR" \
+  if daemon_pid_alive foxytail.stats; then
+    jqr -n -c --argjson r true --argjson p "$(cat "$PID_FILE")" \
+      --argjson i "${STATS_INTERVAL}" --arg d "$TS_STATS_DIR" \
       '{running:$r,pid:$p,interval:$i,dir:$d}'
   else
-    jq -n -c --argjson r false --argjson i "${STATS_INTERVAL:-60}" \
+    jqr -n -c --argjson r false --argjson i "${STATS_INTERVAL}" \
       --arg d "$TS_STATS_DIR" '{running:$r,pid:null,interval:$i,dir:$d}'
   fi
 }
@@ -163,10 +168,10 @@ query() {
       _d="$1"
       _f="${TS_STATS_DIR}/${_d}.jsonl"
       if [ ! -f "$_f" ]; then
-        jq -n -c --arg d "$_d" '{date:$d,hours:[]}'
+        jqr -n -c --arg d "$_d" '{date:$d,hours:[]}'
         return 0
       fi
-      jq -s -c --arg d "$_d" '
+      jqr -s -c --arg d "$_d" '
         [ .[] | select(.error == null) ] as $s
         | { date: $d,
             hours: [ range(0; 24) | . as $h
@@ -188,7 +193,7 @@ query() {
       _lines=""
       for _f in $(stats_recent_files); do
         _d=$(basename "$_f" .jsonl)
-        _lines="${_lines}$(jq -s -c --arg d "$_d" '
+        _lines="${_lines}$(jqr -s -c --arg d "$_d" '
           [ .[] | select(.error == null and .iface != null) ] as $s
           | { date: $d, samples: ($s | length),
               rx: (if ($s | length) > 1 then
@@ -196,23 +201,25 @@ query() {
                    else 0 end),
               tx: (if ($s | length) > 1 then
                      [($s[-1].iface.tx - $s[0].iface.tx), 0] | max
-                   else 0 end) }' "$_f")\n"
+                   else 0 end) }' "$_f")
+"
       done
-      printf '%b' "$_lines" | jq -s -c '{days:.}'
+      printf '%s' "$_lines" | jqr -s -c '{days:.}'
       ;;
     topn)
       _n="$1"
       case "$_n" in '' | *[!0-9]*) _n=10 ;; esac
       _lines=""
       for _f in $(stats_recent_files); do
-        _lines="${_lines}$(jq -s -c '
+        _lines="${_lines}$(jqr -s -c '
           [ .[] | select(.error == null) | .peers[]? ]
           | group_by(.id) | .[]
           | { id: .[0].id,
               rx: ([(map(.rx) | max) - (map(.rx) | min), 0] | max),
-              tx: ([(map(.tx) | max) - (map(.tx) | min), 0] | max) }' "$_f")\n"
+              tx: ([(map(.tx) | max) - (map(.tx) | min), 0] | max) }' "$_f")
+"
       done
-      printf '%b' "$_lines" | jq -s -c --argjson n "$_n" '
+      printf '%s' "$_lines" | jqr -s -c --argjson n "$_n" '
         [ group_by(.id) | .[]
           | { id: .[0].id, rx: (map(.rx) | add), tx: (map(.tx) | add) }
           | select(.rx + .tx > 0) ]

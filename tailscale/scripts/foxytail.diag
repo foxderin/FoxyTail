@@ -12,16 +12,6 @@ ensure_run_dirs
 
 TS_SOCKET="${TS_RUN_DIR}/tailscaled.sock"
 
-tmo() {
-  if command -v timeout >/dev/null 2>&1; then
-    timeout "$@"
-  else
-    _tmo_s=$1
-    shift
-    "$@"
-  fi
-}
-
 collect() {
   _outdir="${1:-/sdcard/Download}"
 

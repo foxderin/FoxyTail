@@ -1,21 +1,21 @@
 #!/system/bin/sh
-# @title FoxyTail Policy Routing Engine
-# @header Idempotent policy routing through tailscale0 using dedicated
-# @header FOXY_* iptables chains, a dedicated routing table and an fwmark.
+# FoxyTail Policy Routing Engine
 #
-# @cmd apply | Install chains, marking rules, ip rule and subnet routes
-# @desc All rules live in FOXY_MARK (mangle) and FOXY_STAT (filter, counters
-# @desc for foxytail.stats); built-in chains get a single jump each. Every rule
-# @desc is checked with -C before being added, so apply is safe to re-run.
+# Idempotent policy routing through tailscale0 using dedicated FOXY_*
+# iptables chains, a dedicated routing table and an fwmark.
 #
-# @cmd teardown | Remove everything apply installed (best effort)
-# @desc Unmounts the jumps, flushes and deletes only the FOXY_* chains, removes
-# @desc the fwmark ip rule and flushes only the dedicated routing table.
-# @desc Individual failures never abort the teardown.
-#
-# @cmd reload | teardown + apply
-#
-# @cmd status | Show chains, counters, ip rule and route table summary
+# Subcommands:
+#   apply     Install chains, marking rules, ip rule and subnet routes. All
+#             rules live in FOXY_MARK (mangle) and FOXY_STAT (filter, counters
+#             for foxytail.stats); built-in chains get a single jump each.
+#             Every rule is checked with -C before being added, so apply is
+#             safe to re-run.
+#   teardown  Remove everything apply installed (best effort). Unmounts the
+#             jumps, flushes and deletes only the FOXY_* chains, removes the
+#             fwmark ip rule and flushes only the dedicated routing table.
+#             Individual failures never abort the teardown.
+#   reload    teardown + apply
+#   status    Show chains, counters, ip rule and route table summary.
 
 # POSIX sh (Android mksh / busybox). No bashisms, no `set -e`.
 
@@ -114,24 +114,32 @@ apply_marking_v6() {
       ;;
     selected)
       if ! owner_supported; then
-        rule_ensure ip6tables mangle "${CHAIN_MARK}" -j MARK --set-xmark "${FWMARK}" 2>/dev/null
+        log Warning "xt_owner not supported by this kernel; falling back to ROUTE_SCOPE=all semantics (IPv6)."
+        rule_ensure ip6tables mangle "${CHAIN_MARK}" -j MARK --set-xmark "${FWMARK}" ||
+          log Warning "failed to add v6 catch-all MARK rule."
         return 0
       fi
       # shellcheck disable=SC2086 # intentional: UID_LIST is space-separated
       for _am6_uid in ${UID_LIST}; do
-        rule_ensure ip6tables mangle "${CHAIN_MARK}" -m owner --uid-owner "${_am6_uid}" -j MARK --set-xmark "${FWMARK}" 2>/dev/null
+        rule_ensure ip6tables mangle "${CHAIN_MARK}" -m owner --uid-owner "${_am6_uid}" -j MARK --set-xmark "${FWMARK}" ||
+          log Warning "failed to add v6 MARK rule for UID ${_am6_uid}."
       done
       ;;
     bypass)
       if ! owner_supported; then
-        rule_ensure ip6tables mangle "${CHAIN_MARK}" -j MARK --set-xmark "${FWMARK}" 2>/dev/null
+        log Warning "xt_owner not supported by this kernel; falling back to ROUTE_SCOPE=all semantics (IPv6)."
+        rule_ensure ip6tables mangle "${CHAIN_MARK}" -j MARK --set-xmark "${FWMARK}" ||
+          log Warning "failed to add v6 catch-all MARK rule."
         return 0
       fi
+      # Exempted UIDs RETURN first, everything else gets marked.
       # shellcheck disable=SC2086 # intentional: UID_LIST is space-separated
       for _am6_uid in ${UID_LIST}; do
-        rule_ensure ip6tables mangle "${CHAIN_MARK}" -m owner --uid-owner "${_am6_uid}" -j RETURN 2>/dev/null
+        rule_ensure ip6tables mangle "${CHAIN_MARK}" -m owner --uid-owner "${_am6_uid}" -j RETURN ||
+          log Warning "failed to add v6 bypass rule for UID ${_am6_uid}."
       done
-      rule_ensure ip6tables mangle "${CHAIN_MARK}" -j MARK --set-xmark "${FWMARK}" 2>/dev/null
+      rule_ensure ip6tables mangle "${CHAIN_MARK}" -j MARK --set-xmark "${FWMARK}" ||
+        log Warning "failed to add v6 catch-all MARK rule."
       ;;
   esac
 }
@@ -176,9 +184,6 @@ apply_routes() {
 route_apply() {
   ensure_run_dirs
   load_conf
-  ROUTE_SCOPE="${ROUTE_SCOPE:-all}"
-  UID_LIST="${UID_LIST:-}"
-  ROUTE_SUBNETS="${ROUTE_SUBNETS:-100.64.0.0/10}"
 
   if ! iface_exists; then
     log Error "interface ${TUN_IFACE} does not exist; cannot apply routing (mode ${TS_MODE})."
@@ -273,8 +278,6 @@ route_teardown() {
 route_status() {
   ensure_run_dirs
   load_conf
-  ROUTE_SCOPE="${ROUTE_SCOPE:-all}"
-  ROUTE_SUBNETS="${ROUTE_SUBNETS:-100.64.0.0/10}"
 
   printf '%s\n' "${blue}Policy Routing Status${normal}"
   printf '%s\n' "  ${blue}Scope:${normal} ${yellow}${ROUTE_SCOPE}${normal}  ${blue}Table:${normal} ${yellow}${ROUTE_TABLE}${normal}  ${blue}fwmark:${normal} ${yellow}${FWMARK}${normal}  ${blue}IPv6:${normal} ${yellow}${IPV6}${normal}"

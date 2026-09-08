@@ -48,11 +48,15 @@ DIR=$(dirname "$(realpath "$0")")
 
 scripts_name=$(basename "$0")
 TS_SOCKET="${TS_RUN_DIR}/tailscaled.sock"
-TS_PID_FILE="${TS_PID_DIR}/tailscaled.pid"
+PID_FILE="${TS_PID_DIR}/tailscaled.pid"
 
-# Print PIDs matching a full command-line pattern (multi-PID safe).
+# Print PIDs of OUR tailscaled daemon (multi-PID safe). A bare
+# `pgrep -f tailscaled` would also match `tail -F tailscaled.log`, the
+# `tailscale` CLI (`tailscale --socket=... status`) and friends, so every
+# candidate is verified against /proc/<pid>/cmdline: argv[0] must be the
+# tailscaled binary itself (invoked by name or by absolute path).
 daemon_pids() {
-  busybox pgrep -f "${TS_DAEMON_CMD}" 2>/dev/null || pgrep -f "${TS_DAEMON_CMD}" 2>/dev/null
+  pids_of_path "${TS_BIN_DIR}/${TS_DAEMON_CMD}"
 }
 
 is_running() {
@@ -76,18 +80,12 @@ update_mod_desc() {
     _umd_state="✘ tailscaled service is stopped"
   fi
   [ -f "${TS_MOD_PROP}" ] || return 0
-  sed -Ei "s/^description=(\[.*][[:space:]]*)?/description=[ ⏲ ${_umd_time} | ${_umd_state} ] /" "${TS_MOD_PROP}"
+  sed -i "s/^description=\(\[.*][[:space:]]*\)\{0,1\}/description=[ ⏲ ${_umd_time} | ${_umd_state} ] /" "${TS_MOD_PROP}"
 }
 
 # Wait up to 10s for the tailscaled socket to appear.
 wait_socket() {
-  _ws_i=0
-  while [ "${_ws_i}" -lt 20 ]; do
-    [ -S "${TS_SOCKET}" ] && return 0
-    sleep 0.5
-    _ws_i=$((_ws_i + 1))
-  done
-  return 1
+  wait_for "tailscaled socket" test -S "${TS_SOCKET}"
 }
 
 build_daemon_cmd() {
@@ -130,7 +128,7 @@ start_service() {
   log Debug "daemon command: ${_ss_cmd}"
   # shellcheck disable=SC2086 # intentional: split daemon command into argv
   nohup ${_ss_cmd} >>"${TS_LOG_FILE}" 2>&1 &
-  echo "$!" >"${TS_PID_FILE}"
+  echo "$!" >"${PID_FILE}"
 
   if ! wait_socket; then
     if ! is_running >/dev/null 2>&1; then
@@ -141,23 +139,36 @@ start_service() {
   fi
 
   update_mod_desc running
-  log Success "tailscaled started (PID: $(cat "${TS_PID_FILE}" 2>/dev/null))."
+  log Success "tailscaled started (PID: $(cat "${PID_FILE}" 2>/dev/null))."
 
-  # Companion pieces. Missing helpers are tolerated: they are optional layers.
+  # Companion pieces. Missing helpers are tolerated: they are optional
+  # layers. A present helper that fails must NOT be swallowed: propagate the
+  # failure so callers (foxytail.webapi.sh control) can report ok:false.
+  _ss_failed=""
   case "${TS_MODE}" in
     bridge)
-      [ -x "${TS_SCRIPTS_DIR}/foxytail.tun" ] && "${TS_SCRIPTS_DIR}/foxytail.tun" start
-      [ -x "${TS_SCRIPTS_DIR}/foxytail.route" ] && "${TS_SCRIPTS_DIR}/foxytail.route" apply
+      if [ -x "${TS_SCRIPTS_DIR}/foxytail.tun" ]; then
+        "${TS_SCRIPTS_DIR}/foxytail.tun" start || _ss_failed="${_ss_failed} foxytail.tun"
+      fi
+      if [ -x "${TS_SCRIPTS_DIR}/foxytail.route" ]; then
+        "${TS_SCRIPTS_DIR}/foxytail.route" apply || _ss_failed="${_ss_failed} foxytail.route"
+      fi
       ;;
     tun)
-      [ -x "${TS_SCRIPTS_DIR}/foxytail.route" ] && "${TS_SCRIPTS_DIR}/foxytail.route" apply
+      if [ -x "${TS_SCRIPTS_DIR}/foxytail.route" ]; then
+        "${TS_SCRIPTS_DIR}/foxytail.route" apply || _ss_failed="${_ss_failed} foxytail.route"
+      fi
       ;;
     proxy)
       log Debug "proxy mode: no interface, skipping hev tunnel and policy routing."
       ;;
   esac
   if [ "${MAGIC_DNS}" = "on" ] && [ -x "${TS_SCRIPTS_DIR}/foxytail.dns" ]; then
-    "${TS_SCRIPTS_DIR}/foxytail.dns" start
+    "${TS_SCRIPTS_DIR}/foxytail.dns" start || _ss_failed="${_ss_failed} foxytail.dns"
+  fi
+  if [ -n "${_ss_failed}" ]; then
+    log Error "companion layer(s) failed:${_ss_failed} (tailscaled itself is up)."
+    return 1
   fi
   return 0
 }
@@ -175,36 +186,18 @@ stop_service() {
   _st_pids=$(daemon_pids)
   if [ -z "${_st_pids}" ]; then
     log Info "✘ tailscaled service is not running."
-    rm -f "${TS_PID_FILE}"
+    rm -f "${PID_FILE}"
     update_mod_desc stopped
     return 0
   fi
 
-  # Graceful: TERM every matching PID, then wait for self cleanup.
-  # shellcheck disable=SC2086 # intentional: one PID per word
-  for _st_pid in ${_st_pids}; do
-    kill -TERM "${_st_pid}" 2>/dev/null
-  done
-  sleep 3
-
-  _st_pids=$(daemon_pids)
-  if [ -n "${_st_pids}" ]; then
-    log Warning "⚠ tailscaled still running after TERM; force killing."
-    # Fix vs. original project: loop over each PID instead of passing the
-    # whole multi-line pgrep output to a single quoted kill.
-    # shellcheck disable=SC2086 # intentional: one PID per word
-    for _st_pid in ${_st_pids}; do
-      kill -KILL "${_st_pid}" 2>/dev/null
-    done
-    sleep 1
-  fi
-
-  if [ -n "$(daemon_pids)" ]; then
-    log Error "tailscaled could not be stopped."
+  # Graceful: TERM every matching PID, wait for self cleanup, then KILL and
+  # verify any survivor.
+  if ! stop_by_pids tailscaled "${_st_pids}"; then
     return 1
   fi
 
-  rm -f "${TS_PID_FILE}"
+  rm -f "${PID_FILE}"
   update_mod_desc stopped
   log Info "✘ tailscaled shut down, service is stopped."
   return 0
@@ -221,7 +214,6 @@ humanize_bytes() {
 
 status_service() {
   _ss_mode="${1:-summary}"
-  _ss_jq="${TS_BIN_DIR}/jq"
   echo "${blue}Service Status Info${normal}"
   echo ""
   if ! is_running >/dev/null 2>&1; then
@@ -231,7 +223,7 @@ status_service() {
 
   printf '%s' "  ${blue}Daemon: ${green}running${normal}"
   _ss_status=$(timeout 10 tailscale --socket="${TS_SOCKET}" status --json 2>/dev/null || echo '{}')
-  _ss_backend=$(echo "${_ss_status}" | "${_ss_jq}" -r '.BackendState // "unknown"')
+  _ss_backend=$(echo "${_ss_status}" | jqr -r '.BackendState // "unknown"')
   if [ "${_ss_backend}" != "Running" ]; then
     printf '%s\n' " | ${blue}Backend: ${yellow}${_ss_backend}${normal}"
     return 1
@@ -242,23 +234,23 @@ status_service() {
 
   case "${_ss_mode}" in
     summary|all)
-      _ss_hostname=$(echo "${_ss_status}" | "${_ss_jq}" -r '.Self.HostName // "-"')
-      _ss_os=$(echo "${_ss_status}" | "${_ss_jq}" -r '.Self.OS // "-"')
-      _ss_relay=$(echo "${_ss_status}" | "${_ss_jq}" -r '.Self.Relay // empty')
+      _ss_hostname=$(echo "${_ss_status}" | jqr -r '.Self.HostName // "-"')
+      _ss_os=$(echo "${_ss_status}" | jqr -r '.Self.OS // "-"')
+      _ss_relay=$(echo "${_ss_status}" | jqr -r '.Self.Relay // empty')
       if [ -f "${TS_DIR}/derpmap.cached.json" ] && [ -n "${_ss_relay}" ]; then
-        _ss_relay_name=$("${_ss_jq}" -r --arg code "${_ss_relay}" '.Regions | to_entries[] | select(.value.RegionCode == $code) | .value.RegionName' "${TS_DIR}/derpmap.cached.json" 2>/dev/null)
+        _ss_relay_name=$(jqr -r --arg code "${_ss_relay}" '.Regions | to_entries[] | select(.value.RegionCode == $code) | .value.RegionName' "${TS_DIR}/derpmap.cached.json" 2>/dev/null)
         [ -n "${_ss_relay_name}" ] && _ss_relay="${_ss_relay_name}"
       fi
       [ -z "${_ss_relay}" ] && _ss_relay="-"
-      _ss_ipv4=$(echo "${_ss_status}" | "${_ss_jq}" -r '.Self.TailscaleIPs[0] // "-"')
-      _ss_ipv6=$(echo "${_ss_status}" | "${_ss_jq}" -r '.Self.TailscaleIPs[1] // "-"')
+      _ss_ipv4=$(echo "${_ss_status}" | jqr -r '.Self.TailscaleIPs[0] // "-"')
+      _ss_ipv6=$(echo "${_ss_status}" | jqr -r '.Self.TailscaleIPs[1] // "-"')
 
       printf '%s\n' "  ${blue}Self:${normal} ${yellow}${_ss_hostname}${normal} ${orange}(${_ss_os})${normal}"
       printf '%s\n' "    ↳ Relay: ${yellow}${_ss_relay}${normal}"
       printf '%s\n' "    ↳ Tailscale IPs: ${yellow}${_ss_ipv4}${normal}, ${yellow}${_ss_ipv6}${normal}"
 
-      _ss_dns_on=$(echo "${_ss_status}" | "${_ss_jq}" -r '.CurrentTailnet.MagicDNSEnabled // false')
-      _ss_dns_suffix=$(echo "${_ss_status}" | "${_ss_jq}" -r '.MagicDNSSuffix // empty')
+      _ss_dns_on=$(echo "${_ss_status}" | jqr -r '.CurrentTailnet.MagicDNSEnabled // false')
+      _ss_dns_suffix=$(echo "${_ss_status}" | jqr -r '.MagicDNSSuffix // empty')
       printf '%s' "    ↳ DNS: "
       if [ "${_ss_dns_on}" = "true" ]; then
         printf '%s\n' "${green}Enabled${normal} (${yellow}${_ss_dns_suffix}${normal})"
@@ -266,9 +258,9 @@ status_service() {
         printf '%s\n' "${red}Disabled${normal}"
       fi
 
-      _ss_addr_count=$(echo "${_ss_status}" | "${_ss_jq}" -r '.Self.Addrs | length')
+      _ss_addr_count=$(echo "${_ss_status}" | jqr -r '.Self.Addrs | length')
       printf '%s\n' "    ↳ Endpoints ${orange}(${_ss_addr_count})${normal}:"
-      echo "${_ss_status}" | "${_ss_jq}" -r '.Self.Addrs[]?' | while IFS= read -r _ss_addr; do
+      echo "${_ss_status}" | jqr -r '.Self.Addrs[]?' | while IFS= read -r _ss_addr; do
         _ss_ip=$(echo "${_ss_addr}" | sed 's/\[//g;s/\].*//g;s/:.*//g')
         _ss_iface=$(ip -o addr show 2>/dev/null | grep -F "${_ss_ip}" | awk '{print $2}' | head -1)
 
@@ -288,13 +280,13 @@ status_service() {
       done
       echo ""
 
-      _ss_exit_id=$(echo "${_ss_status}" | "${_ss_jq}" -r '.ExitNodeStatus.ID // empty')
+      _ss_exit_id=$(echo "${_ss_status}" | jqr -r '.ExitNodeStatus.ID // empty')
       if [ -n "${_ss_exit_id}" ]; then
-        _ss_exit_online=$(echo "${_ss_status}" | "${_ss_jq}" -r '.ExitNodeStatus.Online // false')
-        _ss_exit_ip=$(echo "${_ss_status}" | "${_ss_jq}" -r '.ExitNodeStatus.TailscaleIPs[0] // "-"' | cut -d'/' -f1)
-        _ss_exit_host=$(echo "${_ss_status}" | "${_ss_jq}" -r --arg id "${_ss_exit_id}" '.Peer | to_entries[] | select(.value.ID == $id) | .value.HostName')
-        _ss_exit_rx=$(echo "${_ss_status}" | "${_ss_jq}" -r --arg id "${_ss_exit_id}" '.Peer | to_entries[] | select(.value.ID == $id) | .value.RxBytes')
-        _ss_exit_tx=$(echo "${_ss_status}" | "${_ss_jq}" -r --arg id "${_ss_exit_id}" '.Peer | to_entries[] | select(.value.ID == $id) | .value.TxBytes')
+        _ss_exit_online=$(echo "${_ss_status}" | jqr -r '.ExitNodeStatus.Online // false')
+        _ss_exit_ip=$(echo "${_ss_status}" | jqr -r '.ExitNodeStatus.TailscaleIPs[0] // "-"' | cut -d'/' -f1)
+        _ss_exit_host=$(echo "${_ss_status}" | jqr -r --arg id "${_ss_exit_id}" '.Peer | to_entries[] | select(.value.ID == $id) | .value.HostName')
+        _ss_exit_rx=$(echo "${_ss_status}" | jqr -r --arg id "${_ss_exit_id}" '.Peer | to_entries[] | select(.value.ID == $id) | .value.RxBytes')
+        _ss_exit_tx=$(echo "${_ss_status}" | jqr -r --arg id "${_ss_exit_id}" '.Peer | to_entries[] | select(.value.ID == $id) | .value.TxBytes')
         if [ "${_ss_exit_online}" = "true" ]; then
           printf '%s\n' "  ${blue}Exit Node: ${green}Connected${normal} to ${yellow}${_ss_exit_host}${normal}"
         else
@@ -307,17 +299,17 @@ status_service() {
       ;;
   esac
 
-  _ss_online=$(echo "${_ss_status}" | "${_ss_jq}" '[.Peer | to_entries | .[] | select(.value.Online == true)] | length')
-  _ss_offline=$(echo "${_ss_status}" | "${_ss_jq}" '[.Peer | to_entries | .[] | select(.value.Online == false)] | length')
-  _ss_exit_on=$(echo "${_ss_status}" | "${_ss_jq}" '[.Peer | to_entries | .[] | select(.value.ExitNodeOption == true and .value.Online == true)] | length')
-  _ss_exit_off=$(echo "${_ss_status}" | "${_ss_jq}" '[.Peer | to_entries | .[] | select(.value.ExitNodeOption == true and .value.Online == false)] | length')
+  _ss_online=$(echo "${_ss_status}" | jqr '[.Peer | to_entries | .[] | select(.value.Online == true)] | length')
+  _ss_offline=$(echo "${_ss_status}" | jqr '[.Peer | to_entries | .[] | select(.value.Online == false)] | length')
+  _ss_exit_on=$(echo "${_ss_status}" | jqr '[.Peer | to_entries | .[] | select(.value.ExitNodeOption == true and .value.Online == true)] | length')
+  _ss_exit_off=$(echo "${_ss_status}" | jqr '[.Peer | to_entries | .[] | select(.value.ExitNodeOption == true and .value.Online == false)] | length')
 
   case "${_ss_mode}" in
     summary)
       printf '%s\n' "  ${blue}Peers:${normal} ${green}${_ss_online} online${normal}, ${red}${_ss_offline} offline${normal}"
       printf '%s' "    ↳ By OS: "
       _ss_first=true
-      echo "${_ss_status}" | "${_ss_jq}" -r '
+      echo "${_ss_status}" | jqr -r '
         [.Peer | to_entries | .[] | {os: .value.OS, online: .value.Online}] |
         group_by(.os) |
         map({
@@ -337,7 +329,7 @@ status_service() {
       printf '\n'
       printf '%s\n' "    ↳ By Relay:"
       if [ -f "${TS_DIR}/derpmap.cached.json" ]; then
-        echo "${_ss_status}" | "${_ss_jq}" -r --slurpfile derp "${TS_DIR}/derpmap.cached.json" '
+        echo "${_ss_status}" | jqr -r --slurpfile derp "${TS_DIR}/derpmap.cached.json" '
           [.Peer | to_entries | .[].value.Relay] | group_by(.) | map(. as $group | {
             code: $group[0],
             count: ($group | length),
@@ -347,7 +339,7 @@ status_service() {
           printf '%s\n' "      ↳ ${_ss_region}: ${yellow}${_ss_count}${normal}"
         done
       else
-        echo "${_ss_status}" | "${_ss_jq}" -r '[.Peer | to_entries | .[].value.Relay] | group_by(.) | .[] | "\(.[0]):\(length)"' | while IFS=: read -r _ss_region _ss_count; do
+        echo "${_ss_status}" | jqr -r '[.Peer | to_entries | .[].value.Relay] | group_by(.) | .[] | "\(.[0]):\(length)"' | while IFS=: read -r _ss_region _ss_count; do
           printf '%s\n' "      ↳ ${_ss_region}: ${yellow}${_ss_count}${normal}"
         done
       fi
@@ -355,7 +347,7 @@ status_service() {
       ;;
     peer|all)
       printf '%s\n' "  ${blue}Peers:${normal} ${green}${_ss_online} online${normal}, ${red}${_ss_offline} offline${normal}"
-      echo "${_ss_status}" | "${_ss_jq}" -r --arg green "${green}" --arg red "${red}" --arg orange "${orange}" --arg yellow "${yellow}" --arg normal "${normal}" '
+      echo "${_ss_status}" | jqr -r --arg green "${green}" --arg red "${red}" --arg orange "${orange}" --arg yellow "${yellow}" --arg normal "${normal}" '
         (.Peer | to_entries | map(select(.value.Online == true)) | "    ↳ Online (\($green)\(length)\($normal))"),
         (.Peer | to_entries | map(select(.value.Online == true)) | .[] | "      ↳ \($green)\(.value.HostName)\($normal)\t\($orange)\(.value.Relay)\($normal) \($yellow)\(.value.TailscaleIPs[0])\($normal) \($orange)\(.value.OS)\($normal)"),
         (.Peer | to_entries | map(select(.value.Online == false)) | "    ↳ Offline (\($red)\(length)\($normal))"),
@@ -368,7 +360,7 @@ status_service() {
   case "${_ss_mode}" in
     exit-node|all)
       printf '%s\n' "  ${blue}Exit Nodes:${normal} ${green}${_ss_exit_on} online${normal}, ${red}${_ss_exit_off} offline${normal}"
-      echo "${_ss_status}" | "${_ss_jq}" -r --arg green "${green}" --arg red "${red}" --arg orange "${orange}" --arg yellow "${yellow}" --arg normal "${normal}" '.Peer | to_entries | map(select(.value.ExitNodeOption == true)) | .[] | if .value.Online then "    ↳ \($green)\(.value.HostName)\($normal)\t\($orange)\(.value.Relay)\($normal) \($yellow)\(.value.TailscaleIPs[0])\($normal) \($orange)\(.value.OS)\($normal)" else "    ↳ \($red)\(.value.HostName)\($normal)\t\($orange)\(.value.Relay)\($normal) \($yellow)\(.value.TailscaleIPs[0])\($normal) \($orange)\(.value.OS)\($normal)" end' | while IFS= read -r _ss_line; do echo "${_ss_line}"; done
+      echo "${_ss_status}" | jqr -r --arg green "${green}" --arg red "${red}" --arg orange "${orange}" --arg yellow "${yellow}" --arg normal "${normal}" '.Peer | to_entries | map(select(.value.ExitNodeOption == true)) | .[] | if .value.Online then "    ↳ \($green)\(.value.HostName)\($normal)\t\($orange)\(.value.Relay)\($normal) \($yellow)\(.value.TailscaleIPs[0])\($normal) \($orange)\(.value.OS)\($normal)" else "    ↳ \($red)\(.value.HostName)\($normal)\t\($orange)\(.value.Relay)\($normal) \($yellow)\(.value.TailscaleIPs[0])\($normal) \($orange)\(.value.OS)\($normal)" end' | while IFS= read -r _ss_line; do echo "${_ss_line}"; done
       ;;
   esac
   return 0
@@ -508,7 +500,10 @@ EOF
 }
 
 restart_service() {
-  stop_service
+  if ! stop_service; then
+    log Error "restart aborted: stop failed; not starting again."
+    return 1
+  fi
   sleep 1
   start_service
 }
