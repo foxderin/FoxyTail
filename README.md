@@ -1,6 +1,6 @@
 # FoxyTail
 
-**Tailscale mesh VPN on Android as a Magisk/KernelSU module** — `tailscaled` runs natively on the device, with three run modes, policy-based routing, traffic analytics, MagicDNS split-DNS, coexistence probes for other proxy/firewall modules, a watchdog, network-context awareness, one-shot diagnostics, and a WebUI (in progress) for day-to-day management.
+**Tailscale mesh VPN on Android as a Magisk/KernelSU module** — `tailscaled` runs natively on the device, with three run modes, policy-based routing, traffic analytics, MagicDNS split-DNS, coexistence probes for other proxy/firewall modules, a watchdog, network-context awareness, one-shot diagnostics, and a built-in WebUI for day-to-day management.
 
 Data directory: `/data/adb/foxytail` (binaries, scripts, config, state, backups).
 Module config: [tailscale/conf/foxytail.conf](tailscale/conf/foxytail.conf), [routes.conf](tailscale/conf/routes.conf), [context.conf](tailscale/conf/context.conf).
@@ -26,7 +26,7 @@ FoxyTail is inspired by [anasfanani/Magisk-Tailscaled](https://github.com/anasfa
 | Network-context awareness (`foxytail.context`) | ✅ | rules by Wi-Fi SSID / cellular |
 | One-shot diagnostics bundle (`foxytail.diag`) | ✅ | tar.gz to `/sdcard/Download` |
 | Module toggle via manager | ✅ | inotify watcher on the disable flag |
-| WebUI (12 pages) | 🚧 | under active development; may be incomplete, see below |
+| WebUI (12 pages) | ✅ | KernelSU/MMRL only (the Magisk app has no WebUI support), see below |
 | Light / full release zips, `update.json` OTA | ✅ | |
 
 ## Installation
@@ -39,6 +39,10 @@ Two packages are published on the [Releases](../../releases) page:
 Flash either zip in Magisk Manager, KernelSU Manager or MMRL, then reboot (or use the `/dev/` shortcuts the installer prints until you do).
 
 Requirements: arm or arm64 device, Magisk v20.4+ or KernelSU ≥ 10670. Upgrades preserve your state, config and hook files (see below).
+
+## Uninstall & reinstall
+
+Removing the module from Magisk/KernelSU runs `uninstall.sh`: every FoxyTail component is stopped, the routing/DNS chains are torn down, and `/data/adb/foxytail` is deleted — **but your Tailscale identity is not lost**. Before deletion, `tailscaled.state` is moved to `/data/adb/foxytail-state.backup`. On the next install, if no state exists yet, the installer restores that backup automatically (and prints a notice), so you come back as the same node, still logged in. Delete `/data/adb/foxytail-state.backup` manually if you want a fresh identity.
 
 ## Quick start
 
@@ -72,17 +76,17 @@ All entry points live in `/data/adb/foxytail/scripts/` and are symlinked into `s
 | `foxytail.compat` | `probe` `check` `check-dns-hijack` `suggest` | detect coexisting proxy/firewall/VPN tools; verify `FOXY_*` chains survive |
 | `foxytail.diag` | `collect [output-dir]` | one-shot diagnostics tar.gz (default `/sdcard/Download`) |
 
-Plus the stock `tailscale` CLI (`tailscale` is a symlink to `tailscaled`; `--socket` is preconfigured via `PATH`/`foxytail.service`, for raw use: `tailscale --socket=/data/adb/foxytail/run/tailscaled.sock …`).
+Plus the stock `tailscale` CLI (`tailscale` is a symlink to `tailscaled`; for raw use pass the socket explicitly: `tailscale --socket=/data/adb/foxytail/run/tailscaled.sock …`).
 
 ## WebUI
 
-🚧 **Under active development.** The WebUI lives in `webroot/` (zero-build static HTML/JS, backed by the `foxytail.webapi.sh` JSON API) and may still be incomplete in this release. How it works:
+The WebUI is built in: it lives in `webroot/` (zero-build static HTML/JS, backed by the `foxytail.webapi.sh` JSON API). How to use it:
 
 - Open it from the **KernelSU manager** or **MMRL**. The **official Magisk app does not support module WebUIs** — that button will not exist there.
-- Pages (bottom nav + "More" group): Dashboard · Peers (list + canvas topology) · Exit Nodes · Account · Tunnel · Routing · Traffic · Serve · Files (Taildrop) · Logs · Settings · Diagnostics.
+- 12 pages (bottom nav + "More" group): Dashboard · Peers (list + canvas topology) · Exit Nodes · Account · Tunnel · Routing · Traffic · Serve · Files (Taildrop) · Logs · Settings · Diagnostics.
 - No third-party libraries; i18n (Chinese/English) and light/dark themes.
 
-<!-- Screenshots: docs/screenshots/*.png (placeholder until the WebUI lands) -->
+<!-- Screenshots: docs/screenshots/*.png (to be added, see Roadmap) -->
 
 ## Configuration
 
@@ -175,7 +179,7 @@ FoxyTail never touches other modules' chains and probes for neighbors at boot (`
 
 - **arm / arm64 only** — the installer aborts on other architectures.
 - Default `bridge` mode is userspace networking: throughput is lower than kernel TUN (`tun` mode where available).
-- The WebUI is under active development and may be incomplete; QR-code login is not embedded — use the login URL printed by `tailscale login`.
+- QR-code login is not embedded in the WebUI — use the login URL printed by `tailscale login`.
 - SSID detection parses `dumpsys wifi` output, whose format varies across Android versions (tolerant parsing, worst case "unknown").
 - per-App routing requires kernel `xt_owner`; the installer prints a warning when it is missing.
 - MagicDNS requires a user-supplied dnsmasq binary (above).
@@ -192,9 +196,9 @@ The watchdog restarts a crashed tailscaled automatically (rate-limited: 5 restar
 
 ## Roadmap
 
-- Full WebUI (12 pages listed above), incl. canvas topology, Taildrop file transfer, serve/funnel management, node-key expiry banner
-- Exit-node latency ranking and one-tap fastest switch (CLI/WebUI)
-- Config backup/restore to `/sdcard`
+- Screenshots of the WebUI under `docs/screenshots/`, embedded in this README
+- A trusted static `dnsmasq` source for Android, so MagicDNS works out of the box
+- Real-device compatibility matrix (Android versions × kernels × coexisting proxy modules)
 
 ## Credits
 

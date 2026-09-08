@@ -29,6 +29,10 @@ fi
 if [ "${KSU:-false}" = true ] && [ "${KSU_VER_CODE:-0}" -lt 10670 ]; then
   abort "! KernelSU too old: please update KernelSU and its manager (>= 10670)"
 fi
+# MAGISK_VER_CODE is exported by util_functions.sh (sourced by update-binary).
+if [ "${KSU:-false}" != true ] && [ "${MAGISK_VER_CODE:-0}" -lt 20400 ]; then
+  abort "! Magisk too old: please update to Magisk v20.4+ (versionCode >= 20400)"
+fi
 
 TS_DIR="/data/adb/foxytail"
 TS_BIN_DIR="${TS_DIR}/bin"
@@ -104,6 +108,21 @@ if [ -d "$TS_DIR" ]; then
 fi
 
 mkdir -p "$TS_BIN_DIR" "$TS_SCRIPTS_DIR" "$TS_CONF_DIR"
+
+# --- Restore state left behind by uninstall.sh --------------------------------
+# uninstall.sh moves tailscaled.state to /data/adb/foxytail-state.backup before
+# wiping $TS_DIR. On a reinstall with no state of its own yet, adopt that
+# backup so the node keeps its identity and login.
+
+STATE_BACKUP="/data/adb/foxytail-state.backup"
+if [ -f "$STATE_BACKUP" ] &&
+  [ ! -f "${TS_DIR}/state/tailscaled.state" ] &&
+  [ ! -f "${TS_DIR}/tailscaled.state" ]; then
+  mkdir -p "${TS_DIR}/state"
+  mv "$STATE_BACKUP" "${TS_DIR}/state/tailscaled.state"
+  ui_print "- Restored tailscaled state from a previous install"
+  ui_print "  (${STATE_BACKUP} -> state/tailscaled.state)"
+fi
 
 # --- Extract module files ----------------------------------------------------
 # Everything under tailscale/ except settings.sh lives in $TS_DIR, not in the

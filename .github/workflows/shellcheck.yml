@@ -16,10 +16,13 @@ jobs:
 
       # .shellcheckrc (external-sources, SC2034) is picked up automatically.
       # Any finding at severity=warning or above fails the job.
+      # META-INF/.../update-binary is the stock Magisk installer template; it
+      # currently passes at warning level and is linted like our own scripts.
       - name: Lint POSIX sh scripts
         run: |
           shopt -s nullglob
-          files=(customize.sh service.sh uninstall.sh tailscale/settings.sh)
+          files=(customize.sh service.sh uninstall.sh tailscale/settings.sh
+            META-INF/com/google/android/update-binary)
           for f in tailscale/scripts/*; do
             case "$f" in
               *.yaml) ;; # hev config template, not a shell script

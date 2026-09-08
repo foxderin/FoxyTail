@@ -1,4 +1,5 @@
 dist/
 tailscale/bin/
 *.zip
+*.tmp
 .DS_Store

@@ -39,25 +39,32 @@ jobs:
         if: github.event_name == 'workflow_dispatch' && inputs.bump != 'none'
         run: bash ./.github/tools/version-bump.sh "${{ inputs.bump }}"
 
-      - name: Sync version from tag (tag push)
+      - name: Validate tag format (tag push)
+        if: github.event_name == 'push'
+        run: |
+          TAG="${GITHUB_REF_NAME}"
+          if ! echo "$TAG" | grep -qE '^v[0-9]+\.[0-9]+\.[0-9]+(-rc\.[0-9]+)?$'; then
+            echo "error: tag '$TAG' does not match the required format" >&2
+            echo "       expected: v<major>.<minor>.<patch> or v<major>.<minor>.<patch>-rc.<n>" >&2
+            echo "       examples: v1.2.3, v1.2.3-rc.1" >&2
+            exit 1
+          fi
+
+      # Provenance guard: the zip must be built from the tagged commit, so the
+      # tag version must already match module.prop. Bumping silently here would
+      # produce a zip whose module.prop differs from the tagged tree.
+      - name: Verify tag matches module.prop (tag push)
         if: github.event_name == 'push'
         run: |
           TAG_VERSION="${GITHUB_REF_NAME}"
           CURRENT=$(grep '^version=' module.prop | cut -d= -f2)
           if [ "$TAG_VERSION" != "$CURRENT" ]; then
-            echo "Tag $TAG_VERSION != module.prop $CURRENT; syncing version files"
-            NUM="${TAG_VERSION#v}"
-            NUM="${NUM%%-*}" # drop any -rc suffix for the versionCode math
-            IFS='.' read -r MAJOR MINOR PATCH <<<"$NUM"
-            CODE=$(( MAJOR * 10000 + MINOR * 100 + PATCH ))
-            sed -i "s/^version=.*/version=${TAG_VERSION}/" module.prop
-            sed -i "s/^versionCode=.*/versionCode=${CODE}/" module.prop
-            jq --arg v "$TAG_VERSION" --argjson vc "$CODE" \
-              '.version = $v | .versionCode = $vc' update.json > update.json.tmp
-            mv update.json.tmp update.json
-          else
-            echo "Tag matches module.prop ($CURRENT)"
+            echo "error: tag $TAG_VERSION does not match module.prop version $CURRENT" >&2
+            echo "       run '.github/tools/version-bump.sh' first, commit the version" >&2
+            echo "       files, and only then create the tag" >&2
+            exit 1
           fi
+          echo "Tag matches module.prop ($CURRENT)"
 
       - name: Resolve version and prerelease flag
         id: meta

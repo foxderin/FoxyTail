@@ -68,11 +68,12 @@ trap 'rm -rf "$WORK_DIR"' EXIT
 for ARCH in arm arm64; do
   case $ARCH in
     arm)
-      F_ARCH=armv7a
+      # Upstream asset names are irregular: only arm carries -androideabi.
+      JQ_ASSET=jq-armv7a-linux-androideabi
       HEV_ARCH=arm32v7
       ;;
     arm64)
-      F_ARCH=aarch64
+      JQ_ASSET=jq-aarch64-linux-android
       HEV_ARCH=arm64
       ;;
   esac
@@ -84,7 +85,7 @@ for ARCH in arm arm64; do
   mv "$WORK_DIR/tailscaled" "${BIN_DIR}/tailscaled-${ARCH}"
 
   echo "[${ARCH}] jq (${JQ_REPO}@${JQ_VERSION})"
-  url=$(asset_url "$JQ_REPO" "$JQ_VERSION" "jq-${F_ARCH}-linux-android")
+  url=$(asset_url "$JQ_REPO" "$JQ_VERSION" "${JQ_ASSET}$")
   download "$url" "${BIN_DIR}/jq-${ARCH}"
 
   echo "[${ARCH}] hev-socks5-tunnel (${HEV_REPO}@${HEV_VERSION})"
@@ -101,7 +102,8 @@ echo "- Regenerating tailscale/checksums.txt"
 # This file is regenerated at build time by .github/tools/build.sh.
 # Format: `<sha256>  <filename>` (two spaces, sha256sum compatible).
 # The installer (customize.sh) uses it to verify the sha256 of binaries
-# downloaded at install time. Only an empty template is kept in the repo.
+# downloaded at install time. The repo keeps the output of the most recent
+# build for reference; build.sh overwrites it on every release build.
 EOF
   (cd "$BIN_DIR" && sha256sum tailscaled-* jq-* hev-socks5-tunnel-*)
 } >tailscale/checksums.txt

@@ -1,6 +1,6 @@
 # FoxyTail
 
-**在 Android 上以 Magisk/KernelSU 模块运行的 Tailscale  mesh VPN** —— `tailscaled` 原生运行在设备上，支持三种运行模式、策略路由、流量分析、MagicDNS 分流 DNS、与代理/防火墙模块的共存探针、看门狗、网络环境感知、一键诊断包，以及一个（开发中的）WebUI 管理界面。
+**在 Android 上以 Magisk/KernelSU 模块运行的 Tailscale  mesh VPN** —— `tailscaled` 原生运行在设备上，支持三种运行模式、策略路由、流量分析、MagicDNS 分流 DNS、与代理/防火墙模块的共存探针、看门狗、网络环境感知、一键诊断包，以及一个内置的 WebUI 管理界面。
 
 数据目录：`/data/adb/foxytail`（二进制、脚本、配置、状态、备份）。
 模块配置：[tailscale/conf/foxytail.conf](tailscale/conf/foxytail.conf)、[routes.conf](tailscale/conf/routes.conf)、[context.conf](tailscale/conf/context.conf)。
@@ -26,7 +26,7 @@ FoxyTail 的灵感来自 [anasfanani/Magisk-Tailscaled](https://github.com/anasf
 | 网络环境感知（`foxytail.context`） | ✅ | 按 Wi-Fi SSID / 蜂窝执行规则 |
 | 一键诊断包（`foxytail.diag`） | ✅ | tar.gz 输出到 `/sdcard/Download` |
 | 管理器开关联动 | ✅ | inotify 监听 disable 标志 |
-| WebUI（12 页） | 🚧 | 活跃开发中，可能尚未完整，见下文 |
+| WebUI（12 页） | ✅ | 仅 KernelSU/MMRL（Magisk 官方管理器不支持 WebUI），见下文 |
 | light/full 双 zip、`update.json` OTA | ✅ | |
 
 ## 安装
@@ -39,6 +39,10 @@ FoxyTail 的灵感来自 [anasfanani/Magisk-Tailscaled](https://github.com/anasf
 在 Magisk Manager、KernelSU Manager 或 MMRL 中刷入任一 zip，然后重启（重启前可使用安装器打印的 `/dev/` 快捷方式）。
 
 要求：arm 或 arm64 设备，Magisk v20.4+ 或 KernelSU ≥ 10670。升级时保留你的状态、配置与钩子文件（见下文）。
+
+## 卸载与重装
+
+从 Magisk/KernelSU 移除模块时会执行 `uninstall.sh`：停止所有 FoxyTail 组件、拆除路由/DNS 链、删除 `/data/adb/foxytail`——**但 Tailscale 身份不会丢**。删除前 `tailscaled.state` 会先备份到 `/data/adb/foxytail-state.backup`；下次安装时若尚无状态文件，安装器会自动恢复该备份（并打印提示），重装后仍是原节点、保持登录。如需全新身份，手动删除 `/data/adb/foxytail-state.backup` 即可。
 
 ## 快速上手
 
@@ -76,13 +80,13 @@ su -c 'foxytail.service mode tun'          # 切换运行模式并重启
 
 ## WebUI
 
-🚧 **活跃开发中。** WebUI 位于 `webroot/`（纯静态零构建，后端为 `foxytail.webapi.sh` JSON 接口），本版本中可能尚未完整。使用须知：
+WebUI 已内置：位于 `webroot/`（纯静态零构建，后端为 `foxytail.webapi.sh` JSON 接口）。使用须知：
 
 - 从 **KernelSU 管理器** 或 **MMRL** 打开。**Magisk 官方管理器不支持模块 WebUI**——那里不会出现入口按钮。
-- 页面（底部导航 +「更多」分组）：Dashboard · Peers（列表 + canvas 拓扑图）· Exit Nodes · Account · Tunnel · Routing · Traffic · Serve · Files（Taildrop）· Logs · Settings · Diagnostics。
+- 共 12 页（底部导航 +「更多」分组）：Dashboard · Peers（列表 + canvas 拓扑图）· Exit Nodes · Account · Tunnel · Routing · Traffic · Serve · Files（Taildrop）· Logs · Settings · Diagnostics。
 - 无第三方依赖；中/英 i18n 与深浅色主题。
 
-<!-- 截图占位：docs/screenshots/*.png（WebUI 落地后补充） -->
+<!-- 截图占位：docs/screenshots/*.png（待补充，见 Roadmap） -->
 
 ## 配置
 
@@ -175,7 +179,7 @@ FoxyTail 从不动其他模块的链，开机时自动探测邻居（`foxytail.c
 
 - **仅 arm / arm64**——其他架构安装器直接中止。
 - 默认 `bridge` 模式为 userspace 网络栈：吞吐低于内核 TUN（有条件请用 `tun` 模式）。
-- WebUI 仍在活跃开发中，可能不完整；登录二维码未内嵌——请使用 `tailscale login` 打印的 URL。
+- WebUI 未内嵌登录二维码——请使用 `tailscale login` 打印的 URL。
 - SSID 探测解析 `dumpsys wifi` 输出，各 Android 版本格式有差异（已做容错，最坏情况返回 "unknown"）。
 - 按 App 路由需要内核 `xt_owner`；缺失时安装器会提示。
 - MagicDNS 需要用户自供 dnsmasq 二进制（见上文）。
@@ -192,9 +196,9 @@ FoxyTail 从不动其他模块的链，开机时自动探测邻居（`foxytail.c
 
 ## Roadmap
 
-- 完整 WebUI（上述 12 页），含 canvas 拓扑图、Taildrop 文件收发、serve/funnel 管理、node key 到期提醒横幅
-- 出口节点延迟排序与一键切最快（CLI/WebUI）
-- 配置备份/恢复到 `/sdcard`
+- 补全 `docs/screenshots/` 下的 WebUI 截图并嵌入本文档
+- 接入可信的 Android 静态 dnsmasq 来源，让 MagicDNS 开箱即用
+- 真机兼容性矩阵（Android 版本 × 内核 × 共存代理模块）
 
 ## 致谢
 

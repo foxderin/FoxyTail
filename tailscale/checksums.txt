@@ -1,7 +1,8 @@
 # This file is regenerated at build time by .github/tools/build.sh.
 # Format: `<sha256>  <filename>` (two spaces, sha256sum compatible).
 # The installer (customize.sh) uses it to verify the sha256 of binaries
-# downloaded at install time. Only an empty template is kept in the repo.
+# downloaded at install time. The repo keeps the output of the most recent
+# build for reference; build.sh overwrites it on every release build.
 0d2e0b4a9a5c5f02b465f8c6559eb79123e58287eb550579194aaf0a4405df90  tailscaled-arm
 7e7fd38b44fa128dc15e9b387b0c3350ec87c6f553ce40ab373df8fa2bd6dcda  tailscaled-arm64
 f885443795bb6968e9641ec2876e9a86847ba82bdee7fd123c7d32545d474b86  jq-arm
