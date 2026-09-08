@@ -3,3 +3,8 @@ tailscale/bin/
 *.zip
 *.tmp
 .DS_Store
+
+# WebUI build tooling (the built webroot/ IS committed on purpose)
+webui/node_modules/
+webui/dist/
+webui/.smoke/

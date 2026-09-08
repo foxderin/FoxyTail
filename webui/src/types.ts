@@ -1,0 +1,43 @@
+/* Shared API payload shapes (frozen webapi contract). */
+
+export interface Peer {
+  id: string;
+  hostname: string;
+  ip: string;
+  os: string;
+  relay: string;
+  online: boolean;
+  rxBytes: number;
+  txBytes: number;
+  exitNodeOption: boolean;
+}
+
+export interface ExitNodeProbe {
+  id: string;
+  hostname: string;
+  ip: string;
+  latencyMs: number | null;
+  ok: boolean;
+}
+
+export interface AppInfo {
+  label: string;
+  package: string;
+  uid: number;
+}
+
+export interface InboxFile {
+  name: string;
+  size: number;
+  mtime: number;
+}
+
+export interface AccountEntry {
+  name: string;
+  current: boolean;
+}
+
+export interface DerpRelay {
+  code: string;
+  latencyMs: number;
+}

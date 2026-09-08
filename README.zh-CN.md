@@ -88,6 +88,17 @@ WebUI 已内置：位于 `webroot/`（纯静态零构建，后端为 `foxytail.w
 
 <!-- 截图占位：docs/screenshots/*.png（待补充，见 Roadmap） -->
 
+## WebUI 开发
+
+WebUI 源码位于 `webui/`（Vite + SolidJS + Material Web 3 组件 + `kernelsu` npm 桥接）。构建产物已提交进 `webroot/`，模块自包含，使用者无需安装 Node 工具链。
+
+- `pnpm --dir webui install` —— 安装依赖（一次性）
+- `pnpm --dir webui dev` —— Vite 开发服务器（无 root 桥环境，界面显示 no-root 横幅）
+- `pnpm --dir webui build` —— 生产构建输出到 `../webroot/`（构建结果需提交）
+- `pnpm --dir webui typecheck` / `check:i18n` / `smoke` —— 类型检查、中英键值对齐校验、jsdom 冒烟（13 条路由 + 任务接管 + no-root 横幅）
+
+契约：`webui/src/api.ts` 是 `tailscale/scripts/foxytail.webapi.sh` 的唯一消费者，其 JSON 契约冻结不可改。
+
 ## 配置
 
 `/data/adb/foxytail/conf/` 下三个文件，**仅在不存在时安装**——你的修改在模块升级后保留。

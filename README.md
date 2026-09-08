@@ -88,6 +88,17 @@ The WebUI is built in: it lives in `webroot/` (zero-build static HTML/JS, backed
 
 <!-- Screenshots: docs/screenshots/*.png (to be added, see Roadmap) -->
 
+## WebUI development
+
+The WebUI source lives in `webui/` (Vite + SolidJS + Material Web 3 components + the `kernelsu` npm bridge). The built output is committed to `webroot/`, so the module stays self-contained and no Node toolchain is needed to use it.
+
+- `pnpm --dir webui install` — install dependencies (once)
+- `pnpm --dir webui dev` — Vite dev server (no root bridge there; the UI shows the no-root banner)
+- `pnpm --dir webui build` — production build into `../webroot/` (commit the result)
+- `pnpm --dir webui typecheck` / `check:i18n` / `smoke` — TypeScript check, zh/en key parity, jsdom smoke (13 routes + task adoption + no-root banner)
+
+Contract: `webui/src/api.ts` is the only consumer of `tailscale/scripts/foxytail.webapi.sh`; its JSON contract is frozen.
+
 ## Configuration
 
 Three files in `/data/adb/foxytail/conf/`, installed **only if missing** — your edits survive module upgrades.
