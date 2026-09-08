@@ -1,0 +1,224 @@
+#!/system/bin/sh
+# @title FoxyTail MagicDNS Split Resolver
+# @header Split-DNS via a local dnsmasq: tailnet names go to 100.100.100.100,
+# @header everything else to the system resolver. Coexistence-aware.
+#
+# @cmd start | Start dnsmasq split-DNS and the port-53 redirect
+# @desc Requires MAGIC_DNS=on, a dnsmasq binary in $TS_BIN_DIR and MagicDNS
+# @desc enabled on the tailnet. Reads .MagicDNSSuffix from
+# @desc `tailscale --socket=... status --json`. If any prerequisite fails the
+# @desc script logs a Warning, records state "degraded" and exits 0.
+# @desc If `foxytail.compat check-dns-hijack` reports a conflicting global DNS
+# @desc hijack (non-zero exit), the REDIRECT rule is skipped and only dnsmasq
+# @desc runs.
+#
+# @cmd stop | Remove the redirect chain and stop dnsmasq
+#
+# @cmd status | Show running / degraded / stopped state
+
+# POSIX sh (Android mksh / busybox). No bashisms, no `set -e`.
+
+DIR=$(dirname "$(realpath "$0")")
+# shellcheck source=../settings.sh
+. "${DIR}/../settings.sh"
+
+scripts_name=$(basename "$0")
+TS_SOCKET="${TS_RUN_DIR}/tailscaled.sock"
+DNS_BIN="${TS_BIN_DIR}/dnsmasq"
+DNS_CONF="${TS_RUN_DIR}/dnsmasq.conf"
+DNS_LOG="${TS_RUN_DIR}/dnsmasq.log"
+DNS_PID_FILE="${TS_PID_DIR}/dnsmasq.pid"
+DNS_STATE_FILE="${TS_RUN_DIR}/dnsmasq.state"
+CHAIN_DNS="FOXY_DNS"
+
+set_state() {
+  echo "$1" >"${DNS_STATE_FILE}"
+}
+
+get_state() {
+  cat "${DNS_STATE_FILE}" 2>/dev/null || echo "stopped"
+}
+
+# PIDs of OUR dnsmasq instance only: match the config path in the cmdline.
+dns_pids() {
+  busybox pgrep -f "${DNS_CONF}" 2>/dev/null || pgrep -f "${DNS_CONF}" 2>/dev/null
+}
+
+# True when another module already hijacks port 53 globally; the compat
+# probe is optional (written in a later wave) and only consulted if present.
+# Contract: `foxytail.compat check-dns-hijack` exits 0 when the coast is
+# clear, non-zero when someone else redirects/TProxys UDP/53.
+dns_hijack_conflict() {
+  command -v foxytail.compat >/dev/null 2>&1 || return 1
+  ! foxytail.compat check-dns-hijack >/dev/null 2>&1
+}
+
+# Mount FOXY_DNS (nat) on OUTPUT and redirect UDP/53 into dnsmasq.
+redirect_apply() {
+  iptables -t nat -N "${CHAIN_DNS}" 2>/dev/null
+  if ! iptables -t nat -C "${CHAIN_DNS}" -p udp --dport 53 -j REDIRECT --to-ports "${DNS_PORT}" 2>/dev/null; then
+    iptables -t nat -A "${CHAIN_DNS}" -p udp --dport 53 -j REDIRECT --to-ports "${DNS_PORT}" ||
+      { log Warning "failed to add DNS REDIRECT rule."; return 1; }
+  fi
+  if ! iptables -t nat -C OUTPUT -j "${CHAIN_DNS}" 2>/dev/null; then
+    iptables -t nat -A OUTPUT -j "${CHAIN_DNS}" ||
+      { log Warning "failed to mount ${CHAIN_DNS} on nat/OUTPUT."; return 1; }
+  fi
+  return 0
+}
+
+redirect_teardown() {
+  while iptables -t nat -D OUTPUT -j "${CHAIN_DNS}" 2>/dev/null; do :; done
+  iptables -t nat -F "${CHAIN_DNS}" 2>/dev/null
+  iptables -t nat -X "${CHAIN_DNS}" 2>/dev/null
+  return 0
+}
+
+dns_start() {
+  ensure_run_dirs
+  load_conf
+
+  if [ "${MAGIC_DNS}" != "on" ]; then
+    log Debug "MAGIC_DNS=off; split DNS disabled."
+    set_state stopped
+    return 0
+  fi
+
+  if [ -n "$(dns_pids)" ]; then
+    log Info "dnsmasq (FoxyTail) is already running."
+    set_state running
+    return 0
+  fi
+
+  if [ ! -x "${DNS_BIN}" ]; then
+    log Warning "dnsmasq binary not found at ${DNS_BIN}; MagicDNS degraded."
+    set_state degraded
+    return 0
+  fi
+
+  _ds_json=$(timeout 10 tailscale --socket="${TS_SOCKET}" status --json 2>/dev/null || echo '{}')
+  _ds_suffix=$(echo "${_ds_json}" | "${TS_BIN_DIR}/jq" -r '.MagicDNSSuffix // empty' 2>/dev/null)
+  _ds_enabled=$(echo "${_ds_json}" | "${TS_BIN_DIR}/jq" -r '.CurrentTailnet.MagicDNSEnabled // false' 2>/dev/null)
+  if [ "${_ds_enabled}" != "true" ] || [ -z "${_ds_suffix}" ]; then
+    log Warning "MagicDNS not enabled on this tailnet (or daemon unreachable); split DNS degraded."
+    set_state degraded
+    return 0
+  fi
+
+  _ds_default_dns=$(getprop net.dns1 2>/dev/null)
+  [ -z "${_ds_default_dns}" ] && _ds_default_dns="1.1.1.1"
+
+  {
+    echo "port=${DNS_PORT}"
+    echo "listen-address=127.0.0.1"
+    echo "bind-interfaces"
+    echo "no-resolv"
+    echo "cache-size=512"
+    echo "server=/${_ds_suffix}/100.100.100.100"
+    echo "server=${_ds_default_dns}"
+  } >"${DNS_CONF}"
+
+  rotate_log "${DNS_LOG}"
+  log Info "Starting dnsmasq on 127.0.0.1:${DNS_PORT} (suffix: ${_ds_suffix}, upstream: ${_ds_default_dns})."
+  nohup "${DNS_BIN}" --keep-in-foreground --conf-file="${DNS_CONF}" \
+    --pid-file="${DNS_PID_FILE}" >>"${DNS_LOG}" 2>&1 &
+
+  sleep 1
+  if [ -z "$(dns_pids)" ]; then
+    log Warning "dnsmasq failed to start; see ${DNS_LOG}. MagicDNS degraded."
+    set_state degraded
+    return 0
+  fi
+
+  if dns_hijack_conflict; then
+    log Warning "another module already hijacks UDP/53; skipping REDIRECT (dnsmasq still running on ${DNS_PORT})."
+  else
+    redirect_apply
+  fi
+
+  set_state running
+  log Success "MagicDNS split resolver is up."
+  return 0
+}
+
+dns_stop() {
+  ensure_run_dirs
+  load_conf
+
+  redirect_teardown
+
+  _dt_pids=$(dns_pids)
+  if [ -n "${_dt_pids}" ]; then
+    log Info "Stopping dnsmasq."
+    # shellcheck disable=SC2086 # intentional: one PID per word
+    for _dt_pid in ${_dt_pids}; do
+      kill -TERM "${_dt_pid}" 2>/dev/null
+    done
+    sleep 2
+    _dt_pids=$(dns_pids)
+    if [ -n "${_dt_pids}" ]; then
+      # shellcheck disable=SC2086 # intentional: one PID per word
+      for _dt_pid in ${_dt_pids}; do
+        kill -KILL "${_dt_pid}" 2>/dev/null
+      done
+    fi
+  fi
+
+  rm -f "${DNS_PID_FILE}"
+  set_state stopped
+  return 0
+}
+
+dns_status() {
+  ensure_run_dirs
+  load_conf
+
+  _dst_state=$(get_state)
+  if [ -n "$(dns_pids)" ]; then
+    _dst_state="running"
+  elif [ "${_dst_state}" = "running" ]; then
+    _dst_state="stopped"
+  fi
+
+  case "${_dst_state}" in
+    running) _dst_color="${green}" ;;
+    degraded) _dst_color="${yellow}" ;;
+    *) _dst_color="${red}" ;;
+  esac
+  printf '%s\n' "${blue}MagicDNS:${normal} ${_dst_color}${_dst_state}${normal}  ${blue}Port:${normal} ${yellow}${DNS_PORT}${normal}"
+
+  if iptables -t nat -L "${CHAIN_DNS}" -n >/dev/null 2>&1; then
+    printf '%s\n' "  ${blue}Redirect:${normal} ${green}UDP/53 -> ${DNS_PORT} active (${CHAIN_DNS})${normal}"
+  else
+    printf '%s\n' "  ${blue}Redirect:${normal} ${red}inactive${normal}"
+  fi
+
+  if [ -f "${DNS_CONF}" ]; then
+    _dst_suffix=$(awk -F/ '/^server=\// {print $2}' "${DNS_CONF}" | head -1)
+    [ -n "${_dst_suffix}" ] && printf '%s\n' "  ${blue}Suffix:${normal} ${yellow}${_dst_suffix}${normal}"
+  fi
+  return 0
+}
+
+usage() {
+  printf '%s\n' "${yellow}usage${normal}: ${green}${scripts_name}${normal} {${orange}start|stop|status${normal}}"
+}
+
+case "$1" in
+  start)
+    dns_start
+    ;;
+  stop)
+    dns_stop
+    ;;
+  status)
+    dns_status
+    ;;
+  *)
+    if [ -n "$1" ]; then
+      printf '%s\n' "${yellow}${scripts_name} ${orange}$1 ${red}not found${normal}"
+      exit 1
+    fi
+    usage
+    ;;
+esac

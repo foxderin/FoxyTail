@@ -1,0 +1,212 @@
+# FoxyTail
+
+**Tailscale mesh VPN on Android as a Magisk/KernelSU module** — `tailscaled` runs natively on the device, with three run modes, policy-based routing, traffic analytics, MagicDNS split-DNS, coexistence probes for other proxy/firewall modules, a watchdog, network-context awareness, one-shot diagnostics, and a WebUI (in progress) for day-to-day management.
+
+Data directory: `/data/adb/foxytail` (binaries, scripts, config, state, backups).
+Module config: [tailscale/conf/foxytail.conf](tailscale/conf/foxytail.conf), [routes.conf](tailscale/conf/routes.conf), [context.conf](tailscale/conf/context.conf).
+
+中文文档：[README.zh-CN.md](README.zh-CN.md)
+
+## Relationship to Magisk-Tailscaled
+
+FoxyTail is inspired by [anasfanani/Magisk-Tailscaled](https://github.com/anasfanani/Magisk-Tailscaled) — full credit for the original idea of shipping `tailscaled` as a Magisk module. FoxyTail is a clean-room rewrite, started because the original installer hid download/unzip failures behind `2>/dev/null || true`, pulled unpinned `latest` releases without integrity checks, mislabeled `/data/adb` files with the `system_file` SELinux context, used a 4-segment version scheme, and parsed GitHub API JSON with grep/sed. FoxyTail pins every upstream version ([tailscale/VERSIONS](tailscale/VERSIONS)), verifies every binary with SHA256 ([tailscale/checksums.txt](tailscale/checksums.txt)), and fails loudly.
+
+## Feature matrix
+
+| Feature | Status | Notes |
+|---|---|---|
+| Three run modes (`bridge` / `tun` / `proxy`) | ✅ | hot-switch via CLI; `tun` requires `/dev/net/tun` |
+| Route scope (`all` / `selected` / `bypass`) | ✅ | per-UID marking needs kernel `xt_owner` |
+| Dedicated policy routing (table 1052, fwmark `0xF7`) | ✅ | main table is never touched |
+| Traffic analytics (`foxytail.stats`) | ✅ | JSONL ring buffer, 7-day retention, screen-off throttling |
+| MagicDNS split-DNS (`foxytail.dns`) | ✅ | requires a user-supplied static `dnsmasq` (see below) |
+| IPv6 dual-stack | ✅ | `IPV6=on`, symmetric ip6tables rules |
+| Coexistence probes (`foxytail.compat`) | ✅ | Clash/mihomo, AFWall+, NetGuard detection |
+| Watchdog (`foxytail.watchdog`) | ✅ | crash restart + network-change rebind |
+| Network-context awareness (`foxytail.context`) | ✅ | rules by Wi-Fi SSID / cellular |
+| One-shot diagnostics bundle (`foxytail.diag`) | ✅ | tar.gz to `/sdcard/Download` |
+| Module toggle via manager | ✅ | inotify watcher on the disable flag |
+| WebUI (12 pages) | 🚧 | under active development; may be incomplete, see below |
+| Light / full release zips, `update.json` OTA | ✅ | |
+
+## Installation
+
+Two packages are published on the [Releases](../../releases) page:
+
+- **`FoxyTail-<version>.zip` (light)** — the installer downloads `tailscaled`, `jq` and `hev-socks5-tunnel` at install time from their pinned upstream releases and verifies each against `checksums.txt` (SHA256). Requires internet during install.
+- **`FoxyTail-<version>-full.zip` (full)** — all binaries bundled; installs offline. The bundled binaries are SHA256-verified too, so a tampered zip is rejected.
+
+Flash either zip in Magisk Manager, KernelSU Manager or MMRL, then reboot (or use the `/dev/` shortcuts the installer prints until you do).
+
+Requirements: arm or arm64 device, Magisk v20.4+ or KernelSU ≥ 10670. Upgrades preserve your state, config and hook files (see below).
+
+## Quick start
+
+```sh
+su -c 'tailscale login'            # prints a login URL; open it in a browser
+su -c 'foxytail.service status'    # colored summary of the running daemon
+```
+
+Before the first reboot after flashing, the binaries are not on `PATH` yet — use `/dev/tailscale` and `/dev/foxytail.service` instead (the installer prints exactly this).
+
+Useful extras:
+
+```sh
+su -c 'tailscale set --exit-node=<node>'   # route via an exit node
+su -c 'foxytail.service mode tun'          # switch run mode + restart
+```
+
+## CLI reference
+
+All entry points live in `/data/adb/foxytail/scripts/` and are symlinked into `system/bin` after reboot.
+
+| Command | Subcommands | Purpose |
+|---|---|---|
+| `foxytail.service` | `start` `stop` `restart` `status [summary\|peer\|exit-node\|all]` `log [daemon\|service]` `mode [bridge\|tun\|proxy]` `help [all]` | tailscaled lifecycle, colored status, mode switching |
+| `foxytail.tun` | `start` `stop` `restart` `status` | hev-socks5-tunnel → `tailscale0` interface (bridge mode); runs the `foxytail.tun.up` / `.tun.down` user hooks |
+| `foxytail.route` | `apply` `teardown` `reload` `status` | idempotent policy-routing engine (`FOXY_*` chains, table 1052, fwmark `0xF7`) |
+| `foxytail.dns` | `start` `stop` `status` | MagicDNS split resolver (dnsmasq on port 1053 + coexistence-aware port-53 redirect) |
+| `foxytail.stats` | `start` `stop` `status` `collect-once` `query [hourly <date>\|daily\|topn <n>]` | traffic collector (per-peer Rx/Tx, per-UID counters) |
+| `foxytail.watchdog` | `start` `stop` `status` `check-once` | restart tailscaled on crash, rebind on default-route change (rate-limited) |
+| `foxytail.context` | `start` `stop` `status` `check-once` | apply `context.conf` rules on SSID / cellular changes |
+| `foxytail.compat` | `probe` `check` `check-dns-hijack` `suggest` | detect coexisting proxy/firewall/VPN tools; verify `FOXY_*` chains survive |
+| `foxytail.diag` | `collect [output-dir]` | one-shot diagnostics tar.gz (default `/sdcard/Download`) |
+
+Plus the stock `tailscale` CLI (`tailscale` is a symlink to `tailscaled`; `--socket` is preconfigured via `PATH`/`foxytail.service`, for raw use: `tailscale --socket=/data/adb/foxytail/run/tailscaled.sock …`).
+
+## WebUI
+
+🚧 **Under active development.** The WebUI lives in `webroot/` (zero-build static HTML/JS, backed by the `foxytail.webapi.sh` JSON API) and may still be incomplete in this release. How it works:
+
+- Open it from the **KernelSU manager** or **MMRL**. The **official Magisk app does not support module WebUIs** — that button will not exist there.
+- Pages (bottom nav + "More" group): Dashboard · Peers (list + canvas topology) · Exit Nodes · Account · Tunnel · Routing · Traffic · Serve · Files (Taildrop) · Logs · Settings · Diagnostics.
+- No third-party libraries; i18n (Chinese/English) and light/dark themes.
+
+<!-- Screenshots: docs/screenshots/*.png (placeholder until the WebUI lands) -->
+
+## Configuration
+
+Three files in `/data/adb/foxytail/conf/`, installed **only if missing** — your edits survive module upgrades.
+
+### `foxytail.conf` (main)
+
+| Key | Default | Meaning |
+|---|---|---|
+| `TS_MODE` | `bridge` | `bridge` (userspace + socks5 + hev → tailscale0) · `tun` (native TUN, needs `/dev/net/tun`) · `proxy` (socks5 only) |
+| `SOCKS_PORT` | `1099` | tailscaled's local socks5 port |
+| `DNS_PORT` | `1053` | dnsmasq listen port (MagicDNS) |
+| `MAGIC_DNS` | `off` | split-DNS for tailnet names via dnsmasq |
+| `IPV6` | `off` | dual-stack tailscale0 + ip6tables symmetry |
+| `ROUTE_TABLE` | `1052` | dedicated policy routing table (1–252) |
+| `FWMARK` | `0xF7` | fwmark for FoxyTail-routed packets (hex) |
+| `WATCHDOG` / `WATCHDOG_INTERVAL` | `on` / `30` | crash restart + rebind, seconds between checks |
+| `STATS_INTERVAL` | `60` | stats collection interval (auto-throttled when the screen is off) |
+| `LOG_MAX_KB` | `512` | log rotation threshold (one `.bak` kept) |
+
+### `routes.conf` (routing scope)
+
+| Key | Default | Meaning |
+|---|---|---|
+| `ROUTE_SCOPE` | `all` | `all` · `selected` (only `UID_LIST`) · `bypass` (everything except `UID_LIST`) |
+| `UID_LIST` | empty | space-separated app UIDs for selected/bypass |
+| `ROUTE_SUBNETS` | `100.64.0.0/10` | CIDRs routed through the tunnel |
+
+### `context.conf` (network-context rules)
+
+One rule per line: `<trigger>:<value>:<action>[:<arg>]`
+
+```
+ssid:HomeWifi:down            # tunnel down on this Wi-Fi
+ssid:Office:exit-node:myserver
+cellular:-:no-exit-node       # clear exit node on mobile data
+```
+
+Actions: `up`, `down`, `exit-node <arg>`, `no-exit-node`.
+
+### User hooks
+
+`/data/adb/foxytail/scripts/foxytail.tun.up` and `foxytail.tun.down` run after the `tailscale0` interface comes up/down (bridge mode). Add your own routes/firewall rules there. **The installer never overwrites your modifications** — if the shipped template changed, it is saved next to yours as `<hook>.new`.
+
+## Run modes
+
+| | `bridge` (default) | `tun` | `proxy` |
+|---|---|---|---|
+| How | userspace tailscaled + socks5 + hev-socks5-tunnel → `tailscale0` | tailscaled native TUN | socks5 only, no interface |
+| Needs | nothing special | `/dev/net/tun` | nothing |
+| Works without TUN support | ✅ | ❌ | ✅ |
+| Per-App routing / stats | ✅ | ✅ | ❌ (no interface) |
+| Performance | userspace copy overhead | best | app-level only |
+
+Switch with `foxytail.service mode <mode>` (writes `TS_MODE` and restarts). Switching to `tun` is refused when `/dev/net/tun` is missing.
+
+## Routing engine
+
+`foxytail.route` keeps **everything** off the beaten path so other modules stay intact:
+
+- all rules live in dedicated chains: `FOXY_MARK` (mangle) and `FOXY_STAT` (filter, counters for stats); built-in chains get exactly one jump each
+- policy routing uses dedicated table **1052** (configurable) with fwmark **`0xF7`** (configurable); the main table is never written
+- every rule is checked with `-C` before being added — `apply` is idempotent and safe to re-run; `teardown` removes only FoxyTail's own rules
+- MagicDNS adds `FOXY_DNS` (nat) for the port-53 redirect, skipped when another module already hijacks port 53
+
+## Coexistence guide
+
+FoxyTail never touches other modules' chains and probes for neighbors at boot (`foxytail.compat probe` → `/data/adb/foxytail/run/compat.json`).
+
+- **Clash / mihomo / box-for-magisk**: these usually hijack DNS (redirect or TPROXY UDP/53). `foxytail.dns` runs `foxytail.compat check-dns-hijack` before installing its redirect; on conflict the redirect is skipped (dnsmasq still runs on port 1053, state `degraded`). If you run such a module, prefer `MAGIC_DNS=off`.
+- **AFWall+**: firewall reloads may flush our jumps off the built-in chains. FoxyTail's rules are isolated in `FOXY_*` chains; run `foxytail.compat check` (or `foxytail.route apply`) to detect/restore tampering.
+- **NetGuard / other VPN apps**: FoxyTail does **not** use Android's VpnService, so it occupies zero VPN slots — but a VpnService app with "always-on" can still capture traffic before it reaches our routes.
+
+## MagicDNS
+
+`MAGIC_DNS=on` starts a local dnsmasq that forwards tailnet names (`.<MagicDNSSuffix>`) to `100.100.100.100` and everything else to the system resolver, listening on port 1053 with a coexistence-aware port-53 redirect.
+
+**dnsmasq is not bundled** — there is no trusted static-build source for Android. To enable MagicDNS, drop any static `dnsmasq` binary for your arch into `/data/adb/foxytail/bin/dnsmasq` (mode 0755), then `foxytail.service restart`. If the binary is missing, MagicDNS is off, or the tailnet has MagicDNS disabled, `foxytail.dns` logs a warning, records state `degraded`, and exits cleanly — nothing breaks.
+
+## IPv6
+
+`IPV6=on` gives `tailscale0` a dual-stack address (`fd7a:115c:a1e0::1` in bridge mode), adds symmetric ip6tables policy rules, and routes `fd7a:115c:a1e0::/48` (add it to `ROUTE_SUBNETS`). Default is off.
+
+## Traffic analytics & diagnostics
+
+- `foxytail.stats` samples per-peer Rx/Tx and per-UID chain counters every `STATS_INTERVAL` seconds into `/data/adb/foxytail/run/stats/YYYY-MM-DD.jsonl` (7-day ring, screen-off throttling). Query with `foxytail.stats query hourly <date> | daily | topn <n>`.
+- `foxytail.diag collect` bundles log tails, `tailscale status --json`, `netcheck`, iptables self-check and config into `/sdcard/Download/foxytail-diag-<timestamp>.tar.gz` — attach this when asking for help.
+
+## Limitations (honest list)
+
+- **arm / arm64 only** — the installer aborts on other architectures.
+- Default `bridge` mode is userspace networking: throughput is lower than kernel TUN (`tun` mode where available).
+- The WebUI is under active development and may be incomplete; QR-code login is not embedded — use the login URL printed by `tailscale login`.
+- SSID detection parses `dumpsys wifi` output, whose format varies across Android versions (tolerant parsing, worst case "unknown").
+- per-App routing requires kernel `xt_owner`; the installer prints a warning when it is missing.
+- MagicDNS requires a user-supplied dnsmasq binary (above).
+
+## Troubleshooting
+
+1. `foxytail.service status` — daemon up? backend `Running`?
+2. `foxytail.service log daemon` / `log service` — recent errors.
+3. `foxytail.route status` — chains/table/rule in place? If another tool flushed them: `foxytail.route apply`.
+4. `foxytail.compat check` + `foxytail.compat suggest` — coexistence conflicts.
+5. `foxytail.diag collect` — generate the bundle and attach it to your report.
+
+The watchdog restarts a crashed tailscaled automatically (rate-limited: 5 restarts / 10 min, then a 5-min cooldown).
+
+## Roadmap
+
+- Full WebUI (12 pages listed above), incl. canvas topology, Taildrop file transfer, serve/funnel management, node-key expiry banner
+- Exit-node latency ranking and one-tap fastest switch (CLI/WebUI)
+- Config backup/restore to `/sdcard`
+
+## Credits
+
+- [anasfanani/Magisk-Tailscaled](https://github.com/anasfanani/Magisk-Tailscaled) — original idea and inspiration
+- [Tailscale](https://tailscale.com) — the mesh VPN itself (Android CLI builds by [anasfanani/tailscale-android-cli](https://github.com/anasfanani/tailscale-android-cli))
+- [heiher/hev-socks5-tunnel](https://github.com/heiher/hev-socks5-tunnel) — socks5 → TUN bridge
+- [Magisk](https://github.com/topjohnwu/Magisk) and [KernelSU](https://kernelsu.org) — the module frameworks
+
+## Disclaimer
+
+This is an unofficial community module, not affiliated with Tailscale Inc. It modifies system network configuration; use at your own risk. Backup before upgrading.
+
+## License
+
+BSD 3-Clause — see [LICENSE](LICENSE). Upstream binaries keep their own licenses.

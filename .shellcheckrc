@@ -1,0 +1,5 @@
+external-sources=true
+disable=SC2034
+# Resolve `source=../settings.sh` directives relative to the sourcing script,
+# so tailscale/scripts/* find tailscale/settings.sh (color vars, helpers).
+source-path=SCRIPTDIR

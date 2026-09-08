@@ -1,0 +1,208 @@
+#!/system/bin/sh
+# @title FoxyTail Tunnel Manager
+# @header Manage the hev-socks5-tunnel that turns tailscaled's userspace
+# @header socks5 proxy into a real `tailscale0` network interface (bridge mode).
+#
+# @cmd start | Start hev-socks5-tunnel
+# @desc Only does something in TS_MODE=bridge. Renders foxytail.tun.config.yaml
+# @desc (@SOCKS_PORT@, optional IPv6 block) to ${TS_RUN_DIR}/hev.yaml, starts the
+# @desc daemon, waits up to 10s for the tailscale0 interface, then runs the
+# @desc user hook foxytail.tun.up if it is executable.
+#
+# @cmd stop | Stop hev-socks5-tunnel
+# @desc TERM, then KILL every remaining PID, then run foxytail.tun.down hook.
+#
+# @cmd restart | Restart hev-socks5-tunnel
+#
+# @cmd status | Show interface, process and gateway state
+
+# POSIX sh (Android mksh / busybox). No bashisms, no `set -e`.
+
+DIR=$(dirname "$(realpath "$0")")
+# shellcheck source=../settings.sh
+. "${DIR}/../settings.sh"
+
+scripts_name=$(basename "$0")
+HEV_BIN="${TS_BIN_DIR}/hev-socks5-tunnel"
+HEV_NAME="hev-socks5-tunnel"
+HEV_TEMPLATE="${TS_SCRIPTS_DIR}/foxytail.tun.config.yaml"
+HEV_CONF="${TS_RUN_DIR}/hev.yaml"
+HEV_LOG="${TS_RUN_DIR}/hev-socks5-tunnel.log"
+HEV_PID_FILE="${TS_PID_DIR}/hev-socks5-tunnel.pid"
+TUN_IFACE="tailscale0"
+
+hev_pids() {
+  busybox pgrep -f "${HEV_NAME}" 2>/dev/null || pgrep -f "${HEV_NAME}" 2>/dev/null
+}
+
+iface_exists() {
+  ip link show dev "${TUN_IFACE}" >/dev/null 2>&1
+}
+
+# Wait up to 10s for the tunnel interface to appear.
+wait_iface() {
+  _wi_i=0
+  while [ "${_wi_i}" -lt 20 ]; do
+    iface_exists && return 0
+    sleep 0.5
+    _wi_i=$((_wi_i + 1))
+  done
+  return 1
+}
+
+# Render the runtime config from the template: substitute @SOCKS_PORT@ and
+# strip the IPv6 block unless IPV6=on.
+render_conf() {
+  if [ ! -f "${HEV_TEMPLATE}" ]; then
+    log Error "tunnel config template not found: ${HEV_TEMPLATE}"
+    return 1
+  fi
+  if [ "${IPV6}" = "on" ]; then
+    sed -e "s/\"@SOCKS_PORT@\"/${SOCKS_PORT}/g" -e "s/@SOCKS_PORT@/${SOCKS_PORT}/g" \
+      -e '/^  # @IPV6_BEGIN@$/d' -e '/^  # @IPV6_END@$/d' \
+      "${HEV_TEMPLATE}" >"${HEV_CONF}"
+  else
+    sed -e "s/\"@SOCKS_PORT@\"/${SOCKS_PORT}/g" -e "s/@SOCKS_PORT@/${SOCKS_PORT}/g" \
+      -e '/^  # @IPV6_BEGIN@$/,/^  # @IPV6_END@$/d' \
+      "${HEV_TEMPLATE}" >"${HEV_CONF}"
+  fi
+}
+
+run_hook() {
+  _rh_hook="${TS_SCRIPTS_DIR}/foxytail.tun.$1"
+  if [ -x "${_rh_hook}" ]; then
+    log Info "running user hook: ${_rh_hook}"
+    "${_rh_hook}"
+  fi
+}
+
+tun_start() {
+  ensure_run_dirs
+  load_conf
+
+  if [ "${TS_MODE}" != "bridge" ]; then
+    log Debug "TS_MODE=${TS_MODE}: hev tunnel is only used in bridge mode; skipping."
+    return 0
+  fi
+
+  if [ -n "$(hev_pids)" ]; then
+    log Info "${HEV_NAME} is already running."
+    return 0
+  fi
+
+  if [ ! -x "${HEV_BIN}" ]; then
+    log Error "binary not found or not executable: ${HEV_BIN}"
+    return 1
+  fi
+
+  render_conf || return 1
+  rotate_log "${HEV_LOG}"
+
+  log Info "Starting ${HEV_NAME} (socks5 127.0.0.1:${SOCKS_PORT} -> ${TUN_IFACE})."
+  nohup "${HEV_BIN}" "${HEV_CONF}" >>"${HEV_LOG}" 2>&1 &
+  echo "$!" >"${HEV_PID_FILE}"
+
+  if ! wait_iface; then
+    if [ -z "$(hev_pids)" ]; then
+      log Error "${HEV_NAME} died at startup; see ${HEV_LOG}."
+      return 1
+    fi
+    log Warning "interface ${TUN_IFACE} not up after 10s; continuing anyway."
+  else
+    log Success "${TUN_IFACE} is up."
+  fi
+
+  run_hook up
+  return 0
+}
+
+tun_stop() {
+  ensure_run_dirs
+  load_conf
+
+  _ts_pids=$(hev_pids)
+  if [ -z "${_ts_pids}" ]; then
+    log Debug "${HEV_NAME} is not running."
+  else
+    log Info "Stopping ${HEV_NAME}."
+    # shellcheck disable=SC2086 # intentional: one PID per word
+    for _ts_pid in ${_ts_pids}; do
+      kill -TERM "${_ts_pid}" 2>/dev/null
+    done
+    sleep 3
+    _ts_pids=$(hev_pids)
+    if [ -n "${_ts_pids}" ]; then
+      # Fix vs. original project: kill each PID individually.
+      # shellcheck disable=SC2086 # intentional: one PID per word
+      for _ts_pid in ${_ts_pids}; do
+        kill -KILL "${_ts_pid}" 2>/dev/null
+      done
+      sleep 1
+    fi
+  fi
+
+  rm -f "${HEV_PID_FILE}"
+  run_hook down
+  return 0
+}
+
+tun_status() {
+  ensure_run_dirs
+  load_conf
+
+  if iface_exists; then
+    printf '%s\n' "${blue}Interface:${normal} ${green}${TUN_IFACE} up${normal}"
+    ip -o addr show dev "${TUN_IFACE}" 2>/dev/null | while IFS= read -r _tst_line; do
+      printf '%s\n' "  ↳ ${yellow}$(echo "${_tst_line}" | awk '{print $2, $4}')${normal}"
+    done
+  else
+    printf '%s\n' "${blue}Interface:${normal} ${red}${TUN_IFACE} down${normal}"
+  fi
+
+  _tst_pids=$(hev_pids)
+  if [ -n "${_tst_pids}" ]; then
+    # shellcheck disable=SC2086 # intentional: one PID per word
+    set -- ${_tst_pids}
+    printf '%s\n' "${blue}Process:${normal} ${green}${HEV_NAME} running${normal} (PID: $1)"
+  else
+    printf '%s\n' "${blue}Process:${normal} ${red}${HEV_NAME} not running${normal}"
+  fi
+
+  _tst_gw=$(ip route show dev "${TUN_IFACE}" 2>/dev/null | awk '/default/ {print $3; exit}')
+  if [ -n "${_tst_gw}" ]; then
+    printf '%s\n' "${blue}Gateway:${normal} ${yellow}${_tst_gw}${normal}"
+  else
+    printf '%s\n' "${blue}Gateway:${normal} ${yellow}100.100.100.100${normal} (configured)"
+  fi
+
+  printf '%s\n' "${blue}Mode:${normal} ${yellow}${TS_MODE}${normal}, ${blue}socks5:${normal} ${yellow}127.0.0.1:${SOCKS_PORT}${normal}"
+  return 0
+}
+
+usage() {
+  printf '%s\n' "${yellow}usage${normal}: ${green}${scripts_name}${normal} {${orange}start|stop|restart|status${normal}}"
+}
+
+case "$1" in
+  start)
+    tun_start
+    ;;
+  stop)
+    tun_stop
+    ;;
+  restart)
+    tun_stop
+    sleep 1
+    tun_start
+    ;;
+  status)
+    tun_status
+    ;;
+  *)
+    if [ -n "$1" ]; then
+      printf '%s\n' "${yellow}${scripts_name} ${orange}$1 ${red}not found${normal}"
+      exit 1
+    fi
+    usage
+    ;;
+esac

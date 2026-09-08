@@ -1,0 +1,118 @@
+#!/system/bin/sh
+# FoxyTail - one-shot diagnostics bundle.
+#
+# Usage: foxytail.diag collect [output-dir]   (default /sdcard/Download)
+# Prints the tar.gz path as the LAST line of stdout (webapi parses it).
+
+DIR=$(dirname "$(realpath "$0")")
+# shellcheck source=../settings.sh
+. "$DIR"/../settings.sh
+load_conf
+ensure_run_dirs
+
+TS_SOCKET="${TS_RUN_DIR}/tailscaled.sock"
+
+tmo() {
+  if command -v timeout >/dev/null 2>&1; then
+    timeout "$@"
+  else
+    _tmo_s=$1
+    shift
+    "$@"
+  fi
+}
+
+collect() {
+  _outdir="${1:-/sdcard/Download}"
+
+  # Verify the output dir is writable; fall back to $TS_DIR otherwise.
+  if { [ -d "$_outdir" ] || mkdir -p "$_outdir" 2>/dev/null; } \
+    && touch "${_outdir}/.foxytail-write-test" 2>/dev/null; then
+    rm -f "${_outdir}/.foxytail-write-test"
+  else
+    log Warning "diag: ${_outdir} is not writable, falling back to ${TS_DIR}"
+    echo "warning: ${_outdir} not writable, using ${TS_DIR} instead"
+    _outdir="$TS_DIR"
+    mkdir -p "$_outdir" 2>/dev/null
+  fi
+
+  _stamp=$(date +%Y%m%d-%H%M%S)
+  _out="${_outdir}/foxytail-diag-${_stamp}.tar.gz"
+
+  _stage=$(mktemp -d "${TS_RUN_DIR}/diag.XXXXXX" 2>/dev/null)
+  if [ -z "$_stage" ]; then
+    _stage="${TS_RUN_DIR}/diag.$$"
+    rm -rf "$_stage"
+    mkdir -p "$_stage"
+  fi
+
+  log Info "diag: collecting into ${_stage}"
+
+  # Log tails.
+  for _l in "$TS_RUN_LOG_FILE" "$TS_LOG_FILE"; do
+    [ -f "$_l" ] && tail -n 500 "$_l" >"${_stage}/$(basename "$_l").tail" 2>&1
+  done
+
+  # Daemon state.
+  tmo 15 tailscale --socket="$TS_SOCKET" status --json \
+    >"${_stage}/status.json" 2>"${_stage}/status.err"
+  tmo 20 tailscale --socket="$TS_SOCKET" netcheck \
+    >"${_stage}/netcheck.txt" 2>&1
+  tmo 20 tailscale --socket="$TS_SOCKET" bugreport \
+    >"${_stage}/bugreport.txt" 2>&1
+
+  # Routing and firewall dumps.
+  ip rule >"${_stage}/ip-rule.txt" 2>&1
+  ip route show table main >"${_stage}/ip-route-main.txt" 2>&1
+  ip route show table "${ROUTE_TABLE}" >"${_stage}/ip-route-${ROUTE_TABLE}.txt" 2>&1
+  iptables -S >"${_stage}/iptables-filter.txt" 2>&1
+  iptables -t mangle -S >"${_stage}/iptables-mangle.txt" 2>&1
+  iptables -t nat -S >"${_stage}/iptables-nat.txt" 2>&1
+  if [ "$IPV6" = "on" ]; then
+    ip6tables -S >"${_stage}/ip6tables-filter.txt" 2>&1
+    ip6tables -t mangle -S >"${_stage}/ip6tables-mangle.txt" 2>&1
+  fi
+
+  # Sanitized config copies: drop any line containing authkey/key.
+  mkdir -p "${_stage}/conf"
+  for _c in "${TS_CONF_DIR}"/*; do
+    [ -f "$_c" ] || continue
+    sed '/[Kk][Ee][Yy]/d' "$_c" >"${_stage}/conf/$(basename "$_c")"
+  done
+
+  # Coexistence snapshot.
+  if [ -x "${TS_SCRIPTS_DIR}/foxytail.compat" ]; then
+    "${TS_SCRIPTS_DIR}/foxytail.compat" probe >"${_stage}/compat.json" 2>/dev/null
+  fi
+
+  # Module + device inventory.
+  ls /data/adb/modules >"${_stage}/modules.txt" 2>&1
+  {
+    for _p in ro.product.manufacturer ro.product.model ro.product.device \
+      ro.build.version.release ro.build.version.sdk ro.build.fingerprint \
+      sys.boot_completed; do
+      echo "${_p}=$(getprop "$_p")"
+    done
+  } >"${_stage}/props.txt"
+  [ -f "$TS_MOD_PROP" ] && cp "$TS_MOD_PROP" "${_stage}/module.prop"
+  [ -f "${TS_DIR}/VERSIONS" ] && cp "${TS_DIR}/VERSIONS" "${_stage}/VERSIONS"
+
+  tar -czf "$_out" -C "$TS_RUN_DIR" "$(basename "$_stage")" 2>/dev/null
+  rm -rf "$_stage"
+
+  if [ -f "$_out" ]; then
+    log Success "diag: bundle written to ${_out}"
+  else
+    log Error "diag: failed to write ${_out}"
+    return 1
+  fi
+  echo "$_out"
+}
+
+case "$1" in
+  collect) shift; collect "$@" ;;
+  *)
+    echo "usage: $0 collect [output-dir]" >&2
+    exit 1
+    ;;
+esac

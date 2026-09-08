@@ -1,0 +1,200 @@
+#!/system/bin/sh
+# FoxyTail - network context awareness (Wi-Fi SSID / cellular rules).
+#
+# Subcommands:
+#   start       resident loop (exits when context.conf has no effective rules)
+#   stop        stop the resident loop
+#   status      JSON: {"running":bool,"context":...}
+#   check-once  detect the current context, apply actions on change, exit
+
+DIR=$(dirname "$(realpath "$0")")
+# shellcheck source=../settings.sh
+. "$DIR"/../settings.sh
+load_conf
+ensure_run_dirs
+
+PID_FILE="${TS_PID_DIR}/foxytail.context.pid"
+TS_SOCKET="${TS_RUN_DIR}/tailscaled.sock"
+STATE_FILE="${TS_RUN_DIR}/context.state"
+RULES_FILE="${TS_CONF_DIR}/context.conf"
+INTERVAL=20
+
+SERVICE="${TS_SCRIPTS_DIR}/foxytail.service"
+
+is_running() {
+  [ -f "$PID_FILE" ] || return 1
+  _p=$(cat "$PID_FILE" 2>/dev/null)
+  [ -n "$_p" ] && kill -0 "$_p" 2>/dev/null
+}
+
+tmo() {
+  if command -v timeout >/dev/null 2>&1; then
+    timeout "$@"
+  else
+    _tmo_s=$1
+    shift
+    "$@"
+  fi
+}
+
+# Best-effort SSID from dumpsys wifi; prints "unknown" on any failure.
+get_ssid() {
+  _w=$(dumpsys wifi 2>/dev/null)
+  if [ -z "$_w" ]; then
+    echo "unknown"
+    return
+  fi
+  # Quoted form: SSID: "MyWifi" (covers mWifiInfo / WifiInfo lines too).
+  _s=$(printf '%s\n' "$_w" | grep -o 'SSID: "[^"]*"' | head -n 1 | cut -d'"' -f2)
+  if [ -z "$_s" ]; then
+    # Unquoted form: ... SSID: MyWifi, BSSID: ...
+    _s=$(printf '%s\n' "$_w" | grep -o 'SSID: [^,"]*' | head -n 1 | sed 's/^SSID: //')
+  fi
+  case "$_s" in
+    "" | *unknown* | "<none>") echo "unknown" ;;
+    *) echo "$_s" ;;
+  esac
+}
+
+# Print the current context token: "ssid:<SSID>" | "ssid:unknown" |
+# "cellular:-" | "none:-".
+current_context() {
+  _def=$(ip route show default 2>/dev/null)
+  if [ -z "$_def" ]; then
+    echo "none:-"
+    return
+  fi
+  if printf '%s\n' "$_def" | grep -q 'dev wlan'; then
+    echo "ssid:$(get_ssid)"
+    return
+  fi
+  echo "cellular:-"
+}
+
+# True when the rules file exists and has at least one effective rule.
+have_rules() {
+  [ -f "$RULES_FILE" ] || return 1
+  sed 's/#.*//' "$RULES_FILE" | grep -q '[0-9A-Za-z]'
+}
+
+run_action() {
+  _act="$1"
+  _arg="$2"
+  case "$_act" in
+    up)
+      log Info "context: action up (foxytail.service start)"
+      [ -x "$SERVICE" ] && "$SERVICE" start >>"${TS_RUN_LOG_FILE}" 2>&1
+      ;;
+    down)
+      log Info "context: action down (foxytail.service stop)"
+      [ -x "$SERVICE" ] && "$SERVICE" stop >>"${TS_RUN_LOG_FILE}" 2>&1
+      ;;
+    exit-node)
+      log Info "context: action exit-node ${_arg}"
+      tmo 10 tailscale --socket="$TS_SOCKET" set --exit-node="$_arg" >/dev/null 2>&1
+      ;;
+    no-exit-node)
+      log Info "context: action no-exit-node"
+      tmo 10 tailscale --socket="$TS_SOCKET" set --exit-node= >/dev/null 2>&1
+      ;;
+    *)
+      log Warning "context: unknown action '${_act}', skipped"
+      ;;
+  esac
+}
+
+# Apply every rule whose trigger matches the given context token.
+apply_context() {
+  _ctx="$1"
+  _kind=${_ctx%%:*}
+  _val=${_ctx#*:}
+  while IFS= read -r _line; do
+    _line=$(printf '%s' "$_line" | sed 's/#.*//;s/^ *//;s/ *$//')
+    case "$_line" in '') continue ;; esac
+    _trig=${_line%%:*}
+    _rest=${_line#*:}
+    _tval=${_rest%%:*}
+    _rest2=${_rest#*:}
+    _act=${_rest2%%:*}
+    _arg=""
+    case "$_rest2" in *:*) _arg=${_rest2#*:} ;; esac
+    [ "$_trig" = "$_kind" ] || continue
+    if [ "$_kind" = "ssid" ] && [ "$_tval" != "$_val" ]; then
+      continue
+    fi
+    run_action "$_act" "$_arg"
+  done <"$RULES_FILE"
+}
+
+# Detect context; run actions only when the token changed since last round.
+check_once() {
+  _ctx=$(current_context)
+  _old=$(cat "$STATE_FILE" 2>/dev/null)
+  if [ "$_ctx" != "$_old" ]; then
+    log Info "context: '${_old:-none}' -> '${_ctx}', applying matching rules"
+    echo "$_ctx" >"$STATE_FILE"
+    apply_context "$_ctx"
+  fi
+  return 0
+}
+
+_context_stop() {
+  _ctx_running=0
+}
+
+do_start() {
+  if ! have_rules; then
+    log Info "context: no rules in context.conf, not starting"
+    return 0
+  fi
+  if is_running; then
+    log Info "foxytail.context already running (pid $(cat "$PID_FILE" 2>/dev/null))"
+    return 0
+  fi
+  echo "$$" >"$PID_FILE"
+  _ctx_running=1
+  trap '_context_stop' TERM INT
+  log Info "foxytail.context started (pid $$, interval ${INTERVAL}s)"
+  while [ "$_ctx_running" = "1" ]; do
+    check_once
+    sleep "$INTERVAL" &
+    _sleep_pid=$!
+    wait "$_sleep_pid" 2>/dev/null
+    kill "$_sleep_pid" 2>/dev/null
+  done
+  rm -f "$PID_FILE"
+  log Info "foxytail.context stopped"
+  return 0
+}
+
+do_stop() {
+  if is_running; then
+    kill -TERM "$(cat "$PID_FILE")" 2>/dev/null
+    log Info "foxytail.context stop requested"
+  else
+    rm -f "$PID_FILE"
+    log Info "foxytail.context is not running"
+  fi
+}
+
+do_status() {
+  _ctx=$(current_context)
+  if is_running; then
+    jq -n -c --argjson r true --argjson p "$(cat "$PID_FILE")" --arg c "$_ctx" \
+      '{running:$r,pid:$p,context:$c}'
+  else
+    jq -n -c --argjson r false --arg c "$_ctx" \
+      '{running:$r,pid:null,context:$c}'
+  fi
+}
+
+case "$1" in
+  start) do_start ;;
+  stop) do_stop ;;
+  status) do_status ;;
+  check-once) check_once ;;
+  *)
+    echo "usage: $0 {start|stop|status|check-once}" >&2
+    exit 1
+    ;;
+esac

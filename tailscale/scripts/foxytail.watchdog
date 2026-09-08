@@ -1,0 +1,220 @@
+#!/system/bin/sh
+# FoxyTail - watchdog: restart tailscaled on crash, rebind on network change.
+#
+# Subcommands:
+#   start       resident loop (no-op when WATCHDOG=off; dedup via pid file)
+#   stop        stop the resident loop
+#   status      JSON: {"running":bool,...}
+#   check-once  run a single check round and exit
+
+DIR=$(dirname "$(realpath "$0")")
+# shellcheck source=../settings.sh
+. "$DIR"/../settings.sh
+load_conf
+ensure_run_dirs
+
+WATCHDOG_INTERVAL="${WATCHDOG_INTERVAL:-30}"
+
+PID_FILE="${TS_PID_DIR}/foxytail.watchdog.pid"
+TS_SOCKET="${TS_RUN_DIR}/tailscaled.sock"
+ROUTE_CACHE="${TS_RUN_DIR}/watchdog.route-cache"
+BAD_COUNT_FILE="${TS_RUN_DIR}/watchdog.bad-count"
+RESTARTS_FILE="${TS_RUN_DIR}/watchdog.restarts"
+RESTART_LIMIT=5
+RESTART_WINDOW=600
+COOLDOWN=300
+BACKEND_BAD_LIMIT=3
+
+SERVICE="${TS_SCRIPTS_DIR}/foxytail.service"
+
+is_running() {
+  [ -f "$PID_FILE" ] || return 1
+  _p=$(cat "$PID_FILE" 2>/dev/null)
+  [ -n "$_p" ] && kill -0 "$_p" 2>/dev/null
+}
+
+tmo() {
+  if command -v timeout >/dev/null 2>&1; then
+    timeout "$@"
+  else
+    _tmo_s=$1
+    shift
+    "$@"
+  fi
+}
+
+# Interruptible sleep: returns promptly on TERM/INT.
+isleep() {
+  sleep "$1" &
+  _isleep_pid=$!
+  wait "$_isleep_pid" 2>/dev/null
+  kill "$_isleep_pid" 2>/dev/null
+}
+
+# tailscale status --json, empty string on timeout/failure.
+ts_status_json() {
+  _st=$(tmo 8 tailscale --socket="$TS_SOCKET" status --json 2>/dev/null)
+  if [ -n "$_st" ] && printf '%s' "$_st" | jq -e . >/dev/null 2>&1; then
+    printf '%s' "$_st"
+  fi
+}
+
+# Tailnet reachability: try quad-100 first, then the first online peer.
+tailnet_reachable() {
+  _targets="100.100.100.100"
+  _st=$(ts_status_json)
+  if [ -n "$_st" ]; then
+    _peer=$(printf '%s' "$_st" | jq -r \
+      '[.Peer // {} | .[] | select(.Online == true) | .TailscaleIPs[0]] | .[0] // empty' \
+      2>/dev/null)
+    [ -n "$_peer" ] && _targets="$_targets $_peer"
+  fi
+  for _t in $_targets; do
+    if tmo 10 tailscale --socket="$TS_SOCKET" ping --c=1 --timeout=3s "$_t" >/dev/null 2>&1; then
+      return 0
+    fi
+  done
+  return 1
+}
+
+# Keep only restart timestamps inside the window; print how many remain.
+restarts_count() {
+  _now=$(date +%s)
+  if [ -f "$RESTARTS_FILE" ]; then
+    awk -v cut="$((_now - RESTART_WINDOW))" '$1 >= cut' "$RESTARTS_FILE" \
+      >"${RESTARTS_FILE}.tmp" 2>/dev/null
+    mv "${RESTARTS_FILE}.tmp" "$RESTARTS_FILE"
+  else
+    : >"$RESTARTS_FILE"
+  fi
+  wc -l <"$RESTARTS_FILE" 2>/dev/null || echo 0
+}
+
+# Recover tailscaled via "start" or "restart", with cooldown accounting.
+recover() {
+  _how="$1"
+  _why="$2"
+  _c=$(restarts_count)
+  if [ "$_c" -ge $RESTART_LIMIT ]; then
+    log Error "watchdog: >${RESTART_LIMIT} restarts in ${RESTART_WINDOW}s, cooling down ${COOLDOWN}s (${_why})"
+    isleep $COOLDOWN
+    : >"$RESTARTS_FILE"
+    return 0
+  fi
+  date +%s >>"$RESTARTS_FILE"
+  log Warning "watchdog: tailscaled recovery (${_why})"
+  if [ -x "$SERVICE" ]; then
+    "$SERVICE" "$_how" >>"${TS_RUN_LOG_FILE}" 2>&1
+  else
+    log Error "watchdog: foxytail.service not found, cannot recover"
+  fi
+}
+
+bad_count_get() {
+  cat "$BAD_COUNT_FILE" 2>/dev/null || echo 0
+}
+
+bad_count_inc() {
+  _n=$(( $(bad_count_get) + 1 ))
+  echo "$_n" >"$BAD_COUNT_FILE"
+  echo "$_n"
+}
+
+check_once() {
+  # 1. Process liveness.
+  if ! pidof tailscaled >/dev/null 2>&1; then
+    log Warning "watchdog: tailscaled process is dead"
+    recover start "process-dead"
+    return 0
+  fi
+
+  # 2. Backend state health (3 consecutive bad rounds -> restart).
+  _st=$(ts_status_json)
+  _state=""
+  [ -n "$_st" ] && _state=$(printf '%s' "$_st" | jq -r '.BackendState // "unknown"' 2>/dev/null)
+  if [ "$_state" != "Running" ]; then
+    _bad=$(bad_count_inc)
+    log Warning "watchdog: backend state '${_state:-unreachable}' (${_bad}/${BACKEND_BAD_LIMIT})"
+    if [ "$_bad" -ge $BACKEND_BAD_LIMIT ]; then
+      echo 0 >"$BAD_COUNT_FILE"
+      recover restart "backend-unhealthy"
+    fi
+  else
+    echo 0 >"$BAD_COUNT_FILE"
+  fi
+
+  # 3. Default route change -> verify tailnet connectivity.
+  _route=$(ip route show default 2>/dev/null | tr '\n' ' ' | tr -s ' ')
+  _old=$(cat "$ROUTE_CACHE" 2>/dev/null)
+  if [ "$_route" != "$_old" ]; then
+    echo "$_route" >"$ROUTE_CACHE"
+    if [ -n "$_old" ]; then
+      log Info "watchdog: default route changed, verifying tailnet connectivity"
+      if tailnet_reachable; then
+        log Info "watchdog: tailnet still reachable after network change"
+      else
+        recover restart "network-change"
+      fi
+    fi
+  fi
+  return 0
+}
+
+_watchdog_stop() {
+  _wd_running=0
+}
+
+do_start() {
+  if [ "$WATCHDOG" != "on" ]; then
+    log Info "watchdog disabled (WATCHDOG=${WATCHDOG})"
+    return 0
+  fi
+  if is_running; then
+    log Info "foxytail.watchdog already running (pid $(cat "$PID_FILE" 2>/dev/null))"
+    return 0
+  fi
+  echo "$$" >"$PID_FILE"
+  _wd_running=1
+  trap '_watchdog_stop' TERM INT
+  log Info "foxytail.watchdog started (pid $$, interval ${WATCHDOG_INTERVAL}s)"
+  while [ "$_wd_running" = "1" ]; do
+    check_once
+    isleep "$WATCHDOG_INTERVAL"
+  done
+  rm -f "$PID_FILE"
+  log Info "foxytail.watchdog stopped"
+  return 0
+}
+
+do_stop() {
+  if is_running; then
+    kill -TERM "$(cat "$PID_FILE")" 2>/dev/null
+    log Info "foxytail.watchdog stop requested"
+  else
+    rm -f "$PID_FILE"
+    log Info "foxytail.watchdog is not running"
+  fi
+}
+
+do_status() {
+  if is_running; then
+    jq -n -c --argjson r true --argjson p "$(cat "$PID_FILE")" \
+      --argjson i "$WATCHDOG_INTERVAL" --argjson n "$(restarts_count)" \
+      '{running:$r,pid:$p,interval:$i,restartsRecent:$n}'
+  else
+    jq -n -c --argjson r false --argjson i "$WATCHDOG_INTERVAL" \
+      --argjson n "$(restarts_count)" \
+      '{running:$r,pid:null,interval:$i,restartsRecent:$n}'
+  fi
+}
+
+case "$1" in
+  start) do_start ;;
+  stop) do_stop ;;
+  status) do_status ;;
+  check-once) check_once ;;
+  *)
+    echo "usage: $0 {start|stop|status|check-once}" >&2
+    exit 1
+    ;;
+esac

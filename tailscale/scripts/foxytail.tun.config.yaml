@@ -1,0 +1,44 @@
+# hev-socks5-tunnel configuration template for FoxyTail (bridge mode).
+#
+# `foxytail.tun start` renders this file to $TS_RUN_DIR/hev.yaml:
+#   - @SOCKS_PORT@ is replaced with the configured SOCKS_PORT (default 1099).
+#   - The block between `# @IPV6_BEGIN@` and `# @IPV6_END@` is kept only when
+#     IPV6=on in foxytail.conf; otherwise it is stripped.
+#
+# The interface `tailscale0` created here is managed by hev-socks5-tunnel,
+# NOT by tailscaled (which runs in userspace-networking mode in bridge mode).
+# All traffic entering the interface is forwarded through tailscaled's local
+# socks5 server; the fake gateway 100.100.100.100 matches Tailscale's
+# quad100 DNS address so MagicDNS lookups can flow through the tunnel.
+
+tunnel:
+  name: tailscale0
+  mtu: 1280
+  multi-queue: false
+  ipv4:
+    address: 100.100.100.100
+    gateway: 100.100.100.100
+    prefix: 30
+  # @IPV6_BEGIN@
+  ipv6:
+    address: 'fd7a:115c:a1e0::1'
+    gateway: 'fd7a:115c:a1e0::1'
+    prefix: 126
+  # @IPV6_END@
+
+socks5:
+  address: 127.0.0.1
+  # Placeholder is quoted so the template itself stays valid YAML;
+  # render_conf() strips the quotes, leaving a bare integer in hev.yaml.
+  port: "@SOCKS_PORT@"
+  udp: 'udp'
+  mark: 0
+
+misc:
+  task-stack-size: 81920
+  tcp-buffer-size: 8192
+  connect-timeout: 5000
+  read-write-timeout: 60000
+  log-file: stderr
+  log-level: warn
+  limit-nofile: 65535

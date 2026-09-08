@@ -1,0 +1,239 @@
+#!/system/bin/sh
+# FoxyTail - traffic stats collector.
+#
+# Subcommands:
+#   start        resident collection loop (dedup via pid file, trap TERM)
+#   stop         stop the resident loop
+#   status       JSON: {"running":bool,...}
+#   collect-once append one JSON sample to $TS_STATS_DIR/YYYY-MM-DD.jsonl
+#   query hourly <YYYY-MM-DD> | daily | topn <n>
+
+DIR=$(dirname "$(realpath "$0")")
+# shellcheck source=../settings.sh
+. "$DIR"/../settings.sh
+load_conf
+ensure_run_dirs
+
+PID_FILE="${TS_PID_DIR}/foxytail.stats.pid"
+TS_SOCKET="${TS_RUN_DIR}/tailscaled.sock"
+RETENTION_DAYS=7
+
+is_running() {
+  [ -f "$PID_FILE" ] || return 1
+  _p=$(cat "$PID_FILE" 2>/dev/null)
+  [ -n "$_p" ] && kill -0 "$_p" 2>/dev/null
+}
+
+# Run <cmd...> under a timeout when toybox/busybox timeout exists.
+tmo() {
+  if command -v timeout >/dev/null 2>&1; then
+    timeout "$@"
+  else
+    _tmo_s=$1
+    shift
+    "$@"
+  fi
+}
+
+# _date_lt <a> <b>: true when date string a sorts before b (YYYY-MM-DD).
+# POSIX-safe: test's \< / \> are undefined in POSIX sh (SC3012).
+_date_lt() {
+  [ "$1" != "$2" ] && [ "$(printf '%s\n%s\n' "$1" "$2" | sort | head -n 1)" = "$1" ]
+}
+
+# Delete stats files older than RETENTION_DAYS (compared by file-name date).
+prune_stats() {
+  _cut_epoch=$(( $(date +%s) - RETENTION_DAYS * 86400 ))
+  _cut=$(date -d "@${_cut_epoch}" +%F 2>/dev/null)
+  [ -n "$_cut" ] || return 0
+  for _f in "${TS_STATS_DIR}"/????-??-??.jsonl; do
+    [ -f "$_f" ] || continue
+    _base=$(basename "$_f" .jsonl)
+    if _date_lt "$_base" "$_cut"; then
+      rm -f "$_f"
+    fi
+  done
+}
+
+# Print the paths of stats files inside the retention window, oldest first.
+stats_recent_files() {
+  _cut_epoch=$(( $(date +%s) - RETENTION_DAYS * 86400 ))
+  _cut=$(date -d "@${_cut_epoch}" +%F 2>/dev/null)
+  for _f in "${TS_STATS_DIR}"/????-??-??.jsonl; do
+    [ -f "$_f" ] || continue
+    _base=$(basename "$_f" .jsonl)
+    if [ -z "$_cut" ] || ! _date_lt "$_base" "$_cut"; then
+      echo "$_f"
+    fi
+  done | sort
+}
+
+collect_once() {
+  _ts=$(date +%s)
+  _file="${TS_STATS_DIR}/$(date +%F).jsonl"
+
+  _status=$(tmo 10 tailscale --socket="$TS_SOCKET" status --json 2>/dev/null)
+  if [ -z "$_status" ] || ! printf '%s' "$_status" | jq -e . >/dev/null 2>&1; then
+    echo "{\"ts\":${_ts},\"error\":\"daemon-unreachable\"}" >>"$_file"
+    prune_stats
+    return 0
+  fi
+  _peers=$(printf '%s' "$_status" | jq -c \
+    '[.Peer // {} | .[] | {id:(.ID|tostring),rx:(.RxBytes // 0),tx:(.TxBytes // 0)}]')
+
+  _iface="null"
+  if [ -d /sys/class/net/tailscale0 ]; then
+    _rx=$(cat /sys/class/net/tailscale0/statistics/rx_bytes 2>/dev/null)
+    _tx=$(cat /sys/class/net/tailscale0/statistics/tx_bytes 2>/dev/null)
+    case "$_rx" in '' | *[!0-9]*) _rx=0 ;; esac
+    case "$_tx" in '' | *[!0-9]*) _tx=0 ;; esac
+    _iface="{\"rx\":${_rx},\"tx\":${_tx}}"
+  fi
+
+  # FOXY_STAT is created by foxytail.route; a missing chain means no per-UID
+  # rules are installed. One rule per UID: total bytes counted into rx.
+  _uids="[]"
+  if iptables -L FOXY_STAT -n >/dev/null 2>&1; then
+    _uids=$(iptables -nvxL FOXY_STAT 2>/dev/null \
+      | awk '/owner UID match/ {print $2, $NF}' \
+      | jq -R -s -c 'split("\n") | map(select(length > 0) | split(" ")
+          | {uid:.[1],rx:(.[0] | tonumber),tx:0})')
+  fi
+
+  jq -n -c --argjson ts "$_ts" --argjson peers "$_peers" \
+    --argjson iface "$_iface" --argjson uids "$_uids" \
+    '{ts:$ts,peers:$peers,iface:$iface,uids:$uids}' >>"$_file"
+
+  prune_stats
+}
+
+_stats_stop() {
+  _stats_running=0
+}
+
+do_start() {
+  if is_running; then
+    log Info "foxytail.stats already running (pid $(cat "$PID_FILE" 2>/dev/null))"
+    return 0
+  fi
+  echo "$$" >"$PID_FILE"
+  _stats_running=1
+  trap '_stats_stop' TERM INT
+  log Info "foxytail.stats started (pid $$, interval ${STATS_INTERVAL}s)"
+  while [ "$_stats_running" = "1" ]; do
+    collect_once
+    _int="${STATS_INTERVAL:-60}"
+    is_screen_on || _int=$((_int * 5))
+    sleep "$_int" &
+    _sleep_pid=$!
+    wait "$_sleep_pid" 2>/dev/null
+    kill "$_sleep_pid" 2>/dev/null
+  done
+  rm -f "$PID_FILE"
+  log Info "foxytail.stats stopped"
+  return 0
+}
+
+do_stop() {
+  if is_running; then
+    kill -TERM "$(cat "$PID_FILE")" 2>/dev/null
+    log Info "foxytail.stats stop requested"
+  else
+    rm -f "$PID_FILE"
+    log Info "foxytail.stats is not running"
+  fi
+}
+
+do_status() {
+  if is_running; then
+    jq -n -c --argjson r true --argjson p "$(cat "$PID_FILE")" \
+      --argjson i "${STATS_INTERVAL:-60}" --arg d "$TS_STATS_DIR" \
+      '{running:$r,pid:$p,interval:$i,dir:$d}'
+  else
+    jq -n -c --argjson r false --argjson i "${STATS_INTERVAL:-60}" \
+      --arg d "$TS_STATS_DIR" '{running:$r,pid:null,interval:$i,dir:$d}'
+  fi
+}
+
+query() {
+  _q="$1"
+  shift
+  case "$_q" in
+    hourly)
+      _d="$1"
+      _f="${TS_STATS_DIR}/${_d}.jsonl"
+      if [ ! -f "$_f" ]; then
+        jq -n -c --arg d "$_d" '{date:$d,hours:[]}'
+        return 0
+      fi
+      jq -s -c --arg d "$_d" '
+        [ .[] | select(.error == null) ] as $s
+        | { date: $d,
+            hours: [ range(0; 24) | . as $h
+              | [ $s[] | select((.ts | strflocaltime("%H") | tonumber) == $h) ] as $b
+              | [ $b[] | .iface | select(. != null) ] as $i
+              | [ $b[] | .peers[]? ] as $p
+              | { hour: $h,
+                  samples: ($b | length),
+                  iface: (if ($i | length) > 1 then
+                            { rx: ([$i[-1].rx - $i[0].rx, 0] | max),
+                              tx: ([$i[-1].tx - $i[0].tx, 0] | max) }
+                          else { rx: 0, tx: 0 } end),
+                  peers: ($p | group_by(.id) | map(
+                            { id: .[0].id,
+                              rx: ([(map(.rx) | max) - (map(.rx) | min), 0] | max),
+                              tx: ([(map(.tx) | max) - (map(.tx) | min), 0] | max) })) } ] }' "$_f"
+      ;;
+    daily)
+      _lines=""
+      for _f in $(stats_recent_files); do
+        _d=$(basename "$_f" .jsonl)
+        _lines="${_lines}$(jq -s -c --arg d "$_d" '
+          [ .[] | select(.error == null and .iface != null) ] as $s
+          | { date: $d, samples: ($s | length),
+              rx: (if ($s | length) > 1 then
+                     [($s[-1].iface.rx - $s[0].iface.rx), 0] | max
+                   else 0 end),
+              tx: (if ($s | length) > 1 then
+                     [($s[-1].iface.tx - $s[0].iface.tx), 0] | max
+                   else 0 end) }' "$_f")\n"
+      done
+      printf '%b' "$_lines" | jq -s -c '{days:.}'
+      ;;
+    topn)
+      _n="$1"
+      case "$_n" in '' | *[!0-9]*) _n=10 ;; esac
+      _lines=""
+      for _f in $(stats_recent_files); do
+        _lines="${_lines}$(jq -s -c '
+          [ .[] | select(.error == null) | .peers[]? ]
+          | group_by(.id) | .[]
+          | { id: .[0].id,
+              rx: ([(map(.rx) | max) - (map(.rx) | min), 0] | max),
+              tx: ([(map(.tx) | max) - (map(.tx) | min), 0] | max) }' "$_f")\n"
+      done
+      printf '%b' "$_lines" | jq -s -c --argjson n "$_n" '
+        [ group_by(.id) | .[]
+          | { id: .[0].id, rx: (map(.rx) | add), tx: (map(.tx) | add) }
+          | select(.rx + .tx > 0) ]
+        | sort_by(.rx + .tx) | reverse | .[0:$n]
+        | { topn: . }'
+      ;;
+    *)
+      echo "usage: $0 query {hourly <YYYY-MM-DD>|daily|topn <n>}" >&2
+      return 1
+      ;;
+  esac
+}
+
+case "$1" in
+  start) do_start ;;
+  stop) do_stop ;;
+  status) do_status ;;
+  collect-once) collect_once ;;
+  query) shift; query "$@" ;;
+  *)
+    echo "usage: $0 {start|stop|status|collect-once|query ...}" >&2
+    exit 1
+    ;;
+esac

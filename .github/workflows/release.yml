@@ -1,0 +1,122 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      bump:
+        description: 'Version bump type'
+        type: choice
+        default: 'none'
+        options:
+          - none
+          - major
+          - minor
+          - patch
+      prerelease:
+        description: 'Publish as a pre-release'
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # full history for CHANGELOG generation
+
+      - name: Install build tools
+        run: sudo apt-get update && sudo apt-get install -y zip jq
+
+      - name: Bump version (manual run)
+        if: github.event_name == 'workflow_dispatch' && inputs.bump != 'none'
+        run: bash ./.github/tools/version-bump.sh "${{ inputs.bump }}"
+
+      - name: Sync version from tag (tag push)
+        if: github.event_name == 'push'
+        run: |
+          TAG_VERSION="${GITHUB_REF_NAME}"
+          CURRENT=$(grep '^version=' module.prop | cut -d= -f2)
+          if [ "$TAG_VERSION" != "$CURRENT" ]; then
+            echo "Tag $TAG_VERSION != module.prop $CURRENT; syncing version files"
+            NUM="${TAG_VERSION#v}"
+            NUM="${NUM%%-*}" # drop any -rc suffix for the versionCode math
+            IFS='.' read -r MAJOR MINOR PATCH <<<"$NUM"
+            CODE=$(( MAJOR * 10000 + MINOR * 100 + PATCH ))
+            sed -i "s/^version=.*/version=${TAG_VERSION}/" module.prop
+            sed -i "s/^versionCode=.*/versionCode=${CODE}/" module.prop
+            jq --arg v "$TAG_VERSION" --argjson vc "$CODE" \
+              '.version = $v | .versionCode = $vc' update.json > update.json.tmp
+            mv update.json.tmp update.json
+          else
+            echo "Tag matches module.prop ($CURRENT)"
+          fi
+
+      - name: Resolve version and prerelease flag
+        id: meta
+        run: |
+          VERSION=$(grep '^version=' module.prop | cut -d= -f2)
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          PRE=false
+          case "$VERSION" in *-rc*) PRE=true ;; esac
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ "${{ inputs.prerelease }}" = "true" ]; then
+            PRE=true
+          fi
+          echo "prerelease=${PRE}" >> "$GITHUB_OUTPUT"
+
+      - name: Build
+        run: bash ./.github/tools/build.sh
+
+      - name: Publish GitHub release
+        id: release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.meta.outputs.version }}
+          name: FoxyTail ${{ steps.meta.outputs.version }}
+          files: dist/*.zip
+          generate_release_notes: true
+          prerelease: ${{ steps.meta.outputs.prerelease }}
+          append_body: true
+          body: |
+            ## Downloads
+            - **FoxyTail-${{ steps.meta.outputs.version }}.zip** — light package: binaries are downloaded during installation and SHA256-verified against `tailscale/checksums.txt`
+            - **FoxyTail-${{ steps.meta.outputs.version }}-full.zip** — full package: all binaries bundled, works offline
+
+      - name: Point update.json at the released light zip
+        env:
+          ASSETS: ${{ steps.release.outputs.assets }}
+        run: |
+          ZIP_URL=$(jq -r '.[] | select(.name | test("^FoxyTail-.*\\.zip$") and (endswith("-full.zip") | not)) | .browser_download_url' <<<"$ASSETS")
+          if [ -z "$ZIP_URL" ]; then
+            echo "error: light zip asset URL not found in release assets" >&2
+            exit 1
+          fi
+          jq --arg url "$ZIP_URL" '.zipUrl = $url' update.json > update.json.tmp
+          mv update.json.tmp update.json
+
+      # Write version file changes back for BOTH trigger types. (The original
+      # project only pushed on workflow_dispatch, leaving tag-triggered runs
+      # with an out-of-sync master.)
+      - name: Commit version files back to the repository
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add module.prop update.json CHANGELOG.md
+          if git diff --staged --quiet; then
+            echo "No changes to commit"
+            exit 0
+          fi
+          git commit -m "chore(release): ${{ steps.meta.outputs.version }} [skip ci]"
+          if [ "${{ github.event_name }}" = "push" ]; then
+            # tag pushes check out a detached HEAD at the tag; push to master
+            git push origin HEAD:refs/heads/master
+          else
+            git push
+          fi

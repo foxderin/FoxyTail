@@ -1,0 +1,21 @@
+# Pinned upstream binary versions. build.sh and customize.sh both read this file.
+
+# tailscale/tailscaled Android CLI binaries (static NDK builds, userspace
+# networking capable). Release asset names are `tailscale_<ver>_<arch>.tgz`,
+# each containing a single `tailscaled` binary.
+# NOTE: if this tag does not exist upstream, the build script will fail and
+# ask you to update this file to a valid release tag.
+TAILSCALE_REPO=anasfanani/tailscale-android-cli
+TAILSCALE_VERSION=v1.98.8-android
+
+# Static jq build for Android, used for all JSON parsing on-device.
+# Assets: jq-armv7a-linux-androideabi / jq-aarch64-linux-android.
+JQ_REPO=theshoqanebi/jq-build-for-android
+JQ_VERSION=v1.6
+
+# hev-socks5-tunnel: bridges the socks5 proxy to the tailscale0 TUN interface
+# in bridge mode. Upstream ships no Android-specific asset; the static
+# `hev-socks5-tunnel-linux-arm64` / `-linux-arm32v7` binaries are statically
+# linked and run fine on Android.
+HEV_REPO=heiher/hev-socks5-tunnel
+HEV_VERSION=2.12.0

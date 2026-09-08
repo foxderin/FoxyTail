@@ -1,0 +1,43 @@
+#!/system/bin/sh
+# FoxyTail user hook: runs AFTER the tailscale0 interface comes up (bridge mode).
+#
+# When is this called?
+#   By `foxytail.tun start`, right after hev-socks5-tunnel has created the
+#   tailscale0 interface. It is NOT called in tun/proxy modes.
+#
+# What can you use here?
+#   All variables from settings.sh are available after the source line below,
+#   e.g. $TS_DIR, $TS_BIN_DIR, $TS_RUN_DIR, $TS_CONF_DIR, and after load_conf
+#   also $TS_MODE, $ROUTE_TABLE, $FWMARK, $IPV6, ... Use `log Info "..."` to
+#   write to the FoxyTail runtime log.
+#
+# What is it for?
+#   Add your own routing/firewall customization that depends on the tunnel
+#   interface, e.g. route extra subnets through Tailscale:
+#
+#     ip route add 192.168.10.0/24 dev tailscale0 table "${ROUTE_TABLE}"
+#     ip route add 10.8.0.0/16 dev tailscale0 table "${ROUTE_TABLE}"
+#
+#   or per-interface firewall rules:
+#
+#     iptables -t mangle -A FOXY_MARK -p tcp --dport 445 -j RETURN
+#     iptables -t filter -A FOXY_STAT -s 100.64.0.0/10 -j RETURN
+#
+# Keep it POSIX sh (mksh/busybox), quote every variable, and never let this
+# script hang: it blocks the tunnel startup sequence.
+#
+# The installer never overwrites this file once you have modified it.
+
+DIR=$(dirname "$(realpath "$0")")
+# shellcheck source=../settings.sh
+. "${DIR}/../settings.sh"
+
+ensure_run_dirs
+load_conf
+
+# Default behavior: (re)install FoxyTail policy routing for the new interface.
+if [ -x "${TS_SCRIPTS_DIR}/foxytail.route" ]; then
+  "${TS_SCRIPTS_DIR}/foxytail.route" apply
+fi
+
+exit 0

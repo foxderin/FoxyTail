@@ -1,0 +1,470 @@
+/*
+ * FoxyTail WebUI - stylesheet.
+ *
+ * Dark Material You-inspired theme driven by CSS variables.
+ * html[data-theme="dark"|"light"] forces a theme; "auto" follows
+ * prefers-color-scheme (dark is the fallback/default either way).
+ * Mobile-first, safe-area aware (KernelSU / MMRL WebView).
+ */
+
+/* --- Theme variables -------------------------------------------------------- */
+
+:root,
+html[data-theme="dark"] {
+  --bg: #131318;
+  --bg-elev: #1d1d24;
+  --bg-card: #23232c;
+  --bg-input: #191920;
+  --fg: #e8e6f0;
+  --fg-dim: #a5a2b3;
+  --fg-faint: #6d6a7c;
+  --primary: #c3b8ff;
+  --primary-dim: #4a3f80;
+  --on-primary: #221845;
+  --accent: #8fd0c3;
+  --danger: #f2b8b5;
+  --danger-dim: #8c1d18;
+  --warn-bg: #4d3d00;
+  --warn-fg: #f5d76e;
+  --ok: #7fd88f;
+  --line: #33333f;
+  --shadow: rgba(0, 0, 0, 0.45);
+}
+
+html[data-theme="light"] {
+  --bg: #faf8ff;
+  --bg-elev: #ffffff;
+  --bg-card: #ffffff;
+  --bg-input: #f0edf6;
+  --fg: #1c1b21;
+  --fg-dim: #575462;
+  --fg-faint: #8b8798;
+  --primary: #5b4bbf;
+  --primary-dim: #d9d0f5;
+  --on-primary: #ffffff;
+  --accent: #20705f;
+  --danger: #b3261e;
+  --danger-dim: #f9dedc;
+  --warn-bg: #fff3cd;
+  --warn-fg: #7a5900;
+  --ok: #1a7f37;
+  --line: #e2dff0;
+  --shadow: rgba(60, 50, 100, 0.12);
+}
+
+@media (prefers-color-scheme: light) {
+  html[data-theme="auto"] {
+    --bg: #faf8ff;
+    --bg-elev: #ffffff;
+    --bg-card: #ffffff;
+    --bg-input: #f0edf6;
+    --fg: #1c1b21;
+    --fg-dim: #575462;
+    --fg-faint: #8b8798;
+    --primary: #5b4bbf;
+    --primary-dim: #d9d0f5;
+    --on-primary: #ffffff;
+    --accent: #20705f;
+    --danger: #b3261e;
+    --danger-dim: #f9dedc;
+    --warn-bg: #fff3cd;
+    --warn-fg: #7a5900;
+    --ok: #1a7f37;
+    --line: #e2dff0;
+    --shadow: rgba(60, 50, 100, 0.12);
+  }
+}
+
+/* --- Base ------------------------------------------------------------------- */
+
+* { box-sizing: border-box; margin: 0; padding: 0; }
+
+html { -webkit-text-size-adjust: 100%; }
+
+body {
+  background: var(--bg);
+  color: var(--fg);
+  font-family: system-ui, -apple-system, "Roboto", "Noto Sans SC", sans-serif;
+  font-size: 15px;
+  line-height: 1.5;
+  min-height: 100vh;
+  padding-top: env(safe-area-inset-top, 0);
+}
+
+#app-header {
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  background: var(--bg);
+  border-bottom: 1px solid var(--line);
+  padding: 12px 16px;
+}
+
+#app-title { font-size: 18px; font-weight: 600; letter-spacing: 0.4px; }
+
+#view {
+  padding: 14px 14px calc(88px + env(safe-area-inset-bottom, 0));
+  max-width: 720px;
+  margin: 0 auto;
+}
+
+/* --- Bottom navigation -------------------------------------------------------- */
+
+#bottom-nav {
+  position: fixed;
+  left: 0; right: 0; bottom: 0;
+  z-index: 20;
+  display: flex;
+  background: var(--bg-elev);
+  border-top: 1px solid var(--line);
+  padding-bottom: env(safe-area-inset-bottom, 0);
+}
+
+.nav-item {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  padding: 8px 0 6px;
+  color: var(--fg-faint);
+  text-decoration: none;
+  font-size: 11px;
+  border: 0;
+  background: none;
+  cursor: pointer;
+}
+
+.nav-item .nav-ico { font-size: 19px; line-height: 1; }
+
+.nav-item.active { color: var(--primary); }
+.nav-item.active .nav-ico { transform: translateY(-1px); }
+
+/* --- Root banner ---------------------------------------------------------------- */
+
+.root-banner {
+  background: var(--warn-bg);
+  color: var(--warn-fg);
+  padding: 10px 16px;
+  font-size: 13px;
+  text-align: center;
+  position: sticky;
+  top: 0;
+  z-index: 30;
+}
+
+/* --- Cards ------------------------------------------------------------------------ */
+
+.card {
+  background: var(--bg-card);
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  padding: 14px 16px;
+  margin-bottom: 14px;
+  box-shadow: 0 1px 3px var(--shadow);
+}
+
+.card h2 {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--fg-dim);
+  text-transform: uppercase;
+  letter-spacing: 0.6px;
+  margin-bottom: 10px;
+}
+
+.kv { display: flex; justify-content: space-between; gap: 12px; padding: 4px 0; }
+.kv .k { color: var(--fg-dim); flex-shrink: 0; }
+.kv .v { text-align: right; word-break: break-all; font-variant-numeric: tabular-nums; }
+
+/* --- Status dots & badges --------------------------------------------------------- */
+
+.dot {
+  display: inline-block;
+  width: 9px; height: 9px;
+  border-radius: 50%;
+  margin-right: 6px;
+  vertical-align: baseline;
+}
+.dot.on { background: var(--ok); }
+.dot.off { background: var(--fg-faint); }
+
+.badge {
+  display: inline-block;
+  font-size: 11px;
+  padding: 1px 8px;
+  border-radius: 999px;
+  background: var(--primary-dim);
+  color: var(--fg);
+  margin-left: 6px;
+}
+
+.lat-good { color: var(--ok); }
+.lat-mid { color: var(--warn-fg); }
+.lat-bad { color: var(--danger); }
+
+/* --- Buttons ----------------------------------------------------------------------- */
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  border: 0;
+  border-radius: 999px;
+  padding: 10px 20px;
+  font-size: 14px;
+  font-weight: 600;
+  background: var(--primary);
+  color: var(--on-primary);
+  cursor: pointer;
+  user-select: none;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.btn:active { opacity: 0.85; }
+.btn:disabled { opacity: 0.45; cursor: not-allowed; }
+
+.btn.secondary { background: var(--bg-input); color: var(--fg); border: 1px solid var(--line); }
+.btn.danger { background: var(--danger-dim); color: var(--danger); }
+.btn.small { padding: 6px 14px; font-size: 13px; }
+.btn.block { width: 100%; }
+
+.btn-row { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 10px; }
+.btn-row .btn { flex: 1; min-width: 90px; }
+
+/* --- Forms -------------------------------------------------------------------------- */
+
+label.field { display: block; margin-bottom: 12px; }
+label.field .label { display: block; font-size: 13px; color: var(--fg-dim); margin-bottom: 5px; }
+
+input[type="text"], input[type="password"], input[type="number"],
+select, textarea {
+  width: 100%;
+  background: var(--bg-input);
+  color: var(--fg);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 10px 12px;
+  font-size: 14px;
+  font-family: inherit;
+}
+
+textarea { resize: vertical; font-family: ui-monospace, monospace; font-size: 13px; }
+
+select { appearance: none; }
+
+input:focus, select:focus, textarea:focus {
+  outline: 2px solid var(--primary);
+  outline-offset: -1px;
+}
+
+/* Material switch */
+.switch { position: relative; display: inline-block; width: 46px; height: 26px; flex-shrink: 0; }
+.switch input { opacity: 0; width: 0; height: 0; }
+.switch .track {
+  position: absolute; inset: 0;
+  background: var(--fg-faint);
+  border-radius: 999px;
+  transition: background 0.15s;
+}
+.switch .track::after {
+  content: "";
+  position: absolute;
+  width: 20px; height: 20px;
+  left: 3px; top: 3px;
+  background: var(--bg-elev);
+  border-radius: 50%;
+  transition: transform 0.15s;
+}
+.switch input:checked + .track { background: var(--primary); }
+.switch input:checked + .track::after { transform: translateX(20px); }
+
+.setting-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 0;
+  border-bottom: 1px solid var(--line);
+}
+.setting-row:last-child { border-bottom: 0; }
+.setting-row .desc { font-size: 12px; color: var(--fg-faint); margin-top: 2px; }
+.setting-row input[type="text"], .setting-row input[type="number"] { width: 130px; flex-shrink: 0; }
+
+/* --- Radio cards (route scope) ------------------------------------------------------- */
+
+.radio-cards { display: flex; gap: 8px; margin-bottom: 8px; }
+.radio-card {
+  flex: 1;
+  border: 1.5px solid var(--line);
+  border-radius: 12px;
+  padding: 10px 8px;
+  text-align: center;
+  font-size: 13px;
+  cursor: pointer;
+  color: var(--fg-dim);
+  background: var(--bg-input);
+}
+.radio-card.selected { border-color: var(--primary); color: var(--primary); font-weight: 600; }
+
+/* --- Lists ---------------------------------------------------------------------------- */
+
+.list-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 4px;
+  border-bottom: 1px solid var(--line);
+}
+.list-row:last-child { border-bottom: 0; }
+.list-row .main { flex: 1; min-width: 0; }
+.list-row .title { font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.list-row .sub { font-size: 12px; color: var(--fg-dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* --- Tabs ------------------------------------------------------------------------------ */
+
+.tabs { display: flex; gap: 8px; margin-bottom: 14px; }
+.tab {
+  flex: 1;
+  text-align: center;
+  padding: 8px 0;
+  border-radius: 999px;
+  background: var(--bg-input);
+  color: var(--fg-dim);
+  font-size: 13px;
+  cursor: pointer;
+  border: 0;
+}
+.tab.active { background: var(--primary-dim); color: var(--fg); font-weight: 600; }
+
+/* --- Banners ----------------------------------------------------------------------------- */
+
+.banner {
+  border-radius: 12px;
+  padding: 10px 14px;
+  margin-bottom: 14px;
+  font-size: 13px;
+}
+.banner.warn { background: var(--warn-bg); color: var(--warn-fg); }
+.banner.err { background: var(--danger-dim); color: var(--danger); }
+.banner.ok { background: rgba(127, 216, 143, 0.15); color: var(--ok); }
+
+/* --- States (loading / empty / error) ------------------------------------------------------- */
+
+.state-box {
+  text-align: center;
+  color: var(--fg-faint);
+  padding: 36px 0;
+  font-size: 14px;
+}
+
+.spinner {
+  display: inline-block;
+  width: 22px; height: 22px;
+  border: 2.5px solid var(--line);
+  border-top-color: var(--primary);
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+  vertical-align: middle;
+  margin-right: 8px;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+
+/* --- Toast -------------------------------------------------------------------------------- */
+
+#toast-root {
+  position: fixed;
+  left: 16px; right: 16px;
+  bottom: calc(76px + env(safe-area-inset-bottom, 0));
+  z-index: 50;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  pointer-events: none;
+}
+
+.toast {
+  background: var(--bg-elev);
+  color: var(--fg);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 9px 18px;
+  font-size: 13px;
+  box-shadow: 0 4px 16px var(--shadow);
+  max-width: 100%;
+  word-break: break-all;
+  animation: toast-in 0.18s ease-out;
+}
+.toast.err { border-color: var(--danger-dim); color: var(--danger); }
+.toast.ok { border-color: var(--ok); color: var(--ok); }
+@keyframes toast-in { from { opacity: 0; transform: translateY(8px); } }
+
+/* --- Modal --------------------------------------------------------------------------------- */
+
+.modal-mask {
+  position: fixed; inset: 0;
+  background: rgba(0, 0, 0, 0.55);
+  z-index: 60;
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+}
+
+.modal {
+  background: var(--bg-elev);
+  border-radius: 20px 20px 0 0;
+  padding: 20px 18px calc(18px + env(safe-area-inset-bottom, 0));
+  width: 100%;
+  max-width: 560px;
+  max-height: 76vh;
+  overflow-y: auto;
+  animation: sheet-in 0.2s ease-out;
+}
+.modal h3 { font-size: 16px; margin-bottom: 10px; }
+@keyframes sheet-in { from { transform: translateY(30px); opacity: 0; } }
+
+/* --- Canvas -------------------------------------------------------------------------------- */
+
+canvas.chart, canvas.topo {
+  width: 100%;
+  display: block;
+  border-radius: 12px;
+  background: var(--bg-input);
+  touch-action: pan-y;
+}
+
+.chart-wrap { position: relative; }
+
+/* --- Log viewer ------------------------------------------------------------------------------ */
+
+.log-view {
+  background: var(--bg-input);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 10px;
+  font-family: ui-monospace, monospace;
+  font-size: 11.5px;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  word-break: break-all;
+  max-height: 60vh;
+  overflow-y: auto;
+  color: var(--fg-dim);
+}
+
+/* --- Progress bar (top-N chart) ---------------------------------------------------------------- */
+
+.bar-row { display: flex; align-items: center; gap: 8px; margin: 6px 0; font-size: 12.5px; }
+.bar-row .bar-label { width: 110px; flex-shrink: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.bar-row .bar-track { flex: 1; height: 14px; background: var(--bg-input); border-radius: 7px; overflow: hidden; }
+.bar-row .bar-fill { height: 100%; border-radius: 7px; background: linear-gradient(90deg, var(--primary), var(--accent)); }
+.bar-row .bar-val { width: 84px; text-align: right; color: var(--fg-dim); flex-shrink: 0; font-variant-numeric: tabular-nums; }
+
+/* --- Utility ------------------------------------------------------------------------------------- */
+
+.mono { font-family: ui-monospace, monospace; font-size: 13px; word-break: break-all; }
+.dim { color: var(--fg-dim); }
+.mt { margin-top: 12px; }
+.hidden { display: none !important; }
