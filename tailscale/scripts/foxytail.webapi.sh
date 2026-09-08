@@ -529,6 +529,22 @@ cmd_traffic_uids() {
 }
 
 cmd_apps() {
+  # Fast path: `pm list packages -3 -U` prints "package:<name> uid:<uid>" for
+  # every app in a single binder call (Android 10+). The old per-package
+  # dumpsys loop took minutes on devices with many apps.
+  _ap_list=$(timeout 30 pm list packages -3 -U 2>/dev/null | tr -d '\r')
+  if printf '%s' "${_ap_list}" | grep -q ' uid:[0-9]'; then
+    printf '%s\n' "${_ap_list}" | sed -n 's/^package:\([^ ]*\) uid:\([0-9]*\).*/\1 \2/p' |
+      while IFS=' ' read -r _ap_pkg _ap_uid; do
+        [ -n "${_ap_pkg}" ] || continue
+        # dumpsys exposes only labelRes (a resource id), never the resolved
+        # label string; without aapt the package name is the best label.
+        jqr -n -c --arg l "${_ap_pkg}" --arg p "${_ap_pkg}" --argjson u "${_ap_uid:-0}" \
+          '{label:$l,package:$p,uid:$u}'
+      done | jqr -s -c 'sort_by(.package) | {ok:true,apps:.}'
+    return 0
+  fi
+  # Fallback for ancient pm without -U: per-package dumpsys loop.
   _ap_pkgs=$(timeout 30 pm list packages -3 2>/dev/null | sed 's/^package://' | tr -d '\r' | sort)
   if [ -z "${_ap_pkgs}" ]; then
     echo '{"ok":true,"apps":[]}'
