@@ -12,17 +12,27 @@
     <h1 id="app-title">FoxyTail</h1>
   </header>
 
-  <main id="view" aria-live="polite"></main>
+  <main id="view"></main>
 
   <nav id="bottom-nav" aria-label="main">
-    <!-- Filled by app.js renderNav() -->
+    <!-- Filled by js/router.js renderNav() -->
   </nav>
 
   <div id="toast-root" aria-live="assertive"></div>
   <div id="modal-root"></div>
 
+  <!-- Plain scripts in dependency order (no ES modules: KSU/MMRL WebViews
+       may load this page over file://, where module scripts hit CORS). -->
   <script src="i18n.js"></script>
   <script src="libs/kernelsu.js"></script>
-  <script src="app.js"></script>
+  <script src="js/dom.js"></script>
+  <script src="js/ui.js"></script>
+  <script src="js/router.js"></script>
+  <script src="js/charts.js"></script>
+  <script src="js/pages/dashboard.js"></script>
+  <script src="js/pages/peers.js"></script>
+  <script src="js/pages/account.js"></script>
+  <script src="js/pages/misc.js"></script>
+  <script src="js/boot.js"></script>
 </body>
 </html>

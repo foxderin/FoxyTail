@@ -3,7 +3,7 @@
  *
  *   FOXY.lang          active language code ("zh" | "en")
  *   FOXY.t(key)        translated string; falls back to the key itself
- *   FOXY.setLang(code) persist + switch; app.js re-renders via FOXY.onLangChange
+ *   FOXY.setLang(code) persist + switch; router.js re-renders via FOXY.onLangChange
  *
  * Default language comes from navigator.language; the Settings page can
  * override it (stored in localStorage under "foxy.lang").
@@ -15,11 +15,12 @@
     zh: {
       no_root_banner: '请在 KernelSU 管理器或 MMRL 中打开本页面（未检测到 root 执行环境，功能已禁用）',
       nav_dashboard: '仪表盘', nav_peers: '节点', nav_exitnodes: '出口', nav_traffic: '流量', nav_more: '更多',
-      loading: '加载中…', empty: '暂无数据', error: '出错了', refresh: '刷新',
+      loading: '加载中…', empty: '暂无数据', error: '出错了',
       save: '保存', cancel: '取消', confirm: '确认', delete: '删除', add: '添加',
       copy: '复制', copied: '已复制', open_browser: '浏览器打开', apply: '应用',
-      online: '在线', offline: '离线', unknown: '未知', none: '无', close: '关闭',
-      op_failed: '操作失败', confirm_title: '请确认', back: '返回',
+      offline: '离线', close: '关闭',
+      op_failed: '操作失败', confirm_title: '请确认',
+      misc_missing: '（缺失）', misc_empty: '（空）', misc_unavailable: '（不可用）',
 
       dash_daemon: '守护进程', dash_backend: '后端状态', dash_mode: '运行模式', dash_uptime: '运行时长',
       dash_running: '运行中', dash_stopped: '已停止',
@@ -68,16 +69,17 @@
       traffic_title: '流量', traffic_hourly: '按小时（今日）', traffic_daily: '按天（近 7 天）',
       traffic_topn: '节点排行', traffic_by_app: '按应用', traffic_no_data: '暂无采集数据（采集器需运行一段时间）',
       traffic_rx: '下载', traffic_tx: '上传', traffic_touch_hint: '触摸图表查看数值',
+      traffic_uid: 'UID ',
 
       serve_title: 'Serve / Funnel', serve_serve: 'Serve（tailnet 内）', serve_funnel: 'Funnel（公网）',
-      serve_proto: '协议', serve_port: '端口', serve_target: '目标（如 http://localhost:3000）',
+      serve_kind: '类型', serve_proto: '协议', serve_port: '端口', serve_target: '目标（如 http://localhost:3000）',
       serve_add: '添加映射', serve_empty: '暂无映射', serve_del_confirm: '删除该映射？',
       serve_unavailable: '当前 tailscale 版本不支持此命令',
 
       files_title: '文件', files_inbox: '收件箱', files_empty: '收件箱为空',
       files_send: '发送文件', files_path: '/sdcard 下的文件路径', files_path_hint: '/sdcard/Download/example.zip',
       files_peer: '目标节点', files_send_btn: '发送', files_receive: '拉取待接收文件',
-      files_sent: '发送完成', files_received: '拉取完成', files_size: '大小', files_time: '时间',
+      files_sent: '发送完成', files_received: '拉取完成',
 
       logs_title: '日志', logs_daemon: '守护进程', logs_service: '服务脚本',
       logs_follow: '跟随滚动', logs_empty: '日志为空',
@@ -90,7 +92,7 @@
       set_restore_hint: '/sdcard 下的备份文件路径', set_restore_done: '已恢复（原配置备份于 ',
       set_restore_confirm: '恢复会覆盖当前配置，继续？',
       set_theme: '主题', set_theme_dark: '深色', set_theme_light: '浅色', set_theme_auto: '跟随系统',
-      set_language: '语言',
+      set_language: '语言', set_ui: '界面',
 
       diag_title: '诊断', diag_run: '生成诊断包', diag_running: '正在收集（可能需要半分钟）…',
       diag_done: '诊断包已生成：', diag_hint: '包含日志尾部、状态快照、iptables 自检与配置（密钥已脱敏），用于反馈问题。',
@@ -103,11 +105,12 @@
     en: {
       no_root_banner: 'Open this page in KernelSU manager or MMRL (no root exec bridge detected; features disabled)',
       nav_dashboard: 'Dashboard', nav_peers: 'Peers', nav_exitnodes: 'Exit', nav_traffic: 'Traffic', nav_more: 'More',
-      loading: 'Loading…', empty: 'No data', error: 'Something went wrong', refresh: 'Refresh',
+      loading: 'Loading…', empty: 'No data', error: 'Something went wrong',
       save: 'Save', cancel: 'Cancel', confirm: 'Confirm', delete: 'Delete', add: 'Add',
       copy: 'Copy', copied: 'Copied', open_browser: 'Open in browser', apply: 'Apply',
-      online: 'Online', offline: 'Offline', unknown: 'Unknown', none: 'None', close: 'Close',
-      op_failed: 'Operation failed', confirm_title: 'Please confirm', back: 'Back',
+      offline: 'Offline', close: 'Close',
+      op_failed: 'Operation failed', confirm_title: 'Please confirm',
+      misc_missing: '(missing)', misc_empty: '(empty)', misc_unavailable: '(unavailable)',
 
       dash_daemon: 'Daemon', dash_backend: 'Backend', dash_mode: 'Mode', dash_uptime: 'Uptime',
       dash_running: 'Running', dash_stopped: 'Stopped',
@@ -156,16 +159,17 @@
       traffic_title: 'Traffic', traffic_hourly: 'Hourly (today)', traffic_daily: 'Daily (7 days)',
       traffic_topn: 'Top peers', traffic_by_app: 'By app', traffic_no_data: 'No samples yet (the collector needs some runtime)',
       traffic_rx: 'RX', traffic_tx: 'TX', traffic_touch_hint: 'Touch the chart for values',
+      traffic_uid: 'UID ',
 
       serve_title: 'Serve / Funnel', serve_serve: 'Serve (tailnet)', serve_funnel: 'Funnel (public)',
-      serve_proto: 'Protocol', serve_port: 'Port', serve_target: 'Target (e.g. http://localhost:3000)',
+      serve_kind: 'Kind', serve_proto: 'Protocol', serve_port: 'Port', serve_target: 'Target (e.g. http://localhost:3000)',
       serve_add: 'Add mapping', serve_empty: 'No mappings', serve_del_confirm: 'Delete this mapping?',
       serve_unavailable: 'Not supported by this tailscale build',
 
       files_title: 'Files', files_inbox: 'Inbox', files_empty: 'Inbox is empty',
       files_send: 'Send file', files_path: 'File path under /sdcard', files_path_hint: '/sdcard/Download/example.zip',
       files_peer: 'Target peer', files_send_btn: 'Send', files_receive: 'Fetch waiting files',
-      files_sent: 'File sent', files_received: 'Fetch done', files_size: 'Size', files_time: 'Time',
+      files_sent: 'File sent', files_received: 'Fetch done',
 
       logs_title: 'Logs', logs_daemon: 'Daemon', logs_service: 'Service',
       logs_follow: 'Follow', logs_empty: 'Log is empty',
@@ -178,7 +182,7 @@
       set_restore_hint: 'Backup file path under /sdcard', set_restore_done: 'Restored (previous config saved to ',
       set_restore_confirm: 'Restore will overwrite current config. Continue?',
       set_theme: 'Theme', set_theme_dark: 'Dark', set_theme_light: 'Light', set_theme_auto: 'Auto',
-      set_language: 'Language',
+      set_language: 'Language', set_ui: 'UI',
 
       diag_title: 'Diagnostics', diag_run: 'Generate diagnostics bundle', diag_running: 'Collecting (may take ~30s)…',
       diag_done: 'Bundle written: ', diag_hint: 'Contains log tails, status snapshot, iptables self-check and config (keys redacted), for bug reports.',
@@ -201,6 +205,7 @@
   }
 
   FOXY.lang = detect();
+  document.documentElement.setAttribute('lang', FOXY.lang === 'zh' ? 'zh-CN' : 'en');
 
   FOXY.t = function (key) {
     var table = DICT[FOXY.lang] || DICT.en;
@@ -212,6 +217,7 @@
   FOXY.setLang = function (code) {
     if (code !== 'zh' && code !== 'en') return;
     FOXY.lang = code;
+    document.documentElement.setAttribute('lang', code === 'zh' ? 'zh-CN' : 'en');
     try { localStorage.setItem('foxy.lang', code); } catch (e) { /* ignore */ }
     if (typeof FOXY.onLangChange === 'function') FOXY.onLangChange();
   };

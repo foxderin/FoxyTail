@@ -38,20 +38,28 @@
         if (code == null || code === 0) return resolve(String(res.stdout || ''));
         return reject(new Error(String(res.stderr || 'exit code ' + code)));
       }
-      return resolve(String(res));
+      /* unrecognized object: fail loudly instead of resolving
+       * "[object Object]" and letting it leak into the UI */
+      return reject(new Error('unrecognized exec result: ' + Object.prototype.toString.call(res)));
     }
     resolve(String(res));
   }
 
-  /* Wrap a callback-style exec(cmd, options, cb) implementation. */
+  /* Wrap a callback-style exec(cmd, options, cb) implementation. The callback
+   * may be invoked as cb(result) or cb(errno, stdout, stderr). */
   function wrapCallbackStyle(fn, ctx) {
     return function (cmd) {
       return new Promise(function (resolve, reject) {
         var settled = false;
-        function once(res) {
+        function once(a, b, c) {
           if (settled) return;
           settled = true;
-          settle(resolve, reject, res);
+          if (arguments.length > 1) {
+            /* cb(errno, stdout, stderr) form */
+            if (a == null || a === 0) return resolve(String(b || ''));
+            return reject(new Error(String(c || 'exit code ' + a)));
+          }
+          settle(resolve, reject, a);
         }
         try {
           var ret = fn.call(ctx, cmd, {}, once);
@@ -69,10 +77,14 @@
     return function (cmd) {
       return new Promise(function (resolve, reject) {
         var settled = false;
-        function once(res) {
+        function once(a, b, c) {
           if (settled) return;
           settled = true;
-          settle(resolve, reject, res);
+          if (arguments.length > 1) {
+            if (a == null || a === 0) return resolve(String(b || ''));
+            return reject(new Error(String(c || 'exit code ' + a)));
+          }
+          settle(resolve, reject, a);
         }
         try {
           var ret = fn(cmd, once);
@@ -129,17 +141,22 @@
     });
   };
 
-  /* Probe + banner + button lockdown. Called once from app.js boot. */
+  /* Probe + banner + button lockdown. Called once from js/boot.js. */
   FOXY.initBridge = function () {
     if (FOXY.hasRoot) return;
     var banner = document.createElement('div');
     banner.className = 'root-banner';
     banner.id = 'root-banner';
+    banner.setAttribute('aria-live', 'polite');
     banner.textContent = (FOXY.t ? FOXY.t('no_root_banner')
       : '请在 KernelSU 管理器或 MMRL 中打开本页面 / Open this page in KernelSU manager or MMRL');
     document.body.insertBefore(banner, document.body.firstChild);
-    Array.prototype.forEach.call(document.querySelectorAll('.needs-root'), function (btn) {
-      btn.disabled = true;
+    Array.prototype.forEach.call(document.querySelectorAll('.needs-root'), function (el) {
+      if ('disabled' in el) el.disabled = true;
+      /* non-form containers (e.g. span.switch): disable the controls inside */
+      Array.prototype.forEach.call(
+        el.querySelectorAll('input, select, button, textarea'),
+        function (c) { c.disabled = true; });
     });
   };
 })();

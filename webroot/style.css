@@ -4,6 +4,9 @@
  * Dark Material You-inspired theme driven by CSS variables.
  * html[data-theme="dark"|"light"] forces a theme; "auto" follows
  * prefers-color-scheme (dark is the fallback/default either way).
+ * While data-theme="auto", js/router.js mirrors the resolved system theme
+ * into html[data-theme-effective], so the light palette below has a single
+ * source serving both the explicit "light" entry and the "auto" entry.
  * Mobile-first, safe-area aware (KernelSU / MMRL WebView).
  */
 
@@ -31,7 +34,8 @@ html[data-theme="dark"] {
   --shadow: rgba(0, 0, 0, 0.45);
 }
 
-html[data-theme="light"] {
+html[data-theme="light"],
+html[data-theme-effective="light"] {
   --bg: #faf8ff;
   --bg-elev: #ffffff;
   --bg-card: #ffffff;
@@ -50,29 +54,6 @@ html[data-theme="light"] {
   --ok: #1a7f37;
   --line: #e2dff0;
   --shadow: rgba(60, 50, 100, 0.12);
-}
-
-@media (prefers-color-scheme: light) {
-  html[data-theme="auto"] {
-    --bg: #faf8ff;
-    --bg-elev: #ffffff;
-    --bg-card: #ffffff;
-    --bg-input: #f0edf6;
-    --fg: #1c1b21;
-    --fg-dim: #575462;
-    --fg-faint: #8b8798;
-    --primary: #5b4bbf;
-    --primary-dim: #d9d0f5;
-    --on-primary: #ffffff;
-    --accent: #20705f;
-    --danger: #b3261e;
-    --danger-dim: #f9dedc;
-    --warn-bg: #fff3cd;
-    --warn-fg: #7a5900;
-    --ok: #1a7f37;
-    --line: #e2dff0;
-    --shadow: rgba(60, 50, 100, 0.12);
-  }
 }
 
 /* --- Base ------------------------------------------------------------------- */
@@ -435,8 +416,6 @@ canvas.chart, canvas.topo {
   touch-action: pan-y;
 }
 
-.chart-wrap { position: relative; }
-
 /* --- Log viewer ------------------------------------------------------------------------------ */
 
 .log-view {
@@ -467,4 +446,3 @@ canvas.chart, canvas.topo {
 .mono { font-family: ui-monospace, monospace; font-size: 13px; word-break: break-all; }
 .dim { color: var(--fg-dim); }
 .mt { margin-top: 12px; }
-.hidden { display: none !important; }
