@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"net"
+	"net/netip"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -140,6 +141,110 @@ func e2eQuery(t *testing.T, conn *dns.Conn, host string, typ uint16) *dns.Msg {
 	return response
 }
 
+// Test-only tracing reports the failing transport operation without inspecting
+// DNS payloads or adding probes/retries that could hide the original failure.
+type e2eTraceTransport struct {
+	originalTransport
+	t *testing.T
+}
+
+func (tr e2eTraceTransport) Lookup(network string, local, remote net.Addr) (FlowContext, error) {
+	flow, err := tr.originalTransport.Lookup(network, local, remote)
+	if err != nil {
+		tr.t.Logf("transport Lookup network=%s local=%s remote=%s: %v", network, local, remote, err)
+		return flow, err
+	}
+	if validate := flow.validate; validate != nil {
+		flow.validate = func() error {
+			err := validate()
+			if err != nil {
+				tr.t.Logf("transport validate network=%s source=%s destination=%s: %v", network, flow.OriginalSource, flow.OriginalDestination, err)
+			}
+			return err
+		}
+	}
+	if checkSource := flow.checkSource; checkSource != nil {
+		flow.checkSource = func(source netip.AddrPort) error {
+			err := checkSource(source)
+			if err != nil {
+				tr.t.Logf("transport checkSource network=%s upstream-source=%s uid=%d mark=%#x interface=%s: %v", network, source, flow.UID, flow.Mark, flow.InterfaceName, err)
+			}
+			return err
+		}
+	}
+	return flow, nil
+}
+
+type e2eTraceConn struct {
+	net.Conn
+	t       *testing.T
+	network string
+}
+
+func (c *e2eTraceConn) Read(data []byte) (int, error) {
+	n, err := c.Conn.Read(data)
+	if err != nil {
+		c.t.Logf("upstream Read network=%s source=%s destination=%s bytes=%d: %v", c.network, c.LocalAddr(), c.RemoteAddr(), n, err)
+	}
+	return n, err
+}
+
+func (c *e2eTraceConn) Write(data []byte) (int, error) {
+	n, err := c.Conn.Write(data)
+	if err != nil {
+		c.t.Logf("upstream Write network=%s source=%s destination=%s bytes=%d: %v", c.network, c.LocalAddr(), c.RemoteAddr(), n, err)
+	}
+	return n, err
+}
+
+func (c *e2eTraceConn) SetDeadline(deadline time.Time) error {
+	err := c.Conn.SetDeadline(deadline)
+	if err != nil {
+		c.t.Logf("upstream SetDeadline network=%s: %v", c.network, err)
+	}
+	return err
+}
+
+// dns.Conn selects UDP framing through net.PacketConn. Keep that identity and
+// delegate packet methods to the original socket without substituting streams.
+type e2eTracePacketConn struct {
+	*e2eTraceConn
+	packet net.PacketConn
+}
+
+func (c *e2eTracePacketConn) ReadFrom(data []byte) (int, net.Addr, error) {
+	n, address, err := c.packet.ReadFrom(data)
+	if err != nil {
+		c.t.Logf("upstream ReadFrom network=%s bytes=%d: %v", c.network, n, err)
+	}
+	return n, address, err
+}
+
+func (c *e2eTracePacketConn) WriteTo(data []byte, address net.Addr) (int, error) {
+	n, err := c.packet.WriteTo(data, address)
+	if err != nil {
+		c.t.Logf("upstream WriteTo network=%s bytes=%d: %v", c.network, n, err)
+	}
+	return n, err
+}
+
+func traceE2ETransport(t *testing.T, r *resolver) {
+	r.transport = e2eTraceTransport{originalTransport: r.transport, t: t}
+	dial := r.dial
+	r.dial = func(ctx context.Context, network string, flow FlowContext) (net.Conn, error) {
+		connection, err := dial(ctx, network, flow)
+		if err != nil {
+			t.Logf("transport DialOriginal network=%s source=%s destination=%s uid=%d mark=%#x interface=%s: %v", network, flow.OriginalSource, flow.OriginalDestination, flow.UID, flow.Mark, flow.InterfaceName, err)
+			return connection, err
+		}
+		traced := &e2eTraceConn{Conn: connection, t: t, network: network}
+		if packet, ok := connection.(net.PacketConn); ok {
+			return &e2eTracePacketConn{e2eTraceConn: traced, packet: packet}, nil
+		}
+		return traced, nil
+	}
+}
+
 func TestPrivilegedDNSNamespace(t *testing.T) {
 	root := requireDNSNamespace(t) // Must precede every ip/iptables invocation.
 	kernelCommand(t, "ip", "link", "set", "lo", "up")
@@ -163,6 +268,7 @@ func TestPrivilegedDNSNamespace(t *testing.T) {
 	if s.interceptor == nil || s.queueError != nil {
 		kernelUnavailable(t, "kernel queue/conntrack/socket-context capability unavailable: %v", s.queueError)
 	}
+	traceE2ETransport(t, s.resolver)
 	port := strconv.Itoa(s.port)
 	var receivedMu sync.Mutex
 	var received []string
