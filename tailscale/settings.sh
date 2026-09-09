@@ -127,6 +127,11 @@ rotate_log() (
   _rl_tmp="${_rl_file}.bak.$$"
   trap 'rm -f "${_rl_tmp}"; [ "${_rl_locked}" = 0 ] || conf_lock_release' 0
   trap 'exit 1' HUP INT TERM
+  # Another logger may have rotated after our cheap check but before the
+  # writer lock. Never replace its useful backup with the now-empty file.
+  [ -f "${_rl_file}" ] || exit 0
+  _rl_size=$(wc -c <"${_rl_file}" 2>/dev/null || echo 0)
+  [ "${_rl_size}" -gt "${_rl_max_bytes}" ] || exit 0
   # Preserve writer file descriptors and bound the backup, even if the source
   # grew far beyond its target before the resident log monitor ran.
   if tail -c "${_rl_max_bytes}" "${_rl_file}" >"${_rl_tmp}" && mv "${_rl_tmp}" "${_rl_file}.bak"; then
@@ -465,14 +470,19 @@ ensure_run_dirs() {
   mkdir -p "${TS_RUN_DIR}" "${TS_PID_DIR}" "${TS_STATS_DIR}"
 }
 
-# Return 0 when the screen is on; tolerant of dumpsys format differences,
-# assumes "on" when the power state cannot be determined.
+# Parse dumpsys power from stdin. Any active display wins over an inactive
+# one; unfamiliar or empty output remains unknown, never an inferred off.
+screen_state() {
+  awk '
+    { line=tolower($0) }
+    line ~ /mscreenon=true|display power: state=on([[:space:]]|$)|mwakefulness=awake/ { on=1 }
+    line ~ /mscreenon=false|display power: state=(off|doze|doze_suspend)([[:space:]]|$)|mwakefulness=(asleep|dozing)/ { off=1 }
+    END { print on ? "on" : off ? "off" : "unknown" }'
+}
+
+# Unknown power state conservatively keeps the foreground sampling interval.
 is_screen_on() {
-  _ft_power=$(dumpsys power 2>/dev/null)
-  if [ -z "${_ft_power}" ]; then
-    return 0
-  fi
-  echo "${_ft_power}" | grep -qi -e 'mScreenOn=true' -e 'Display Power: state=ON'
+  [ "$(dumpsys power 2>/dev/null | screen_state)" != off ]
 }
 
 # --- Process lookup ------------------------------------------------------------

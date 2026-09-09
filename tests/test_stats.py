@@ -4,6 +4,7 @@ import json
 import os
 from pathlib import Path
 import shutil
+import shlex
 import subprocess
 import tempfile
 import unittest
@@ -15,9 +16,8 @@ class StatsRegression(unittest.TestCase):
  def setUp(self):
   self.tmp=tempfile.TemporaryDirectory(prefix='foxytail-stats-');self.addCleanup(self.tmp.cleanup)
   self.dir=Path(self.tmp.name)
-  script=(ROOT/'tailscale/scripts/foxytail.stats').read_text()
   self.script=self.dir/'query.sh'
-  self.script.write_text('jqr() { jq "$@"; }\nstats_recent_files() { echo "$SAMPLES"; }\n'+script[script.index('stats_deltas() {'):script.index('\ncase "$1" in')]+ '\nquery "$@"\n')
+  self.script.write_text('. ' + shlex.quote(str(ROOT/'tailscale/scripts/foxytail.stats-lib.sh')) + '\njqr() { jq "$@"; }\nstats_recent_files() { echo "$SAMPLES"; }\nquery "$@"\n')
   self.file=self.dir/'samples.jsonl'
  def query(self,mode,*args):
   r=subprocess.run(['sh',str(self.script),mode,*args],env={**os.environ,'SAMPLES':str(self.file),'TZ':'UTC'},text=True,capture_output=True)
@@ -60,10 +60,14 @@ class StatsRegression(unittest.TestCase):
   for row in rows:row.pop('uidDirection');row['uids']=[dict(uid='10101',rx=1000,tx=0)]
   self.file.write_text('\n'.join(json.dumps(r) for r in rows))
   self.assertEqual(self.query('uids','10')['uids'],[])
+ def test_missing_uid_aggregate_keeps_previous_counter_baseline(self):
+  rows=self.samples([100,0,300])
+  rows[1]['uids']=None
+  self.file.write_text('\n'.join(json.dumps(r) for r in rows))
+  self.assertEqual(self.query('uids','10')['uids'],[dict(uid='10101',rx=0,tx=200)])
  def test_uid_collection_sums_ipv4_ipv6_as_transmit_bytes(self):
-  source=(ROOT/'tailscale/scripts/foxytail.stats').read_text()
   runner=self.dir/'collect.sh'
-  runner.write_text("""TS_STATS_DIR="$TEST_DIR"
+  runner.write_text('. ' + shlex.quote(str(ROOT/'tailscale/scripts/foxytail.stats-lib.sh')) + '\n' + """TS_STATS_DIR="$TEST_DIR"
 TS_RUN_DIR="$TEST_DIR"
 TS_BIN_DIR="$TEST_DIR"
 TS_SOCKET="$TEST_DIR/socket"
@@ -73,7 +77,7 @@ pids_of_path() { :; }
 prune_stats() { :; }
 iptables() { printf '%s\\n' '1 100 RETURN all -- * tailscale0 0.0.0.0/0 0.0.0.0/0 owner UID match 10101' '1 30 RETURN all -- * tailscale0 0.0.0.0/0 0.0.0.0/0 owner UID match 10102'; }
 ip6tables() { printf '%s\\n' '1 200 RETURN all -- * tailscale0 ::/0 ::/0 owner UID match 10101' '1 50 RETURN all -- * tailscale0 ::/0 ::/0 owner UID match 10102'; }
-"""+source[source.index('collect_once() {'):source.index('\n_stats_stop() {')]+ '\ncollect_once\n')
+"""+ '\ncollect_once\n')
   result=subprocess.run(['sh',str(runner)],env={**os.environ,'TEST_DIR':str(self.dir)},text=True,capture_output=True)
   self.assertEqual(result.returncode,0,result.stderr)
   row=json.loads(next(self.dir.glob('????-??-??.jsonl')).read_text())

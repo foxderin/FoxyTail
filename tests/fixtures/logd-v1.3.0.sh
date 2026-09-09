@@ -1,0 +1,33 @@
+#!/system/bin/sh
+# Bound logs independently of WATCHDOG. copytruncate in rotate_log keeps
+# append-only daemon descriptors attached to the active file.
+DIR=$(dirname "$(realpath "$0")")
+# shellcheck source=../settings.sh
+. "$DIR"/../settings.sh
+ensure_run_dirs
+
+rotate_all() {
+  # Invalid configuration still leaves safe default limits; keep protecting
+  # storage while its parse diagnostics are being written.
+  load_conf || :
+  for _la_file in "${TS_RUN_DIR}"/*.log; do
+    [ -f "$_la_file" ] && [ ! -L "$_la_file" ] || continue
+    rotate_log "$_la_file"
+  done
+}
+
+case "$1" in
+  start)
+    daemon_claim_pidfile foxytail.logd || exit 0
+    _la_running=1
+    trap '_la_running=0' TERM INT
+    while [ "$_la_running" = 1 ]; do
+      rotate_all
+      isleep 2
+    done
+    rm -f "${TS_PID_DIR}/foxytail.logd.pid"
+    ;;
+  stop) daemon_stop_pidfile foxytail.logd ;;
+  once) rotate_all ;;
+  *) echo "usage: $0 {start|stop|once}" >&2; exit 1 ;;
+esac

@@ -154,8 +154,7 @@ ts_cli() { test -L "$TS_RUN_DIR/dns-account-transition" || return 9; echo "$*" >
         self.assertTrue(json.loads(result.stdout)['ok'])
 
     def test_watchdog_respects_explicit_nonrepairable_dns_state(self):
-        source = (ROOT / 'tailscale/scripts/foxytail.watchdog').read_text()
-        check = source[source.index('check_once() {'):source.index('_watchdog_stop() {')]
+        check = '. ' + shlex.quote(str(ROOT / 'tailscale/scripts/foxytail.watchdog-lib.sh')) + '\n'
         fixture = self.scripts / 'foxytail.dns'
         fixture.write_text('#!/bin/sh\ncat "$TS_DIR/dns-status.json"\n')
         fixture.chmod(0o755)
