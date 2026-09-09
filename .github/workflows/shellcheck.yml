@@ -2,6 +2,11 @@ name: Verify
 on: [push, pull_request]
 permissions:
   contents: read
+# New commits supersede verification for the same branch/PR. Tags remain
+# separate, and Release has its own unchanged workflow/concurrency policy.
+concurrency:
+  group: verify-${{ github.workflow }}-${{ github.event.pull_request.head.repo.full_name || github.repository }}-${{ github.ref_type }}-${{ github.head_ref || github.ref_name }}
+  cancel-in-progress: true
 jobs:
   verify:
     runs-on: ubuntu-latest
