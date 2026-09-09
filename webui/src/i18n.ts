@@ -1,13 +1,19 @@
+import { toolsZh, toolsEn } from './i18n-tools';
 /*
  * FoxyTail WebUI — i18n dictionaries (zh / en), reactive t().
  * Keys migrated 1:1 from the hand-written webroot/i18n.js, plus the
  * login-hero keys. scripts/check-i18n.mjs enforces key parity.
  */
+import { foundationZh, foundationEn } from './i18n-foundation';
+import { networkZh, networkEn } from './i18n-network';
 import { createSignal } from 'solid-js';
 
 export type Lang = 'zh' | 'en';
 
 const zh = {
+  ...toolsZh,
+  ...foundationZh,
+  ...networkZh,
   no_root_banner: '请在 KernelSU 管理器或 MMRL 中打开本页面（未检测到 root 执行环境，功能已禁用）',
   nav_dashboard: '仪表盘', nav_peers: '节点', nav_exitnodes: '出口', nav_traffic: '流量', nav_more: '更多',
   loading: '加载中…', empty: '暂无数据', error: '出错了',
@@ -120,6 +126,9 @@ const zh = {
 export type I18nKey = keyof typeof zh;
 
 const en: Record<I18nKey, string> = {
+  ...toolsEn,
+  ...foundationEn,
+  ...networkEn,
   no_root_banner: 'Open this page in KernelSU manager or MMRL (no root exec bridge detected; features disabled)',
   nav_dashboard: 'Dashboard', nav_peers: 'Peers', nav_exitnodes: 'Exit', nav_traffic: 'Traffic', nav_more: 'More',
   loading: 'Loading…', empty: 'No data', error: 'Something went wrong',

@@ -7,7 +7,7 @@
  * fire-and-forget; session tasks survive navigation by design.
  */
 import { render } from 'solid-js/web';
-import { createSignal } from 'solid-js';
+import { createSignal, getOwner, onCleanup } from 'solid-js';
 import './style.css';
 import { initTheme } from './theme';
 import { AppShell, type RouteDef } from './components/AppShell';
@@ -49,14 +49,18 @@ function parseRoute(): string {
 
 export function createRouter() {
   const [route, setRoute] = createSignal(parseRoute());
-  window.addEventListener('hashchange', () => setRoute(parseRoute()));
+  const onRouteChange = () => setRoute(parseRoute());
+  window.addEventListener('hashchange', onRouteChange);
+  if (getOwner()) onCleanup(() => window.removeEventListener('hashchange', onRouteChange));
   return route;
 }
 
 export function mountApp(target: HTMLElement): void {
   initTheme();
-  const route = createRouter();
-  render(() => <AppShell route={route} routes={ROUTES} />, target);
+  render(() => {
+    const route = createRouter();
+    return <AppShell route={route} routes={ROUTES} />;
+  }, target);
   document.getElementById('boot-screen')?.remove();
 }
 
@@ -68,6 +72,7 @@ if (typeof document !== 'undefined' && document.getElementById('app')) {
 
 /* Minimal test handle for the jsdom smoke harness (task adoption case). */
 import { startTask, getTask, cancelTask } from './tasks';
-if (typeof window !== 'undefined') {
-  (window as unknown as Record<string, unknown>).__foxy = { startTask, getTask, cancelTask };
+import { refreshStatus } from './state';
+if (import.meta.env.MODE === 'smoke' && typeof window !== 'undefined') {
+  (window as unknown as Record<string, unknown>).__foxy = { startTask, getTask, cancelTask, refreshStatus };
 }

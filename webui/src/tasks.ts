@@ -42,6 +42,11 @@ export function getTask(key: string): Task | undefined {
   return taskMap().get(key);
 }
 
+/** Reactive snapshot for the global activity menu; task ownership stays in this registry. */
+export function listTasks(): Task[] {
+  return [...taskMap().values()].sort((a, b) => b.startedAt - a.startedAt);
+}
+
 /* Start (or replace) a heavy task. Replacing cancels the previous run,
  * including its backend process via the ApiCall cancel path. */
 export function startTask(key: string, cmd: string, ...args: (string | number)[]): ApiCall {

@@ -1,167 +1,327 @@
-/*
- * Canvas line chart (rAF-throttled touch tooltip), ported from
- * webroot/js/charts.js drawLineChart; colors now come from MD3 tokens.
- */
-import { onCleanup, onMount, type JSX } from 'solid-js';
-import { token } from '../theme';
+/** Responsive SVG traffic chart with gap-aware samples and a readable data table. */
+import {
+  createMemo,
+  createSignal,
+  createUniqueId,
+  For,
+  onCleanup,
+  onMount,
+  type JSX,
+} from 'solid-js';
 import { fmtBytes } from '../format';
+import { t } from '../i18n';
 
 export interface ChartSeries {
   name: string;
   color: string;
-  values: number[];
+  values: (number | null)[];
 }
-
 export function chartColors(): { rx: string; tx: string } {
   return {
-    rx: token('--md-sys-color-primary', '#e0632f'),
-    tx: token('--md-sys-color-tertiary', '#8fd0c3'),
+    rx: 'var(--md-sys-color-primary)',
+    tx: 'var(--md-sys-color-tertiary)',
   };
 }
 
-export function LineChart(props: { labels: string[]; series: ChartSeries[] }): JSX.Element {
-  let canvas!: HTMLCanvasElement;
+export function LineChart(props: {
+  labels: string[];
+  series: ChartSeries[];
+}): JSX.Element {
+  let root!: HTMLDivElement;
+  const titleId = createUniqueId();
+  const [width, setWidth] = createSignal(640);
+  const [selected, setSelected] = createSignal<number | null>(null);
+  const height = 232,
+    left = 57,
+    right = 12,
+    top = 12,
+    bottom = 28;
+  const plotWidth = () => Math.max(1, width() - left - right);
+  const plotHeight = height - top - bottom;
+  const validNumber = (value: number | null | undefined): value is number =>
+    typeof value === 'number' && Number.isFinite(value) && value >= 0;
+  const max = createMemo(() => {
+    const value = Math.max(
+      1,
+      ...props.series.flatMap((series) => series.values.filter(validNumber)),
+    );
+    const step = 10 ** Math.floor(Math.log10(value));
+    return Math.ceil(value / step) * step;
+  });
+  const xAt = (index: number) =>
+    left +
+    (props.labels.length < 2
+      ? plotWidth() / 2
+      : (index / (props.labels.length - 1)) * plotWidth());
+  const yAt = (value: number) => top + plotHeight * (1 - value / max());
+  const currentIndex = () =>
+    Math.max(
+      0,
+      Math.min(
+        props.labels.length - 1,
+        selected() ??
+          props.labels.findLastIndex((_, index) =>
+            props.series.some((series) => validNumber(series.values[index])),
+          ),
+      ),
+    );
+  const segments = (series: ChartSeries) => {
+    const output: {
+      line: string;
+      area: string;
+      points: { x: number; y: number }[];
+    }[] = [];
+    let points: { x: number; y: number }[] = [];
+    const finish = () => {
+      if (!points.length) return;
+      const line = points
+        .map((point, index) => `${index ? 'L' : 'M'}${point.x},${point.y}`)
+        .join(' ');
+      output.push({
+        line,
+        area: `${line} L${points[points.length - 1].x},${yAt(0)} L${points[0].x},${yAt(0)} Z`,
+        points,
+      });
+      points = [];
+    };
+    series.values.forEach((value, index) => {
+      if (validNumber(value)) points.push({ x: xAt(index), y: yAt(value) });
+      else finish();
+    });
+    finish();
+    return output;
+  };
+  const indices = createMemo(() => {
+    const n = props.labels.length;
+    const count = Math.max(2, Math.floor(plotWidth() / 68));
+    return [
+      ...new Set(
+        Array.from({ length: Math.min(n, count) }, (_, index) =>
+          Math.round((index * (n - 1)) / (Math.min(n, count) - 1 || 1)),
+        ),
+      ),
+    ];
+  });
+  const describe = () =>
+    `${props.labels[currentIndex()] || ''}: ${props.series.map((series) => `${series.name} ${validNumber(series.values[currentIndex()]) ? fmtBytes(series.values[currentIndex()]) : t('net_traffic_unrecorded')}`).join(', ')}`;
+  const choosePoint = (event: PointerEvent) => {
+    const rect = (event.currentTarget as SVGSVGElement).getBoundingClientRect();
+    if (!rect.width) return;
+    const x = ((event.clientX - rect.left) * width()) / rect.width;
+    setSelected(
+      Math.max(
+        0,
+        Math.min(
+          props.labels.length - 1,
+          Math.round(((x - left) / plotWidth()) * (props.labels.length - 1)),
+        ),
+      ),
+    );
+  };
 
   onMount(() => {
-    const ctx = canvas.getContext('2d');
-    if (!ctx) return;
-    const hgt = 220;
-    let w = 320;
-    const padL = 46, padR = 10, padT = 12, padB = 26;
-    const ih = hgt - padT - padB;
-    let iw = w - padL - padR;
-    const labels = props.labels;
-    const series = props.series;
-    const n = labels.length;
-
-    const measure = () => {
-      const dpr = window.devicePixelRatio || 1;
-      w = canvas.clientWidth || canvas.parentElement?.clientWidth || 320;
-      iw = w - padL - padR;
-      canvas.width = w * dpr;
-      canvas.height = hgt * dpr;
-      canvas.style.height = hgt + 'px';
-      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    };
-
-    const cFg = token('--md-sys-color-on-surface', '#e8e6f0');
-    const cDim = token('--md-sys-color-on-surface-variant', '#6d6a7c');
-    const cLine = token('--md-sys-color-outline-variant', '#33333f');
-
-    let maxV = 1;
-    series.forEach((s) => s.values.forEach((v) => { if (v > maxV) maxV = v; }));
-
-    const xAt = (i: number) => padL + (n <= 1 ? iw / 2 : (i / (n - 1)) * iw);
-    const yAt = (v: number) => padT + ih - (v / maxV) * ih;
-
-    /* gradients depend only on (color, geometry); build once per series */
-    const gradCache: Record<string, CanvasGradient> = {};
-    const gradFor = (s: ChartSeries) => {
-      const key = s.color + '|' + padT + '|' + ih;
-      if (!gradCache[key]) {
-        const grad = ctx.createLinearGradient(0, padT, 0, padT + ih);
-        grad.addColorStop(0, s.color + '55');
-        grad.addColorStop(1, s.color + '00');
-        gradCache[key] = grad;
-      }
-      return gradCache[key];
-    };
-
-    const paint = (hoverIdx: number | null) => {
-      ctx.clearRect(0, 0, w, hgt);
-      ctx.font = '10px system-ui, sans-serif';
-      ctx.strokeStyle = cLine;
-      ctx.fillStyle = cDim;
-      ctx.textAlign = 'right';
-      for (let g = 0; g <= 4; g++) {
-        const v = (maxV / 4) * g;
-        const y = yAt(v);
-        ctx.beginPath();
-        ctx.moveTo(padL, y);
-        ctx.lineTo(w - padR, y);
-        ctx.globalAlpha = 0.4;
-        ctx.stroke();
-        ctx.globalAlpha = 1;
-        ctx.fillText(fmtBytes(v), padL - 6, y + 3);
-      }
-      ctx.textAlign = 'center';
-      const step = Math.ceil(n / 6) || 1;
-      for (let i = 0; i < n; i += step) {
-        ctx.fillText(String(labels[i]), xAt(i), hgt - 8);
-      }
-      series.forEach((s) => {
-        ctx.beginPath();
-        ctx.moveTo(xAt(0), yAt(s.values[0] ?? 0));
-        for (let j = 1; j < n; j++) ctx.lineTo(xAt(j), yAt(s.values[j] ?? 0));
-        ctx.lineTo(xAt(n - 1), padT + ih);
-        ctx.lineTo(xAt(0), padT + ih);
-        ctx.closePath();
-        ctx.fillStyle = gradFor(s);
-        ctx.fill();
-        ctx.beginPath();
-        ctx.moveTo(xAt(0), yAt(s.values[0] ?? 0));
-        for (let j = 1; j < n; j++) ctx.lineTo(xAt(j), yAt(s.values[j] ?? 0));
-        ctx.strokeStyle = s.color;
-        ctx.lineWidth = 2;
-        ctx.stroke();
-      });
-      if (hoverIdx != null && hoverIdx >= 0 && hoverIdx < n) {
-        const hx = xAt(hoverIdx);
-        ctx.strokeStyle = cFg;
-        ctx.globalAlpha = 0.5;
-        ctx.beginPath();
-        ctx.moveTo(hx, padT);
-        ctx.lineTo(hx, padT + ih);
-        ctx.stroke();
-        ctx.globalAlpha = 1;
-        let txt = String(labels[hoverIdx]);
-        series.forEach((s) => {
-          txt += '  ' + s.name + ' ' + fmtBytes(s.values[hoverIdx] ?? 0);
-        });
-        ctx.textAlign = 'center';
-        ctx.fillStyle = cFg;
-        ctx.fillText(txt, Math.min(Math.max(hx, 90), w - 90), padT + 2);
-      }
-    };
-    const draw = () => {
-      measure();
-      paint(null);
-    };
-    draw();
-
-    const onResize = () => draw();
-    window.addEventListener('resize', onResize);
-
-    /* rAF throttle: collapse a burst of pointer/touch moves into one repaint
-     * per frame; clientX is captured synchronously because touch point lists
-     * are not guaranteed to survive until the frame fires */
-    let rafPending = false;
-    let pendingX: number | null = null;
-    const onTouch = (e: Event) => {
-      const te = e as TouchEvent;
-      const src = te.touches ? te.touches[0] : (e as PointerEvent);
-      if (!src) return;
-      pendingX = src.clientX;
-      if (rafPending) return;
-      rafPending = true;
-      requestAnimationFrame(() => {
-        rafPending = false;
-        const rect = canvas.getBoundingClientRect();
-        const px = (pendingX ?? 0) - rect.left;
-        const idx = Math.round(((px - padL) / iw) * (n - 1));
-        paint(Math.max(0, Math.min(n - 1, idx)));
-      });
-    };
-    canvas.addEventListener('pointermove', onTouch);
-    canvas.addEventListener('touchstart', onTouch, { passive: true });
-    canvas.addEventListener('touchmove', onTouch, { passive: true });
+    const resize = () =>
+      setWidth(Math.max(240, Math.round(root.clientWidth || 640)));
+    resize();
+    const observer =
+      typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(resize);
+    observer?.observe(root);
+    window.addEventListener('resize', resize);
     onCleanup(() => {
-      canvas.removeEventListener('pointermove', onTouch);
-      canvas.removeEventListener('touchstart', onTouch);
-      canvas.removeEventListener('touchmove', onTouch);
-      window.removeEventListener('resize', onResize);
+      observer?.disconnect();
+      window.removeEventListener('resize', resize);
     });
   });
 
-  return <canvas ref={canvas} class="chart" />;
+  return (
+    <div ref={root} class="network-line-chart">
+      <div class="network-chart-legend">
+        <For each={props.series}>
+          {(series) => (
+            <span>
+              <i style={{ background: series.color }} />
+              {series.name}
+            </span>
+          )}
+        </For>
+        <span class="network-chart-hint">{t('traffic_touch_hint')}</span>
+      </div>
+      <div
+        class="network-chart-focus"
+        tabIndex={0}
+        role="group"
+        aria-label={describe()}
+        onKeyDown={(event) => {
+          if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key))
+            return;
+          event.preventDefault();
+          const next =
+            event.key === 'Home'
+              ? 0
+              : event.key === 'End'
+                ? props.labels.length - 1
+                : currentIndex() + (event.key === 'ArrowLeft' ? -1 : 1);
+          setSelected(Math.max(0, Math.min(props.labels.length - 1, next)));
+        }}
+      >
+        <svg
+          class="network-traffic-svg"
+          viewBox={`0 0 ${width()} ${height}`}
+          role="img"
+          aria-labelledby={titleId}
+          onPointerDown={choosePoint}
+          onPointerMove={(event) => {
+            if (event.pointerType === 'mouse' || event.buttons)
+              choosePoint(event);
+          }}
+        >
+          <title id={titleId}>
+            {t('net_traffic_chart')} —{' '}
+            {props.series.map((series) => series.name).join(', ')}
+          </title>
+          <For each={[0, 1, 2, 3, 4]}>
+            {(tick) => (
+              <g class="network-chart-axis">
+                <line
+                  x1={left}
+                  x2={width() - right}
+                  y1={yAt((max() * tick) / 4)}
+                  y2={yAt((max() * tick) / 4)}
+                  stroke="var(--md-sys-color-outline-variant)"
+                  stroke-dasharray={tick ? '3 5' : undefined}
+                />
+                <text
+                  x={left - 9}
+                  y={yAt((max() * tick) / 4) + 3}
+                  text-anchor="end"
+                >
+                  {fmtBytes(Math.round((max() * tick) / 4))}
+                </text>
+              </g>
+            )}
+          </For>
+          <For each={indices()}>
+            {(index) => (
+              <text
+                class="network-chart-axis"
+                x={xAt(index)}
+                y={height - 7}
+                text-anchor={
+                  index === 0
+                    ? 'start'
+                    : index === props.labels.length - 1
+                      ? 'end'
+                      : 'middle'
+                }
+              >
+                {props.labels[index]}
+              </text>
+            )}
+          </For>
+          <For each={props.series}>
+            {(series) => (
+              <For each={segments(series)}>
+                {(segment) => (
+                  <g>
+                    <path d={segment.area} fill={series.color} opacity="0.07" />
+                    <path
+                      d={segment.line}
+                      fill="none"
+                      stroke={series.color}
+                      stroke-width="2.5"
+                      stroke-linejoin="round"
+                      stroke-linecap="round"
+                    />
+                    <For
+                      each={segment.points.length === 1 ? segment.points : []}
+                    >
+                      {(point) => (
+                        <circle
+                          cx={point.x}
+                          cy={point.y}
+                          r="3"
+                          fill={series.color}
+                        />
+                      )}
+                    </For>
+                  </g>
+                )}
+              </For>
+            )}
+          </For>
+          <line
+            x1={xAt(currentIndex())}
+            x2={xAt(currentIndex())}
+            y1={top}
+            y2={height - bottom}
+            stroke="var(--md-sys-color-outline)"
+            stroke-dasharray="3 4"
+          />
+          <For each={props.series}>
+            {(series) =>
+              validNumber(series.values[currentIndex()]) ? (
+                <circle
+                  cx={xAt(currentIndex())}
+                  cy={yAt(series.values[currentIndex()] as number)}
+                  r="4"
+                  fill={series.color}
+                  stroke="var(--md-sys-color-surface)"
+                  stroke-width="2"
+                />
+              ) : null
+            }
+          </For>
+        </svg>
+      </div>
+      <div class="network-chart-readout">
+        <strong>{props.labels[currentIndex()]}</strong>
+        <For each={props.series}>
+          {(series) => (
+            <span>
+              <i style={{ background: series.color }} />
+              {series.name}
+              <b>
+                {validNumber(series.values[currentIndex()])
+                  ? fmtBytes(series.values[currentIndex()])
+                  : '—'}
+              </b>
+            </span>
+          )}
+        </For>
+      </div>
+      <details class="network-chart-data">
+        <summary>{t('net_traffic_table')}</summary>
+        <div class="network-table-scroll">
+          <table>
+            <thead>
+              <tr>
+                <th scope="col">{t('net_traffic_time')}</th>
+                <For each={props.series}>
+                  {(series) => <th scope="col">{series.name}</th>}
+                </For>
+              </tr>
+            </thead>
+            <tbody>
+              <For each={props.labels}>
+                {(label, index) => (
+                  <tr>
+                    <th scope="row">{label}</th>
+                    <For each={props.series}>
+                      {(series) => (
+                        <td>
+                          {validNumber(series.values[index()])
+                            ? fmtBytes(series.values[index()])
+                            : t('net_traffic_unrecorded')}
+                        </td>
+                      )}
+                    </For>
+                  </tr>
+                )}
+              </For>
+            </tbody>
+          </table>
+        </div>
+      </details>
+    </div>
+  );
 }

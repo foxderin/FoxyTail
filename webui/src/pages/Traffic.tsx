@@ -1,229 +1,440 @@
-/*
- * Traffic — hourly/daily line chart (canvas), Top-N peers bar list,
- * per-app (UID) totals. All reads are light stats queries.
- */
-import { createSignal, onMount, Show, type JSX } from 'solid-js';
+/** Recorded traffic, with independent errors for the chart, peers, and apps. */
+import {
+  createMemo,
+  createSignal,
+  For,
+  onMount,
+  Show,
+  type JSX,
+} from 'solid-js';
 import { createApiScope } from '../api';
 import { t } from '../i18n';
 import { fmtBytes } from '../format';
-import { Card, SkeletonCard, SkeletonRows, EmptyState, ErrorState } from '../components/Basics';
+import {
+  Card,
+  SkeletonRows,
+  EmptyState,
+  ErrorState,
+} from '../components/Basics';
 import { LineChart, chartColors } from '../components/LineChart';
 import { MdIcon } from '../icons';
-import { Select, Switch, Tab, Tabs } from '../components/ui';
+import { Button } from '../components/ui';
 import type { Peer, AppInfo } from '../types';
+import './network.css';
 
 interface HourSample {
   hour: number;
+  samples?: number;
   iface?: { rx: number; tx: number };
 }
-
 interface DaySample {
   date: string;
+  samples?: number;
   rx: number;
   tx: number;
 }
-
 interface TopEntry {
   id: string;
   rx: number;
   tx: number;
 }
-
 interface UidEntry {
   uid: string;
   tx: number;
 }
-
-let seq = 0;
+interface ChartData {
+  labels: string[];
+  rx: (number | null)[];
+  tx: (number | null)[];
+}
+const bytes = (value: number | null | undefined) =>
+  Number.isFinite(value) && Number(value) >= 0 ? Number(value) : 0;
 
 export default function Traffic(): JSX.Element {
   const scope = createApiScope();
+  let chartSeq = 0,
+    topSeq = 0,
+    uidSeq = 0;
   const [mode, setMode] = createSignal<'hourly' | 'daily'>('hourly');
-  const [chart, setChart] = createSignal<{ labels: string[]; rx: number[]; tx: number[] } | null>(null);
+  const [chart, setChart] = createSignal<ChartData | null>(null);
   const [chartError, setChartError] = createSignal<string | null>(null);
-  const [chartEmpty, setChartEmpty] = createSignal(false);
-  const [topn, setTopn] = createSignal<{ entry: TopEntry; name: string }[] | null>(null);
-  const [uidRows, setUidRows] = createSignal<{ label: string; uid: string; tx: number }[] | null>(null);
+  const [chartLoading, setChartLoading] = createSignal(true);
+  const [topn, setTopn] = createSignal<
+    { entry: TopEntry; name: string }[] | null
+  >(null);
+  const [topError, setTopError] = createSignal<string | null>(null);
+  const [topLoading, setTopLoading] = createSignal(false);
+  const [uidRows, setUidRows] = createSignal<
+    { label: string; uid: string; tx: number }[] | null
+  >(null);
+  const [uidError, setUidError] = createSignal<string | null>(null);
+  const [uidLoading, setUidLoading] = createSignal(false);
+  const hasSamples = () =>
+    chart()?.rx.some((value) => value !== null) ||
+    chart()?.tx.some((value) => value !== null);
+  const totals = createMemo(() => ({
+    rx: chart()?.rx.reduce<number>((sum, value) => sum + bytes(value), 0) || 0,
+    tx: chart()?.tx.reduce<number>((sum, value) => sum + bytes(value), 0) || 0,
+  }));
+  const refreshing = () => chartLoading() || topLoading() || uidLoading();
 
   async function loadChart() {
-    const m = mode();
-    const my = ++seq;
-    setChart(null);
+    const selectedMode = mode();
+    const my = ++chartSeq;
+    setChartLoading(true);
     setChartError(null);
-    setChartEmpty(false);
-    const res = await scope.api('traffic', m);
-    if (res.cancelled || my !== seq) return;
+    const res = await scope.api('traffic', selectedMode);
+    if (res.cancelled || my !== chartSeq) return;
+    setChartLoading(false);
     if (!res.ok) {
       setChartError(res.error || t('error'));
       return;
     }
-    const labels: string[] = [];
-    const rx: number[] = [];
-    const tx: number[] = [];
-    if (m === 'hourly') {
-      ((res.hours as HourSample[]) || []).forEach((hh) => {
-        labels.push(hh.hour + ':00');
-        rx.push(hh.iface ? hh.iface.rx : 0);
-        tx.push(hh.iface ? hh.iface.tx : 0);
+    const data: ChartData = { labels: [], rx: [], tx: [] };
+    if (selectedMode === 'hourly') {
+      ((res.hours as HourSample[]) || []).forEach((sample) => {
+        const recorded =
+          sample.samples === undefined
+            ? !!sample.iface &&
+              bytes(sample.iface.rx) + bytes(sample.iface.tx) > 0
+            : sample.samples > 0;
+        data.labels.push(String(sample.hour).padStart(2, '0') + ':00');
+        data.rx.push(recorded && sample.iface ? bytes(sample.iface.rx) : null);
+        data.tx.push(recorded && sample.iface ? bytes(sample.iface.tx) : null);
       });
     } else {
-      ((res.days as DaySample[]) || []).forEach((d) => {
-        labels.push(d.date.slice(5));
-        rx.push(d.rx);
-        tx.push(d.tx);
+      ((res.days as DaySample[]) || []).forEach((sample) => {
+        const recorded =
+          sample.samples === undefined
+            ? bytes(sample.rx) + bytes(sample.tx) > 0
+            : sample.samples > 0;
+        data.labels.push(sample.date.slice(5));
+        data.rx.push(recorded ? bytes(sample.rx) : null);
+        data.tx.push(recorded ? bytes(sample.tx) : null);
       });
     }
-    if (!labels.length || (rx.every((v) => !v) && tx.every((v) => !v))) {
-      setChartEmpty(true);
-      return;
-    }
-    setChart({ labels, rx, tx });
+    setChart(data);
   }
 
   async function loadTopn() {
+    if (topLoading()) return;
+    const my = ++topSeq;
+    setTopLoading(true);
     const res = await scope.api('traffic', 'topn', 10);
-    if (res.cancelled) return;
-    if (!res.ok || !Array.isArray(res.topn) || !(res.topn as TopEntry[]).length) {
-      setTopn([]);
+    if (res.cancelled || my !== topSeq) return;
+    if (!res.ok) {
+      setTopLoading(false);
+      setTopError(res.error || t('error'));
       return;
     }
-    // Render counters immediately; name lookup can complete independently.
-    setTopn((res.topn as TopEntry[]).map((r) => ({ entry: r, name: r.id })));
+    setTopError(null);
+    const rows = Array.isArray(res.topn)
+      ? (res.topn as TopEntry[])
+          .filter((row) => bytes(row.rx) + bytes(row.tx) > 0)
+          .sort((a, b) => bytes(b.rx) + bytes(b.tx) - bytes(a.rx) - bytes(a.tx))
+      : [];
+    setTopn(rows.map((entry) => ({ entry, name: entry.id })));
+    // Avoid an extra root call when there are no counters to label.
+    if (!rows.length) {
+      setTopLoading(false);
+      return;
+    }
     const peersRes = await scope.api('peers');
-    if (peersRes.cancelled) return;
+    if (peersRes.cancelled || my !== topSeq) return;
+    setTopLoading(false);
     const names: Record<string, string> = {};
-    if (peersRes.ok) ((peersRes.peers as Peer[]) || []).forEach((p) => (names[p.id] = p.hostname));
-    setTopn((res.topn as TopEntry[]).map((r) => ({ entry: r, name: names[r.id] || r.id })));
+    if (peersRes.ok)
+      ((peersRes.peers as Peer[]) || []).forEach((peer) => {
+        names[peer.id] = peer.hostname;
+      });
+    setTopn(
+      rows.map((entry) => ({ entry, name: names[entry.id] || entry.id })),
+    );
   }
 
   async function loadUids() {
+    if (uidLoading()) return;
+    const my = ++uidSeq;
+    setUidLoading(true);
     const res = await scope.api('traffic-uids');
-    if (res.cancelled) return;
-    if (!res.ok || !Array.isArray(res.uids) || !(res.uids as UidEntry[]).length) {
-      setUidRows([]);
+    if (res.cancelled || my !== uidSeq) return;
+    if (!res.ok) {
+      setUidLoading(false);
+      setUidError(res.error || t('error'));
       return;
     }
-    const rows = (res.uids as UidEntry[]).slice(0, 50);
-    setUidRows(rows.map((u) => ({ label: t('traffic_uid') + u.uid, uid: u.uid, tx: u.tx })));
-    // Package manager enumeration is expensive on phones with many apps.
-    // Skip it entirely when there are no UID counters to label.
-    const appsRes = await scope.api('apps');
-    if (appsRes.cancelled) return;
-    const labels: Record<string, string> = {};
-    if (appsRes.ok) ((appsRes.apps as AppInfo[]) || []).forEach((a) => (labels[String(a.uid)] = a.label));
+    setUidError(null);
+    const rows = Array.isArray(res.uids)
+      ? (res.uids as UidEntry[]).filter((row) => bytes(row.tx) > 0).slice(0, 50)
+      : [];
     setUidRows(
-      rows.map((u) => ({
-        label: labels[String(u.uid)] || t('traffic_uid') + u.uid,
-        uid: u.uid,
-        tx: u.tx,
+      rows.map((row) => ({
+        label: t('traffic_uid') + row.uid,
+        uid: row.uid,
+        tx: row.tx,
+      })),
+    );
+    // Package enumeration can be expensive, so only request names for real data.
+    if (!rows.length) {
+      setUidLoading(false);
+      return;
+    }
+    const appsRes = await scope.api('apps');
+    if (appsRes.cancelled || my !== uidSeq) return;
+    setUidLoading(false);
+    const labels: Record<string, string> = {};
+    if (appsRes.ok)
+      ((appsRes.apps as AppInfo[]) || []).forEach((app) => {
+        labels[String(app.uid)] = app.label;
+      });
+    setUidRows(
+      rows.map((row) => ({
+        label: labels[String(row.uid)] || t('traffic_uid') + row.uid,
+        uid: row.uid,
+        tx: row.tx,
       })),
     );
   }
 
-  onMount(() => {
+  const refresh = () => {
     void loadChart();
     void loadTopn();
     void loadUids();
-  });
-
-  const topMax = () => {
-    const list = topn() ?? [];
-    let max = 1;
-    list.forEach((r) => {
-      if (r.entry.rx + r.entry.tx > max) max = r.entry.rx + r.entry.tx;
-    });
-    return max;
   };
+  onMount(refresh);
+  const topMax = () =>
+    Math.max(
+      1,
+      ...(topn() || []).map((row) => bytes(row.entry.rx) + bytes(row.entry.tx)),
+    );
+  const colors = chartColors();
 
   return (
-    <>
-      <Tabs
-        activeTabIndex={mode() === 'hourly' ? 0 : 1}
-        onChange={(e: Event) => {
-          const idx = (e.target as unknown as { activeTabIndex: number }).activeTabIndex;
-          const m = idx === 0 ? 'hourly' : 'daily';
-          if (m !== mode()) {
-            setMode(m);
-            void loadChart();
-          }
-        }}
-      >
-        <Tab label={t('traffic_hourly')} />
-        <Tab label={t('traffic_daily')} />
-      </Tabs>
+    <div class="page-stack network-page">
+      <div class="network-period-toolbar">
+        <div
+          class="filter-chips"
+          role="group"
+          aria-label={t('net_traffic_period')}
+        >
+          <For each={['hourly', 'daily'] as const}>
+            {(period) => (
+              <button
+                type="button"
+                class="filter-chip"
+                classList={{ active: mode() === period }}
+                aria-pressed={mode() === period}
+                onClick={() => {
+                  if (period === mode()) return;
+                  setMode(period);
+                  setChart(null);
+                  void loadChart();
+                }}
+              >
+                {t(period === 'hourly' ? 'traffic_hourly' : 'traffic_daily')}
+              </button>
+            )}
+          </For>
+        </div>
+        <Button variant="outlined" disabled={refreshing()} onClick={refresh}>
+          <MdIcon
+            name="refresh"
+            size={18}
+            class={refreshing() ? 'network-refreshing' : ''}
+          />
+          {refreshing() ? t('loading') : t('net_refresh')}
+        </Button>
+      </div>
 
-      <Card title={t('traffic_title')} icon="monitoring">
-        <Show when={chart() !== null || chartError() !== null || chartEmpty()} fallback={<SkeletonCard lines={3} />}>
+      <div class="metric-grid network-metrics network-traffic-metrics">
+        <div class="metric-card">
+          <div class="metric-label">
+            <MdIcon name="monitoring" size={18} />
+            {t('net_traffic_total')}
+          </div>
+          <div
+            class="metric-value"
+            classList={{ 'network-metric-loading': chartLoading() && !chart() }}
+          >
+            {hasSamples() ? fmtBytes(totals().rx + totals().tx) : '—'}
+          </div>
+        </div>
+        <div class="metric-card">
+          <div class="metric-label">
+            <span class="network-direction-icon">↓</span>
+            {t('traffic_rx')}
+          </div>
+          <div
+            class="metric-value"
+            classList={{ 'network-metric-loading': chartLoading() && !chart() }}
+          >
+            {hasSamples() ? fmtBytes(totals().rx) : '—'}
+          </div>
+        </div>
+        <div class="metric-card">
+          <div class="metric-label">
+            <span class="network-direction-icon is-upload">↑</span>
+            {t('traffic_tx')}
+          </div>
+          <div
+            class="metric-value"
+            classList={{ 'network-metric-loading': chartLoading() && !chart() }}
+          >
+            {hasSamples() ? fmtBytes(totals().tx) : '—'}
+          </div>
+        </div>
+      </div>
+
+      <Card title={t('net_traffic_chart')} icon="monitoring">
+        <p class="network-supporting">{t('net_traffic_chart_hint')}</p>
+        <Show when={chartError()}>
+          <ErrorState text={chartError()!} onRetry={() => void loadChart()} />
+        </Show>
+        <Show
+          when={chart() !== null || chartError()}
+          fallback={
+            <div class="network-chart-skeleton" aria-busy="true">
+              <div class="skeleton" />
+              <div class="skeleton" />
+              <div class="skeleton" />
+              <div class="skeleton" />
+              <div class="network-chart-skeleton-axis">
+                <span class="skeleton" />
+                <span class="skeleton" />
+                <span class="skeleton" />
+              </div>
+            </div>
+          }
+        >
           <Show
-            when={!chartError()}
-            fallback={<ErrorState text={chartError()!} onRetry={() => void loadChart()} />}
+            when={hasSamples()}
+            fallback={
+              <Show when={!chartError()}>
+                <div class="empty-state network-traffic-empty">
+                  <div class="network-empty-graphic">
+                    <MdIcon name="monitoring" size={34} />
+                  </div>
+                  <strong>{t('net_traffic_no_samples')}</strong>
+                </div>
+              </Show>
+            }
+          >
+            <LineChart
+              labels={chart()!.labels}
+              series={[
+                {
+                  name: t('traffic_rx'),
+                  color: colors.rx,
+                  values: chart()!.rx,
+                },
+                {
+                  name: t('traffic_tx'),
+                  color: colors.tx,
+                  values: chart()!.tx,
+                },
+              ]}
+            />
+          </Show>
+        </Show>
+      </Card>
+
+      <div class="content-grid network-detail-grid network-traffic-breakdown">
+        <Card title={t('traffic_topn')} icon="group">
+          <p class="network-supporting">{t('net_traffic_top_hint')}</p>
+          <Show when={topError()}>
+            <ErrorState text={topError()!} onRetry={() => void loadTopn()} />
+          </Show>
+          <Show
+            when={topn() !== null || topError()}
+            fallback={<SkeletonRows rows={4} />}
           >
             <Show
-              when={!chartEmpty()}
-              fallback={<EmptyState text={t('traffic_no_data')} icon="monitoring" />}
+              when={(topn() || []).length > 0}
+              fallback={
+                <Show when={!topError()}>
+                  <EmptyState text={t('net_traffic_no_peer')} icon="group" />
+                </Show>
+              }
             >
-              <div class="dim">{t('traffic_touch_hint')}</div>
-              <Show when={chart()}>
-                {(c) => {
-                  const colors = chartColors();
-                  return (
-                    <LineChart
-                      labels={c().labels}
-                      series={[
-                        { name: t('traffic_rx'), color: colors.rx, values: c().rx },
-                        { name: t('traffic_tx'), color: colors.tx, values: c().tx },
-                      ]}
-                    />
-                  );
-                }}
-              </Show>
+              <div class="network-rank-list">
+                <For each={topn() || []}>
+                  {(row, index) => (
+                    <div class="network-rank-row">
+                      <span class="network-rank-number">
+                        {String(index() + 1).padStart(2, '0')}
+                      </span>
+                      <div class="network-rank-content">
+                        <div class="network-rank-heading">
+                          <strong>{row.name}</strong>
+                          <span>
+                            {fmtBytes(
+                              bytes(row.entry.rx) + bytes(row.entry.tx),
+                            )}
+                          </span>
+                        </div>
+                        <div class="network-stacked-track">
+                          <span
+                            class="network-rx-fill"
+                            style={{
+                              width: `${(bytes(row.entry.rx) / topMax()) * 100}%`,
+                            }}
+                          />
+                          <span
+                            class="network-tx-fill"
+                            style={{
+                              width: `${(bytes(row.entry.tx) / topMax()) * 100}%`,
+                            }}
+                          />
+                        </div>
+                        <div class="network-rank-details">
+                          <span>↓ {fmtBytes(row.entry.rx)}</span>
+                          <span>↑ {fmtBytes(row.entry.tx)}</span>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+                </For>
+              </div>
             </Show>
           </Show>
-        </Show>
-      </Card>
-
-      <Card title={t('traffic_topn')} icon="speed">
-        <Show when={topn() !== null} fallback={<SkeletonRows rows={3} />}>
-          <Show
-            when={topn()!.length > 0}
-            fallback={<EmptyState text={t('traffic_no_data')} icon="speed" />}
-          >
-            {topn()!.map((r) => (
-              <div class="bar-row">
-                <span class="bar-label">{r.name}</span>
-                <div class="bar-track">
-                  <div
-                    class="bar-fill"
-                    style={{ width: Math.max(2, ((r.entry.rx + r.entry.tx) / topMax()) * 100) + '%' }}
-                  />
-                </div>
-                <span class="bar-val">{'↓' + fmtBytes(r.entry.rx)}</span>
-              </div>
-            ))}
+        </Card>
+        <Card title={t('traffic_by_app')} icon="router">
+          <p class="network-supporting">{t('traffic_app_tx_hint')}</p>
+          <Show when={uidError()}>
+            <ErrorState text={uidError()!} onRetry={() => void loadUids()} />
           </Show>
-        </Show>
-      </Card>
-
-      <Card title={t('traffic_by_app')} icon="group">
-        <p class="dim">{t('traffic_app_tx_hint')}</p>
-        <Show when={uidRows() !== null} fallback={<SkeletonRows rows={3} />}>
           <Show
-            when={uidRows()!.length > 0}
-            fallback={<EmptyState text={t('traffic_no_data')} icon="group" />}
+            when={uidRows() !== null || uidError()}
+            fallback={<SkeletonRows rows={4} />}
           >
-            {uidRows()!.map((u) => (
-              <div class="list-row">
-                <MdIcon name="person" size={20} class="dim" />
-                <div class="main">
-                  <div class="title">{u.label}</div>
-                  <div class="sub">{t('traffic_uid') + u.uid}</div>
-                </div>
-                <span class="dim">{'↑' + fmtBytes(u.tx)}</span>
+            <Show
+              when={(uidRows() || []).length > 0}
+              fallback={
+                <Show when={!uidError()}>
+                  <EmptyState text={t('net_traffic_no_app')} icon="router" />
+                </Show>
+              }
+            >
+              <div class="network-app-list">
+                <For each={uidRows() || []}>
+                  {(row) => (
+                    <div class="network-app-row">
+                      <div class="network-app-avatar">
+                        <MdIcon name="router" size={18} />
+                      </div>
+                      <div>
+                        <strong>{row.label}</strong>
+                        <span>{t('traffic_uid') + row.uid}</span>
+                      </div>
+                      <b>↑ {fmtBytes(row.tx)}</b>
+                    </div>
+                  )}
+                </For>
               </div>
-            ))}
+            </Show>
           </Show>
-        </Show>
-      </Card>
-    </>
+        </Card>
+      </div>
+    </div>
   );
 }

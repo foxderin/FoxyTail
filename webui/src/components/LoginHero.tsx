@@ -4,13 +4,19 @@
  * banner (sessionStorage, per session, keyed by connection state so a state
  * change re-surfaces the hero). Every other page stays fully usable.
  */
-import { createSignal, Show, type JSX } from 'solid-js';
+import { createSignal, onCleanup, Show, type JSX } from 'solid-js';
 import { status, connState, refreshStatus, type ConnState } from '../state';
 import { createApiScope, hasRoot } from '../api';
 import { t } from '../i18n';
 import { MdIcon } from '../icons';
 import { showToast, toastApiError } from './Toast';
-import { Button, CircularProgress, IconButton, LinearProgress, TextField } from './ui';
+import {
+  Button,
+  CircularProgress,
+  IconButton,
+  LinearProgress,
+  TextField,
+} from './ui';
 
 const DISMISS_KEY = 'foxy.heroDismissed';
 
@@ -26,30 +32,42 @@ export function copyText(text: string): boolean {
   /* navigator.clipboard requires a secure context and is unavailable on
    * file:// WebUI pages; the legacy execCommand path is the one that works
    * in KSU/MMRL WebViews. */
+  const previousFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+  const ta = document.createElement('textarea');
   try {
-    const ta = document.createElement('textarea');
     ta.value = text;
+    ta.readOnly = true;
+    ta.tabIndex = -1;
     ta.style.position = 'fixed';
     ta.style.opacity = '0';
     document.body.appendChild(ta);
     ta.select();
-    const ok = document.execCommand('copy');
-    ta.remove();
-    return ok;
+    return document.execCommand('copy');
   } catch {
     return false;
+  } finally {
+    ta.remove();
+    if (previousFocus?.isConnected) previousFocus.focus({ preventScroll: true });
   }
 }
 
-export function LoginHero(): JSX.Element {
+export function LoginHero(props: { showStopped?: boolean } = {}): JSX.Element {
   const scope = createApiScope();
+  let refreshTimer: ReturnType<typeof setTimeout> | undefined;
+  let disposed = false;
+  onCleanup(() => {
+    disposed = true;
+    clearTimeout(refreshTimer);
+  });
   const cs = (): ConnState => connState(status());
-  const [dismissed, setDismissed] = createSignal<string | null>(readDismissed());
+  const [dismissed, setDismissed] = createSignal<string | null>(
+    readDismissed(),
+  );
 
   const heroState = (): 'login' | 'stopped' | null => {
     const c = cs();
-    if (c === 'needs-login' || c === 'starting') return 'login';
-    if (c === 'stopped') return 'stopped';
+    if (c === 'needs-login') return 'login';
+    if (c === 'stopped' && props.showStopped !== false) return 'stopped';
     return null;
   };
 
@@ -84,11 +102,11 @@ export function LoginHero(): JSX.Element {
     setLoginUrl(null);
     const res = await scope.api('login');
     setWaiting(false);
-    if (res.cancelled) return;
+    if (res.cancelled || disposed) return;
     if (res.ok && typeof res.url === 'string') setLoginUrl(res.url);
     else if (res.ok && res.already) {
       showToast(t('acc_already'), 'ok');
-      void refreshStatus();
+      void refreshStatus({ afterCurrent: true });
     } else toastApiError(t('op_failed'), res);
   }
 
@@ -98,11 +116,11 @@ export function LoginHero(): JSX.Element {
     setAuthkeyBusy(true);
     const res = await scope.api('login-authkey', key);
     setAuthkeyBusy(false);
-    if (res.cancelled) return;
+    if (res.cancelled || disposed) return;
     if (res.ok) {
       showToast(t('acc_logged_in'), 'ok');
       setAuthkey('');
-      void refreshStatus();
+      void refreshStatus({ afterCurrent: true });
     } else toastApiError(t('op_failed'), res);
   }
 
@@ -111,10 +129,11 @@ export function LoginHero(): JSX.Element {
     setStartBusy(true);
     const res = await scope.api('control', 'start');
     setStartBusy(false);
-    if (res.cancelled) return;
+    if (res.cancelled || disposed) return;
     if (res.ok) showToast(t('dash_action_done'), 'ok');
     else toastApiError(t('op_failed'), res);
-    setTimeout(() => void refreshStatus(), 1500);
+    clearTimeout(refreshTimer);
+    refreshTimer = setTimeout(() => void refreshStatus({ afterCurrent: true }), 1500);
   }
 
   return (
@@ -126,28 +145,55 @@ export function LoginHero(): JSX.Element {
             <div class="banner info">
               <MdIcon name={st() === 'stopped' ? 'stop' : 'login'} size={18} />
               <span class="spacer">
-                {st() === 'stopped' ? t('hero_banner_stopped') : t('hero_banner_login')}
+                {st() === 'stopped'
+                  ? t('hero_banner_stopped')
+                  : t('hero_banner_login')}
               </span>
-              <Button variant="text" onClick={expand}>{t('hero_expand')}</Button>
+              <Button variant="text" onClick={expand}>
+                {t('hero_expand')}
+              </Button>
             </div>
           }
         >
           <div class="hero-wrap">
             <div class="hero">
-              <IconButton class="hero-close" onClick={dismiss} aria-label={t('hero_minimize')}>
+              <IconButton
+                class="hero-close"
+                onClick={dismiss}
+                aria-label={t('hero_minimize')}
+              >
                 <MdIcon name="close" size={20} />
               </IconButton>
-              <h2>{st() === 'stopped' ? t('hero_stopped_title') : t('hero_login_title')}</h2>
-              <p>{st() === 'stopped' ? t('hero_stopped_desc') : t('hero_login_desc')}</p>
+              <div class="network-login-heading">
+                <div class="network-device-avatar">
+                  <MdIcon
+                    name={st() === 'stopped' ? 'play_arrow' : 'vpn_key'}
+                    size={24}
+                  />
+                </div>
+                <span class="eyebrow">{t('net_login_secure')}</span>
+              </div>
+              <h2>
+                {st() === 'stopped'
+                  ? t('hero_stopped_title')
+                  : t('hero_login_title')}
+              </h2>
+              <p>
+                {st() === 'stopped'
+                  ? t('hero_stopped_desc')
+                  : t('hero_login_desc')}
+              </p>
 
               <Show when={st() === 'stopped'}>
                 <div class="hero-actions">
                   <Button
                     variant="filled"
-                    disabled={startBusy() || !hasRoot}
+                    busy={startBusy()}
+                    disabled={!hasRoot}
                     onClick={startService}
                   >
-                    <MdIcon name="play_arrow" size={18} /> {t('hero_start_service')}
+                    <MdIcon name="play_arrow" size={18} />{' '}
+                    {t('hero_start_service')}
                   </Button>
                   <Show when={startBusy()}>
                     <CircularProgress size={28} />
@@ -159,12 +205,16 @@ export function LoginHero(): JSX.Element {
                 <div class="hero-actions">
                   <Button
                     variant="filled"
-                    disabled={waiting() || !hasRoot}
+                    busy={waiting()}
+                    disabled={!hasRoot}
                     onClick={getLoginLink}
                   >
                     <MdIcon name="login" size={18} /> {t('hero_get_link')}
                   </Button>
-                  <Button variant="text" onClick={() => setShowAuthkey(!showAuthkey())}>
+                  <Button
+                    variant="text"
+                    onClick={() => setShowAuthkey(!showAuthkey())}
+                  >
                     <MdIcon name="vpn_key" size={18} /> {t('acc_authkey')}
                   </Button>
                 </div>
@@ -189,8 +239,12 @@ export function LoginHero(): JSX.Element {
                         >
                           <MdIcon name="content_copy" size={18} /> {t('copy')}
                         </Button>
-                        <Button variant="tonal" onClick={() => window.open(url(), '_blank')}>
-                          <MdIcon name="open_in_new" size={18} /> {t('open_browser')}
+                        <Button
+                          variant="tonal"
+                          onClick={() => window.open(url(), '_blank')}
+                        >
+                          <MdIcon name="open_in_new" size={18} />{' '}
+                          {t('open_browser')}
                         </Button>
                       </div>
                     </div>
@@ -209,10 +263,12 @@ export function LoginHero(): JSX.Element {
                     />
                     <Button
                       variant="tonal"
-                      disabled={!authkey().trim() || authkeyBusy() || !hasRoot}
+                      busy={authkeyBusy()}
+                      disabled={!authkey().trim() || !hasRoot}
                       onClick={loginWithAuthkey}
                     >
-                      <MdIcon name="vpn_key" size={18} /> {t('acc_login_authkey')}
+                      <MdIcon name="vpn_key" size={18} />{' '}
+                      {t('acc_login_authkey')}
                     </Button>
                   </div>
                 </Show>

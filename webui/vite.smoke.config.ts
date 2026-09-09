@@ -4,6 +4,7 @@ import { defineConfig } from 'vite';
 import solid from 'vite-plugin-solid';
 
 export default defineConfig({
+  mode: 'smoke',
   plugins: [solid()],
   build: {
     outDir: '.smoke',

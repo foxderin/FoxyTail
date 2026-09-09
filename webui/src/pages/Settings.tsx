@@ -1,22 +1,31 @@
-/*
- * Settings — foxytail.conf editor (bool/num/text per key), network context
- * rules (base64 round-trip), read-only tun hooks, backup / restore,
- * theme + language.
- */
-import { createSignal, onCleanup, onMount, Show, type JSX } from 'solid-js';
+/* Settings separate appearance, runtime configuration and recovery operations. */
+import { createSignal, For, onCleanup, onMount, Show, type JSX } from 'solid-js';
 import { createApiScope, execRaw, hasRoot } from '../api';
 import { t, lang, setLang, type Lang } from '../i18n';
+import type { ToolsKey } from '../i18n-tools';
 import { refreshStatus } from '../state';
 import { mode, applyTheme, type ThemeMode } from '../theme';
-import { Card, SkeletonRows, EmptyState, ErrorState } from '../components/Basics';
+import { Card, SkeletonRows, ErrorState, StatusBadge } from '../components/Basics';
+import { copyText } from '../components/LoginHero';
 import { confirmDialog } from '../components/ConfirmDialog';
 import { showToast, toastApiError } from '../components/Toast';
 import { MdIcon } from '../icons';
 import { Button, Select, Switch, TextField } from '../components/ui';
+import './tools.css';
 
-const BOOL_KEYS = ['MAGIC_DNS', 'IPV6', 'WATCHDOG'];
-const NUM_KEYS = ['SOCKS_PORT', 'DNS_PORT', 'ROUTE_TABLE', 'WATCHDOG_INTERVAL', 'STATS_INTERVAL', 'LOG_MAX_KB'];
-
+type Field = { key: string; label: ToolsKey; hint?: ToolsKey; range?: [number, number]; bool?: boolean };
+const NETWORK: Field[] = [
+  { key: 'MAGIC_DNS', label: 'tools_magicdns', hint: 'tools_magicdns_desc', bool: true },
+  { key: 'IPV6', label: 'tools_ipv6', bool: true },
+  { key: 'SOCKS_PORT', label: 'tools_socks_port', range: [1024, 65535] },
+  { key: 'DNS_PORT', label: 'tools_dns_port', range: [1024, 65535] },
+];
+const BACKGROUND: Field[] = [
+  { key: 'WATCHDOG', label: 'tools_watchdog', hint: 'tools_watchdog_desc', bool: true },
+  { key: 'WATCHDOG_INTERVAL', label: 'tools_watchdog_interval', range: [5, 300] },
+  { key: 'STATS_INTERVAL', label: 'tools_stats_interval', range: [10, 3600] },
+  { key: 'LOG_MAX_KB', label: 'tools_log_limit', range: [64, 10240] },
+];
 const HOOKS: [string, 'set_hook_up' | 'set_hook_down'][] = [
   ['foxytail.tun.up', 'set_hook_up'],
   ['foxytail.tun.down', 'set_hook_down'],
@@ -28,289 +37,446 @@ export default function Settings(): JSX.Element {
   onCleanup(() => hookAbort.abort());
   const [settings, setSettings] = createSignal<Record<string, string> | null>(null);
   const [settingsError, setSettingsError] = createSignal<string | null>(null);
-  const [ctxRules, setCtxRules] = createSignal('');
-  const [ctxBusy, setCtxBusy] = createSignal(false);
-  const [hooks, setHooks] = createSignal<Record<string, string>>({});
-  const [restorePath, setRestorePath] = createSignal('');
-  const [backupBusy, setBackupBusy] = createSignal(false);
   const [restartRequired, setRestartRequired] = createSignal(false);
   const [restartBusy, setRestartBusy] = createSignal(false);
-  const [saving, setSaving] = createSignal(false);
+  const [saving, setSaving] = createSignal<string | null>(null);
+  const [advancedLoaded, setAdvancedLoaded] = createSignal(false);
+  const [advancedBusy, setAdvancedBusy] = createSignal(false);
+  const [ctxRules, setCtxRules] = createSignal('');
+  const [ctxError, setCtxError] = createSignal(false);
+  const [ctxBusy, setCtxBusy] = createSignal(false);
+  const [hooks, setHooks] = createSignal<Record<string, string>>({});
+  const [backupBusy, setBackupBusy] = createSignal(false);
+  const [backupPath, setBackupPath] = createSignal('');
+  const [restorePath, setRestorePath] = createSignal('');
+  const [restoreBusy, setRestoreBusy] = createSignal(false);
+  const [restoreResult, setRestoreResult] = createSignal<{ previous: string; note: string } | null>(
+    null,
+  );
+  const locked = () => !hasRoot || Boolean(saving()) || restartBusy() || restoreBusy();
 
   async function loadSettings(): Promise<boolean | undefined> {
     const res = await scope.api('settings-get');
     if (res.cancelled) return;
-    if (res.ok) {
-      setSettings((res.settings as Record<string, string>) || {});
-      setSettingsError(null);
-      if (typeof res.restartRequired === 'boolean') {
-        setRestartRequired(res.restartRequired);
-        return res.restartRequired;
-      }
-    } else {
+    if (!res.ok) {
       setSettingsError(res.error || t('error'));
+      return;
     }
+    setSettings((res.settings as Record<string, string>) || {});
+    setSettingsError(null);
+    const pending = res.restartRequired === true;
+    setRestartRequired(pending);
+    return pending;
   }
-
-  async function saveKey(key: string, value: string): Promise<boolean> {
-    if (saving() || restartBusy()) return false;
-    setSaving(true);
-    const res = await scope.api('settings-set', key, value);
-    setSaving(false);
-    if (res.cancelled) return false;
+  async function saveKey(field: Field, value: string, el?: HTMLInputElement) {
+    const previous = settings()?.[field.key] ?? '';
+    const restoreInput = () => {
+      if (!el) return;
+      if (field.bool) el.checked = previous === 'on';
+      else el.value = previous;
+    };
+    if (locked()) {
+      restoreInput();
+      return;
+    }
+    if (value === previous) return;
+    if (
+      field.range &&
+      (!/^\d+$/.test(value) || Number(value) < field.range[0] || Number(value) > field.range[1])
+    ) {
+      showToast(t('tools_invalid_number') + ` ${field.range[0]}–${field.range[1]}`, 'err');
+      restoreInput();
+      return;
+    }
+    setSaving(field.key);
+    const res = await scope.api('settings-set', field.key, value);
+    setSaving(null);
+    if (res.cancelled) {
+      restoreInput();
+      return;
+    }
     if (res.ok) {
-      const pending = res.applied !== true;
-      if (pending) setRestartRequired(true);
-      showToast(t(pending ? 'set_restart_required' : 'set_saved') + ': ' + key, pending ? 'info' : 'ok');
-      return true;
+      setSettings((s) => ({ ...(s ?? {}), [field.key]: value }));
+      if (res.applied !== true) setRestartRequired(true);
+    } else {
+      restoreInput();
+      toastApiError(t('op_failed'), res);
     }
-    toastApiError(t('op_failed'), res);
-    return false;
   }
-
   async function applySavedSettings() {
-    if (restartBusy() || saving()) return;
+    if (locked()) return;
     setRestartBusy(true);
     const res = await scope.api('control', 'restart');
-    if (res.cancelled) { setRestartBusy(false); return; }
-    if (res.ok) {
-      let pending = res.applied !== true || res.restartRequired === true;
-      setRestartRequired(pending);
-      const observedPending = await loadSettings();
-      if (observedPending !== undefined) pending = observedPending;
-      showToast(t(pending ? 'set_restart_required' : 'set_applied'), pending ? 'info' : 'ok');
-      void refreshStatus();
-    } else toastApiError(t('op_failed'), res);
+    if (!res.cancelled) {
+      if (res.ok) {
+        const pending = await loadSettings();
+        if (pending !== false) setRestartRequired(true);
+        showToast(
+          t(pending === false ? 'set_applied' : 'set_restart_required'),
+          pending === false ? 'ok' : 'info',
+        );
+        void refreshStatus({ afterCurrent: true });
+      } else toastApiError(t('op_failed'), res);
+    }
     setRestartBusy(false);
   }
-
+  async function loadAdvanced() {
+    if (advancedBusy()) return;
+    setAdvancedBusy(true);
+    const res = await scope.api('context-get');
+    if (!res.cancelled) {
+      setCtxError(!res.ok);
+      if (res.ok) setCtxRules((res.rules as string) || '');
+    }
+    await Promise.all(
+      HOOKS.map(async ([file, key]) => {
+        try {
+          const out = await execRaw(
+            'cat /data/adb/foxytail/scripts/' + file + ' 2>/dev/null || echo "(missing)"',
+            15000,
+            hookAbort.signal,
+          );
+          if (!hookAbort.signal.aborted)
+            setHooks((h) => ({
+              ...h,
+              [key]: out === '(missing)' ? t('misc_missing') : out || t('misc_empty'),
+            }));
+        } catch {
+          if (!hookAbort.signal.aborted) setHooks((h) => ({ ...h, [key]: t('misc_unavailable') }));
+        }
+      }),
+    );
+    setAdvancedBusy(false);
+    setAdvancedLoaded(true);
+  }
   async function saveContext() {
-    if (ctxBusy()) return;
+    if (ctxBusy() || ctxError() || locked()) return;
     setCtxBusy(true);
     try {
-      const b64 = btoa(unescape(encodeURIComponent(ctxRules())));
-      const res = await scope.api('context-set', b64);
-      if (res.cancelled) return;
-      if (res.ok) showToast(t('set_saved'), 'ok');
-      else toastApiError(t('op_failed'), res);
+      const res = await scope.api('context-set', btoa(unescape(encodeURIComponent(ctxRules()))));
+      if (!res.cancelled) {
+        if (res.ok) {
+          setRestartRequired(true);
+          showToast(t('tools_saved_pending'), 'info');
+        } else toastApiError(t('op_failed'), res);
+      }
     } catch {
       showToast(t('op_failed'), 'err');
     } finally {
       setCtxBusy(false);
     }
   }
-
   async function doBackup() {
     if (backupBusy()) return;
     setBackupBusy(true);
     const res = await scope.api('backup');
     setBackupBusy(false);
     if (res.cancelled) return;
-    if (res.ok) showToast(t('set_backup_done') + String(res.path), 'ok');
-    else toastApiError(t('op_failed'), res);
-  }
-
-  async function doRestore() {
-    const p = restorePath().trim();
-    if (!p) return;
-    if (!(await confirmDialog(t('set_restore_confirm')))) return;
-    const res = await scope.api('restore', p);
-    if (res.cancelled) return;
     if (res.ok) {
-      setRestartRequired(true);
-      void loadSettings();
-      showToast(t('set_restore_done') + String(res.previous || '') + ')', 'info');
-    }
-    else toastApiError(t('op_failed'), res);
+      setBackupPath(String(res.path));
+      showToast(t('set_saved'), 'ok');
+    } else toastApiError(t('op_failed'), res);
   }
-
-  onMount(() => {
-    void loadSettings();
-    void scope.api('context-get').then((res) => {
-      if (!res.cancelled && res.ok) setCtxRules((res.rules as string) || '');
-    });
-    HOOKS.forEach(([file, key]) => {
-      void execRaw('cat /data/adb/foxytail/scripts/' + file + ' 2>/dev/null || echo "(missing)"', 15000, hookAbort.signal)
-        .then((out) => {
-          /* the shell side marks a missing hook with "(missing)"; the
-           * displayed string goes through the dictionary */
-          setHooks((h) => ({
-            ...h,
-            [key]: out === '(missing)' ? t('misc_missing') : out || t('misc_empty'),
-          }));
-        })
-        .catch(() => {
-          if (!hookAbort.signal.aborted) setHooks((h) => ({ ...h, [key]: t('misc_unavailable') }));
+  async function doRestore() {
+    const path = restorePath().trim();
+    if (locked() || !path) return;
+    if (!path.startsWith('/sdcard/') || !path.endsWith('.tar.gz')) {
+      showToast(t('tools_restore_path'), 'err');
+      return;
+    }
+    if (!(await confirmDialog(t('set_restore_confirm')))) return;
+    setRestoreBusy(true);
+    const res = await scope.api('restore', path);
+    if (!res.cancelled) {
+      if (res.ok) {
+        setRestoreResult({
+          previous: typeof res.previous === 'string' ? res.previous : '',
+          note: typeof res.note === 'string' ? res.note : '',
         });
-    });
-  });
-
+        setRestartRequired(true);
+        await loadSettings();
+        if (advancedLoaded()) void loadAdvanced();
+        showToast(t('tools_saved_pending'), 'info');
+      } else toastApiError(t('op_failed'), res);
+    }
+    setRestoreBusy(false);
+  }
+  onMount(() => void loadSettings());
+  function fieldRow(field: Field): JSX.Element {
+    const value = () => settings()?.[field.key] ?? '';
+    return (
+      <div class="tool-setting" data-setting={field.key}>
+        <div class="tool-setting-copy">
+          <span class="tool-setting-label">{t(field.label)}</span>
+          <Show when={field.hint}>
+            <span class="tool-hint">{t(field.hint!)}</span>
+          </Show>
+          <Show when={field.key === 'IPV6'}>
+            <span class="tool-hint">{t('set_ipv6_hint')}</span>
+          </Show>
+          <Show when={field.range}>
+            <span class="tool-hint">
+              {t('tools_range')} {field.range![0]}–{field.range![1]}
+            </span>
+          </Show>
+          <Show when={saving() === field.key}>
+            <span class="tool-hint" role="status">
+              {t('tools_saving')}
+            </span>
+          </Show>
+        </div>
+        <Show
+          when={field.bool}
+          fallback={
+            <TextField
+              aria-label={t(field.label)}
+              type="number"
+              value={value()}
+              disabled={locked()}
+              onChange={(e) => {
+                const el = e.target as HTMLInputElement;
+                void saveKey(field, el.value.trim(), el);
+              }}
+            />
+          }
+        >
+          <Switch
+            aria-label={t(field.label)}
+            selected={value() === 'on'}
+            disabled={locked()}
+            onChange={(e) => {
+              const el = e.target as HTMLInputElement;
+              void saveKey(field, el.checked ? 'on' : 'off', el);
+            }}
+          />
+        </Show>
+      </div>
+    );
+  }
   return (
-    <>
+    <div class="tools-page">
       <Show when={restartRequired()}>
-        <div class="banner warn">
-          <span class="spacer">{t('set_restart_required')}</span>
-          <Button variant="tonal" disabled={!hasRoot || restartBusy() || saving()} onClick={() => void applySavedSettings()}>{t('set_apply_restart')}</Button>
+        <div class="tool-pending" role="status">
+          <div class="toolbar">
+            <MdIcon name="sync" size={20} />
+            <strong>{t('tools_saved_pending')}</strong>
+          </div>
+          <p class="tool-hint">{t('tools_saved_pending_desc')}</p>
+          <div class="tool-actions">
+            <Button busy={restartBusy()} disabled={locked()} onClick={() => void applySavedSettings()}>
+              <MdIcon name="refresh" size={18} />
+              {restartBusy() ? t('loading') : t('tools_restart')}
+            </Button>
+          </div>
         </div>
       </Show>
-      <Card title={t('set_general')} icon="settings">
-        <Show when={settings() !== null || settingsError() !== null} fallback={<SkeletonRows rows={4} />}>
-          <Show
-            when={!settingsError()}
-            fallback={<ErrorState text={settingsError()!} onRetry={() => void loadSettings()} />}
+      <Card title={t('tools_appearance')} icon="dark_mode">
+        <div class="tool-setting wide-control">
+          <span class="tool-setting-label">{t('set_theme')}</span>
+          <Select
+            aria-label={t('set_theme')}
+            value={mode()}
+            onChange={(e) => applyTheme((e.target as HTMLSelectElement).value as ThemeMode)}
           >
-            <Show
-              when={Object.keys(settings() ?? {}).length > 0}
-              fallback={<EmptyState text={t('empty')} icon="settings" />}
-            >
-              {Object.keys(settings() ?? {}).map((key) => {
-                const val = () => settings()![key];
-                if (key === 'TS_MODE') {
-                  return (
-                    <div class="setting-row">
-                      <div>
-                        <div>{key}</div>
-                        <div class="desc">{t('dash_mode')}</div>
-                      </div>
-                      <span class="dim">{val()}</span>
-                    </div>
-                  );
-                }
-                if (BOOL_KEYS.includes(key)) {
-                  return (
-                    <div class="setting-row">
-                      <div>
-                        {key}
-                        <Show when={key === 'IPV6'}><div class="desc">{t('set_ipv6_hint')}</div></Show>
-                      </div>
-                      <Switch
-                        selected={val() === 'on'}
-                        disabled={!hasRoot || saving() || restartBusy()}
-                        onChange={(e: Event) => {
-                          const el = e.target as unknown as { selected: boolean };
-                          const v = el.selected ? 'on' : 'off';
-                          void saveKey(key, v).then((ok) => {
-                            if (ok) setSettings((s) => ({ ...(s ?? {}), [key]: v }));
-                          });
-                        }}
-                      />
-                    </div>
-                  );
-                }
-                return (
-                  <div class="setting-row">
-                    <div>{key}</div>
-                    <TextField
-                      type={NUM_KEYS.includes(key) ? 'number' : 'text'}
-                      value={val()}
-                      disabled={!hasRoot || saving() || restartBusy()}
-                      onChange={(e: Event) => {
-                        const el = e.target as HTMLInputElement;
-                        const v = el.value.trim();
-                        if (v === val()) return;
-                        void saveKey(key, v).then((ok) => {
-                          if (ok) setSettings((s) => ({ ...(s ?? {}), [key]: v }));
-                          else el.value = val();
-                        });
-                      }}
-                    />
-                  </div>
-                );
-              })}
-            </Show>
+            <For each={['auto', 'light', 'dark'] as ThemeMode[]}>
+              {(m) => (
+                <option value={m}>
+                  {t(
+                    m === 'dark'
+                      ? 'set_theme_dark'
+                      : m === 'light'
+                        ? 'set_theme_light'
+                        : 'set_theme_auto',
+                  )}
+                </option>
+              )}
+            </For>
+          </Select>
+        </div>
+        <div class="tool-setting wide-control">
+          <span class="tool-setting-label">{t('set_language')}</span>
+          <Select
+            aria-label={t('set_language')}
+            value={lang()}
+            onChange={(e) => setLang((e.target as HTMLSelectElement).value as Lang)}
+          >
+            <option value="zh">中文</option>
+            <option value="en">English</option>
+          </Select>
+        </div>
+      </Card>
+      <Show
+        when={settings() !== null || settingsError()}
+        fallback={
+          <Card title={t('tools_network_settings')} icon="router">
+            <SkeletonRows rows={5} />
+          </Card>
+        }
+      >
+        <Show
+          when={!settingsError()}
+          fallback={
+            <Card>
+              <ErrorState text={settingsError()!} onRetry={() => void loadSettings()} />
+            </Card>
+          }
+        >
+          <Card title={t('tools_network_settings')} icon="router" description={t('tools_save_mode')}>
+            <For each={NETWORK}>{fieldRow}</For>
+            <div class="tool-actions spread">
+              <StatusBadge tone={restartRequired() ? 'warning' : 'success'}>
+                {t(restartRequired() ? 'tools_saved_pending' : 'tools_all_applied')}
+              </StatusBadge>
+              <a class="tool-text-link" href="#/tunnel">
+                {t('tools_mode_link')}
+                <MdIcon name="chevron_right" size={16} />
+              </a>
+            </div>
+          </Card>
+          <Card title={t('tools_background')} icon="sync">
+            <For each={BACKGROUND}>{fieldRow}</For>
+          </Card>
+        </Show>
+      </Show>
+      <details
+        class="tool-disclosure"
+        onToggle={(e) => {
+          if (e.currentTarget.open && !advancedLoaded()) void loadAdvanced();
+        }}
+      >
+        <summary>
+          <MdIcon name="settings" size={18} /> {t('tools_advanced')}
+        </summary>
+        <div class="tool-disclosure-body">
+          <Show when={settings()}>
+            {fieldRow({ key: 'ROUTE_TABLE', label: 'tools_route_table', range: [1000, 65535] })}
+            <div class="tool-setting">
+              <span class="tool-setting-label">{t('tools_mark')}</span>
+              <code>{settings()?.FWMARK}</code>
+            </div>
+            <div class="tool-setting">
+              <span class="tool-setting-label">{t('tools_mark_mask')}</span>
+              <code>{settings()?.FWMARK_MASK}</code>
+            </div>
           </Show>
+          <Show when={advancedLoaded() && !advancedBusy()} fallback={<SkeletonRows rows={5} />}>
+            <Card title={t('set_context')} icon="sync" description={t('set_context_hint')}>
+              <Show
+                when={!ctxError()}
+                fallback={
+                  <ErrorState text={t('tools_context_load_error')} onRetry={() => void loadAdvanced()} />
+                }
+              >
+                <textarea
+                  class="tool-editor"
+                  aria-label={t('set_context')}
+                  rows={7}
+                  value={ctxRules()}
+                  disabled={locked() || ctxBusy()}
+                  onInput={(e) => setCtxRules(e.currentTarget.value)}
+                />
+                <div class="tool-actions">
+                  <Button busy={ctxBusy()} disabled={locked()} onClick={() => void saveContext()}>
+                    <MdIcon name="check_circle" size={18} />
+                    {ctxBusy() ? t('loading') : t('save')}
+                  </Button>
+                </div>
+              </Show>
+            </Card>
+            <Card title={t('set_hooks')} icon="article" description={t('set_hooks_hint')}>
+              <For each={HOOKS}>
+                {([, key]) => (
+                  <div class="tool-result">
+                    <p class="tool-hint">{t(key)}</p>
+                    <pre class="mono">{hooks()[key] ?? t('loading')}</pre>
+                  </div>
+                )}
+              </For>
+            </Card>
+          </Show>
+        </div>
+      </details>
+      <Card title={t('set_backup')} icon="backup" description={t('tools_backup_desc')}>
+        <Button variant="tonal" busy={backupBusy()} disabled={locked()} onClick={() => void doBackup()}>
+          <MdIcon name="backup" size={18} />
+          {backupBusy() ? t('loading') : t('set_backup')}
+        </Button>
+        <Show when={backupPath()}>
+          <div class="tool-result">
+            <p class="mono">{backupPath()}</p>
+            <Button
+              variant="text"
+              onClick={() => showToast(t(copyText(backupPath()) ? 'copied' : 'op_failed'), 'info')}
+            >
+              <MdIcon name="content_copy" size={18} />
+              {t('tools_copy_path')}
+            </Button>
+          </div>
         </Show>
       </Card>
-
-      <Card title={t('set_context')} icon="sync">
-        <p class="dim">{t('set_context_hint')}</p>
-        <textarea
-          class="ctx-editor"
-          rows={7}
-          value={ctxRules()}
-          onInput={(e) => setCtxRules(e.currentTarget.value)}
-        />
-        <div class="btn-row">
-          <Button
-            variant="filled"
-            disabled={ctxBusy() || !hasRoot}
-            onClick={() => void saveContext()}
-          >
-            <MdIcon name="check_circle" size={18} /> {t('save')}
-          </Button>
-        </div>
-      </Card>
-
-      <Card title={t('set_hooks')} icon="article">
-        <p class="dim">{t('set_hooks_hint')}</p>
-        {HOOKS.map(([, key]) => (
-          <div class="mt">
-            <div class="dim">{t(key)}</div>
-            <pre class="log-view">{hooks()[key] ?? t('loading')}</pre>
-          </div>
-        ))}
-      </Card>
-
-      <Card title={t('set_backup') + ' / ' + t('set_restore')} icon="backup">
-        <div class="btn-row" style={{ 'margin-top': '0' }}>
-          <Button
-            variant="tonal"
-            disabled={backupBusy() || !hasRoot}
-            onClick={() => void doBackup()}
-          >
-            <MdIcon name="backup" size={18} /> {t('set_backup')}
-          </Button>
-        </div>
+      <section class="tool-danger">
+        <h2>
+          <MdIcon name="refresh" size={18} /> {t('set_restore')}
+        </h2>
+        <p class="tool-hint">{t('tools_restore_desc')}</p>
         <TextField
           label={t('set_restore')}
           placeholder={t('set_restore_hint')}
           value={restorePath()}
-          onInput={(e: InputEvent) => setRestorePath((e.target as HTMLInputElement).value)}
+          disabled={restoreBusy()}
+          onInput={(e) => setRestorePath((e.target as HTMLInputElement).value)}
         />
-        <div class="btn-row">
+        <div>
           <Button
             variant="outlined"
-            disabled={!restorePath().trim() || !hasRoot}
+            class="danger"
+            busy={restoreBusy()}
+            disabled={!restorePath().trim() || locked()}
             onClick={() => void doRestore()}
           >
-            <MdIcon name="refresh" size={18} /> {t('set_restore')}
+            {restoreBusy() ? t('tools_restore_busy') : t('set_restore')}
           </Button>
         </div>
-      </Card>
-
-      <Card title={t('set_ui')} icon="dark_mode">
-        <div class="setting-row">
-          <div>
-            <MdIcon name="dark_mode" size={18} class="dim" /> {t('set_theme')}
-          </div>
-          <Select
-            style={{ width: '180px' }}
-            value={mode()}
-            onChange={(e: Event) =>
-              applyTheme((e.target as HTMLSelectElement).value as ThemeMode || 'dark')
-            }
-          >
-            {(['dark', 'light', 'auto'] as ThemeMode[]).map((m) => (
-              <option value={m} selected={m === mode()}>
-                {t(m === 'dark' ? 'set_theme_dark' : m === 'light' ? 'set_theme_light' : 'set_theme_auto')}
-              </option>
-            ))}
-          </Select>
-        </div>
-        <div class="setting-row">
-          <div>
-            <MdIcon name="translate" size={18} class="dim" /> {t('set_language')}
-          </div>
-          <Select
-            style={{ width: '180px' }}
-            value={lang()}
-            onChange={(e: Event) => setLang((e.target as HTMLSelectElement).value as Lang || 'zh')}
-          >
-            <option value="zh" selected={lang() === 'zh'}>中文</option>
-            <option value="en" selected={lang() === 'en'}>English</option>
-          </Select>
-        </div>
-      </Card>
-    </>
+      </section>
+      <Show when={restoreResult()}>
+        {(result) => (
+          <Card title={t('tools_restore_result')} icon="backup" class="tool-restore-result">
+            <StatusBadge tone="success">{t('set_restore')}</StatusBadge>
+            <Show when={result().previous}>
+              <div class="tool-result">
+                <strong>{t('tools_restore_previous')}</strong>
+                <p class="mono" data-testid="restore-previous">
+                  {result().previous}
+                </p>
+                <Button
+                  variant="text"
+                  onClick={() =>
+                    showToast(t(copyText(result().previous) ? 'copied' : 'op_failed'), 'info')
+                  }
+                >
+                  <MdIcon name="content_copy" size={18} />
+                  {t('tools_copy_path')}
+                </Button>
+              </div>
+            </Show>
+            <Show when={result().note}>
+              <div class="tool-result">
+                <strong>{t('tools_restore_note')}</strong>
+                <pre class="mono" data-testid="restore-note">
+                  {result().note}
+                </pre>
+                <Button
+                  variant="text"
+                  onClick={() => showToast(t(copyText(result().note) ? 'copied' : 'op_failed'), 'info')}
+                >
+                  <MdIcon name="content_copy" size={18} />
+                  {t('copy')}
+                </Button>
+              </div>
+            </Show>
+          </Card>
+        )}
+      </Show>
+    </div>
   );
 }

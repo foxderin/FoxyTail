@@ -123,6 +123,8 @@ let releaseSpeedtest = null;
 let holdCancel = false;
 const pendingCancels = [];
 const commandLog = [];
+const holdNext = new Set();
+const heldReplies = [];
 const canned = {
   status: { ok: true, daemon: 'running', backend: 'NeedsLogin', mode: 'tun', self: { hostname: 'fox', ips: ['100.64.0.1'], relay: 'sin' }, exitNode: null, peers: { online: 1, offline: 0 }, magicDns: true, keyExpiry: null, uptime: 60 },
   peers: { ok: true, peers: [{ id: 'p1', hostname: 'peer-one', ip: '100.64.0.2', os: 'linux', relay: 'sin', online: true, rxBytes: 1024, txBytes: 2048, exitNodeOption: true }] },
@@ -166,6 +168,11 @@ window.ksu = {
     if (requestId) apiArgs.splice(0, 2);
     const sub = apiArgs.shift();
     commandLog.push({ cmd, sub, requestId, args: apiArgs });
+    if (holdNext.delete(sub)) {
+      const output = JSON.stringify(canned[sub]);
+      heldReplies.push({ sub, finish: () => cb(0, output, '') });
+      return;
+    }
     if (sub === 'cancel' && !overrides.cancel) {
       const acknowledge = () => cb(0, JSON.stringify({ ok: true }), '');
       if (holdCancel) pendingCancels.push({ requestId: apiArgs[0], acknowledge });
@@ -288,6 +295,7 @@ assert(
   window.__foxy.getTask('speedtest-exitnodes')?.status === 'running',
   'task survives navigation away',
 );
+assert(window.document.querySelector('.task-menu a[href="#/exitnodes"]'), 'global activity links a running probe back to its originating page');
 
 nav('exitnodes');
 await flush();
@@ -371,7 +379,7 @@ overrides['routes-get'] = [1, '{"ok":false,"error":"boom-reason"}', ''];
 nav('routing');
 await flush();
 assert(
-  (window.document.querySelector('#toast-root')?.textContent || '').includes('boom-reason'),
+  (window.document.querySelector('#view [role="alert"]')?.textContent || '').includes('boom-reason'),
   'backend error reason surfaces in the UI (boom-reason)',
 );
 delete overrides['routes-get'];
@@ -393,7 +401,7 @@ assert(
 );
 
 console.log('[8] tab buttons render non-empty labels');
-nav('peers');
+nav('logs');
 await flush();
 const tabButtons = [...window.document.querySelectorAll('[role="tab"]')];
 assert(tabButtons.length > 0, 'tabbed route renders tab buttons');
@@ -472,7 +480,7 @@ await flush();
 assert(commandLog.some(({ cmd }) => cmd.startsWith('curl --proxy socks5h://127.0.0.1:1099')), 'probe explicitly uses SOCKS5 with proxy-side DNS');
 nav('routing');
 await flush();
-const scopeButtons = [...window.document.querySelectorAll('#view .radio-cards button')];
+const scopeButtons = [...window.document.querySelectorAll('#view [role="radio"]')];
 assert(scopeButtons.length === 3 && !scopeButtons[0].disabled && scopeButtons.slice(1).every((b) => b.disabled), 'native TUN disables selected/bypass but permits All');
 
 console.log('[12] ServeConfig protocols, paths and Funnel visibility');
@@ -496,7 +504,9 @@ assert(!serveCards[0].textContent.includes('8443'), 'HTTPS listener is not dupli
 const apiRow = [...serveCards[1].querySelectorAll('.list-row')].find((row) => row.textContent.includes('/api'));
 apiRow?.querySelector('button')?.click();
 await flush();
-window.document.querySelector('.md-dialog-actions button[autofocus]')?.click();
+const cancelAction = window.document.querySelector('.md-dialog-actions button[autofocus]');
+assert(/Cancel|取消/.test(cancelAction?.textContent || ''), 'confirmation defaults to the non-destructive Cancel action');
+window.document.querySelector('.md-dialog-actions .btn-filled')?.click();
 await flush();
 assert(commandLog.some(({ sub, args }) => sub === 'funnel-del' && JSON.stringify(args) === JSON.stringify(['https', '8443', '/api'])), 'deletion preserves HTTPS protocol and the selected path');
 
@@ -511,21 +521,21 @@ if (portField) {
   portField.dispatchEvent(new window.Event('change', { bubbles: true }));
 }
 await flush();
-assert(window.document.querySelector('#view .banner.warn'), 'saved but unapplied settings show a persistent restart notice');
+assert(window.document.querySelector('#view .tool-pending'), 'saved but unapplied settings show a persistent restart notice');
 canned.control = { ok: true, applied: false, restartRequired: true };
 canned['settings-get'].restartRequired = true;
-const restartButton = window.document.querySelector('#view .banner.warn button');
+const restartButton = window.document.querySelector('#view .tool-pending button');
 restartButton?.click();
 await flush();
 assert(commandLog.some(({ sub, args }) => sub === 'control' && args[0] === 'restart'), 'settings can apply through service restart');
-assert(window.document.querySelector('#view .banner.warn'), 'a newer configuration revision stays pending after restart');
+assert(window.document.querySelector('#view .tool-pending'), 'a newer configuration revision stays pending after restart');
 const latestToast = [...window.document.querySelectorAll('#toast-root .toast')].at(-1)?.textContent || '';
 assert(!/配置已应用|Configuration applied/.test(latestToast), 'partial application does not report all settings applied');
 canned.control = { ok: true, applied: true, restartRequired: false };
 canned['settings-get'].restartRequired = false;
-window.document.querySelector('#view .banner.warn button')?.click();
+window.document.querySelector('#view .tool-pending button')?.click();
 await flush();
-assert(!window.document.querySelector('#view .banner.warn'), 'restart that applies the latest revision clears the pending notice');
+assert(!window.document.querySelector('#view .tool-pending'), 'restart that applies the latest revision clears the pending notice');
 
 console.log('[14] lightweight page reads and explicit DNS checks');
 assert(!commandLog.some(({ sub }) => sub === 'key-expiry'), 'Dashboard derives key expiry from the shared status snapshot');
@@ -550,7 +560,69 @@ dnsButton?.click();
 await flush();
 const dnsCard = [...window.document.querySelectorAll('#view .card')].find((card) => card.textContent.includes('MagicDNS'));
 assert(dnsCard?.textContent.includes('Tailnet MagicDNS may still be enabled') || dnsCard?.textContent.includes('不代表 Tailnet MagicDNS 关闭'), 'disabled local resolver is distinguished from Tailnet MagicDNS');
-assert(dnsCard?.textContent.includes('fox.ts.net') && dnsCard?.textContent.includes('✓'), 'DNS inspection shows native routing configuration and suffix');
+assert(dnsCard?.textContent.includes('fox.ts.net') && /Detected|已检测到|已检测/.test(dnsCard?.textContent || ''), 'DNS inspection shows native routing configuration and suffix');
+const originalDns = canned.dns;
+canned.dns = { ...originalDns, enabled: true, state: 'running', reason: 'ipv6-unavailable' };
+dnsButton?.click();
+await flush();
+const ipv4OnlyDns = dnsCard?.querySelector('.status-badge');
+assert(ipv4OnlyDns?.classList.contains('tone-warning') && /Transparent IPv6 DNS forwarding unavailable\.|IPv6 DNS 透明转发不可用/.test(ipv4OnlyDns.textContent), 'DNS warns specifically about unavailable transparent IPv6 forwarding without claiming IPv6 connectivity is disabled');
+assert(dnsCard?.querySelectorAll('.status-badge').length === 1 && !dnsCard.textContent.includes('ipv6-unavailable'), 'partial DNS availability has one localized status without duplicate indicators');
+assert(!dnsCard?.querySelector('[data-testid="dns-ipv6-path"]'), 'an older backend without path fields does not invent an IPv6 detection result');
+canned.dns = { ...originalDns, enabled: true, state: 'running', reason: 'running' };
+dnsButton?.click();
+await flush();
+assert(dnsCard?.querySelector('.status-badge.tone-success') && !dnsCard.textContent.includes('IPv6'), 'a fresh healthy DNS result replaces the earlier IPv6 limitation');
+const dnsPathCases = [
+  ['available', 'not-needed', /^(Native|原生)$/],
+  ['module-loaded', 'loaded', /^(Kernel module|内核模块)$/],
+  ['fallback', 'missing', /^(Compatibility \(No module available\)|兼容 \(无可用模块\))$/],
+  ['fallback', 'load-failed', /^(Compatibility \(Module load failed\)|兼容 \(模块加载失败\))$/],
+  ['fallback', 'loader-unavailable', /^(Compatibility \(Module loader unavailable\)|兼容 \(无模块加载工具\))$/],
+  ['fallback', 'not-checked', /^(Compatibility \(Module not checked\)|兼容 \(模块尚未检查\))$/],
+  ['disabled', 'not-needed', /^(Disabled|已关闭)$/],
+];
+for (const [interception, moduleStatus, expectedLabel] of dnsPathCases) {
+  canned.dns = { ...originalDns, enabled: true, state: 'running', reason: interception === 'fallback' ? 'ipv6-unavailable' : 'running', ipv6DnsInterception: interception, ipv6ModuleStatus: moduleStatus };
+  const callsBeforePathCheck = commandLog.filter(entry => entry.sub === 'dns').length;
+  dnsButton?.click();
+  await flush();
+  const pathRow = dnsCard?.querySelector('[data-testid="dns-ipv6-path"]');
+  assert(pathRow && expectedLabel.test(pathRow.querySelector('.v')?.textContent || ''), interception + '/' + moduleStatus + ': manual DNS inspection identifies the detected IPv6 path');
+  assert(Boolean(pathRow?.querySelector('.tool-hint')) === (interception === 'fallback'), interception + '/' + moduleStatus + ': only the compatibility path explains its interception limit');
+  assert(dnsCard?.querySelectorAll('.status-badge').length === 1 && /^(Running|运行中)$/.test(dnsCard.querySelector('.status-badge')?.textContent || ''), interception + '/' + moduleStatus + ': the badge reports overall DNS health without duplicating the path');
+  assert(commandLog.filter(entry => entry.sub === 'dns').length === callsBeforePathCheck + 1, interception + '/' + moduleStatus + ': detection does not trigger additional DNS requests');
+}
+
+// Exercise translated detection details through the real language setting.
+const previousLanguage = window.document.documentElement.lang.startsWith('zh') ? 'zh' : 'en';
+nav('settings');
+await flush();
+const languageSelector = () => [...window.document.querySelectorAll('#view select')].find(select => select.querySelector('option[value="zh"]') && select.querySelector('option[value="en"]'));
+const languageControl = languageSelector();
+assert(languageControl, 'the UI language can be changed for the DNS inspection');
+if (languageControl) {
+  languageControl.value = 'zh';
+  languageControl.dispatchEvent(new window.Event('change', { bubbles: true }));
+}
+canned.dns = { ...originalDns, enabled: true, state: 'running', reason: 'ipv6-unavailable', ipv6DnsInterception: 'fallback', ipv6ModuleStatus: 'missing' };
+const beforeLocalizedDns = commandLog.filter(entry => entry.sub === 'dns').length;
+nav('tunnel');
+await flush();
+assert(commandLog.filter(entry => entry.sub === 'dns').length === beforeLocalizedDns && !window.document.querySelector('[data-testid="dns-ipv6-path"]'), 'changing language and reopening Tunnel leaves DNS inspection manual');
+const localizedDnsCard = [...window.document.querySelectorAll('#view .card')].find(card => card.querySelector('h2')?.textContent.includes('MagicDNS'));
+localizedDnsCard?.querySelector('button')?.click();
+await flush();
+const localizedPath = localizedDnsCard?.querySelector('[data-testid="dns-ipv6-path"]');
+assert(localizedPath?.querySelector('.k')?.textContent === 'IPv6 DNS 路径' && localizedPath.querySelector('.v')?.textContent === '兼容 (无可用模块)' && localizedPath.querySelector('.tool-hint')?.textContent === '兼容路径不拦截 IPv6 DNS', 'Chinese detection copy distinguishes missing NAT modules from IPv6 connectivity');
+nav('settings');
+await flush();
+const restoreLanguage = languageSelector();
+if (restoreLanguage) {
+  restoreLanguage.value = previousLanguage;
+  restoreLanguage.dispatchEvent(new window.Event('change', { bubbles: true }));
+}
+canned.dns = originalDns;
 
 console.log('[15] native asynchronous spawn selection, errors and shell quoting');
 assert(spawnLog.length > 0 && nativeExecCount === 0, 'modern manager uses spawn for every read, task and cancellation');
@@ -572,6 +644,310 @@ const failedSpawn = window.__foxy.startTask('spawn-error', 'mode-get');
 await flush();
 assert((await failedSpawn.promise).error.includes('spawn-shell-unavailable'), 'synchronous spawn failure settles immediately instead of waiting for timeout');
 throwSpawn = false;
+
+console.log('[16] redesigned navigation, filtering and explicit actions');
+for (const route of ROUTES) {
+  nav(route);
+  assert(window.document.querySelectorAll('#view h1').length === 1, route + ': one accessible page heading');
+  const selected = window.document.querySelectorAll('#bottom-nav [aria-current="page"]');
+  const parentRoute = ['dashboard', 'peers', 'exitnodes', 'traffic'].includes(route) ? route : 'more';
+  assert(selected.length === 1 && selected[0].getAttribute('href') === '#/' + parentRoute, route + ': navigation identifies the active destination');
+}
+await flush();
+canned.peers.peers.push({ ...canned.peers.peers[0], id: 'p2', hostname: 'offline-tablet', ip: '100.64.0.3', online: false });
+nav('peers');
+assert(window.document.querySelector('#view [aria-busy="true"]'), 'device inventory immediately exposes a loading state');
+await flush();
+const search = window.document.querySelector('#view input[type="search"]');
+const beforeSearch = commandLog.length;
+search.value = '100.64.0.3';
+search.dispatchEvent(new window.Event('input', { bubbles: true }));
+assert(window.document.querySelectorAll('.network-peer-row').length === 1 && window.document.querySelector('.network-peer-row').textContent.includes('offline-tablet'), 'device search matches IP addresses');
+const onlineFilter = [...window.document.querySelectorAll('#view .filter-chip')].find(button => /^(Online|在线)$/.test(button.textContent));
+onlineFilter?.click();
+assert(window.document.querySelectorAll('.network-peer-row').length === 0, 'device search combines with online filtering');
+assert(commandLog.length === beforeSearch, 'search and filters never launch native bridge calls');
+
+nav('exitnodes');
+await flush();
+const beforeSelection = commandLog.length;
+window.document.querySelector('input[name="exit-node"][value="p1"]')?.click();
+await flush();
+assert(!commandLog.slice(beforeSelection).some(({ sub }) => sub === 'exitnode-set'), 'selecting an exit does not change the connection');
+canned['exitnode-set'] = { ok: true };
+const applyExit = [...window.document.querySelectorAll('#view button')].find(button => /Apply selected exit|应用所选出口/.test(button.textContent));
+assert(applyExit && !applyExit.disabled, 'a valid changed exit selection enables the explicit Apply action');
+applyExit?.click();
+await flush();
+assert(commandLog.slice(beforeSelection).filter(({ sub }) => sub === 'exitnode-set').length === 1 && commandLog.some(({ sub, args }) => sub === 'exitnode-set' && args[0] === '100.64.0.2'), 'Apply changes the exit exactly once using the selected peer IP');
+
+nav('logs');
+await flush();
+const beforeLogSearch = commandLog.length;
+const logSearch = window.document.querySelector('#view .tool-log-controls input');
+logSearch.value = 'TWO';
+logSearch.dispatchEvent(new window.Event('input', { bubbles: true }));
+assert(window.document.querySelectorAll('.tool-log-line').length === 1 && window.document.querySelector('.tool-log-line')?.textContent.includes('line two'), 'log filtering is case insensitive by default');
+const caseSwitch = [...window.document.querySelectorAll('#view [role="switch"]')].find(input => /Case sensitive|区分大小写/.test(input.getAttribute('aria-label') || ''));
+caseSwitch?.click();
+assert(window.document.querySelectorAll('.tool-log-line').length === 0, 'case sensitive search respects capitalization');
+assert(commandLog.length === beforeLogSearch, 'log search does not reread the device log');
+const liveSwitch = [...window.document.querySelectorAll('#view [role="switch"]')].find(input => /Auto-refresh|自动刷新/.test(input.getAttribute('aria-label') || ''));
+liveSwitch?.click();
+assert(liveSwitch && !liveSwitch.checked && /paused|已暂停/.test(window.document.querySelector('#view').textContent), 'auto-refresh can be paused with visible feedback');
+
+const beforeAdvanced = commandLog.length;
+nav('settings');
+await flush();
+assert([...window.document.querySelectorAll('#view [role="switch"]')].every(input => input.getAttribute('aria-label')?.trim()), 'every settings switch has an accessible name');
+assert(!commandLog.slice(beforeAdvanced).some(({ sub }) => sub === 'context-get'), 'advanced configuration is not eagerly loaded');
+
+console.log('[17] rejected settings and post-mutation refresh races');
+const ipv6 = window.document.querySelector('[data-setting="IPV6"] input');
+assert(ipv6 && !ipv6.checked, 'IPv6 starts disabled in the server snapshot');
+overrides['settings-set'] = [1, JSON.stringify({ ok: false, error: 'IPv6 subnet required' }), ''];
+ipv6?.click();
+await flush();
+assert(ipv6 && !ipv6.checked, 'a rejected switch change rolls back the native checked state');
+delete overrides['settings-set'];
+
+nav('serve');
+await flush();
+holdNext.add('funnel-list');
+const publicCard = window.document.querySelectorAll('#view .card')[1];
+[...publicCard.querySelectorAll('button')].find(button => /^(Refresh|刷新)$/.test(button.textContent))?.click();
+await flush();
+const staleFunnel = heldReplies.find(reply => reply.sub === 'funnel-list');
+assert(staleFunnel, 'a pre-mutation service refresh is in flight');
+const changedServeFixture = JSON.parse(JSON.stringify(serveFixture));
+delete changedServeFixture.Web['fox.ts.net:8443'].Handlers['/api'];
+canned['funnel-list'] = { ok: true, status: changedServeFixture };
+const selectedPath = [...publicCard.querySelectorAll('.list-row')].find(row => row.textContent.includes('/api'));
+selectedPath?.querySelector('button')?.click();
+await flush();
+window.document.querySelector('.md-dialog-actions .btn-filled')?.click();
+await flush();
+staleFunnel?.finish();
+await flush();
+assert(!window.document.querySelectorAll('#view .card')[1].textContent.includes('/api'), 'a stale refresh cannot resurrect a deleted service mapping');
+
+nav('files');
+await flush();
+holdNext.add('files-inbox');
+const inboxCard = window.document.querySelector('#view .card');
+[...inboxCard.querySelectorAll('button')].find(button => /^(Refresh|刷新)$/.test(button.textContent))?.click();
+await flush();
+const staleInbox = heldReplies.find(reply => reply.sub === 'files-inbox');
+assert(staleInbox, 'an inbox refresh is in flight before receiving');
+canned['files-inbox'] = { ok: true, files: [{ name: 'new-arrival.txt', size: 20, mtime: 1700000000 }] };
+canned['file-receive'] = { ok: true };
+window.__foxy.startTask('file-receive', 'file-receive');
+await flush();
+staleInbox?.finish();
+await flush();
+assert(window.document.querySelector('#view').textContent.includes('new-arrival.txt'), 'receive completion queues a fresh inbox read after an older refresh');
+
+nav('settings');
+await flush();
+canned.restore = { ok: true, previous: '/data/adb/foxytail/backups/before-restore', note: 'Hooks staged in /data/adb/foxytail/backups/restored-hooks' };
+canned['settings-get'].restartRequired = true;
+const restoreInput = window.document.querySelector('.tool-danger input');
+restoreInput.value = '/sdcard/Download/backup.tar.gz';
+restoreInput.dispatchEvent(new window.Event('input', { bubbles: true }));
+window.document.querySelector('.tool-danger button')?.click();
+await flush();
+window.document.querySelector('.md-dialog-actions .btn-filled')?.click();
+await flush();
+assert(window.document.querySelector('[data-testid="restore-previous"]')?.textContent === canned.restore.previous, 'restore keeps the previous configuration location visible');
+assert(window.document.querySelector('[data-testid="restore-note"]')?.textContent === canned.restore.note, 'restore keeps the hook staging instructions visible');
+
+console.log('[18] exit confirmation waits for a snapshot started after the mutation');
+canned.status = { ...canned.status, backend: 'Running', exitNode: null };
+await window.__foxy.refreshStatus();
+nav('exitnodes');
+await flush();
+holdNext.add('status');
+const statusCount = commandLog.filter(entry => entry.sub === 'status').length;
+const oldStatusRead = window.__foxy.refreshStatus();
+await flush();
+const staleStatus = heldReplies.find(reply => reply.sub === 'status');
+assert(staleStatus, 'a status read that began before the exit change is held');
+window.document.querySelector('input[name="exit-node"][value="p1"]')?.click();
+const applyAfterOldRead = [...window.document.querySelectorAll('#view button')].find(button => /Apply selected exit|应用所选出口/.test(button.textContent));
+applyAfterOldRead?.click();
+await flush();
+assert(window.document.querySelector('input[name="exit-node"]:checked')?.value === 'p1', 'the requested exit remains selected while its status is unconfirmed');
+assert(commandLog.filter(entry => entry.sub === 'status').length === statusCount + 1, 'post-mutation status waits for the old read rather than launching concurrently');
+const queuedA = window.__foxy.refreshStatus({ afterCurrent: true });
+const queuedB = window.__foxy.refreshStatus({ afterCurrent: true });
+assert(queuedA === queuedB, 'multiple post-mutation refreshes share a single queued read');
+canned.status = { ...canned.status, exitNode: { ...canned.exitnodes.peers[0], rx: 0, tx: 0 } };
+staleStatus?.finish();
+await flush();
+await Promise.all([oldStatusRead, queuedA, queuedB]);
+assert(commandLog.filter(entry => entry.sub === 'status').length === statusCount + 2, 'exactly one fresh status read follows the stale response');
+const confirmedExit = window.document.querySelector('input[name="exit-node"]:checked');
+assert(confirmedExit?.value === 'p1' && /Current|当前/.test(confirmedExit.closest('label').textContent), 'fresh confirmation marks the selected radio as the current exit');
+overrides.status = [1, JSON.stringify({ ok: false, error: 'status-unavailable' }), ''];
+await window.__foxy.refreshStatus();
+assert(!window.document.querySelector('.network-current-exit .network-small-badge'), 'an unavailable status is not mislabeled as a confirmed current exit');
+delete overrides.status;
+await window.__foxy.refreshStatus();
+
+console.log('[19] absent interface samples and recorded zero traffic are distinct');
+canned.traffic = { ok: true, hours: [{ hour: 0, samples: 0, iface: { rx: 0, tx: 0 } }], days: [], topn: [] };
+nav('traffic');
+await flush();
+assert(!window.document.querySelector('#view svg[role="img"]') && window.document.querySelector('.network-traffic-empty'), 'missing interface samples render an empty state instead of a fabricated zero chart');
+canned.traffic.hours[0].samples = 1;
+nav('more');
+nav('traffic');
+await flush();
+assert(window.document.querySelector('#view svg[role="img"]') && !window.document.querySelector('.network-traffic-empty'), 'a recorded zero sample renders the chart instead of an empty state');
+
+console.log('[20] service and mode controls stay at the page header');
+const headerToggle = window.document.querySelector('#app-header [role="switch"]');
+const headerMode = window.document.querySelector('#app-header select');
+assert(headerToggle && headerMode, 'service switch and mode selector are available in the persistent header');
+for (const route of ROUTES) {
+  nav(route);
+  assert(window.document.querySelector('#app-header [role="switch"]') === headerToggle && window.document.querySelector('#app-header select') === headerMode, route + ': primary controls persist at the top');
+}
+await flush();
+const beforeCancelControl = commandLog.length;
+headerToggle?.click();
+await flush();
+window.document.querySelector('.md-dialog-actions button[autofocus]')?.click();
+await flush();
+assert(headerToggle?.checked && !commandLog.slice(beforeCancelControl).some(({ sub }) => sub === 'control'), 'cancelling Stop preserves the service switch and sends no command');
+if (headerMode) {
+  headerMode.value = 'bridge';
+  headerMode.dispatchEvent(new window.Event('change', { bubbles: true }));
+}
+await flush();
+window.document.querySelector('.md-dialog-actions button[autofocus]')?.click();
+await flush();
+assert(headerMode?.value === 'tun' && !commandLog.slice(beforeCancelControl).some(({ sub }) => sub === 'mode-set'), 'cancelling a mode change restores the canonical mode');
+canned['mode-set'] = { ok: true };
+holdNext.add('mode-set');
+if (headerMode) {
+  headerMode.value = 'bridge';
+  headerMode.dispatchEvent(new window.Event('change', { bubbles: true }));
+}
+await flush();
+window.document.querySelector('.md-dialog-actions .btn-filled')?.click();
+await flush();
+const modeReply = heldReplies.find(reply => reply.sub === 'mode-set');
+assert(modeReply && headerMode?.disabled && headerToggle?.disabled, 'a mode change locks conflicting header controls');
+nav('peers');
+assert(window.document.querySelector('#app-header select') === headerMode && headerMode?.disabled, 'an in-flight header action survives page navigation');
+canned.status.mode = 'bridge';
+modeReply?.finish();
+await flush();
+assert(headerMode?.value === 'bridge' && !headerMode.disabled && !headerToggle.disabled, 'a fresh status confirms the new mode and restores controls');
+
+console.log('[21] service controls reconcile completion, failure and unknown device state');
+const runningSnapshot = { ...canned.status, daemon: 'running', backend: 'Running' };
+const stoppedSnapshot = { ...runningSnapshot, daemon: 'stopped', backend: 'Stopped', self: null, exitNode: null, uptime: 0 };
+const serviceFeedback = () => window.document.querySelector('.service-controls-feedback');
+const serviceRetry = () => window.document.querySelector('.service-controls-retry');
+async function requestStop() {
+  headerToggle?.click();
+  await flush();
+  const approve = window.document.querySelector('.md-dialog-actions .btn-filled');
+  assert(approve, 'stopping a running service requires confirmation');
+  approve?.click();
+  await flush();
+}
+function switchHasFeedback() {
+  const ids = (headerToggle?.getAttribute('aria-describedby') || '').split(/\s+/).filter(Boolean);
+  return ids.some(id => window.document.getElementById(id)?.textContent.trim());
+}
+
+canned.status = runningSnapshot;
+await window.__foxy.refreshStatus();
+holdNext.add('control');
+const beforeStopReplies = heldReplies.length;
+await requestStop();
+const successfulStop = heldReplies.slice(beforeStopReplies).find(reply => reply.sub === 'control');
+assert(successfulStop && headerToggle?.checked && headerToggle.disabled, 'Stop retains the confirmed running state while the command is in flight');
+nav('traffic');
+assert(window.document.querySelector('#app-header [role="switch"]') === headerToggle && headerToggle?.disabled, 'a Stop operation remains active after page navigation');
+canned.status = stoppedSnapshot;
+successfulStop?.finish();
+await flush();
+assert(headerToggle && !headerToggle.checked && !headerToggle.indeterminate && !headerToggle.disabled, 'a successful Stop displays the confirmed stopped state and unlocks the switch');
+nav('dashboard');
+await flush();
+assert(/^(Stopped|已停止)$/.test(window.document.querySelector('.network-health h2')?.textContent.trim() || ''), 'the dashboard agrees with a confirmed stopped service');
+
+holdNext.add('control');
+const beforeStartReplies = heldReplies.length;
+headerToggle?.click();
+await flush();
+const successfulStart = heldReplies.slice(beforeStartReplies).find(reply => reply.sub === 'control');
+assert(successfulStart && !headerToggle?.checked && headerToggle?.disabled, 'Start retains the confirmed stopped state while the command is in flight');
+nav('peers');
+canned.status = runningSnapshot;
+successfulStart?.finish();
+await flush();
+assert(headerToggle?.checked && !headerToggle.indeterminate && !headerToggle.disabled, 'a successful Start displays the confirmed running state after navigation');
+
+// Model an immediate timeout result from the bridge, avoiding a real 30s wait.
+// The daemon may have stopped before that response was lost, so only a fresh
+// status read determines which state the switch can truthfully display.
+overrides.control = [1, JSON.stringify({ ok: false, error: 'timed out waiting for control stop' }), ''];
+canned.status = stoppedSnapshot;
+const beforeTimedOutStop = commandLog.length;
+await requestStop();
+const timedOutStopCalls = commandLog.slice(beforeTimedOutStop);
+const stopCallIndex = timedOutStopCalls.findIndex(entry => entry.sub === 'control' && entry.args[0] === 'stop');
+assert(stopCallIndex >= 0 && timedOutStopCalls.slice(stopCallIndex + 1).some(entry => entry.sub === 'status'), 'a timed-out Stop always verifies state using a read after the command');
+assert(headerToggle && !headerToggle.checked && !headerToggle.indeterminate && !headerToggle.disabled, 'a timed-out response with confirmed stopped state does not leave the service running or locked in the UI');
+assert(/confirmed stopped|已确认服务停止/i.test(serviceFeedback()?.textContent || ''), 'a lost Stop response still reports that the observed service is stopped');
+
+canned.status = runningSnapshot;
+await window.__foxy.refreshStatus();
+await requestStop();
+assert(headerToggle?.checked && !headerToggle.indeterminate && !headerToggle.disabled, 'a failed Stop with a running snapshot rolls back the native switch and allows recovery');
+assert(serviceFeedback()?.textContent.trim() && serviceRetry() && !serviceRetry().disabled, 'a failed Stop keeps actionable feedback beside the switch');
+assert(/currently running|当前服务仍在运行/i.test(serviceFeedback()?.textContent || ''), 'failed Stop feedback identifies the observed running state');
+assert(switchHasFeedback(), 'the service switch describes its persistent failure feedback accessibly');
+const failedStopFeedback = serviceFeedback()?.textContent;
+nav('dashboard');
+await flush();
+assert(failedStopFeedback?.trim() && serviceFeedback()?.textContent === failedStopFeedback && headerToggle?.checked, 'failed Stop feedback and actual running state survive page navigation');
+
+overrides.status = [1, JSON.stringify({ ok: false, error: 'status-unavailable-after-stop' }), ''];
+await requestStop();
+assert(headerToggle?.indeterminate && headerToggle.disabled, 'a failed state read marks the switch indeterminate and prevents an uninformed service mutation');
+assert(serviceFeedback()?.textContent.trim() && switchHasFeedback() && serviceRetry(), 'an unknown service state has accessible feedback and a recovery action');
+assert(/state is unconfirmed|服务状态待确认/i.test(serviceFeedback()?.textContent || ''), 'a failed verification reports uncertainty instead of repeating the earlier running state');
+assert(!/^(Stopped|已停止)$/.test(window.document.querySelector('.network-health h2')?.textContent.trim() || ''), 'a failed state read is not presented as a stopped service on the dashboard');
+delete overrides.status;
+canned.status = stoppedSnapshot;
+serviceRetry()?.click();
+await flush();
+assert(headerToggle && !headerToggle.checked && !headerToggle.indeterminate && !headerToggle.disabled, 'retrying the status read replaces uncertainty with the confirmed stopped state');
+
+for (const daemon of ['unknown', 'stopped']) {
+  canned.status = { ...stoppedSnapshot, daemon, backend: 'unreachable' };
+  await window.__foxy.refreshStatus();
+  assert(headerToggle?.indeterminate && headerToggle.disabled, daemon + '/unreachable status is visibly uncertain and cannot be toggled');
+  assert(!/^(Stopped|已停止)$/.test(window.document.querySelector('.network-health h2')?.textContent.trim() || ''), daemon + '/unreachable status never reports a confirmed stopped service');
+}
+delete overrides.control;
+canned.status = { ...runningSnapshot, backend: 'unreachable' };
+await window.__foxy.refreshStatus();
+const serviceRestart = window.document.querySelector('[data-testid="service-restart"] button');
+assert(headerToggle?.checked && !headerToggle.indeterminate && !headerToggle.disabled && serviceRestart && !serviceRestart.disabled, 'a confirmed live daemon remains stoppable and restartable when its connection status is unreachable');
+assert(!/^(Stopped|已停止)$/.test(window.document.querySelector('.network-health h2')?.textContent.trim() || '') && !window.document.querySelector('.network-health.is-connected'), 'an unreachable connection is neither stopped nor connected on the dashboard');
+canned.status = stoppedSnapshot;
+await requestStop();
+assert(headerToggle && !headerToggle.checked && !headerToggle.indeterminate && !headerToggle.disabled, 'a live daemon with an unreachable connection can be stopped and confirmed');
+canned.status = runningSnapshot;
+await window.__foxy.refreshStatus();
+assert(headerToggle?.checked && !headerToggle.indeterminate && !headerToggle.disabled, 'a later healthy snapshot clears uncertainty and restores service controls');
 
 for (const variant of ['kernelsu-spawn', 'legacy-exec']) {
   const isolated = new JSDOM('<!DOCTYPE html><html><body><div id="app"></div></body></html>', {

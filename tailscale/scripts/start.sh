@@ -9,7 +9,7 @@ ensure_run_dirs
 stop_inotifyd() {
   _si_pids=""
   for _si_pid in $(busybox pidof inotifyd 2>/dev/null || pidof inotifyd 2>/dev/null); do
-    if tr '\0' '\n' <"/proc/${_si_pid}/cmdline" 2>/dev/null |
+    if _proc_cmdline "${_si_pid}" |
       grep -qxF "${TS_SCRIPTS_DIR}/foxytail.inotify"; then
       _si_pids="${_si_pids} ${_si_pid}"
     fi

@@ -16,11 +16,18 @@ p=Path(os.environ['MOCK_STATE']); s=json.loads(p.read_text())
 a=sys.argv[1:]; cmd=Path(sys.argv[0]).name
 s['calls'].append([cmd,*a]); rc=0; out=[]
 if cmd in ('iptables','ip6tables'):
+ waited=False
+ if a[:2]==['-w','2']:waited=True;del a[:2]
  table='filter'
  if '-t' in a: i=a.index('-t');table=a[i+1];del a[i:i+2]
+ if cmd=='ip6tables' and table=='nat' and os.environ.get('MOCK_NO_IPV6_NAT')=='1':
+  p.write_text(json.dumps(s));sys.stderr.write('ip6tables: nat table does not exist\n');sys.exit(3)
  k=cmd+':'+table; chains=s['chains'].setdefault(k,{'OUTPUT':[],'PREROUTING':[]})
  op=a[0]; ch=a[1] if len(a)>1 else None; rule=a[2:]
- if op in ('-D','-F','-X') and os.environ.get('MOCK_FAIL_IPTABLES_DELETE')=='1':rc=1
+ if op in ('-N','-A','-I','-D','-F','-X') and os.environ.get('MOCK_XTABLES_REQUIRE_WAIT')=='1' and not waited:rc=4
+ elif op=='-A' and os.environ.get('MOCK_XTABLES_TIMEOUT_ONCE')=='1' and not s.get('xtablesTimedOut'):
+  s['xtablesTimedOut']=True;rc=4
+ elif op in ('-D','-F','-X') and os.environ.get('MOCK_FAIL_IPTABLES_DELETE')=='1':rc=1
  elif op=='-N':
   if ch in chains:rc=1
   else:chains[ch]=[]
@@ -55,7 +62,14 @@ elif cmd=='ip':
  elif a[0]=='route':
   table=a[a.index('table')+1];key=fam+':'+table;rows=s['routes'].setdefault(key,[])
   if a[1]=='show':
-   out=[' '.join(r) for r in rows if ('proto' not in a or ['proto',a[a.index('proto')+1]]==r[3:5]) and ('dev' not in a or ['dev',a[a.index('dev')+1]]==r[1:3])]
+   for r in rows:
+    if 'proto' in a and ['proto',a[a.index('proto')+1]]!=r[3:5]:continue
+    if 'dev' in a and ['dev',a[a.index('dev')+1]]!=r[1:3]:continue
+    rendered=list(r)
+    # Real Android iproute2 suppresses selectors in its filtered output.
+    for field in ('proto','dev'):
+     if field in a:i=rendered.index(field);del rendered[i:i+2]
+    out.append(' '.join(rendered))
   else:
    net=a[2];dev=a[a.index('dev')+1];proto=a[a.index('proto')+1];row=[net,'dev',dev,'proto',proto]
    if a[1]=='add':
@@ -167,6 +181,22 @@ esac
   s=self.read();s['routes']['-4:1052']=[];self.write(s);self.env['MOCK_NO_OWNER']='1'
   self.run_script('foxytail.route','apply',ok=False)
   self.assertNotIn('FOXY_MARK',self.read()['chains']['iptables:mangle'])
+ def test_route_xtables_wait_is_bounded_and_failure_rolls_back(self):
+  self.env['MOCK_XTABLES_REQUIRE_WAIT']='1'
+  self.run_script('foxytail.route','apply');self.run_script('foxytail.route','check')
+  self.run_script('foxytail.route','teardown')
+  calls=[c for c in self.read()['calls'] if c[0] in ('iptables','ip6tables')]
+  mutations=[c for c in calls if any(op in c for op in ('-N','-A','-I','-D','-F','-X'))]
+  reads=[c for c in calls if any(op in c for op in ('-C','-S'))]
+  self.assertTrue(mutations);self.assertTrue(reads)
+  self.assertTrue(all(c[1:3]==['-w','2'] for c in mutations))
+  self.assertTrue(all('-w' not in c for c in reads))
+  self.env['MOCK_XTABLES_TIMEOUT_ONCE']='1'
+  self.run_script('foxytail.route','apply',ok=False)
+  state=self.read();self.assertTrue(state['xtablesTimedOut'])
+  self.assertNotIn('FOXY_MARK',state['chains']['iptables:mangle'])
+  self.assertNotIn('FOXY_STAT',state['chains']['iptables:filter'])
+  self.assertFalse((self.dir/'run/route.state').exists())
  def test_cleanup_failure_retains_ownership_for_retry(self):
   self.run_script('foxytail.route','apply');self.env['MOCK_FAIL_DELETE']='1'
   self.run_script('foxytail.route','teardown',ok=False)
@@ -246,7 +276,7 @@ esac
    path.write_text('#!/bin/sh\n');path.chmod(0o755)
    self.assertEqual(selected().stdout,str(path))
 
- def test_dns_live_process_preserves_degraded_and_recovers(self):
+ def setup_dns_runtime(self):
   self.setup_binder()
   dns=(ROOT/'tailscale/scripts/foxytail.dns').read_text()
   runner=self.dir/'dns-runner.sh'
@@ -261,7 +291,7 @@ DNS_LOG="$TS_RUN_DIR/dnsmasq.log"
 PID_FILE="$TS_RUN_DIR/dnsmasq.pid"
 TS_SOCKET="$TS_RUN_DIR/tailscaled.sock"
 CHAIN_DNS=FOXY_DNS
-"""+dns[dns.index('set_state() {'):dns.index('\ncase "$1" in')]+ '\ndns_pids() { [ -f "$TEST_DIR/alive" ] && echo 123; }\nstop_by_pids() { [ "$FAIL_STOP" != 1 ] && rm -f "$TEST_DIR/alive"; }\ntmo() { cat "$TEST_DIR/current.json"; }\ngetprop() { echo 1.1.1.1; }\nrotate_log() { :; }\n"$@"\n')
+"""+dns[dns.index('set_state() {'):dns.index('\ncase "$1" in')]+ '\ndns_pids() { [ -f "$TEST_DIR/alive" ] && echo 123; }\nstop_by_pids() { [ "$FAIL_STOP" != 1 ] && rm -f "$TEST_DIR/alive"; }\ntmo() { cat "$TEST_DIR/current.json"; }\nipv6_module_boot() { echo test-boot; }\nipv6_nat_module_dirs() { :; }\ngetprop() { echo 1.1.1.1; }\nrotate_log() { :; }\n"$@"\n')
   wrapper=self.dir/'bin/foxytail.compat';wrapper.write_text('#!/bin/sh\nexec sh "$TEST_DIR/scripts/foxytail.compat" "$@"\n');wrapper.chmod(0o755)
   daemon=self.dir/'bin/dnsmasq';daemon.write_text('#!/bin/sh\ntouch "$TEST_DIR/alive"\n');daemon.chmod(0o755)
   (self.dir/'alive').touch()
@@ -274,6 +304,38 @@ CHAIN_DNS=FOXY_DNS
    if ok:self.assertEqual(r.returncode,0,r.stdout+r.stderr)
    else:self.assertNotEqual(r.returncode,0,r.stdout+r.stderr)
    return r.stdout
+  return run,current
+
+ def test_dns_missing_ipv6_nat_retains_ipv4_and_recovers_when_available(self):
+  run,_=self.setup_dns_runtime()
+  self.env['MOCK_NO_IPV6_NAT']='1'
+  run('dns_start')
+  status=json.loads(run('dns_status','--json'))
+  self.assertEqual((status['state'],status['reason']),('running','ipv6-unavailable'))
+  state=self.read()
+  self.assertEqual(state['chains']['iptables:nat']['OUTPUT'],[['-j','FOXY_DNS']])
+  self.assertFalse(any(c[0]=='ip6tables' and c[1:3]==['-t','nat'] and c[3] in ('-A','-I','-N') for c in state['calls']))
+  calls=self.dir/'service-calls';before=calls.read_text()
+  run('dns_start')
+  self.assertEqual(calls.read_text(),before)
+  # No configuration fallback: IPv6 tunnel/listener preference is retained.
+  self.assertIn('IPV6="on"',(self.dir/'config').read_text())
+  self.assertIn('listen-address=::1',(self.dir/'run/dnsmasq.conf').read_text())
+  self.env.pop('MOCK_NO_IPV6_NAT')
+  self.assertEqual(json.loads(run('dns_status','--json'))['state'],'degraded')
+  run('dns_start')
+  status=json.loads(run('dns_status','--json'))
+  self.assertEqual((status['state'],status['reason']),('running','running'))
+  self.assertEqual(self.read()['chains']['ip6tables:nat']['OUTPUT'],[['-j','FOXY_DNS']])
+  # Turning IPv6 off never requires or installs its nat table.
+  self.config(IPV6='off');self.env['MOCK_NO_IPV6_NAT']='1'
+  run('dns_start');status=json.loads(run('dns_status','--json'))
+  self.assertEqual((status['state'],status['reason']),('running','running'))
+
+ def test_dns_live_process_preserves_degraded_and_recovers(self):
+  run,current=self.setup_dns_runtime()
+  current['Peer']['peer1']['TailscaleIPs'].append('fd7a:115c:a1e0::2')
+  (self.dir/'current.json').write_text(json.dumps(current))
   state=self.read();state['chains']={'ip6tables:mangle':{'OUTPUT':[['-p','udp','--dport','53','-j','TPROXY']]}};self.write(state)
   run('dns_start');self.assertEqual(json.loads(run('dns_status','--json'))['state'],'degraded')
   state=self.read();state['chains']['ip6tables:mangle']['OUTPUT']=[];self.write(state)
@@ -288,6 +350,12 @@ CHAIN_DNS=FOXY_DNS
   run('dns_start');self.assertEqual(calls.read_text(),before)
   conf=(self.dir/'run/dnsmasq.conf').read_text()
   self.assertIn('address=/laptop/100.64.0.2',conf);self.assertIn('address=/phone/100.64.0.1',conf)
+  # Full node names must keep their AAAA answer even when native MagicDNS
+  # returns only A; older Android dnsmasq supports these inline mappings.
+  for name in ('laptop','laptop.example.ts.net'):
+   for address in ('100.64.0.2','fd7a:115c:a1e0::2'):
+    self.assertIn(f'address=/{name}/{address}\n',conf)
+  self.assertIn('address=/phone.example.ts.net/100.64.0.1\n',conf)
   self.assertNotIn('addn-hosts=',conf)
   # Online/traffic fluctuations are excluded from the DNS context. Name and
   # address changes are detected and reconciled by the watchdog status check.
@@ -297,7 +365,10 @@ CHAIN_DNS=FOXY_DNS
   current['Peer']['peer1']['TailscaleIPs']=['100.64.0.3']
   (self.dir/'current.json').write_text(json.dumps(current))
   self.assertEqual(json.loads(run('dns_status','--json'))['state'],'degraded')
-  run('dns_start');self.assertIn('address=/laptop/100.64.0.3',(self.dir/'run/dnsmasq.conf').read_text())
+  run('dns_start');conf=(self.dir/'run/dnsmasq.conf').read_text()
+  self.assertIn('address=/laptop/100.64.0.3\n',conf)
+  self.assertIn('address=/laptop.example.ts.net/100.64.0.3\n',conf)
+  self.assertNotIn('100.64.0.2',conf);self.assertNotIn('fd7a:115c:a1e0::2',conf)
   self.assertEqual(calls.read_text()[len(before):].splitlines(),['call dnsresolver 16777215','call dnsresolver 11 i32 101','call dnsresolver 11 i32 102'])
   state=self.read()
   for cmd in ('iptables','ip6tables'):

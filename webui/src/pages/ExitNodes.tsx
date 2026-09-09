@@ -1,19 +1,32 @@
-/*
- * Exit Nodes — list (light read), latency speed test as a session-level
- * cancellable task with progress (never auto-started), one-tap switch.
- */
-import { createSignal, onMount, Show, type JSX } from 'solid-js';
+/** Exit selection is explicit; probes remain cancellable session-level tasks. */
+import {
+  createEffect,
+  createMemo,
+  createSignal,
+  For,
+  onMount,
+  Show,
+  type JSX,
+} from 'solid-js';
 import { createApiScope, hasRoot } from '../api';
 import { t } from '../i18n';
-import { status, refreshStatus } from '../state';
+import { status, statusError, statusLoading, refreshStatus } from '../state';
 import { getTask } from '../tasks';
 import { latClass } from '../format';
-import { Card, StatusDot, SkeletonRows, EmptyState, ErrorState } from '../components/Basics';
+import {
+  Card,
+  StatusDot,
+  SkeletonRows,
+  EmptyState,
+  ErrorState,
+} from '../components/Basics';
+import { OsIcon } from '../components/OsIcon';
 import { TaskButton, TaskProgress } from '../components/TaskProgress';
 import { showToast, toastApiError } from '../components/Toast';
 import { MdIcon } from '../icons';
 import { Button } from '../components/ui';
 import type { Peer, ExitNodeProbe } from '../types';
+import './network.css';
 
 const TASK_KEY = 'speedtest-exitnodes';
 
@@ -21,134 +34,121 @@ export default function ExitNodes(): JSX.Element {
   const scope = createApiScope();
   const [peers, setPeers] = createSignal<Peer[] | null>(null);
   const [loadError, setLoadError] = createSignal<string | null>(null);
-  const [switching, setSwitching] = createSignal<string | null>(null);
-  const [clearing, setClearing] = createSignal(false);
-
+  const [loading, setLoading] = createSignal(false);
+  const [switching, setSwitching] = createSignal(false);
+  // null follows shared status; the empty string deliberately selects no exit.
+  const [draftId, setDraftId] = createSignal<string | null>(null);
+  const [pendingId, setPendingId] = createSignal<string | null>(null);
   const task = () => getTask(TASK_KEY);
-  const latMap = (): Record<string, number | null> => {
-    const tsk = task();
-    if (!tsk || !tsk.result?.ok) return {};
+  const statusKnown = () =>
+    !!status() && !statusError() && status()?.daemon === 'running';
+  const currentId = () =>
+    statusKnown() ? (status()?.exitNode?.id ?? '') : null;
+  const selectedId = () => draftId() ?? currentId();
+  const changed = () =>
+    selectedId() !== null &&
+    currentId() !== null &&
+    selectedId() !== currentId();
+  const selectedPeer = () =>
+    (peers() || []).find((peer) => peer.id === selectedId());
+  const canApply = () =>
+    statusKnown() &&
+    pendingId() === null &&
+    changed() &&
+    (selectedId() === '' || selectedPeer()?.online);
+  const choose = (id: string) => {
+    setPendingId(null);
+    setDraftId(id);
+  };
+  createEffect(() => {
+    const expected = pendingId();
+    if (expected !== null && statusKnown() && currentId() === expected) {
+      setPendingId(null);
+      setDraftId(null);
+      showToast(t(expected === '' ? 'exit_cleared' : 'exit_set_done'), 'ok');
+    }
+  });
+  const latMap = createMemo(() => {
+    const result = task()?.result;
     const out: Record<string, number | null> = {};
-    ((tsk.result.results as ExitNodeProbe[]) || []).forEach((r) => {
-      out[r.id] = r.latencyMs;
-    });
+    if (result?.ok)
+      ((result.results as ExitNodeProbe[]) || []).forEach((probe) => {
+        out[probe.id] = probe.latencyMs;
+      });
     return out;
-  };
-  /* After a successful speed test, rows follow the latency-sorted order. */
-  const sortedIds = (): string[] => {
-    const tsk = task();
-    if (!tsk || !tsk.result?.ok) return [];
-    return ((tsk.result.results as ExitNodeProbe[]) || []).map((r) => r.id);
-  };
-
-  const currentId = () => status()?.exitNode?.id ?? null;
-
-  const rows = (): Peer[] => {
-    const list = peers() ?? [];
-    const order = sortedIds();
-    if (!order.length) return list;
-    const byId = new Map(list.map((p) => [p.id, p]));
-    const sorted: Peer[] = [];
-    order.forEach((id) => {
-      const p = byId.get(id);
-      if (p) {
-        sorted.push(p);
-        byId.delete(id);
-      }
-    });
-    return [...sorted, ...byId.values()];
-  };
+  });
+  const rows = createMemo(() => {
+    const list = [...(peers() || [])];
+    const latencies = latMap();
+    return list.sort(
+      (a, b) =>
+        Number(b.online) - Number(a.online) ||
+        (latencies[a.id] ?? Infinity) - (latencies[b.id] ?? Infinity) ||
+        a.hostname.localeCompare(b.hostname),
+    );
+  });
 
   async function loadList() {
+    if (loading()) return;
+    setLoading(true);
     const res = await scope.api('exitnodes');
+    setLoading(false);
     if (res.cancelled) return;
     if (res.ok) {
       setPeers((res.peers as Peer[]) || []);
       setLoadError(null);
-    } else {
-      setLoadError(res.error || t('error'));
+    } else setLoadError(res.error || t('error'));
+  }
+
+  async function applySelection() {
+    if (switching() || !canApply()) return;
+    const peer = selectedPeer();
+    const clear = selectedId() === '';
+    if (!clear && !peer?.online) return;
+    setSwitching(true);
+    const res = clear
+      ? await scope.api('exitnode-clear')
+      : await scope.api('exitnode-set', peer!.ip);
+    if (res.cancelled) {
+      setSwitching(false);
+      return;
     }
-  }
-
-  async function useNode(p: Peer) {
-    if (switching()) return;
-    setSwitching(p.id);
-    const res = await scope.api('exitnode-set', p.ip);
-    setSwitching(null);
-    if (res.cancelled) return;
     if (res.ok) {
-      showToast(t('exit_set_done'), 'ok');
-      void refreshStatus();
+      const expected = clear ? '' : peer!.id;
+      setDraftId(expected);
+      setPendingId(expected);
+      await refreshStatus({ afterCurrent: true });
     } else toastApiError(t('op_failed'), res);
+    setSwitching(false);
   }
 
-  async function clearNode() {
-    if (clearing()) return;
-    setClearing(true);
-    const res = await scope.api('exitnode-clear');
-    setClearing(false);
-    if (res.cancelled) return;
-    if (res.ok) {
-      showToast(t('exit_cleared'), 'ok');
-      void refreshStatus();
-    } else toastApiError(t('op_failed'), res);
-  }
-
-  onMount(() => {
-    void loadList();
-  });
+  onMount(() => void loadList());
 
   return (
-    <>
-      <Card title={t('exit_title')} icon="logout">
-        <Show when={peers() !== null || loadError() !== null} fallback={<SkeletonRows rows={3} />}>
-          <Show
-            when={!loadError()}
-            fallback={<ErrorState text={loadError()!} onRetry={() => void loadList()} />}
-          >
-            <Show
-              when={rows().length > 0}
-              fallback={<EmptyState text={t('exit_empty')} icon="logout" />}
-            >
-              {rows().map((p) => {
-                const lat = () => (p.id in latMap() ? latMap()[p.id] : undefined);
-                return (
-                  <div class="list-row">
-                    <StatusDot state={p.online ? 'on' : 'off'} />
-                    <div class="main">
-                      <div class="title">
-                        {p.hostname}
-                        <Show when={p.id === currentId()}>
-                          <span class="badge">{t('exit_current')}</span>
-                        </Show>
-                      </div>
-                      <div class="sub">
-                        {p.ip + ' · ' + p.relay}
-                        <Show when={lat() !== undefined}>
-                          {' · '}
-                          <span class={lat() === null ? 'dim' : latClass(lat())}>
-                            {lat() === null ? '✗' : lat() + 'ms'}
-                          </span>
-                        </Show>
-                      </div>
-                    </div>
-                    <Button
-                      variant="tonal"
-                      disabled={
-                        p.id === currentId() || switching() !== null || !hasRoot
-                      }
-                      onClick={() => void useNode(p)}
-                    >
-                      {p.id === currentId() ? t('exit_current') : t('exit_use')}
-                    </Button>
-                  </div>
-                );
-              })}
-            </Show>
-          </Show>
-        </Show>
-      </Card>
-
+    <div class="page-stack network-page">
+      <div class="toolbar">
+        <TaskButton
+          taskKey={TASK_KEY}
+          cmd="speedtest-exitnodes"
+          label={
+            task()?.status === 'running' ? t('exit_testing') : t('exit_test')
+          }
+          icon={<MdIcon name="speed" size={18} />}
+          disabled={!rows().some((peer) => peer.online)}
+        />
+        <Button
+          variant="outlined"
+          disabled={loading()}
+          onClick={() => void loadList()}
+        >
+          <MdIcon
+            name="refresh"
+            size={18}
+            class={loading() ? 'network-refreshing' : ''}
+          />
+          {loading() ? t('loading') : t('net_refresh')}
+        </Button>
+      </div>
       <TaskProgress taskKey={TASK_KEY} />
       <Show when={task()?.status === 'error'}>
         <div class="banner warn">
@@ -157,21 +157,207 @@ export default function ExitNodes(): JSX.Element {
         </div>
       </Show>
 
-      <div class="btn-row">
-        <TaskButton
-          taskKey={TASK_KEY}
-          cmd="speedtest-exitnodes"
-          label={task()?.status === 'running' ? t('exit_testing') : t('exit_test')}
-          icon={<MdIcon name="speed" size={18} />}
-        />
-        <Button
-          variant="outlined"
-          disabled={!currentId() || clearing() || !hasRoot}
-          onClick={() => void clearNode()}
+      <Show when={!statusKnown() || (status()?.exitNode && peers() !== null && !rows().some(peer => peer.id === currentId()))}>
+      <section
+        class="panel network-current-exit"
+        aria-label={t('net_exit_selection')}
+      >
+        <div class="network-device-avatar">
+          <MdIcon name={currentId() ? 'logout' : 'language'} size={26} />
+        </div>
+        <div class="network-current-exit-copy">
+          <span class="eyebrow">{t('net_exit_selection')}</span>
+          <h2>
+            {statusKnown()
+              ? status()?.exitNode?.hostname || t('net_exit_local')
+              : t('net_exit_unknown')}
+          </h2>
+          <p>
+            {statusKnown()
+              ? status()?.exitNode?.ip || t('net_exit_local_hint')
+              : statusLoading()
+                ? t('loading')
+                : t('net_exit_unknown_hint')}
+          </p>
+        </div>
+        <Show
+          when={statusKnown()}
+          fallback={
+            <Button
+              variant="outlined"
+              disabled={statusLoading() || switching()}
+              onClick={() => void refreshStatus({ afterCurrent: true })}
+            >
+              <MdIcon name="refresh" size={18} />
+              {t('retry')}
+            </Button>
+          }
         >
-          <MdIcon name="close" size={18} /> {t('exit_clear')}
-        </Button>
-      </div>
-    </>
+          <span class="network-small-badge">{t('exit_current')}</span>
+        </Show>
+        <Show
+          when={
+            statusKnown() && status()?.exitNode && !status()?.exitNode?.online
+          }
+        >
+          <div class="banner warn">
+            <MdIcon name="warning" size={18} />
+            <span>{t('net_exit_unavailable')}</span>
+          </div>
+        </Show>
+      </section>
+      </Show>
+
+      <Card title={t('net_exit_choose')} icon="router">
+        <Show when={loadError()}>
+          <ErrorState text={loadError()!} onRetry={() => void loadList()} />
+        </Show>
+        <div
+          class="network-exit-options"
+          role="radiogroup"
+          aria-label={t('net_exit_choose')}
+        >
+          <label
+            class="network-exit-option"
+            classList={{ 'is-selected': selectedId() === '' }}
+          >
+            <input
+              type="radio"
+              name="exit-node"
+              value=""
+              checked={selectedId() === ''}
+              disabled={switching() || !hasRoot || !statusKnown()}
+              onChange={() => choose('')}
+            />
+            <div class="network-device-avatar">
+              <MdIcon name="language" size={23} />
+            </div>
+            <div class="network-exit-option-copy">
+              <strong>{t('net_exit_local')}</strong>
+              <span>{t('net_exit_local_hint')}</span>
+            </div>
+            <Show when={currentId() === ''}>
+              <span class="network-small-badge">{t('exit_current')}</span>
+            </Show>
+          </label>
+          <Show
+            when={peers() !== null || loadError() !== null}
+            fallback={<SkeletonRows rows={3} />}
+          >
+            <Show
+              when={rows().length > 0}
+              fallback={
+                <Show when={!loadError()}>
+                  <EmptyState text={t('exit_empty')} icon="logout" />
+                </Show>
+              }
+            >
+              <For each={rows()}>
+                {(peer) => (
+                  <label
+                    class="network-exit-option"
+                    classList={{
+                      'is-selected': selectedId() === peer.id,
+                      'is-offline': !peer.online,
+                    }}
+                  >
+                    <input
+                      type="radio"
+                      name="exit-node"
+                      value={peer.id}
+                      checked={selectedId() === peer.id}
+                      disabled={
+                        !peer.online ||
+                        switching() ||
+                        !hasRoot ||
+                        !statusKnown()
+                      }
+                      onChange={() => choose(peer.id)}
+                    />
+                    <OsIcon os={peer.os} />
+                    <div class="network-exit-option-copy">
+                      <strong>
+                        {peer.hostname}
+                        <Show when={peer.id === currentId()}>
+                          <span class="network-small-badge">
+                            {t('exit_current')}
+                          </span>
+                        </Show>
+                      </strong>
+                      <span>
+                        <code>{peer.ip}</code>
+                        <Show when={peer.relay && peer.relay !== '-'}>
+                          {' '}
+                          · {peer.relay.toUpperCase()}
+                        </Show>
+                      </span>
+                      <span class="network-exit-option-state">
+                        <StatusDot state={peer.online ? 'on' : 'off'} />
+                        {peer.online
+                          ? t('net_filter_online')
+                          : t('net_filter_offline')}
+                      </span>
+                    </div>
+                    <div
+                      class={'network-latency ' + latClass(latMap()[peer.id])}
+                    >
+                      <MdIcon name="speed" size={16} />
+                      <span>
+                        {latMap()[peer.id] === undefined
+                          ? t('net_exit_untested')
+                          : latMap()[peer.id] === null
+                            ? t('net_exit_unreachable')
+                            : `${latMap()[peer.id]} ms`}
+                      </span>
+                    </div>
+                  </label>
+                )}
+              </For>
+            </Show>
+          </Show>
+        </div>
+        <div class="network-apply-bar">
+          <div>
+            <StatusDot
+              state={
+                !statusKnown() || pendingId() !== null || changed()
+                  ? 'warn'
+                  : 'on'
+              }
+            />
+            <span>
+              {pendingId() !== null
+                ? t('net_exit_confirming')
+                : !statusKnown()
+                  ? t('net_exit_unknown')
+                  : changed()
+                    ? t('net_exit_pending') +
+                      ' · ' +
+                      (selectedPeer()?.hostname || t('net_exit_local'))
+                    : t('net_exit_applied')}
+            </span>
+          </div>
+          <Show when={pendingId() !== null}>
+            <Button
+              variant="text"
+              disabled={switching()}
+              onClick={() => void refreshStatus({ afterCurrent: true })}
+            >
+              <MdIcon name="refresh" size={18} />
+              {t('retry')}
+            </Button>
+          </Show>
+          <Button
+            variant="filled"
+            busy={switching()}
+            disabled={!canApply() || !hasRoot}
+            onClick={() => void applySelection()}
+          >
+            <MdIcon name="check" size={18} />
+            {switching() ? t('net_working') : t('net_exit_apply')}
+          </Button>
+        </div>
+      </Card>
+    </div>
   );
 }

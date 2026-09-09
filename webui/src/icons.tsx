@@ -45,8 +45,20 @@ import send from '@material-symbols/svg-400/outlined/send.svg?raw';
 import download from '@material-symbols/svg-400/outlined/download.svg?raw';
 import sync from '@material-symbols/svg-400/outlined/sync.svg?raw';
 import language from '@material-symbols/svg-400/outlined/language.svg?raw';
+import hub from '@material-symbols/svg-400/outlined/hub.svg?raw';
+import android from '@material-symbols/svg-400/outlined/android.svg?raw';
+import desktopWindows from '@material-symbols/svg-400/outlined/desktop_windows.svg?raw';
+import laptopMac from '@material-symbols/svg-400/outlined/laptop_mac.svg?raw';
+import mobileDevice from '@material-symbols/svg-400/outlined/mobile_2.svg?raw';
+import terminal from '@material-symbols/svg-400/outlined/terminal.svg?raw';
+import devices from '@material-symbols/svg-400/outlined/devices.svg?raw';
 
 import checkSvg from '@material-symbols/svg-400/outlined/check.svg?raw';
+import dashboardFilled from '@material-symbols/svg-400/outlined/dashboard-fill.svg?raw';
+import groupFilled from '@material-symbols/svg-400/outlined/group-fill.svg?raw';
+import logoutFilled from '@material-symbols/svg-400/outlined/logout-fill.svg?raw';
+import monitoringFilled from '@material-symbols/svg-400/outlined/monitoring-fill.svg?raw';
+import moreFilled from '@material-symbols/svg-400/outlined/more_horiz-fill.svg?raw';
 
 const ICONS = {
   dashboard,
@@ -91,11 +103,30 @@ const ICONS = {
   download,
   sync,
   language,
+  hub,
+  android,
+  desktop_windows: desktopWindows,
+  laptop_mac: laptopMac,
+  mobile_2: mobileDevice,
+  terminal,
+  devices,
 } as const;
 
 export type IconName = keyof typeof ICONS;
+const FILLED_ICONS: Partial<Record<IconName, string>> = {
+  dashboard: dashboardFilled,
+  group: groupFilled,
+  logout: logoutFilled,
+  monitoring: monitoringFilled,
+  more_horiz: moreFilled,
+};
 
-export function MdIcon(props: { name: IconName; size?: number; class?: string }): JSX.Element {
+export function MdIcon(props: {
+  name: IconName;
+  size?: number;
+  class?: string;
+  filled?: boolean;
+}): JSX.Element {
   const size = () => props.size ?? 24;
   return (
     <span
@@ -104,7 +135,9 @@ export function MdIcon(props: { name: IconName; size?: number; class?: string })
       aria-hidden="true"
       /* Build-time constant SVG strings from the icon package — never
        * user input, so innerHTML is safe here. */
-      innerHTML={ICONS[props.name]}
+      innerHTML={
+        (props.filled && FILLED_ICONS[props.name]) || ICONS[props.name]
+      }
     />
   );
 }

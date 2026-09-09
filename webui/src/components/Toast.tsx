@@ -1,5 +1,6 @@
 /* Global toast service + host component. */
 import { createSignal, For, type JSX } from 'solid-js';
+import { MdIcon } from '../icons';
 
 export type ToastKind = 'ok' | 'err' | 'info';
 
@@ -34,9 +35,9 @@ export function toastApiError(prefix: string, res: { error?: string; cancelled?:
 
 export function ToastRoot(): JSX.Element {
   return (
-    <div id="toast-root" aria-live="assertive">
+    <div id="toast-root" aria-live="polite" aria-relevant="additions">
       <For each={toasts()}>
-        {(it) => <div class={'toast' + (it.kind === 'err' ? ' err' : '')}>{it.msg}</div>}
+        {(it) => <div class={'toast ' + it.kind} role={it.kind === 'err' ? 'alert' : 'status'}><MdIcon name={it.kind === 'err' ? 'error' : it.kind === 'ok' ? 'check_circle' : 'info'} size={18} /><span>{it.msg}</span></div>}
       </For>
     </div>
   );

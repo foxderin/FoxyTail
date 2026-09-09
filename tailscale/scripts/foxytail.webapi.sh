@@ -8,7 +8,8 @@
 #   cancel              cancel <request-id>, exact registered child cancellation
 #   status              Overall snapshot {daemon,backend,mode,self,exitNode,peers,magicDns,keyExpiry,uptime}.
 #                       Reads `tailscale --socket=... status --json` (10s timeout);
-#                       returns daemon:"stopped" quickly when the socket is absent.
+#                       returns daemon:"stopped" only when our process is absent;
+#                       a live daemon without a responding socket is "unreachable".
 #   peers               Array of peers {id,hostname,ip,os,relay,online,rxBytes,txBytes,exitNodeOption}
 #   exitnodes           Same shape as peers, restricted to ExitNodeOption peers
 #   speedtest-exitnodes Ping every exit node, [{id,hostname,ip,latencyMs,ok}] sorted by
@@ -260,9 +261,15 @@ ts_status_json() {
   fi
 }
 
-# Daemon liveness: socket + process.
+# Process liveness is independent of LocalAPI/socket health. An unresponsive
+# daemon still needs a working Stop control, and cannot be called stopped.
+daemon_exists() {
+  [ -n "$(pids_of_path "${TS_BIN_DIR}/${TS_DAEMON_CMD}")" ]
+}
+
+# Ready for CLI requests: socket + our exact daemon process.
 daemon_up() {
-  [ -S "${TS_SOCKET}" ] && pidof tailscaled >/dev/null 2>&1
+  [ -S "${TS_SOCKET}" ] && daemon_exists
 }
 
 # Uptime in seconds, derived from the pid file mtime (0 when unknown).
@@ -295,15 +302,23 @@ _sanitize_text() {
 # --- status / peers -----------------------------------------------------------
 
 cmd_status() {
-  if ! daemon_up; then
+  if ! daemon_exists; then
     jqr -n -c --arg mode "${TS_MODE}" \
       '{ok:true,daemon:"stopped",backend:"-",mode:$mode,self:null,exitNode:null,peers:{online:0,offline:0},magicDns:false,keyExpiry:null,uptime:0}'
     return 0
   fi
-  _cs_st=$(ts_status_json)
+  _cs_st=""
+  [ ! -S "${TS_SOCKET}" ] || _cs_st=$(ts_status_json)
   if [ -z "${_cs_st}" ]; then
-    jqr -n -c --arg mode "${TS_MODE}" \
-      '{ok:true,daemon:"stopped",backend:"unreachable",mode:$mode,self:null,exitNode:null,peers:{online:0,offline:0},magicDns:false,keyExpiry:null,uptime:0}'
+    # A Stop may have completed during the CLI read. Recheck before reporting
+    # either a stopped daemon or a live process with an unavailable LocalAPI.
+    _cs_daemon=stopped _cs_backend=- _cs_uptime=0
+    if daemon_exists; then
+      _cs_daemon=running _cs_backend=unreachable _cs_uptime=$(daemon_uptime)
+    fi
+    jqr -n -c --arg mode "${TS_MODE}" --arg daemon "${_cs_daemon}" \
+      --arg backend "${_cs_backend}" --argjson uptime "${_cs_uptime}" \
+      '{ok:true,daemon:$daemon,backend:$backend,mode:$mode,self:null,exitNode:null,peers:{online:0,offline:0},magicDns:false,keyExpiry:null,uptime:$uptime}'
     return 0
   fi
   _cs_up=$(daemon_uptime)
@@ -507,7 +522,9 @@ cmd_dns() {
   if [ -n "${_cd_out}" ] && printf '%s' "${_cd_out}" | jqr -e . >/dev/null 2>&1; then
     printf '%s' "${_cd_out}" | jqr -c '{ok:true,state:.state,suffix:.suffix,port:.port,
       enabled:(.enabled // false),reason:(.reason // ""),binary:(.binary // null),
-      upstreamNative:(.upstreamNative // false)}'
+      upstreamNative:(.upstreamNative // false),
+      ipv6DnsInterception:(.ipv6DnsInterception // null),
+      ipv6ModuleStatus:(.ipv6ModuleStatus // null)}'
   else
     jqr -n -c --argjson p "${DNS_PORT}" --arg enabled "${MAGIC_DNS}" \
       '{ok:true,state:"stopped",suffix:"",port:$p,enabled:($enabled=="on"),

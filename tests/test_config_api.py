@@ -4,6 +4,7 @@ import json
 import os
 from pathlib import Path
 import shlex
+import socket
 import subprocess
 import tarfile
 import tempfile
@@ -205,12 +206,19 @@ cmd_apps''')
     def test_dns_status_preserves_configuration_and_native_capability(self):
         status = {'state': 'stopped', 'suffix': '', 'port': 1053, 'enabled': False,
                   'reason': 'Local DNS helper is disabled', 'binary': '/system/bin/dnsmasq',
-                  'upstreamNative': True}
+                  'upstreamNative': True, 'ipv6DnsInterception': 'disabled',
+                  'ipv6ModuleStatus': 'not-checked'}
         dns = self.scripts / 'foxytail.dns'
         dns.write_text('#!/bin/sh\nprintf %s ' + shlex.quote(json.dumps(status)) + '\n')
         dns.chmod(0o755)
         result = json.loads(self.shell('load_conf; cmd_dns').stdout)
         self.assertEqual(result, {'ok': True, **status})
+        for mode, module in [('available', 'not-needed'), ('module-loaded', 'loaded'),
+                             ('fallback', 'missing'), ('fallback', 'load-failed')]:
+            status.update(state='running', enabled=True, ipv6DnsInterception=mode,
+                          ipv6ModuleStatus=module)
+            dns.write_text('#!/bin/sh\nprintf %s ' + shlex.quote(json.dumps(status)) + '\n')
+            self.assertEqual(json.loads(self.shell('load_conf; cmd_dns').stdout), {'ok': True, **status})
 
     def test_restore_validation_has_no_partial_writes(self):
         previous = self.snapshot()
@@ -323,10 +331,61 @@ _op_exec 3 sh -c 'printf ready; exit 7' ''', ok=False)
             (proc / pid).mkdir(parents=True)
             (proc / pid / 'cmdline').write_bytes((str(self.base / 'bin' / name) + '\0--socket=tailscaled.sock\0').encode())
         settings = (ROOT / 'tailscale/settings.sh').read_text()
-        function = settings[settings.index('pids_of_path() {'):settings.index('# Echo the subset')]
+        function = settings[settings.index('_proc_cmdline() {'):settings.index('# Echo the subset')]
         function = function.replace('/proc/', str(proc) + '/')
         result = self.shell(function + '\npids_of() { printf \'101 102\'; }\nreadlink() { printf \'%s\' "$TS_BIN_DIR/tailscaled"; }\npids_of_path "$TS_BIN_DIR/tailscaled"')
         self.assertEqual(result.stdout.strip(), '101')
+
+    def test_proc_command_snapshot_finishes_without_waiting_for_eof(self):
+        proc = self.base / 'proc' / '101'
+        proc.mkdir(parents=True)
+        fifo = proc / 'cmdline'
+        os.mkfifo(fifo)
+        settings = (ROOT / 'tailscale/settings.sh').read_text()
+        function = settings[settings.index('_proc_cmdline() {'):settings.index('# Like pids_of')]
+        function = function.replace('/proc/', str(self.base / 'proc') + '/')
+        # Simulate a proc descriptor that yields an argument prefix but never
+        # EOF. Discovery must release its controller instead of holding a lock.
+        writer = subprocess.Popen(['sh', '-c', 'exec 3>"$1"; head -c 4096 /dev/zero >&3; sleep 5',
+                                   'writer', str(fifo)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        try:
+            start = time.monotonic()
+            result = self.shell(function + '\n_proc_cmdline 101')
+            self.assertLess(time.monotonic() - start, 1.5)
+            self.assertEqual(result.stdout, '\n' * 4096)
+        finally:
+            writer.terminate()
+            writer.wait(timeout=3)
+
+    def test_process_lookup_skips_foreign_or_vanished_candidates_before_read(self):
+        result = self.shell('''pids_of() { printf '101 102'; }
+readlink() { return 1; }
+_proc_cmdline() { touch "$TS_RUN_DIR/unsafe-read"; }
+pids_of_path "$TS_BIN_DIR/tailscaled"''')
+        self.assertEqual(result.stdout, '')
+        self.assertFalse((self.run / 'unsafe-read').exists())
+
+    def test_status_reports_live_daemon_without_socket_as_unreachable(self):
+        result = json.loads(self.shell('''load_conf
+daemon_exists() { return 0; }
+ts_status_json() { touch "$TS_RUN_DIR/unexpected-cli"; }
+cmd_status''').stdout)
+        self.assertEqual((result['daemon'], result['backend']), ('running', 'unreachable'))
+        self.assertFalse((self.run / 'unexpected-cli').exists())
+
+    def test_status_rechecks_process_after_localapi_failure(self):
+        sock = socket.socket(socket.AF_UNIX)
+        sock.bind(str(self.run / 'tailscaled.sock'))
+        self.addCleanup(sock.close)
+        for stopped in (False, True):
+            with self.subTest(stopped=stopped):
+                (self.run / 'alive').touch()
+                result = json.loads(self.shell('''load_conf
+daemon_exists() { [ -f "$TS_RUN_DIR/alive" ]; }
+ts_status_json() { ''' + ('rm "$TS_RUN_DIR/alive";' if stopped else ':;') + ''' }
+cmd_status''').stdout)
+                expected = ('stopped', '-') if stopped else ('running', 'unreachable')
+                self.assertEqual((result['daemon'], result['backend']), expected)
 
     def test_process_identity_handles_spaces_and_parentheses(self):
         proc = self.base / 'proc'

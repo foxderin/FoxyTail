@@ -28,12 +28,12 @@ export function ConfirmHost(): JSX.Element {
         open
         headline={t('confirm_title')}
         onClose={() => settle(false)}
+        actions={<>
+          <Button variant="outlined" autofocus onClick={() => settle(false)}>{t('cancel')}</Button>
+          <Button variant="filled" onClick={() => settle(true)}>{t('confirm')}</Button>
+        </>}
       >
         {message()}
-        <div class="md-dialog-actions">
-          <Button variant="text" onClick={() => settle(false)}>{t('cancel')}</Button>
-          <Button variant="filled" autofocus onClick={() => settle(true)}>{t('confirm')}</Button>
-        </div>
       </Dialog>
     </Show>
   );

@@ -1,32 +1,68 @@
-/* More — overflow page linking the eight secondary routes. */
 import { For, type JSX } from 'solid-js';
 import { t, type I18nKey } from '../i18n';
+import type { ToolsKey } from '../i18n-tools';
 import { MdIcon, type IconName } from '../icons';
-import { Card } from '../components/Basics';
+import './tools.css';
 
-const LINKS: { route: string; labelKey: I18nKey; icon: IconName }[] = [
-  { route: 'tunnel', labelKey: 'more_tunnel', icon: 'router' },
-  { route: 'routing', labelKey: 'more_routing', icon: 'alt_route' },
-  { route: 'account', labelKey: 'more_account', icon: 'person' },
-  { route: 'serve', labelKey: 'more_serve', icon: 'dns' },
-  { route: 'files', labelKey: 'more_files', icon: 'folder' },
-  { route: 'logs', labelKey: 'more_logs', icon: 'article' },
-  { route: 'settings', labelKey: 'more_settings', icon: 'settings' },
-  { route: 'diag', labelKey: 'more_diag', icon: 'bug_report' },
+type Tool = { route: string; label: I18nKey; description: ToolsKey; icon: IconName };
+const GROUPS: { title: ToolsKey; tools: Tool[] }[] = [
+  {
+    title: 'tools_network',
+    tools: [
+      { route: 'tunnel', label: 'more_tunnel', description: 'tools_tunnel_desc', icon: 'router' },
+      { route: 'routing', label: 'more_routing', description: 'tools_routing_desc', icon: 'alt_route' },
+      { route: 'serve', label: 'more_serve', description: 'tools_serve_desc', icon: 'dns' },
+    ],
+  },
+  {
+    title: 'tools_device',
+    tools: [
+      { route: 'account', label: 'more_account', description: 'tools_account_desc', icon: 'person' },
+      { route: 'files', label: 'more_files', description: 'tools_files_desc', icon: 'folder' },
+    ],
+  },
+  {
+    title: 'tools_maintenance',
+    tools: [
+      { route: 'logs', label: 'more_logs', description: 'tools_logs_desc', icon: 'article' },
+      { route: 'diag', label: 'more_diag', description: 'tools_diag_desc', icon: 'bug_report' },
+      {
+        route: 'settings',
+        label: 'more_settings',
+        description: 'tools_settings_desc',
+        icon: 'settings',
+      },
+    ],
+  },
 ];
-
 export default function More(): JSX.Element {
   return (
-    <Card title={t('more_title')} icon="more_horiz">
-      <For each={LINKS}>
-        {(item) => (
-          <a class="more-row" href={'#/' + item.route}>
-            <MdIcon name={item.icon} size={22} />
-            <span class="main">{t(item.labelKey)}</span>
-            <MdIcon name="chevron_right" size={20} />
-          </a>
+    <div class="tools-page">
+      <For each={GROUPS}>
+        {(group) => (
+          <section class="tool-group">
+            <div class="tool-group-heading">
+              <h2>{t(group.title)}</h2>
+            </div>
+            <div class="tool-links">
+              <For each={group.tools}>
+                {(item) => (
+                  <a class="tool-link" href={'#/' + item.route}>
+                    <span class="tool-link-icon">
+                      <MdIcon name={item.icon} size={22} />
+                    </span>
+                    <span class="tool-link-copy">
+                      <span class="tool-link-name">{t(item.label)}</span>
+                      <span class="tool-link-desc">{t(item.description)}</span>
+                    </span>
+                    <MdIcon name="chevron_right" size={19} />
+                  </a>
+                )}
+              </For>
+            </div>
+          </section>
         )}
       </For>
-    </Card>
+    </div>
   );
 }

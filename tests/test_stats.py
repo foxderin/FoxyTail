@@ -45,6 +45,16 @@ class StatsRegression(unittest.TestCase):
   rows=self.samples([100,300],[0,120])
   self.file.write_text(json.dumps(rows[0])+'\nnot-json\n'+json.dumps(dict(ts=60,error='daemon-unreachable'))+'\n'+json.dumps(rows[1])+'\n')
   day=self.query('daily')['days'][0];self.assertEqual(day['samples'],2);self.assertEqual(day['rx'],200)
+ def test_hourly_missing_interface_is_not_a_recorded_zero(self):
+  self.file.write_text(json.dumps(dict(ts=60,iface=None,peers=[],uids=[]))+'\n')
+  hour=self.query('hourly','1970-01-01')['hours'][0]
+  self.assertEqual(hour['samples'],0)
+  self.assertEqual(self.query('daily')['days'][0]['samples'],0)
+ def test_recorded_zero_traffic_remains_a_valid_sample(self):
+  self.samples([0,0])
+  hour=self.query('hourly','1970-01-01')['hours'][0]
+  self.assertEqual(hour['samples'],2)
+  self.assertEqual(hour['iface'],dict(rx=0,tx=0))
  def test_legacy_uid_rx_does_not_become_tx(self):
   rows=self.samples([100,200])
   for row in rows:row.pop('uidDirection');row['uids']=[dict(uid='10101',rx=1000,tx=0)]

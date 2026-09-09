@@ -74,11 +74,26 @@ owned_routes() {
   ip "$1" route show table "$2" proto "${ROUTE_PROTOCOL}" dev "${TUN_IFACE}" 2>/dev/null | sort
 }
 
+# iproute2 omits fields already selected on its command line. Compare both
+# renderings without dev/proto labels, while retaining the kernel's exact
+# protocol/device filter above as the ownership authority. Foreign routes
+# remain extra records and can never be claimed by this normalization.
+route_comparison_lines() {
+  awk '{
+    line=""
+    for (i=1;i<=NF;i++) {
+      if ($i=="dev" || $i=="proto") {i++; continue}
+      line=line (line=="" ? "" : " ") $i
+    }
+    if (line!="") print line
+  }' | sort
+}
+
 # Refuse another controller's table or priority; never replace its routes.
 table_available() {
   for _ta_family in -4 -6; do
-    _ta_all=$(ip "${_ta_family}" route show table "${ROUTE_TABLE}" 2>/dev/null | sort)
-    _ta_owned=$(owned_routes "${_ta_family}" "${ROUTE_TABLE}")
+    _ta_all=$(ip "${_ta_family}" route show table "${ROUTE_TABLE}" 2>/dev/null | route_comparison_lines)
+    _ta_owned=$(owned_routes "${_ta_family}" "${ROUTE_TABLE}" | route_comparison_lines)
     [ "${_ta_all}" = "${_ta_owned}" ] || {
       log Error "table ${ROUTE_TABLE} contains foreign routes (${_ta_family})"; return 1;
     }
@@ -130,17 +145,27 @@ route_check() {
   table_available
 }
 
-unmount() { while "$1" -t "$2" -D OUTPUT -j "$3" 2>/dev/null; do :; done; }
+# Android/netd and other modules share the xtables lock. Wait briefly for each
+# mutation instead of treating a concurrent writer as a broken rule set.
+# Read-only readiness checks keep their immediate behavior, including absent
+# families/tables; no unbounded -w is used in the controller.
+xtables_write() {
+  _xw_cmd="$1"
+  shift
+  "${_xw_cmd}" -w 2 "$@"
+}
+
+unmount() { while xtables_write "$1" -t "$2" -D OUTPUT -j "$3" 2>/dev/null; do :; done; }
 
 route_cleanup() {
   _cl_failed=0
   for _cl_cmd in iptables ip6tables; do
     unmount "${_cl_cmd}" mangle "${CHAIN_MARK}"
     unmount "${_cl_cmd}" filter "${CHAIN_STAT}"
-    "${_cl_cmd}" -t mangle -F "${CHAIN_MARK}" 2>/dev/null
-    "${_cl_cmd}" -t mangle -X "${CHAIN_MARK}" 2>/dev/null
-    "${_cl_cmd}" -t filter -F "${CHAIN_STAT}" 2>/dev/null
-    "${_cl_cmd}" -t filter -X "${CHAIN_STAT}" 2>/dev/null
+    xtables_write "${_cl_cmd}" -t mangle -F "${CHAIN_MARK}" 2>/dev/null
+    xtables_write "${_cl_cmd}" -t mangle -X "${CHAIN_MARK}" 2>/dev/null
+    xtables_write "${_cl_cmd}" -t filter -F "${CHAIN_STAT}" 2>/dev/null
+    xtables_write "${_cl_cmd}" -t filter -X "${CHAIN_STAT}" 2>/dev/null
     "${_cl_cmd}" -t mangle -S "${CHAIN_MARK}" >/dev/null 2>&1 && _cl_failed=1
     "${_cl_cmd}" -t filter -S "${CHAIN_STAT}" >/dev/null 2>&1 && _cl_failed=1
   done
@@ -182,32 +207,32 @@ route_cleanup() {
 # Preserve Android marks and bypass every packet already marked by Tailscale.
 apply_family() {
   _af_cmd="$1"; _af_family="$2"
-  "${_af_cmd}" -t mangle -N "${CHAIN_MARK}" 2>/dev/null || return 1
-  "${_af_cmd}" -t filter -N "${CHAIN_STAT}" 2>/dev/null || return 1
-  "${_af_cmd}" -t mangle -A "${CHAIN_MARK}" -m owner --uid-owner 0 -j RETURN || return 1
-  "${_af_cmd}" -t mangle -A "${CHAIN_MARK}" -m mark ! --mark 0x0/0x1e000000 -j RETURN || return 1
+  xtables_write "${_af_cmd}" -t mangle -N "${CHAIN_MARK}" 2>/dev/null || return 1
+  xtables_write "${_af_cmd}" -t filter -N "${CHAIN_STAT}" 2>/dev/null || return 1
+  xtables_write "${_af_cmd}" -t mangle -A "${CHAIN_MARK}" -m owner --uid-owner 0 -j RETURN || return 1
+  xtables_write "${_af_cmd}" -t mangle -A "${CHAIN_MARK}" -m mark ! --mark 0x0/0x1e000000 -j RETURN || return 1
   # The local resolver must reach Quad100 even when the user's selected/bypass
   # UID scope excludes nobody. Restrict the exception to DNS, its UID and one
   # service address; preserve the daemon/root and Tailscale mark exemptions.
   if [ "${TS_MODE}" = bridge ] && [ "${MAGIC_DNS}" = on ] && [ "${_af_family}" = -4 ]; then
     for _af_proto in udp tcp; do
-      "${_af_cmd}" -t mangle -A "${CHAIN_MARK}" -m owner --uid-owner 9999 -d 100.100.100.100/32 -p "${_af_proto}" --dport 53 -j MARK --set-xmark "${FWMARK}/${FWMARK_MASK}" || return 1
+      xtables_write "${_af_cmd}" -t mangle -A "${CHAIN_MARK}" -m owner --uid-owner 9999 -d 100.100.100.100/32 -p "${_af_proto}" --dport 53 -j MARK --set-xmark "${FWMARK}/${FWMARK_MASK}" || return 1
     done
     ip -4 route add 100.100.100.100/32 dev "${TUN_IFACE}" table "${ROUTE_TABLE}" proto "${ROUTE_PROTOCOL}" || return 1
   fi
   if [ "${ROUTE_SCOPE}" = bypass ]; then
     for _af_uid in ${UID_LIST}; do
-      "${_af_cmd}" -t mangle -A "${CHAIN_MARK}" -m owner --uid-owner "${_af_uid}" -j RETURN || return 1
+      xtables_write "${_af_cmd}" -t mangle -A "${CHAIN_MARK}" -m owner --uid-owner "${_af_uid}" -j RETURN || return 1
     done
   fi
   for _af_net in ${ROUTE_SUBNETS}; do
     case "${_af_family}:${_af_net}" in -4:*:*) continue ;; -6:*:*) ;; -6:*) continue ;; esac
     if [ "${ROUTE_SCOPE}" = selected ]; then
       for _af_uid in ${UID_LIST}; do
-        "${_af_cmd}" -t mangle -A "${CHAIN_MARK}" -d "${_af_net}" -m owner --uid-owner "${_af_uid}" -j MARK --set-xmark "${FWMARK}/${FWMARK_MASK}" || return 1
+        xtables_write "${_af_cmd}" -t mangle -A "${CHAIN_MARK}" -d "${_af_net}" -m owner --uid-owner "${_af_uid}" -j MARK --set-xmark "${FWMARK}/${FWMARK_MASK}" || return 1
       done
     else
-      "${_af_cmd}" -t mangle -A "${CHAIN_MARK}" -d "${_af_net}" -j MARK --set-xmark "${FWMARK}/${FWMARK_MASK}" || return 1
+      xtables_write "${_af_cmd}" -t mangle -A "${CHAIN_MARK}" -d "${_af_net}" -j MARK --set-xmark "${FWMARK}/${FWMARK_MASK}" || return 1
     fi
     if [ "${_af_net}" != 100.100.100.100/32 ] || [ "${TS_MODE}:${MAGIC_DNS}:${_af_family}" != bridge:on:-4 ]; then
       ip "${_af_family}" route add "${_af_net}" dev "${TUN_IFACE}" table "${ROUTE_TABLE}" proto "${ROUTE_PROTOCOL}" || return 1
@@ -216,11 +241,11 @@ apply_family() {
   # OUTPUT on the actual TUN interface counts transmitted overlay bytes only.
   # UID rules precede the terminal return and are summed over both families.
   for _af_uid in ${UID_LIST}; do
-    "${_af_cmd}" -t filter -A "${CHAIN_STAT}" -o "${TUN_IFACE}" -m owner --uid-owner "${_af_uid}" -j RETURN || return 1
+    xtables_write "${_af_cmd}" -t filter -A "${CHAIN_STAT}" -o "${TUN_IFACE}" -m owner --uid-owner "${_af_uid}" -j RETURN || return 1
   done
-  "${_af_cmd}" -t filter -A "${CHAIN_STAT}" -j RETURN || return 1
-  "${_af_cmd}" -t mangle -A OUTPUT -j "${CHAIN_MARK}" || return 1
-  "${_af_cmd}" -t filter -A OUTPUT -j "${CHAIN_STAT}" || return 1
+  xtables_write "${_af_cmd}" -t filter -A "${CHAIN_STAT}" -j RETURN || return 1
+  xtables_write "${_af_cmd}" -t mangle -A OUTPUT -j "${CHAIN_MARK}" || return 1
+  xtables_write "${_af_cmd}" -t filter -A OUTPUT -j "${CHAIN_STAT}" || return 1
   ip "${_af_family}" rule add pref "${ROUTE_RULE_PREF}" fwmark "${FWMARK}/${FWMARK_MASK}" table "${ROUTE_TABLE}" || return 1
   "${_af_cmd}" -t mangle -S "${CHAIN_MARK}" >"${ROUTE_SNAPSHOT_DIR}/${_af_cmd}.mangle" || return 1
   "${_af_cmd}" -t filter -S "${CHAIN_STAT}" >"${ROUTE_SNAPSHOT_DIR}/${_af_cmd}.filter" || return 1

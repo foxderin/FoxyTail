@@ -1,46 +1,56 @@
-/*
- * Diagnostics — one-tap bundle collection as a cancellable session task
- * (can take ~30s), result path shown inline.
- */
 import { Show, type JSX } from 'solid-js';
 import { t } from '../i18n';
 import { getTask } from '../tasks';
-import { Card, ErrorState } from '../components/Basics';
+import { Card, EmptyState, ErrorState, StatusBadge } from '../components/Basics';
+import { copyText } from '../components/LoginHero';
+import { showToast } from '../components/Toast';
 import { TaskButton, TaskProgress } from '../components/TaskProgress';
 import { MdIcon } from '../icons';
-
+import { Button } from '../components/ui';
+import './tools.css';
 const TASK_KEY = 'diag';
-
 export default function Diag(): JSX.Element {
   const task = () => getTask(TASK_KEY);
-
+  const path = () => String(task()?.result?.path ?? '');
   return (
-    <Card title={t('diag_title')} icon="bug_report">
-      <p class="dim">{t('diag_hint')}</p>
-
-      <TaskProgress taskKey={TASK_KEY} />
-      <Show when={task()?.status === 'running'}>
-        <div class="dim">{t('diag_running')}</div>
-      </Show>
-      <Show when={task()?.status === 'done'}>
-        <div class="banner ok">
-          <MdIcon name="check_circle" size={18} />
-          <span>{t('diag_done')}</span>
+    <div class="tools-page">
+      <Card title={t('tools_diag_collect')} icon="bug_report" description={t('tools_diag_contents')}>
+        <TaskProgress taskKey={TASK_KEY} />
+        <Show when={task()?.status === 'running'}>
+          <div class="tool-result" aria-live="polite">
+            <StatusBadge tone="accent">{t('diag_running')}</StatusBadge>
+          </div>
+        </Show>
+        <Show when={task()?.status === 'error'}>
+          <ErrorState text={task()?.result?.error || t('error')} />
+        </Show>
+        <div class="tool-actions">
+          <TaskButton
+            taskKey={TASK_KEY}
+            cmd="diag"
+            label={t('diag_run')}
+            icon={<MdIcon name="bug_report" size={18} />}
+          />
         </div>
-        <p class="mono">{String(task()?.result?.path ?? '')}</p>
-      </Show>
-      <Show when={task()?.status === 'error'}>
-        <ErrorState text={task()?.result?.error || t('error')} />
-      </Show>
-
-      <div class="btn-row">
-        <TaskButton
-          taskKey={TASK_KEY}
-          cmd="diag"
-          label={t('diag_run')}
-          icon={<MdIcon name="bug_report" size={18} />}
-        />
-      </div>
-    </Card>
+      </Card>
+      <Card title={t('tools_diag_ready')} icon="folder">
+        <Show
+          when={task()?.status === 'done' && path()}
+          fallback={<EmptyState text={t('tools_diag_waiting')} icon="folder" />}
+        >
+          <StatusBadge tone="success">{t('diag_done')}</StatusBadge>
+          <div class="tool-result">
+            <p class="mono">{path()}</p>
+            <Button
+              variant="tonal"
+              onClick={() => showToast(t(copyText(path()) ? 'copied' : 'op_failed'), 'info')}
+            >
+              <MdIcon name="content_copy" size={18} />
+              {t('tools_copy_path')}
+            </Button>
+          </div>
+        </Show>
+      </Card>
+    </div>
   );
 }

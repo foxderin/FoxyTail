@@ -60,7 +60,7 @@ get_state() {
 dns_pids() {
   for _dp_bin in "${TS_BIN_DIR}/dnsmasq" /system/bin/dnsmasq /vendor/bin/dnsmasq; do
     for _dp_pid in $(pids_of_path "${_dp_bin}"); do
-      if tr '\0' '\n' <"/proc/${_dp_pid}/cmdline" 2>/dev/null | grep -qxF -- "--conf-file=${DNS_CONF}"; then
+      if _proc_cmdline "${_dp_pid}" | grep -qxF -- "--conf-file=${DNS_CONF}"; then
         echo "${_dp_pid}"
       fi
     done
@@ -151,6 +151,97 @@ redirect6_teardown() {
   return 0
 }
 
+# Android kernels can support IPv6 routing/filtering without an IPv6 nat
+# table. DNS interception then remains useful over IPv4; this capability is
+# separate from the user's IPv6 tunnel preference and may change at runtime.
+ipv6_nat_available() {
+  ip6tables -t nat -S OUTPUT >/dev/null 2>&1
+}
+
+# Search only OS module trees for the exact legacy IPv6 NAT module. Do not
+# download modules, guess a different kernel build, or load similarly named
+# IPv6 modules (for example 6LoWPAN compression modules).
+ipv6_nat_module_dirs() {
+  for _im_root in /system_dlkm/lib/modules /vendor_dlkm/lib/modules \
+    /odm_dlkm/lib/modules /system/lib/modules /vendor/lib/modules \
+    /odm/lib/modules "/lib/modules/$(uname -r)"; do
+    [ ! -d "${_im_root}" ] || realpath "${_im_root}"
+  done | sort -u | while IFS= read -r _im_dir; do
+    if [ -n "$(find "${_im_dir}" -maxdepth 8 -type f \
+      \( -name ip6table_nat.ko -o -name ip6table_nat.ko.xz \
+      -o -name ip6table_nat.ko.gz -o -name ip6table_nat.ko.zst \) \
+      -print 2>/dev/null | head -n 1)" ]; then
+      printf '%s\n' "${_im_dir}"
+    fi
+  done
+}
+
+ipv6_module_boot() {
+  cat /proc/sys/kernel/random/boot_id 2>/dev/null
+}
+
+ipv6_module_status() {
+  _im_boot="" _im_status=""
+  if [ -r "${TS_RUN_DIR}/dnsmasq.ipv6-module" ]; then
+    read -r _im_boot _im_status <"${TS_RUN_DIR}/dnsmasq.ipv6-module" || :
+  fi
+  if [ -z "${_im_boot}" ] || [ "${_im_boot}" != "$(ipv6_module_boot)" ]; then
+    echo not-checked
+    return
+  fi
+  case "${_im_status}" in
+    loaded|missing|load-failed|loader-unavailable|not-needed) echo "${_im_status}" ;;
+    *) echo not-checked ;;
+  esac
+}
+
+record_ipv6_module_status() {
+  printf '%s %s\n' "$(ipv6_module_boot)" "$1" \
+    >"${TS_RUN_DIR}/dnsmasq.ipv6-module"
+}
+
+load_ipv6_nat_module() {
+  # Native Android modprobe resolves this tree's declared dependencies. The
+  # kernel validates ABI/signatures; never use forced loads or direct insmod.
+  command -v timeout >/dev/null 2>&1 || return 127
+  for _im_loader in /system/bin/modprobe /vendor/bin/modprobe /sbin/modprobe; do
+    [ -x "${_im_loader}" ] || continue
+    timeout "${2:-3}" "${_im_loader}" -d "$1" ip6table_nat >/dev/null 2>&1
+    return $?
+  done
+  return 127
+}
+
+# Mutation-only capability upgrade. Status/check calls never load modules.
+# Rechecking the actual table, rather than trusting modprobe's exit status,
+# handles missing dependencies, ABI mismatches and a concurrently loaded module.
+ensure_ipv6_nat() {
+  [ "${IPV6}" = on ] || return 1
+  if ipv6_nat_available; then
+    [ "$(ipv6_module_status)" = loaded ] || record_ipv6_module_status not-needed
+    return 0
+  fi
+  _im_dirs=$(ipv6_nat_module_dirs)
+  if [ -z "${_im_dirs}" ]; then record_ipv6_module_status missing; return 1; fi
+  _im_failure=load-failed
+  _im_deadline=$(($(date +%s) + 6))
+  for _im_dir in ${_im_dirs}; do
+    _im_remaining=$((_im_deadline - $(date +%s)))
+    [ "${_im_remaining}" -gt 0 ] || break
+    [ "${_im_remaining}" -le 3 ] || _im_remaining=3
+    load_ipv6_nat_module "${_im_dir}" "${_im_remaining}"
+    _im_rc=$?
+    if ipv6_nat_available; then
+      record_ipv6_module_status loaded
+      log Info "IPv6 DNS interception enabled with the system ip6table_nat module."
+      return 0
+    fi
+    [ "${_im_rc}" != 127 ] || _im_failure=loader-unavailable
+  done
+  record_ipv6_module_status "${_im_failure}"
+  return 1
+}
+
 # Reconcile redirect independently from process liveness. A running dnsmasq
 # without interception remains degraded and can recover on the next start.
 reconcile_redirect() {
@@ -162,17 +253,20 @@ reconcile_redirect() {
     set_state degraded conflict
     return "${_dr_cleanup}"
   fi
-  if ! redirect_apply || { [ "${IPV6}" = on ] && ! redirect6_apply; }; then
+  _dr_v6=off
+  if [ "${IPV6}" = on ] && ensure_ipv6_nat; then _dr_v6=on; fi
+  if ! redirect_apply || { [ "${_dr_v6}" = on ] && ! redirect6_apply; }; then
     redirect_teardown
     redirect6_teardown
     set_state degraded redirect-failed
     return 1
   fi
-  if [ "${IPV6}" != on ] && ! redirect6_teardown; then
+  if [ "${_dr_v6}" != on ] && ! redirect6_teardown; then
     set_state degraded cleanup-failed
     return 1
   fi
   _dr_reason=running
+  if [ "${IPV6}" = on ] && [ "${_dr_v6}" != on ]; then _dr_reason=ipv6-unavailable; fi
   # DoT configured by Android bypasses port 53; report it without changing
   # the user's encrypted DNS policy or repeatedly restarting a healthy daemon.
   [ "$(settings get global private_dns_mode 2>/dev/null)" = hostname ] && _dr_reason=private-dns
@@ -181,7 +275,9 @@ reconcile_redirect() {
 
 redirect_present() {
   for _dp_cmd in iptables ip6tables; do
-    [ "${_dp_cmd}" = ip6tables ] && [ "${IPV6}" != on ] && continue
+    if [ "${_dp_cmd}" = ip6tables ]; then
+      [ "${IPV6}" = on ] && ipv6_nat_available || continue
+    fi
     "${_dp_cmd}" -t nat -C OUTPUT -j "${CHAIN_DNS}" 2>/dev/null || return 1
     [ "$("${_dp_cmd}" -t nat -S OUTPUT 2>/dev/null | awk '$1=="-A" {print; exit}')" = "-A OUTPUT -j ${CHAIN_DNS}" ] || return 1
     for _dp_proto in udp tcp; do
@@ -221,7 +317,9 @@ dns_context_matches() {
 }
 
 dns_alias_lines() {
-  printf '%s' "$1" | jqr -r '.hosts[] | "address=/\(.short)/\(.ip)"'
+  # Some Android tailscaled builds omit AAAA answers for otherwise reachable
+  # peers. Use the current authoritative node addresses for both name forms.
+  printf '%s' "$1" | jqr -r '.hosts[] | "address=/\(.short)/\(.ip)", "address=/\(.name)/\(.ip)"'
 }
 
 # Android caches NXDOMAIN independently of dnsmasq. A newly enabled resolver
@@ -324,7 +422,7 @@ dns_start() {
     echo "bind-interfaces"
     echo "no-resolv"
     echo "cache-size=512"
-    # Android ignores DNS search domains. Inline short-name mappings are read
+    # Android ignores DNS search domains. Inline node-name mappings are read
     # before dnsmasq drops privileges; addn-hosts is read afterwards and fails
     # beneath /data/adb (0700 root) on the system dnsmasq shipped by Android.
     # Use address=, supported by its older 2.51 build, instead of host-record=.
@@ -404,6 +502,14 @@ dns_status() {
     _dst_state="degraded"
     _dst_reason=process-failed
   fi
+  if [ "${_dst_state}" = running ]; then
+    # Reflect current kernel capability even if it changed since start. A
+    # recovered nat table without our IPv6 rules fails redirect_present above
+    # and schedules reconciliation; an absent table never erases working IPv4.
+    _dst_reason=running
+    if [ "${IPV6}" = on ] && ! ipv6_nat_available; then _dst_reason=ipv6-unavailable; fi
+    [ "$(settings get global private_dns_mode 2>/dev/null)" = hostname ] && _dst_reason=private-dns
+  fi
 
   _dst_enabled=false
   if [ "${MAGIC_DNS}" = on ]; then
@@ -416,6 +522,16 @@ dns_status() {
   fi
   _dst_native=false
   native_dns_present && _dst_native=true
+
+  _dst_v6=disabled
+  _dst_module=$(ipv6_module_status)
+  if [ "${IPV6}" = on ]; then
+    _dst_v6=fallback
+    if ipv6_nat_available; then
+      _dst_v6=available
+      [ "${_dst_module}" != loaded ] || _dst_v6=module-loaded
+    fi
+  fi
 
   _dst_pid=null
   if [ -n "${_dst_pids}" ]; then
@@ -435,8 +551,10 @@ dns_status() {
       --argjson p "${DNS_PORT}" --argjson pid "${_dst_pid}" \
       --argjson enabled "${_dst_enabled}" --arg reason "${_dst_reason}" \
       --arg binary "${DNS_BIN}" --argjson native "${_dst_native}" \
+      --arg v6 "${_dst_v6}" --arg module "${_dst_module}" \
       '{state:$s,suffix:$sfx,port:$p,pid:$pid,enabled:$enabled,reason:$reason,
-        binary:(if $binary=="" then null else $binary end),upstreamNative:$native}'
+        binary:(if $binary=="" then null else $binary end),upstreamNative:$native,
+        ipv6DnsInterception:$v6,ipv6ModuleStatus:$module}'
     return 0
   fi
 

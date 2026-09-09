@@ -5,9 +5,18 @@
 import { createSignal, onCleanup, onMount, Show, type JSX } from 'solid-js';
 import { createApiScope, execRaw, hasRoot, type ApiResult } from '../api';
 import { t, type I18nKey } from '../i18n';
+import './tools.css';
 import { getTask } from '../tasks';
 import { latClass } from '../format';
-import { Card, KvRow, StatusDot, SkeletonCard, ErrorState } from '../components/Basics';
+import {
+  Card,
+  KvRow,
+  MetricCard,
+  StatusBadge,
+  EmptyState,
+  SkeletonCard,
+  ErrorState,
+} from '../components/Basics';
 import { TaskButton, TaskProgress } from '../components/TaskProgress';
 import { MdIcon } from '../icons';
 import { Button, LinearProgress } from '../components/ui';
@@ -29,16 +38,59 @@ interface DnsInfo extends ApiResult {
   reason?: string;
   suffix?: string;
   upstreamNative?: boolean;
+  ipv6DnsInterception?: 'available' | 'module-loaded' | 'fallback' | 'disabled';
+  ipv6ModuleStatus?: 'not-needed' | 'loaded' | 'missing' | 'load-failed' | 'loader-unavailable' | 'not-checked';
 }
 
 const DNS_REASONS: Record<string, I18nKey> = {
-  running: 'dns_running', disabled: 'dns_disabled', 'apply-pending': 'dns_apply_pending',
-  'disable-pending': 'dns_disable_pending', 'tailnet-unavailable': 'dns_tailnet_unavailable',
-  'missing-binary': 'dns_missing_binary', conflict: 'dns_conflict', 'redirect-failed': 'dns_redirect_failed',
-  'cleanup-failed': 'dns_cleanup_failed', 'process-failed': 'dns_process_failed',
-  'reconcile-needed': 'dns_reconcile_needed', 'private-dns': 'dns_private_dns',
-  stopped: 'dns_stopped', degraded: 'dns_degraded',
+  running: 'dns_running',
+  disabled: 'dns_disabled',
+  'apply-pending': 'dns_apply_pending',
+  'disable-pending': 'dns_disable_pending',
+  'tailnet-unavailable': 'dns_tailnet_unavailable',
+  'missing-binary': 'dns_missing_binary',
+  conflict: 'dns_conflict',
+  'redirect-failed': 'dns_redirect_failed',
+  'cleanup-failed': 'dns_cleanup_failed',
+  'process-failed': 'dns_process_failed',
+  'reconcile-needed': 'dns_reconcile_needed',
+  'private-dns': 'dns_private_dns',
+  'ipv6-unavailable': 'tools_dns_ipv6_unavailable',
+  stopped: 'dns_stopped',
+  degraded: 'dns_degraded',
 };
+
+const IPV6_DNS_PATHS: Record<NonNullable<DnsInfo['ipv6DnsInterception']>, I18nKey> = {
+  available: 'tools_dns_ipv6_native',
+  'module-loaded': 'tools_dns_ipv6_module',
+  fallback: 'tools_dns_ipv6_fallback',
+  disabled: 'tools_dns_ipv6_disabled',
+};
+const IPV6_MODULE_DETAILS: Partial<Record<NonNullable<DnsInfo['ipv6ModuleStatus']>, I18nKey>> = {
+  missing: 'tools_dns_ipv6_module_missing',
+  'load-failed': 'tools_dns_ipv6_module_failed',
+  'loader-unavailable': 'tools_dns_ipv6_loader_missing',
+  'not-checked': 'tools_dns_ipv6_module_unchecked',
+};
+
+function ipv6DnsPathLabel(info: DnsInfo): string | null {
+  const path = info.ipv6DnsInterception;
+  if (!path || !IPV6_DNS_PATHS[path]) return null;
+  const label = t(IPV6_DNS_PATHS[path]);
+  const detail = path === 'fallback' && info.ipv6ModuleStatus
+    ? IPV6_MODULE_DETAILS[info.ipv6ModuleStatus]
+    : undefined;
+  return detail ? `${label} (${t(detail)})` : label;
+}
+
+function dnsStatusLabel(info: DnsInfo): string {
+  // Current backends report the IPv6 limitation in its own path row. Keep
+  // the reason visible in the badge when talking to an older backend.
+  const reason = info.ipv6DnsInterception === 'fallback' && info.reason === 'ipv6-unavailable'
+    ? info.state
+    : info.reason || info.state;
+  return reason && DNS_REASONS[reason] ? t(DNS_REASONS[reason]) : reason || '—';
+}
 
 export default function Tunnel(): JSX.Element {
   const scope = createApiScope();
@@ -50,6 +102,9 @@ export default function Tunnel(): JSX.Element {
   const [socksBusy, setSocksBusy] = createSignal(false);
   const [dns, setDns] = createSignal<DnsInfo | null>(null);
   const [dnsBusy, setDnsBusy] = createSignal(false);
+  const [tunBusy, setTunBusy] = createSignal(false);
+  const probeAbort = new AbortController();
+  onCleanup(() => probeAbort.abort());
 
   async function checkDns() {
     if (dnsBusy()) return;
@@ -61,16 +116,18 @@ export default function Tunnel(): JSX.Element {
 
   const task = () => getTask(TASK_KEY);
   const relays = (): DerpRelay[] =>
-    task()?.result?.ok ? ((task()!.result!.relays as DerpRelay[]) || []) : [];
+    task()?.result?.ok ? (task()!.result!.relays as DerpRelay[]) || [] : [];
   const preferred = (): string | null =>
     task()?.result?.ok ? ((task()!.result!.preferred as string) ?? null) : null;
 
   async function loadTun() {
     if (loading) return;
     loading = true;
+    setTunBusy(true);
     const my = ++seq;
     const res = await scope.api('tun');
     loading = false;
+    setTunBusy(false);
     if (res.cancelled || my !== seq) return;
     if (res.ok) {
       setTun(res as unknown as TunInfo);
@@ -94,9 +151,11 @@ export default function Tunnel(): JSX.Element {
     const started = Date.now();
     try {
       const out = await execRaw(
-        'curl --proxy socks5h://127.0.0.1:' + port +
+        'curl --proxy socks5h://127.0.0.1:' +
+          port +
           ' -sI --max-time 10 -o /dev/null -w "%{http_code}" https://1.1.1.1',
         15000,
+        probeAbort.signal,
       );
       const ms = Date.now() - started;
       const code = String(out).trim();
@@ -105,7 +164,11 @@ export default function Tunnel(): JSX.Element {
         ok,
         text:
           (ok ? t('tun_socks_ok') : t('tun_socks_fail')) +
-          ' · HTTP ' + (code || '???') + ' · ' + ms + 'ms',
+          ' · HTTP ' +
+          (code || '???') +
+          ' · ' +
+          ms +
+          'ms',
       });
     } catch (err) {
       setSocksResult({ ok: false, text: t('tun_socks_fail') + ': ' + String(err) });
@@ -122,51 +185,140 @@ export default function Tunnel(): JSX.Element {
     onCleanup(() => clearInterval(id));
   });
 
+  const modeDescription = () =>
+    t(
+      tun()?.mode === 'tun'
+        ? 'tools_tun_desc'
+        : tun()?.mode === 'proxy'
+          ? 'tools_proxy_desc'
+          : 'tools_bridge_desc',
+    );
   return (
-    <>
-      <Show when={tun() !== null || tunError() !== null} fallback={<SkeletonCard lines={3} />}>
-        <Card title={t('tun_iface')} icon="router">
+    <div class="tools-page">
+      <div class="toolbar" data-testid="tunnel-actions">
+        <TaskButton
+          taskKey={TASK_KEY}
+          cmd="derp-speedtest"
+          label={task()?.status === 'running' ? t('tun_derp_testing') : t('tun_derp')}
+          icon={<MdIcon name="speed" size={18} />}
+        />
+        <Show when={tun() && ['bridge', 'proxy'].includes(tun()!.mode)}>
+          <Button
+            variant="tonal"
+            busy={socksBusy()}
+            disabled={!hasRoot}
+            onClick={() => void checkSocks()}
+          >
+            <MdIcon name="network_check" size={18} />
+            {socksBusy() ? t('tun_socks_checking') : t('tun_socks_check')}
+          </Button>
+        </Show>
+      </div>
+      <Show when={tun() !== null || tunError() !== null} fallback={<SkeletonCard lines={4} />}>
+        <Card
+          title={t('tools_tunnel_overview')}
+          icon="router"
+          actions={
+            <Button variant="text" busy={tunBusy()} onClick={() => void loadTun()}>
+              <MdIcon name="refresh" size={18} />
+              {tunBusy() ? t('loading') : t('tools_refresh')}
+            </Button>
+          }
+        >
           <Show
             when={!tunError()}
             fallback={<ErrorState text={tunError()!} onRetry={() => void loadTun()} />}
           >
-            <KvRow
-              k={
-                <>
-                  <StatusDot state={tun()!.ifaceUp ? 'on' : 'off'} />
-                  <span>{tun()!.ifaceUp ? t('tun_up') : t('tun_down')}</span>
-                </>
-              }
-              v={<span>{t('dash_mode') + ': ' + tun()!.mode}</span>}
-            />
-            <KvRow k={t('tun_gateway')} v={tun()!.gateway || '-'} />
-            <KvRow
-              k={t('tun_hev')}
-              v={tun()!.hevPid ? t('tun_pid') + ': ' + tun()!.hevPid : t('tun_not_running')}
-            />
+            <Show when={tun()?.mode !== 'bridge'}>
+              <p class="tool-hint">{modeDescription()}</p>
+            </Show>
+            <div class="metric-grid">
+              <MetricCard
+                label={t('tun_iface')}
+                value={tun()!.ifaceUp ? t('tun_up') : t('tun_down')}
+                caption="tailscale0"
+                icon="router"
+                tone={tun()!.ifaceUp ? 'success' : 'neutral'}
+              />
+              <MetricCard label={t('tun_gateway')} value={tun()!.gateway || '—'} icon="alt_route" />
+            </div>
+            <Show when={tun()!.mode === 'bridge'}>
+              <KvRow
+                k={t('tun_hev')}
+                v={
+                  <StatusBadge tone={tun()!.hevPid ? 'success' : 'warning'}>
+                    {tun()!.hevPid ? 'PID ' + tun()!.hevPid : t('tun_not_running')}
+                  </StatusBadge>
+                }
+              />
+            </Show>
+            <a class="tool-text-link" href="#/routing">
+              {t('more_routing')}
+              <MdIcon name="chevron_right" size={16} />
+            </a>
           </Show>
         </Card>
       </Show>
-
       <Card title={t('dns_title')} icon="dns">
-        <p class="dim">{t('dns_hint')}</p>
-        <Show when={dns()}>
-          {(info) => <Show when={info().ok} fallback={<ErrorState text={info().error || t('error')} />}>
-            <KvRow k={t('dns_local')} v={info().reason && DNS_REASONS[info().reason!]
-              ? t(DNS_REASONS[info().reason!]) : info().reason || info().state || '-'} />
-            <KvRow k={t('dns_native')} v={info().upstreamNative ? '✓' : '✗'} />
-            <Show when={info().suffix}><KvRow k={t('dns_suffix')} v={info().suffix || '-'} /></Show>
-          </Show>}
+        <Show when={dns()} fallback={<EmptyState text={t('tools_dns_unchecked')} icon="dns" />}>
+          {(info) => (
+            <Show
+              when={info().ok}
+              fallback={<ErrorState text={info().error || t('error')} onRetry={() => void checkDns()} />}
+            >
+              <div class="tool-result" aria-live="polite">
+                <StatusBadge
+                  tone={
+                    (info().reason === 'ipv6-unavailable' && info().ipv6DnsInterception !== 'fallback') || info().state === 'degraded'
+                      ? 'warning'
+                      : info().state === 'running'
+                        ? 'success'
+                        : 'neutral'
+                  }
+                >
+                  {dnsStatusLabel(info())}
+                </StatusBadge>
+                <Show when={ipv6DnsPathLabel(info())}>
+                  {(label) => (
+                    <div data-testid="dns-ipv6-path">
+                      <KvRow k={t('tools_dns_ipv6_path')} v={label()} />
+                      <Show when={info().ipv6DnsInterception === 'fallback'}>
+                        <p class="tool-hint">{t('tools_dns_ipv6_fallback_hint')}</p>
+                      </Show>
+                    </div>
+                  )}
+                </Show>
+                <KvRow
+                  k={t('dns_native')}
+                  v={t(info().upstreamNative ? 'tools_dns_native_yes' : 'tools_dns_native_no')}
+                />
+                <Show when={info().suffix}>
+                  <KvRow k={t('dns_suffix')} v={info().suffix || '—'} />
+                </Show>
+              </div>
+            </Show>
+          )}
         </Show>
-        <div class="btn-row">
-          <Button variant="tonal" disabled={dnsBusy() || !hasRoot} onClick={() => void checkDns()}>
-            <MdIcon name="network_check" size={18} /> {dnsBusy() ? t('loading') : t('dns_check')}
+        <Show when={dnsBusy()}>
+          <div class="progress-row">
+            <LinearProgress indeterminate />
+            <span class="dim">{t('loading')}</span>
+          </div>
+        </Show>
+        <div class="tool-actions spread">
+          <Button variant="tonal" busy={dnsBusy()} disabled={!hasRoot} onClick={() => void checkDns()}>
+            <MdIcon name="network_check" size={18} />
+            {dnsBusy() ? t('loading') : dns() ? t('tools_dns_check_again') : t('dns_check')}
           </Button>
+          <a class="tool-text-link" href="#/settings">
+            {t('tools_dns_settings')}
+            <MdIcon name="chevron_right" size={16} />
+          </a>
         </div>
       </Card>
-
-      <Show when={tun() && ['bridge', 'proxy'].includes(tun()!.mode)}>
+      <Show when={tun() && ['bridge', 'proxy'].includes(tun()!.mode) && (socksBusy() || socksResult())}>
         <Card title={t('tun_socks_check')} icon="network_check">
+          <KvRow k="SOCKS5" v={<code>127.0.0.1:{tun()?.socksPort}</code>} />
           <Show when={socksBusy()}>
             <div class="progress-row">
               <LinearProgress indeterminate />
@@ -174,49 +326,35 @@ export default function Tunnel(): JSX.Element {
             </div>
           </Show>
           <Show when={socksResult()}>
-            {(r) => <div class={r().ok ? 'lat-good' : 'lat-bad'}>{r().text}</div>}
+            {(result) => (
+              <div class="tool-result" role="status">
+                <StatusBadge tone={result().ok ? 'success' : 'danger'}>{result().text}</StatusBadge>
+              </div>
+            )}
           </Show>
-          <div class="btn-row">
-            <Button
-              variant="tonal"
-              disabled={socksBusy() || !hasRoot}
-              onClick={() => void checkSocks()}
-            >
-              <MdIcon name="network_check" size={18} /> {t('tun_socks_check')}
-            </Button>
-          </div>
         </Card>
       </Show>
-
-      <Card title={t('tun_derp')} icon="speed">
-        <TaskProgress taskKey={TASK_KEY} />
-        <Show when={task()?.status === 'error'}>
-          <ErrorState text={task()?.result?.error || t('error')} />
-        </Show>
-        <Show when={relays().length > 0}>
-          {relays().map((r) => (
-            <div class="list-row">
-              <div class="main">
-                <div class="title mono">
-                  {r.code}
-                  <Show when={r.code === preferred()}>
-                    <span class="badge">{t('tun_preferred')}</span>
+      <Show when={task()?.status === 'running' || task()?.status === 'error' || relays().length > 0}>
+        <Card title={t('tun_derp')} icon="speed">
+          <TaskProgress taskKey={TASK_KEY} />
+          <Show when={task()?.status === 'error'}>
+            <ErrorState text={task()?.result?.error || t('error')} />
+          </Show>
+          <Show when={relays().length > 0}>
+            {relays().map((relay) => (
+              <div class="list-row">
+                <div class="main">
+                  <div class="title mono">{relay.code}</div>
+                  <Show when={relay.code === preferred()}>
+                    <StatusBadge tone="accent">{t('tun_preferred')}</StatusBadge>
                   </Show>
                 </div>
+                <strong class={latClass(relay.latencyMs)}>{relay.latencyMs} ms</strong>
               </div>
-              <span class={latClass(r.latencyMs)}>{r.latencyMs}ms</span>
-            </div>
-          ))}
-        </Show>
-        <div class="btn-row">
-          <TaskButton
-            taskKey={TASK_KEY}
-            cmd="derp-speedtest"
-            label={task()?.status === 'running' ? t('tun_derp_testing') : t('tun_derp')}
-            icon={<MdIcon name="speed" size={18} />}
-          />
-        </div>
-      </Card>
-    </>
+            ))}
+          </Show>
+        </Card>
+      </Show>
+    </div>
   );
 }

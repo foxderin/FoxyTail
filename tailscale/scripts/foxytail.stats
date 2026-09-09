@@ -224,7 +224,7 @@ query() {
         [ .[] | select((.ts|strflocaltime("%F"))==$d) ] as $s
         | {date:$d,attribution:"interval-end",hours:[range(0;24) | . as $h
             | [$s[] | select((.ts|strflocaltime("%H")|tonumber)==$h)] as $b
-            | {hour:$h,samples:($b|length),
+            | {hour:$h,samples:([$b[]|select(.iface!=null)]|length),
                 iface:{rx:([$b[].iface.rx // 0]|add // 0),tx:([$b[].iface.tx // 0]|add // 0)},
                 peers:([$b[].peers[]] | group_by(.id) | map(
                   {id:.[0].id,rx:(map(.rx)|add),tx:(map(.tx)|add)}))}]}'

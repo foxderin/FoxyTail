@@ -418,6 +418,15 @@ pids_of() {
   busybox pgrep -f "$1" 2>/dev/null || pgrep -f "$1" 2>/dev/null
 }
 
+# Snapshot only the small argument prefix needed to identify our processes.
+# Never feed procfs directly to toybox tr: if a candidate exits during the
+# read, some Android builds spin on the stale fd instead of reaching EOF.
+# A bounded reader isolates that race and also limits unusual argv lengths.
+_proc_cmdline() {
+  case "$1" in '' | *[!0-9]*) return 1 ;; esac
+  tmo 2 dd "if=/proc/$1/cmdline" bs=4096 count=1 2>/dev/null | tr '\000' '\n'
+}
+
 # Like pids_of, but every candidate PID is verified against
 # /proc/<pid>/cmdline: argv[0] must be <path> itself or its basename. This
 # filters false positives such as `tail -F tailscaled.log` or a foreign
@@ -428,10 +437,11 @@ pids_of_path() {
   _pop_name="${_pop_path##*/}"
   _pop_candidates=$(pids_of "${2:-${_pop_name}}")
   for _pop_pid in ${_pop_candidates}; do
-    _pop_argv0=$(tr '\0' '\n' <"/proc/${_pop_pid}/cmdline" 2>/dev/null | head -n 1)
-    case "${_pop_argv0}" in "${_pop_path}" | "${_pop_name}") ;; *) continue ;; esac
+    # Reject vanished/foreign candidates before opening their command line.
     _pop_exe=$(readlink "/proc/${_pop_pid}/exe" 2>/dev/null)
-    case "${_pop_exe}" in "${_pop_path}" | "${_pop_path} (deleted)") echo "${_pop_pid}" ;; esac
+    case "${_pop_exe}" in "${_pop_path}" | "${_pop_path} (deleted)") ;; *) continue ;; esac
+    _pop_argv0=$(_proc_cmdline "${_pop_pid}" | head -n 1)
+    case "${_pop_argv0}" in "${_pop_path}" | "${_pop_name}") echo "${_pop_pid}" ;; esac
   done
 }
 
@@ -617,7 +627,7 @@ daemon_claim_pidfile() {
     _dcp_pid=$(cat "${_dcp_file}" 2>/dev/null)
     case "${_dcp_pid}" in '' | *[!0-9]*) _dcp_pid="" ;; esac
     if [ -n "${_dcp_pid}" ] && kill -0 "${_dcp_pid}" 2>/dev/null; then
-      if tr '\0' ' ' <"/proc/${_dcp_pid}/cmdline" 2>/dev/null | grep -qF "${_dcp_name}"; then
+      if _proc_cmdline "${_dcp_pid}" | grep -qF "${_dcp_name}"; then
         log Info "${_dcp_name} already running (pid ${_dcp_pid})"
         conf_lock_release
         return 1
@@ -640,7 +650,7 @@ daemon_stop_pidfile() {
   _dsp_pid=$(cat "${_dsp_file}" 2>/dev/null)
   case "${_dsp_pid}" in '' | *[!0-9]*) _dsp_pid="" ;; esac
   if [ -n "${_dsp_pid}" ] && kill -0 "${_dsp_pid}" 2>/dev/null; then
-    if tr '\0' ' ' <"/proc/${_dsp_pid}/cmdline" 2>/dev/null | grep -qF "${_dsp_name}"; then
+    if _proc_cmdline "${_dsp_pid}" | grep -qF "${_dsp_name}"; then
       stop_by_pids "${_dsp_name}" "${_dsp_pid}" || _dsp_rc=1
     else
       log Warning "${_dsp_name}: pid ${_dsp_pid} is not ours (stale pid file); not signalling it."

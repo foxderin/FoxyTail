@@ -1,6 +1,5 @@
 /*
- * FoxyTail WebUI — MD3 theme: full --md-sys-color-* token set derived from
- * the fox-orange seed #E0632F via precomputed material-color-utilities, with
+ * FoxyTail WebUI — neutral semantic palettes with restrained fox-orange, with
  * dark / light / auto (prefers-color-scheme) modes persisted to
  * localStorage under "foxy.theme".
  */
@@ -20,7 +19,7 @@ function loadSaved(): ThemeMode {
   } catch {
     /* ignore */
   }
-  return 'dark';
+  return 'auto';
 }
 
 const [mode, setModeSignal] = createSignal<ThemeMode>(loadSaved());
@@ -41,6 +40,7 @@ function paint(m: ThemeMode): void {
   root.setAttribute('data-theme', m);
   root.setAttribute('data-theme-effective', isDark ? 'dark' : 'light');
   root.style.colorScheme = isDark ? 'dark' : 'light';
+  document.querySelector('meta[name="theme-color"]')?.setAttribute('content', isDark ? '#15181e' : '#f5f6f8');
 }
 
 export function applyTheme(m: ThemeMode): void {

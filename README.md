@@ -185,11 +185,15 @@ FoxyTail never touches other modules' chains and probes for neighbors at boot (`
 
 The resolver selects `/data/adb/foxytail/bin/dnsmasq`, `/system/bin/dnsmasq`, then `/vendor/bin/dnsmasq`. Devices with a compatible system binary need no download. Otherwise supply a trusted dnsmasq for your architecture (mode 0755). Set `MAGIC_DNS=on`, then apply through the WebUI restart action. Android Private DNS settings remain unchanged; strict DoT or app-level DoH may bypass local port-53 resolution.
 
-The Android tailscaled DNS redirect resolves full Tailnet names but does not apply search domains. The local resolver derives short names from the current peer table and embeds them in the main configuration, which system dnsmasq reads before dropping privileges. The watchdog reconciles changes to names, IPs and accounts. The Tunnel page DNS check distinguishes the local resolver, its enable switch and binary source, and upstream native DNS rules.
+The local resolver derives short and full Tailnet names, including IPv4 and IPv6 records, from the current peer table and embeds them in the main configuration, which system dnsmasq reads before dropping privileges. This also preserves AAAA answers on native DNS implementations that only return IPv4 records for full Tailnet names. The watchdog reconciles changes to names, IPs and accounts. The Tunnel page DNS check distinguishes the local resolver, its enable switch and binary source, and upstream native DNS rules.
 
 ## IPv6
 
 `IPV6=on` gives `tailscale0` a dual-stack address (`fd7a:115c:a1e0::1` in bridge mode), adds symmetric ip6tables policy rules, and routes `fd7a:115c:a1e0::/48` (add it to `ROUTE_SUBNETS`). Default is off. Add an IPv6 CIDR before enabling it; route application fails explicitly when none is configured.
+
+DNS startup first checks IPv6 NAT capability. If absent, it searches OS module trees for `ip6table_nat` and uses the system module loader with its declared dependencies and kernel ABI/signature checks. Module attempts have a six-second total budget, and success requires the NAT table to become usable. The Tunnel page reports the detected native, module, or fallback path; reading status does not load modules.
+
+When the module is absent or cannot load, the fallback retains IPv6 tunnel routing, the `::1` DNS listener, and A/AAAA mappings for both short and full Tailnet names. IPv4 DNS interception continues; transparent interception of DNS sent over IPv6 is unavailable on that path. The user's IPv6 setting remains enabled.
 
 ## Traffic analytics & diagnostics
 
