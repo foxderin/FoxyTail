@@ -29,6 +29,15 @@ func TestSocketDiagUsesConnectedFullTupleAndKernelFilter(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
+		message.Header.Sequence = 1
+		wire, err := message.MarshalBinary()
+		if err != nil || len(wire) != 16+len(message.Data) || len(wire)%4 != 0 {
+			t.Fatalf("raw socket-diag request is not a valid wire message: %d / %v", len(wire), err)
+		}
+		var decoded netlink.Message
+		if err = decoded.UnmarshalBinary(wire); err != nil || decoded.Header.Length != uint32(len(wire)) || decoded.Header.Sequence != 1 {
+			t.Fatalf("raw socket-diag wire header did not round-trip: %+v / %v", decoded.Header, err)
+		}
 		if message.Header.Flags&netlink.Dump != netlink.Dump || binary.NativeEndian.Uint32(message.Data[4:8]) != 1<<1 {
 			t.Fatal("socket lookup must inspect all matching connected UDP sockets")
 		}

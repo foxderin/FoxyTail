@@ -159,7 +159,10 @@ func socketDiagRequest(tuple flowTuple) (netlink.Message, error) {
 	if err != nil {
 		return netlink.Message{}, err
 	}
-	return netlink.Message{Header: netlink.Header{Type: unix.SOCK_DIAG_BY_FAMILY, Flags: netlink.Request | netlink.Dump}, Data: append(data, attributes...)}, nil
+	// Raw Sendto does not run netlink.Conn's header fixup. MarshalBinary
+	// requires the complete aligned wire length, including the 16-byte header.
+	payload := append(data, attributes...)
+	return netlink.Message{Header: netlink.Header{Length: uint32(16 + len(payload)), Type: unix.SOCK_DIAG_BY_FAMILY, Flags: netlink.Request | netlink.Dump}, Data: payload}, nil
 }
 
 func decodeSocketIdentity(data []byte, tuple flowTuple) (socketIdentity, error) {
