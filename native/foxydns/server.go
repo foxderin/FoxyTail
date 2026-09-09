@@ -249,7 +249,7 @@ func (s *service) writeState(ready bool) error {
 	if queueError != nil {
 		state["error"] = queueError.Error()
 	}
-	return writeJSON(s.cfg.StateFile, state)
+	return writeSnapshotJSON(s.cfg.StateFile, state)
 }
 
 func (s *service) closeListeners() {

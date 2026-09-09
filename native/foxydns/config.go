@@ -64,7 +64,11 @@ func (c Config) validate() error {
 	return nil
 }
 
-func writeJSON(path string, data any) error {
+// writeSnapshotJSON atomically publishes private, replaceable runtime state.
+// It deliberately does not sync to storage: readers check the live process and
+// snapshot freshness, and a restart reconstructs this data. Persistent account
+// or configuration state must use its own durable write path instead.
+func writeSnapshotJSON(path string, data any) error {
 	if path == "" {
 		return nil
 	}
@@ -77,14 +81,12 @@ func writeJSON(path string, data any) error {
 		return err
 	}
 	defer os.Remove(f.Name())
-	if _, err = f.Write(append(bytes, '\n')); err == nil {
-		err = f.Sync()
-	}
+	_, err = f.Write(append(bytes, '\n'))
 	if closeErr := f.Close(); err == nil {
 		err = closeErr
 	}
 	if err != nil {
-		return fmt.Errorf("write DNS state: %w", err)
+		return fmt.Errorf("write DNS snapshot: %w", err)
 	}
 	return os.Rename(f.Name(), path)
 }
