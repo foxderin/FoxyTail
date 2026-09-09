@@ -1,6 +1,6 @@
 /*
  * Serve / Funnel — list both mappings (light reads), add / delete with
- * confirm. Status JSON flattened best-effort (TCP + Web handlers).
+ * confirm. ServeConfig is adapted without losing listener protocol or handler paths.
  */
 import { createSignal, onMount, Show, type JSX } from 'solid-js';
 import { createApiScope, hasRoot } from '../api';
@@ -11,42 +11,9 @@ import { showToast, toastApiError } from '../components/Toast';
 import { MdIcon } from '../icons';
 import { Button, IconButton, Select, TextField } from '../components/ui';
 
-interface Mapping {
-  proto: string;
-  port: string;
-  target: string;
-}
+import { serveMappings, serveDeleteArgs, type ServeMapping as Mapping } from '../serve';
 
 type Kind = 'serve' | 'funnel';
-
-/* Flatten `serve status --json` into [{proto,port,target}] best effort. */
-function flatten(status: unknown): Mapping[] {
-  const out: Mapping[] = [];
-  if (!status || typeof status !== 'object') return out;
-  const st = status as Record<string, unknown>;
-  if (st.TCP && typeof st.TCP === 'object') {
-    Object.entries(st.TCP as Record<string, unknown>).forEach(([port, handler]) => {
-      const hd = handler as { TCPForward?: string; Target?: string } | null;
-      out.push({ proto: 'tcp', port, target: hd?.TCPForward || hd?.Target || '' });
-    });
-  }
-  if (st.Web && typeof st.Web === 'object') {
-    Object.entries(st.Web as Record<string, unknown>).forEach(([hp, web]) => {
-      const port = (hp.match(/:(\d+)$/) || [])[1] || '443';
-      const handlers = (web as { Handlers?: Record<string, { Proxy?: string; Path?: string; Text?: string }> })
-        ?.Handlers;
-      let target = '';
-      if (handlers) {
-        Object.entries(handlers).forEach(([path, hd]) => {
-          const tg = hd.Proxy || hd.Path || hd.Text || '';
-          if (tg) target = path + ' → ' + tg;
-        });
-      }
-      out.push({ proto: port === '443' ? 'https' : 'http', port, target });
-    });
-  }
-  return out;
-}
 
 export default function Serve(): JSX.Element {
   const scope = createApiScope();
@@ -74,17 +41,17 @@ export default function Serve(): JSX.Element {
       return;
     }
     setUnavailable((u) => ({ ...u, [k]: false }));
-    setMappings((m) => ({ ...m, [k]: flatten(res.status) }));
+    setMappings((m) => ({ ...m, [k]: serveMappings(res.status).filter((mapping) => mapping.funnel === (k === 'funnel')) }));
   }
 
   async function del(k: Kind, m: Mapping) {
     if (delBusy() !== null) return;
     if (!(await confirmDialog(t('serve_del_confirm')))) return;
-    setDelBusy(k + '/' + m.proto + '/' + m.port);
-    const res = await scope.api(k + '-del', m.proto, m.port);
+    setDelBusy(k + '/' + m.proto + '/' + m.port + (m.path ?? ''));
+    const res = await scope.api(k + '-del', ...serveDeleteArgs(m));
     setDelBusy(null);
     if (res.cancelled) return;
-    if (res.ok) void loadKind(k);
+    if (res.ok) { void loadKind('serve'); void loadKind('funnel'); }
     else toastApiError(t('op_failed'), res);
   }
 
@@ -120,14 +87,14 @@ export default function Serve(): JSX.Element {
             {mappings()[k]!.map((m) => (
               <div class="list-row">
                 <div class="main">
-                  <div class="title mono">{m.proto + ' :' + m.port}</div>
+                  <div class="title mono">{m.proto + ' ' + m.host + ':' + m.port + (m.path ?? '')}</div>
                   <Show when={m.target}>
                     <div class="sub mono">{m.target}</div>
                   </Show>
                 </div>
                 <IconButton
                   aria-label={t('delete')}
-                  disabled={!hasRoot || delBusy() !== null}
+                  disabled={!hasRoot || delBusy() !== null || !m.canDelete}
                   onClick={() => void del(k, m)}
                 >
                   <MdIcon name="delete" size={20} />

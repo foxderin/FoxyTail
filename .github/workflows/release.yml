@@ -1,129 +1,60 @@
 name: Release
-
 on:
   push:
-    tags:
-      - 'v*'
+    tags: ['v*']
   workflow_dispatch:
     inputs:
-      bump:
-        description: 'Version bump type'
-        type: choice
-        default: 'none'
-        options:
-          - none
-          - major
-          - minor
-          - patch
+      tag:
+        description: 'Existing, reviewed version tag to release (e.g. v1.0.3)'
+        required: true
+        type: string
       prerelease:
         description: 'Publish as a pre-release'
         type: boolean
         default: false
-
 permissions:
   contents: write
-
+concurrency:
+  group: release-${{ inputs.tag || github.ref_name }}
+  cancel-in-progress: false
 jobs:
   release:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
         with:
-          fetch-depth: 0 # full history for CHANGELOG generation
-
-      - name: Install build tools
-        run: sudo apt-get update && sudo apt-get install -y zip jq
-
-      - name: Bump version (manual run)
-        if: github.event_name == 'workflow_dispatch' && inputs.bump != 'none'
-        run: bash ./.github/tools/version-bump.sh "${{ inputs.bump }}"
-
-      - name: Validate tag format (tag push)
-        if: github.event_name == 'push'
+          fetch-depth: 0
+      - name: Select the existing release commit
+        env:
+          RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
         run: |
-          TAG="${GITHUB_REF_NAME}"
-          if ! echo "$TAG" | grep -qE '^v[0-9]+\.[0-9]+\.[0-9]+(-rc\.[0-9]+)?$'; then
-            echo "error: tag '$TAG' does not match the required format" >&2
-            echo "       expected: v<major>.<minor>.<patch> or v<major>.<minor>.<patch>-rc.<n>" >&2
-            echo "       examples: v1.2.3, v1.2.3-rc.1" >&2
-            exit 1
-          fi
-
-      # Provenance guard: the zip must be built from the tagged commit, so the
-      # tag version must already match module.prop. Bumping silently here would
-      # produce a zip whose module.prop differs from the tagged tree.
-      - name: Verify tag matches module.prop (tag push)
-        if: github.event_name == 'push'
+          [[ "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-rc\.[0-9]+)?$ ]] || exit 1
+          git show-ref --verify "refs/tags/$RELEASE_TAG"
+          git checkout --detach "refs/tags/$RELEASE_TAG"
+          test "$(git rev-parse HEAD)" = "$(git rev-parse "refs/tags/$RELEASE_TAG^{commit}")"
+          test "$RELEASE_TAG" = "$(sed -n 's/^version=//p' module.prop)"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.14.0'
+      - uses: pnpm/action-setup@v4
+        with:
+          version: '10.30.3'
+      - name: Install verification tools
+        run: sudo apt-get update && sudo apt-get install -y zip jq shellcheck
+      - run: pnpm --dir webui install --frozen-lockfile
+      - name: Verify sources and committed WebUI
+        run: bash .github/tools/verify.sh
+      - name: Build from the reviewed manifest
         run: |
-          TAG_VERSION="${GITHUB_REF_NAME}"
-          CURRENT=$(grep '^version=' module.prop | cut -d= -f2)
-          if [ "$TAG_VERSION" != "$CURRENT" ]; then
-            echo "error: tag $TAG_VERSION does not match module.prop version $CURRENT" >&2
-            echo "       run '.github/tools/version-bump.sh' first, commit the version" >&2
-            echo "       files, and only then create the tag" >&2
-            exit 1
-          fi
-          echo "Tag matches module.prop ($CURRENT)"
-
-      - name: Resolve version and prerelease flag
-        id: meta
-        run: |
-          VERSION=$(grep '^version=' module.prop | cut -d= -f2)
-          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
-          PRE=false
-          case "$VERSION" in *-rc*) PRE=true ;; esac
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ "${{ inputs.prerelease }}" = "true" ]; then
-            PRE=true
-          fi
-          echo "prerelease=${PRE}" >> "$GITHUB_OUTPUT"
-
-      - name: Build
-        run: bash ./.github/tools/build.sh
-
-      - name: Publish GitHub release
-        id: release
+          bash .github/tools/build.sh
+          test -z "$(git status --porcelain --untracked-files=no)"
+      - name: Publish the existing tag
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ steps.meta.outputs.version }}
-          name: FoxyTail ${{ steps.meta.outputs.version }}
-          files: dist/*.zip
+          tag_name: ${{ inputs.tag || github.ref_name }}
+          files: |
+            dist/*.zip
+            dist/SHA256SUMS
           generate_release_notes: true
-          prerelease: ${{ steps.meta.outputs.prerelease }}
-          append_body: true
-          body: |
-            ## Downloads
-            - **FoxyTail-${{ steps.meta.outputs.version }}.zip** — light package: binaries are downloaded during installation and SHA256-verified against `tailscale/checksums.txt`
-            - **FoxyTail-${{ steps.meta.outputs.version }}-full.zip** — full package: all binaries bundled, works offline
-
-      - name: Point update.json at the released light zip
-        env:
-          ASSETS: ${{ steps.release.outputs.assets }}
-        run: |
-          ZIP_URL=$(jq -r '.[] | select(.name | test("^FoxyTail-.*\\.zip$") and (endswith("-full.zip") | not)) | .browser_download_url' <<<"$ASSETS")
-          if [ -z "$ZIP_URL" ]; then
-            echo "error: light zip asset URL not found in release assets" >&2
-            exit 1
-          fi
-          jq --arg url "$ZIP_URL" '.zipUrl = $url' update.json > update.json.tmp
-          mv update.json.tmp update.json
-
-      # Write version file changes back for BOTH trigger types. (The original
-      # project only pushed on workflow_dispatch, leaving tag-triggered runs
-      # with an out-of-sync master.)
-      - name: Commit version files back to the repository
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add module.prop update.json CHANGELOG.md
-          if git diff --staged --quiet; then
-            echo "No changes to commit"
-            exit 0
-          fi
-          git commit -m "chore(release): ${{ steps.meta.outputs.version }} [skip ci]"
-          if [ "${{ github.event_name }}" = "push" ]; then
-            # tag pushes check out a detached HEAD at the tag; push to master
-            git push origin HEAD:refs/heads/master
-          else
-            git push
-          fi
+          prerelease: ${{ inputs.prerelease || contains(inputs.tag || github.ref_name, '-rc.') }}
+          fail_on_unmatched_files: true

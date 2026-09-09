@@ -1,0 +1,216 @@
+"""Host-safe lifecycle/upgrade fault injection; no Android commands are run."""
+import os
+from pathlib import Path
+import subprocess
+import tempfile
+import unittest
+
+ROOT = Path(__file__).resolve().parents[1]
+
+
+def run_sh(script, directory):
+    result = subprocess.run(['sh', '-c', script], cwd=directory, text=True,
+                            capture_output=True, timeout=20)
+    if result.returncode:
+        raise AssertionError(f'rc={result.returncode}\n{result.stdout}\n{result.stderr}')
+    return result.stdout
+
+
+class LifecycleTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.dir = Path(self.tmp.name)
+
+    def service_functions(self):
+        source = (ROOT / 'tailscale/scripts/foxytail.service').read_text()
+        return source[source.index('daemon_pids() {'):source.index('# Serialize all controllers')]
+
+    def test_repeat_start_reconciles_companions(self):
+        script = self.service_functions() + '''
+TS_RUN_DIR=.; TS_DIR=.; TS_MODE=bridge; ROUTE_SCOPE=all
+ensure_run_dirs() { :; }
+load_conf() { :; }
+log() { :; }
+is_running() { return 0; }
+reconcile_companions() { echo reconciled; return 7; }
+start_service
+rc=$?
+test "$rc" = 7
+'''
+        self.assertEqual(run_sh(script, self.dir).strip(), 'reconciled')
+
+    def test_unsupported_native_scope_never_starts_daemon(self):
+        script = self.service_functions() + '''
+TS_RUN_DIR=.; TS_DIR=.; TS_MODE=tun; ROUTE_SCOPE=selected
+ensure_run_dirs() { :; }
+load_conf() { :; }
+log() { :; }
+is_running() { echo unsafe >called; return 0; }
+start_service && exit 5
+test ! -e called
+'''
+        run_sh(script, self.dir)
+
+    def test_postinstall_starts_all_residents_and_preserves_run(self):
+        scripts = self.dir / 'scripts'
+        scripts.mkdir()
+        runtime = self.dir / 'run'
+        runtime.mkdir()
+        (runtime / 'route.state').write_text('owned routing state')
+        (self.dir / 'settings.sh').write_text('''
+TS_DIR="$PWD"; TS_SCRIPTS_DIR="$PWD/scripts"; TS_RUN_DIR="$PWD/run"; TS_MOD_DIR="$PWD"
+load_conf() { :; }
+ensure_run_dirs() { :; }
+log() { :; }
+stop_by_pids() { :; }
+''')
+        for name in ['foxytail.service', 'foxytail.stats', 'foxytail.watchdog', 'foxytail.context', 'foxytail.logd']:
+            path = scripts / name
+            path.write_text(f'#!/bin/sh\necho "$1" >"{runtime / name}"\n')
+            path.chmod(0o755)
+        source = (ROOT / 'tailscale/scripts/start.sh').read_text()
+        source = source.replace('nohup "${TS_SCRIPTS_DIR}/${_sr_name}"', 'nohup sh "${TS_SCRIPTS_DIR}/${_sr_name}"')
+        source = source.replace('\n"${TS_SCRIPTS_DIR}/foxytail.service"', '\nsh "${TS_SCRIPTS_DIR}/foxytail.service"')
+        (scripts / 'start.sh').write_text(source)
+        subprocess.run(['sh', str(scripts / 'start.sh'), 'postinstall'], cwd=self.dir, check=True, timeout=10)
+        # Background children write bounded, local files. Wait only for their
+        # observable completion, never for an arbitrary application sleep.
+        import time
+        deadline = time.monotonic() + 3
+        while not all((runtime / x).exists() for x in ['foxytail.stats', 'foxytail.watchdog', 'foxytail.context', 'foxytail.logd']):
+            self.assertLess(time.monotonic(), deadline)
+            time.sleep(.01)
+        self.assertEqual((runtime / 'route.state').read_text(), 'owned routing state')
+        for name in ['foxytail.service', 'foxytail.stats', 'foxytail.watchdog', 'foxytail.context', 'foxytail.logd']:
+            self.assertEqual((runtime / name).read_text().strip(), 'start')
+
+    def test_reload_only_clears_the_revision_it_applied(self):
+        scripts = self.dir / 'scripts'; scripts.mkdir()
+        runtime = self.dir / 'run'; runtime.mkdir()
+        (self.dir / 'settings.sh').write_text('''
+TS_DIR="$PWD"; TS_SCRIPTS_DIR="$PWD/scripts"; TS_RUN_DIR="$PWD/run"; TS_MOD_DIR="$PWD"
+load_conf() { :; }
+ensure_run_dirs() { :; }
+log() { :; }
+stop_by_pids() { :; }
+conf_lock_acquire() { :; }
+conf_lock_release() { :; }
+''')
+        service = scripts / 'foxytail.service'
+        service.write_text('#!/bin/sh\n[ "$WRITE_NEW" != 1 ] || echo new-revision >"$PWD/run/settings.pending"\nexit 0\n')
+        service.chmod(0o755)
+        source = (ROOT / 'tailscale/scripts/start.sh').read_text()
+        source = source.replace('\n"${TS_SCRIPTS_DIR}/foxytail.service"', '\nsh "${TS_SCRIPTS_DIR}/foxytail.service"')
+        (scripts / 'start.sh').write_text(source)
+        for newer in ('0', '1'):
+            (runtime / 'settings.pending').write_text('old-revision\n')
+            subprocess.run(['sh', str(scripts / 'start.sh'), 'reload'], cwd=self.dir,
+                           env={**os.environ, 'WRITE_NEW': newer}, check=True, timeout=10)
+            if newer == '1':
+                self.assertEqual((runtime / 'settings.pending').read_text().strip(), 'new-revision')
+            else:
+                self.assertFalse((runtime / 'settings.pending').exists())
+        # Disabled modules cannot claim an unapplied restart succeeded.
+        (self.dir / 'disable').touch()
+        result = subprocess.run(['sh', str(scripts / 'start.sh'), 'reload'], cwd=self.dir, timeout=10)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertTrue((runtime / 'settings.pending').exists())
+
+    def test_service_lock_serializes_competing_stale_owner_recovery(self):
+        source = (ROOT / 'tailscale/scripts/foxytail.service').read_text()
+        settings = (ROOT / 'tailscale/settings.sh').read_text()
+        helpers = settings[settings.index('_conf_pid_stamp() {'):settings.index('conf_lock_acquire() {')]
+        a = source.index('service_unlock() {')
+        functions = source[a:source.index('\ncase "$1" in', a)]
+        (self.dir / '.service-lock').symlink_to('99999999:-')
+        runner = helpers + functions + '''
+TS_RUN_DIR="$1"
+ensure_run_dirs() { :; }
+log() { :; }
+service_lock || exit 1
+echo enter >>"$TS_RUN_DIR/events"
+sleep 0.03
+echo leave >>"$TS_RUN_DIR/events"
+'''
+        procs = [subprocess.Popen(['sh', '-c', runner, 'fixture', str(self.dir)],
+                                 stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True) for _ in range(6)]
+        for proc in procs:
+            stdout, stderr = proc.communicate(timeout=15)
+            self.assertEqual(proc.returncode, 0, stdout + stderr)
+        self.assertEqual((self.dir / 'events').read_text().splitlines(), ['enter', 'leave'] * 6)
+        self.assertFalse((self.dir / '.service-lock').is_symlink())
+
+    def test_upgrade_switch_rolls_back_after_second_directory_failure(self):
+        source = (ROOT / 'customize.sh').read_text()
+        functions = source[source.index('rollback_install() {'):source.index('# Recover an interrupted earlier switch')]
+        for part in ['bin', 'scripts', 'conf']:
+            (self.dir / part).mkdir()
+            (self.dir / part / 'value').write_text('old-' + part)
+            (self.dir / 'candidate' / part).mkdir(parents=True)
+            (self.dir / 'candidate' / part / 'value').write_text('new-' + part)
+        for part in ['settings.sh', 'VERSIONS', 'checksums.txt']:
+            (self.dir / part).write_text('old-' + part)
+            (self.dir / 'candidate' / part).write_text('new-' + part)
+        (self.dir / 'bin/dnsmasq').write_text('user-binary')
+        (self.dir / 'files').mkdir()
+        (self.dir / 'files/received').write_text('user-file')
+        run_sh(functions + '''
+TS_DIR="$PWD"; CANDIDATE="$PWD/candidate"; BACKUP="$PWD/backups/unique"
+mv() {
+  if [ "$1" = "$CANDIDATE/scripts" ]; then return 1; fi
+  command mv "$@"
+}
+switch_install && exit 7
+rollback_install
+''', self.dir)
+        for part in ['bin', 'scripts', 'conf']:
+            self.assertEqual((self.dir / part / 'value').read_text(), 'old-' + part)
+        self.assertEqual((self.dir / 'bin/dnsmasq').read_text(), 'user-binary')
+        self.assertEqual((self.dir / 'files/received').read_text(), 'user-file')
+        self.assertEqual((self.dir / 'settings.sh').read_text(), 'old-settings.sh')
+
+    def test_rollback_delete_failure_retains_backup_and_journal(self):
+        source = (ROOT / 'customize.sh').read_text()
+        functions = source[source.index('rollback_install() {'):source.index('# Recover an interrupted earlier switch')]
+        for relative in ['bin', 'backups/old/bin']:
+            (self.dir / relative).mkdir(parents=True)
+        (self.dir / 'bin/version').write_text('new')
+        (self.dir / 'backups/old/bin/version').write_text('old')
+        (self.dir / '.installing').write_text('')
+        (self.dir / '.install-transaction').write_text('journal')
+        run_sh(functions + '''
+TS_DIR="$PWD"; BACKUP="$PWD/backups/old"
+rm() { if [ "$*" = "-rf $TS_DIR/bin" ]; then return 1; fi; command rm "$@"; }
+rollback_install && exit 8
+test -f "$TS_DIR/.install-transaction"
+test -f "$TS_DIR/.installing"
+''', self.dir)
+        self.assertEqual((self.dir / 'bin/version').read_text(), 'new')
+        self.assertEqual((self.dir / 'backups/old/bin/version').read_text(), 'old')
+        self.assertFalse((self.dir / 'bin/bin').exists())
+
+    def test_copytruncate_keeps_existing_writer_on_active_inode(self):
+        settings = (ROOT / 'tailscale/settings.sh').read_text()
+        function = settings[settings.index('rotate_log()'):settings.index('# Log with a per-call')]
+        function += settings[settings.index('_conf_pid_stamp() {'):settings.index('# Must be called under conf_lock_acquire')]
+        run_sh(function + '''
+LOG_MAX_KB=1
+TS_RUN_DIR="$PWD"
+logfile="$PWD/daemon.log"
+exec 3>>"$logfile"
+head -c 2048 /dev/zero >&3
+before=$(ls -i "$logfile" | awk '{print $1}')
+rotate_log "$logfile"
+echo after-rotation >&3
+exec 3>&-
+after=$(ls -i "$logfile" | awk '{print $1}')
+test "$before" = "$after"
+test "$(cat "$logfile")" = after-rotation
+test -f "$logfile.bak"
+test "$(wc -c <"$logfile.bak")" -le 1024
+''', self.dir)
+
+
+if __name__ == '__main__':
+    unittest.main()

@@ -12,7 +12,7 @@
  * stay page-scoped (createApiScope) and are dropped on unmount.
  */
 import { createSignal } from 'solid-js';
-import { apiCall, type ApiCall, type ApiResult } from './api';
+import { apiCallAfter, type ApiCall, type ApiResult } from './api';
 
 export type TaskStatus = 'running' | 'done' | 'cancelled' | 'error';
 
@@ -46,9 +46,8 @@ export function getTask(key: string): Task | undefined {
  * including its backend process via the ApiCall cancel path. */
 export function startTask(key: string, cmd: string, ...args: (string | number)[]): ApiCall {
   const prev = taskMap().get(key);
-  if (prev && prev.status === 'running') prev.call.cancel();
-
-  const call = apiCall(cmd, ...args);
+  const settled = prev ? prev.call.cancel() : Promise.resolve({ ok: true });
+  const call = apiCallAfter(settled, cmd, ...args);
   setTaskMap((prevMap) => {
     const next = new Map(prevMap);
     next.set(key, { key, status: 'running', result: null, startedAt: Date.now(), call });
@@ -63,7 +62,7 @@ export function startTask(key: string, cmd: string, ...args: (string | number)[]
   return call;
 }
 
-export function cancelTask(key: string): void {
+export function cancelTask(key: string): Promise<ApiResult> {
   const t = taskMap().get(key);
-  if (t && t.status === 'running') t.call.cancel();
+  return t && t.status === 'running' ? t.call.cancel() : Promise.resolve({ ok: true });
 }

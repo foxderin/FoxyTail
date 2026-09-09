@@ -4,7 +4,8 @@
 # JSON-only backend for the WebUI. Every command prints exactly one JSON
 # document to stdout; diagnostics go to stderr / the log file.
 #
-# Commands:
+# Commands (optionally prefix with --request-id <unix-seconds>_<unique-token>):
+#   cancel              cancel <request-id>, exact registered child cancellation
 #   status              Overall snapshot {daemon,backend,mode,self,exitNode,peers,magicDns,keyExpiry,uptime}.
 #                       Reads `tailscale --socket=... status --json` (10s timeout);
 #                       returns daemon:"stopped" quickly when the socket is absent.
@@ -28,14 +29,14 @@
 #                       auth flow can complete after the URL is returned.
 #   login-authkey       login-authkey <key> (tailscale login --authkey=, waits for result)
 #   logout              tailscale logout
-#   accounts            parse `tailscale switch list` -> {accounts:[{name,current}]}
+#   accounts            `tailscale switch --list --json` -> {accounts:[{name,id,label,current}]}
 #   switch              switch <account-name>
 #   serve-list          `tailscale serve status --json` passthrough {ok,status}
 #   serve-set           serve-set <proto> <port> <target>
-#   serve-del           serve-del <proto> <port>
+#   serve-del           serve-del <proto> <port> [path]
 #   funnel-list         `tailscale funnel status --json` passthrough {ok,status}
 #   funnel-set          funnel-set <proto> <port> <target>
-#   funnel-del          funnel-del <proto> <port>
+#   funnel-del          funnel-del <proto> <port> [path]
 #   traffic             traffic hourly [YYYY-MM-DD] | daily | topn [n]
 #                       (foxytail.stats query passthrough)
 #   traffic-uids        per-UID traffic totals across the retention window {uids:[{uid,rx}]}
@@ -70,7 +71,7 @@
 DIR=$(dirname "$(realpath "$0")")
 # shellcheck source=../settings.sh
 . "${DIR}/../settings.sh"
-load_conf
+load_conf || { printf '%s\n' '{"ok":false,"error":"invalid configuration; inspect the service log"}'; exit 1; }
 ensure_run_dirs
 
 TS_SOCKET="${TS_RUN_DIR}/tailscaled.sock"
@@ -88,11 +89,166 @@ jerr() {
   exit 1
 }
 
-# tailscale CLI against our socket. $1: timeout seconds, rest: argv.
+# Requests use a never-reused ID. Cancellation leaves a tombstone so a delayed
+# bridge invocation cannot start after the UI was told it had been cancelled.
+_op_valid_id() {
+  case "$1" in '' | *[!A-Za-z0-9_-]*) return 1 ;; esac
+  [ "${#1}" -le 96 ] || return 1
+  _ov_epoch=${1%%_*}
+  case "${_ov_epoch}" in '' | *[!0-9]* | ???????????*) return 1 ;; esac
+  [ "${_ov_epoch}" -gt 0 ] 2>/dev/null
+}
+
+_op_recent_id() {
+  _ori_epoch=${1%%_*}
+  _ori_now=$(date +%s)
+  [ "${_ori_epoch}" -ge $((_ori_now - 900)) ] && [ "${_ori_epoch}" -le $((_ori_now + 30)) ]
+}
+
+# IDs older than the acceptance window can never start again. Retain live
+# operations, but collect old terminal records/tombstones at most once a minute.
+_op_gc() {
+  _og_now=$(date +%s)
+  _og_last=$(cat "${TS_RUN_DIR}/operations/.gc-last" 2>/dev/null)
+  case "${_og_last}" in '' | *[!0-9]*) _og_last=0 ;; esac
+  [ $((_og_now - _og_last)) -ge 60 ] || return 0
+  printf '%s\n' "${_og_now}" >"${TS_RUN_DIR}/operations/.gc-last"
+  for _og_dir in "${TS_RUN_DIR}/operations/"*; do
+    [ -d "${_og_dir}" ] && [ ! -L "${_og_dir}" ] || continue
+    _og_id=${_og_dir##*/}
+    _op_valid_id "${_og_id}" || continue
+    _og_epoch=${_og_id%%_*}
+    [ "${_og_epoch}" -lt $((_og_now - 930)) ] || continue
+    _og_alive=0
+    for _og_record in "${_og_dir}/runner" "${_og_dir}"/child.*; do
+      _op_pid_alive "${_og_record}" && _og_alive=1
+    done
+    [ "${_og_alive}" = 1 ] || rm -rf "${_og_dir}"
+  done
+}
+
+_op_starttime() {
+  [ -r "/proc/$1/stat" ] || return 1
+  awk '{sub(/^.*\) /, ""); if($1!="Z") print $20}' "/proc/$1/stat" 2>/dev/null
+}
+
+_op_pid_alive() {
+  _opa_record="$1"
+  [ -f "${_opa_record}" ] || return 1
+  IFS=' ' read -r _opa_pid _opa_start <"${_opa_record}"
+  case "${_opa_pid}:${_opa_start}" in *[!0-9:]* | :* | *:) return 1 ;; esac
+  _opa_now=$(_op_starttime "${_opa_pid}")
+  [ -n "${_opa_now}" ] && [ "${_opa_now}" = "${_opa_start}" ] && kill -0 "${_opa_pid}" 2>/dev/null
+}
+
+_op_signal() {
+  if _op_pid_alive "$1"; then kill "-$2" "${_opa_pid}" 2>/dev/null; fi
+}
+
+_op_cancelled() {
+  [ -n "${_OP_DIR:-}" ] && [ -f "${_OP_DIR}/cancelled" ]
+}
+
+_op_finish() {
+  conf_lock_release
+  if [ -n "${_OP_DIR:-}" ]; then
+    rm -f "${_OP_DIR}/runner"
+    : >"${_OP_DIR}/done"
+  fi
+}
+
+_op_init() {
+  _op_valid_id "$1" || jerr 'invalid request ID'
+  _op_recent_id "$1" || jerr 'request ID has expired or is from the future'
+  mkdir -p "${TS_RUN_DIR}/operations" || jerr 'cannot create operation registry'
+  _op_gc
+  _OP_DIR="${TS_RUN_DIR}/operations/$1"
+  # mkdir claims the ID; an existing ID is either a cancellation tombstone or
+  # a previous invocation. Both must prevent duplicate execution.
+  mkdir "${_OP_DIR}" 2>/dev/null || jerr 'request already exists or was cancelled'
+  printf '%s\n' "$2" >"${_OP_DIR}/command"
+  printf '%s\n' "${TS_SOCKET}" >"${_OP_DIR}/socket"
+  printf '%s %s\n' "$$" "$(_op_starttime "$$")" >"${_OP_DIR}/runner"
+  trap '_op_finish' 0
+  trap 'exit 130' HUP INT TERM
+  _op_cancelled && jerr 'request was cancelled'
+}
+
+cmd_cancel() {
+  _op_valid_id "$1" || jerr 'invalid request ID'
+  _oc_dir="${TS_RUN_DIR}/operations/$1"
+  if [ ! -d "${_oc_dir}" ] && ! _op_recent_id "$1"; then
+    echo '{"ok":true,"cancelled":true,"expired":true}'; return 0
+  fi
+  mkdir -p "${_oc_dir}" || jerr 'cannot record cancellation'
+  _oc_cmd=$(cat "${_oc_dir}/command" 2>/dev/null)
+  case "${_oc_cmd}" in
+    control | mode-set | routes-set | settings-set | context-set | restore | backup)
+      if _op_pid_alive "${_oc_dir}/runner"; then jerr 'operation is committing changes and cannot be cancelled'; fi ;;
+  esac
+  : >"${_oc_dir}/cancelled" || jerr 'cannot record cancellation'
+  _oc_socket=$(cat "${_oc_dir}/socket" 2>/dev/null)
+  [ -z "${_oc_socket}" ] || [ "${_oc_socket}" = "${TS_SOCKET}" ] || jerr 'operation socket mismatch'
+  _oc_i=0
+  while [ "${_oc_i}" -lt 50 ]; do
+    _oc_busy=0
+    for _oc_record in "${_oc_dir}"/child.*; do
+      if _op_pid_alive "${_oc_record}"; then
+        _oc_busy=1
+        if [ "${_oc_i}" -lt 30 ]; then _op_signal "${_oc_record}" TERM
+        else _op_signal "${_oc_record}" KILL; fi
+      fi
+    done
+    _op_pid_alive "${_oc_dir}/runner" && _oc_busy=1
+    [ "${_oc_busy}" = 0 ] && { jqr -n -c --arg id "$1" '{ok:true,cancelled:true,requestId:$id}'; return 0; }
+    sleep 0.1
+    _oc_i=$((_oc_i + 1))
+  done
+  jerr 'operation has not stopped; replacement was not authorized'
+}
+
+# Run the actual CLI as a registered child, with a separate timeout monitor.
+# No pgrep/pkill patterns or process groups can target unrelated invocations.
+_op_exec() {
+  _oe_seconds="$1"
+  shift
+  _op_cancelled && return 130
+  "$@" &
+  _oe_pid=$!
+  _oe_start=$(_op_starttime "${_oe_pid}")
+  _oe_record="${TS_RUN_DIR}/.cli-${_oe_pid}"
+  [ -z "${_OP_DIR:-}" ] || _oe_record="${_OP_DIR}/child.${_oe_pid}"
+  printf '%s %s\n' "${_oe_pid}" "${_oe_start}" >"${_oe_record}"
+  _oe_timeout="${_oe_record}.timeout"
+  _op_cancelled && _op_signal "${_oe_record}" TERM
+  (
+    sleep "${_oe_seconds}" &
+    _oe_sleep=$!
+    trap 'kill "${_oe_sleep}" 2>/dev/null; exit 0' TERM INT HUP
+    wait "${_oe_sleep}" 2>/dev/null
+    if _op_pid_alive "${_oe_record}"; then
+      : >"${_oe_timeout}"
+      _op_signal "${_oe_record}" TERM
+      sleep 1
+      _op_signal "${_oe_record}" KILL
+    fi
+  ) >/dev/null 2>&1 &
+  _oe_timer=$!
+  wait "${_oe_pid}"
+  _oe_rc=$?
+  kill "${_oe_timer}" 2>/dev/null
+  wait "${_oe_timer}" 2>/dev/null
+  [ ! -f "${_oe_timeout}" ] || _oe_rc=124
+  rm -f "${_oe_record}" "${_oe_timeout}"
+  _op_cancelled && return 130
+  return "${_oe_rc}"
+}
+
+# Diagnostics are preserved; callers choose whether to capture or suppress them.
 ts_cli() {
   _tc_t="$1"
   shift
-  timeout "${_tc_t}" tailscale --socket="${TS_SOCKET}" "$@" 2>/dev/null
+  _op_exec "${_tc_t}" tailscale --socket="${TS_SOCKET}" "$@"
 }
 
 # status --json, empty string on any failure.
@@ -221,6 +377,7 @@ cmd_speedtest_exitnodes() {
      | [(.TailscaleIPs // [])[0] // "", .HostName // "-", .ID // ""] | @tsv')
   _se_out=""
   printf '%s\n' "${_se_list}" | while IFS="$(printf '\t')" read -r _se_ip _se_host _se_id; do
+    _op_cancelled && break
     [ -n "${_se_ip}" ] || continue
     _se_ms=""
     _se_ping=$(ts_cli 8 ping --c=2 --timeout=3s "${_se_ip}" </dev/null)
@@ -261,13 +418,20 @@ cmd_derp_speedtest() {
 
 # --- control / mode -----------------------------------------------------------
 
+_control_run() {
+  if [ "$1" = restart ]; then "${TS_SCRIPTS_DIR}/start.sh" reload
+  else "${TS_SCRIPTS_DIR}/foxytail.service" "$1"; fi
+}
+
 cmd_control() {
   case "$1" in
     start | stop | restart) ;;
     *) jerr "control: expected start|stop|restart" ;;
   esac
-  if "${TS_SCRIPTS_DIR}/foxytail.service" "$1" >>"${TS_RUN_LOG_FILE}" 2>&1; then
-    jqr -n -c --arg a "$1" '{ok:true,action:$a}'
+  if _control_run "$1" >>"${TS_RUN_LOG_FILE}" 2>&1; then
+    _cc_pending=false
+    [ ! -f "${TS_RUN_DIR}/settings.pending" ] || _cc_pending=true
+    jqr -n -c --arg a "$1" --argjson p "${_cc_pending}" '{ok:true,action:$a,applied:(if $a=="restart" then ($p|not) else null end),restartRequired:$p}'
   else
     jerr "foxytail.service $1 failed (see ${TS_RUN_LOG_FILE})"
   fi
@@ -282,6 +446,9 @@ cmd_mode_set() {
     bridge | tun | proxy) ;;
     *) jerr "mode-set: expected bridge|tun|proxy" ;;
   esac
+  if [ "$1" = tun ] && [ "${ROUTE_SCOPE}" != all ]; then
+    jerr "native tun supports only route scope all; use bridge for UID routing"
+  fi
   if [ "$1" = "tun" ] && [ ! -c /dev/net/tun ]; then
     jerr "tun mode unavailable: /dev/net/tun does not exist on this device"
   fi
@@ -349,24 +516,10 @@ cmd_dns() {
 # True when the login CLI output already contains an auth URL or an
 # already-logged-in/success marker. Used as a wait_for check by cmd_login.
 _login_probe() {
+  _op_cancelled && return 0
   [ -f "${_cl_tmp}" ] || return 1
   grep -q 'https://' "${_cl_tmp}" 2>/dev/null && return 0
   grep -qi -e already -e success "${_cl_tmp}" 2>/dev/null
-}
-
-# TERM stale `tailscale login` clients that run against OUR socket. The
-# cmdline must contain the socket path, so a user's own `tailscale login`
-# and a concurrent authkey login are never touched.
-_login_kill_stale() {
-  for _lk_pid in $(pids_of 'tailscale.*login'); do
-    _lk_cmd=$(tr '\0' ' ' <"/proc/${_lk_pid}/cmdline" 2>/dev/null)
-    case "${_lk_cmd}" in
-      *"${TS_SOCKET}"*login*)
-        case "${_lk_cmd}" in *authkey*) continue ;; esac
-        kill "${_lk_pid}" 2>/dev/null
-        ;;
-    esac
-  done
 }
 
 cmd_login() {
@@ -379,13 +532,10 @@ cmd_login() {
   fi
   _cl_tmp="${TS_RUN_DIR}/webapi-login.$$"
   rm -f "${_cl_tmp}"
-  # Stale `tailscale login` clients from earlier attempts make the daemon
-  # answer new attempts with EOF; clear them before starting a fresh one.
-  _login_kill_stale
-  sleep 1
   # The CLI blocks until auth completes; keep it alive after we grab the URL.
-  ( timeout 180 tailscale --socket="${TS_SOCKET}" login "$@" >"${_cl_tmp}" 2>&1 ) &
+  ( _op_exec 180 tailscale --socket="${TS_SOCKET}" login "$@"; sleep 25; rm -f "${_cl_tmp}" ) >"${_cl_tmp}" 2>&1 </dev/null &
   if wait_for "login URL" _login_probe 20 1; then
+    _op_cancelled && jerr "login cancelled"
     _cl_url=$(grep -o 'https://[^ ]*' "${_cl_tmp}" 2>/dev/null | head -n 1)
     if [ -n "${_cl_url}" ]; then
       jqr -n -c --arg u "${_cl_url}" '{ok:true,url:$u}'
@@ -397,9 +547,10 @@ cmd_login() {
   fi
   _cl_err=$(tail -n 3 "${_cl_tmp}" 2>/dev/null | tr '\n' ' ')
   rm -f "${_cl_tmp}"
-  # Best-effort cleanup: a lingering `tailscale login` process is useless once
-  # we have given up; kill it so the next attempt starts fresh.
-  _login_kill_stale
+  # Only this request owns its CLI record.
+  if [ -n "${_OP_DIR:-}" ]; then
+    for _cl_record in "${_OP_DIR}"/child.*; do _op_signal "${_cl_record}" TERM; done
+  fi
   _cl_hint=""
   # If the daemon logged a control-plane reachability error, surface it so the
   # user sees *why* the URL never arrived (common cause: proxy/DNS conflict).
@@ -439,19 +590,12 @@ cmd_logout() {
 
 cmd_accounts() {
   daemon_up || jerr "tailscaled is not running"
-  _ac_list=$(ts_cli 15 switch list 2>&1)
-  if [ $? -ne 0 ]; then
-    jerr "switch list failed: ${_ac_list:-timeout}"
-  fi
-  printf '%s\n' "${_ac_list}" | grep -v '^$' | while IFS= read -r _ac_line; do
-    _ac_cur=false
-    case "${_ac_line}" in
-      *\**) _ac_cur=true ;;
-    esac
-    _ac_name=$(printf '%s' "${_ac_line}" | sed 's/\*//g' | awk '{print $1}')
-    [ -n "${_ac_name}" ] || continue
-    jqr -n -c --arg n "${_ac_name}" --argjson c "${_ac_cur}" '{name:$n,current:$c}'
-  done | jqr -s -c '{ok:true,accounts:.}'
+  _ac_list=$(ts_cli 15 switch --list --json 2>&1) || jerr "account list failed: ${_ac_list}"
+  printf '%s' "${_ac_list}" | jqr -e 'type == "array"' >/dev/null 2>&1 || jerr "account list did not return a JSON array"
+  printf '%s' "${_ac_list}" | jqr -c '{ok:true,accounts:map({
+    name:.id, id:.id, current:(.selected // false),
+    label:(.nickname // .account // .id), tailnet:(.tailnet // "")
+  })}'
 }
 
 cmd_switch() {
@@ -491,6 +635,7 @@ _serve_set() {
   case "${_ss_port}" in
     '' | *[!0-9]*) jerr "invalid port: ${_ss_port:-<empty>}" ;;
   esac
+  _num_in_range "${_ss_port}" 1 65535 || jerr "invalid port"
   [ -n "${_ss_target}" ] || jerr "missing target"
   _ss_out=$(ts_cli 25 "${_ss_kind}" --bg --"${_ss_proto}=${_ss_port}" "${_ss_target}" 2>&1)
   if [ $? -eq 0 ]; then
@@ -505,6 +650,7 @@ _serve_del() {
   _sd_kind="$1"
   _sd_proto="$2"
   _sd_port="$3"
+  _sd_path="${4:-}"
   case "${_sd_proto}" in
     http | https | tcp | tls-terminated-tcp) ;;
     *) jerr "invalid proto: ${_sd_proto:-<empty>}" ;;
@@ -512,7 +658,14 @@ _serve_del() {
   case "${_sd_port}" in
     '' | *[!0-9]*) jerr "invalid port: ${_sd_port:-<empty>}" ;;
   esac
-  _sd_out=$(ts_cli 25 "${_sd_kind}" --bg --"${_sd_proto}=${_sd_port}" off 2>&1)
+  _num_in_range "${_sd_port}" 1 65535 || jerr "invalid port"
+  if [ -n "${_sd_path}" ]; then
+    case "${_sd_proto}:${_sd_path}" in http:/* | https:/*) ;; *) jerr 'path applies only to HTTP(S) handlers and must start with /' ;; esac
+    printf '%s' "${_sd_path}" | LC_ALL=C grep '[[:cntrl:]]' >/dev/null && jerr 'invalid path'
+    _sd_out=$(ts_cli 25 "${_sd_kind}" --bg --"${_sd_proto}=${_sd_port}" --set-path="${_sd_path}" off 2>&1)
+  else
+    _sd_out=$(ts_cli 25 "${_sd_kind}" --bg --"${_sd_proto}=${_sd_port}" off 2>&1)
+  fi
   if [ $? -eq 0 ]; then
     jqr -n -c --arg k "${_sd_kind}" --arg p "${_sd_proto}" --argjson port "${_sd_port}" \
       '{ok:true,kind:$k,proto:$p,port:$port,deleted:true}'
@@ -552,26 +705,9 @@ cmd_traffic() {
 }
 
 cmd_traffic_uids() {
-  _tu_lines=""
-  for _tu_f in $("${TS_SCRIPTS_DIR}/foxytail.stats" recent-files 2>/dev/null); do
-    [ -f "${_tu_f}" ] || continue
-    _tu_lines="${_tu_lines}$(jqr -R -s -c '
-      split("\n") | map(select(length > 0) | fromjson? | select(type == "object"))
-      | [ .[] | select(.error == null) | .uids[]? ]
-      | group_by(.uid) | .[]
-      | { uid: .[0].uid,
-          rx: ([(map(.rx) | max) - (map(.rx) | min), 0] | max) }' "${_tu_f}" 2>/dev/null)
-"
-  done
-  if [ -z "${_tu_lines}" ]; then
-    echo '{"ok":true,"uids":[]}'
-    return 0
-  fi
-  printf '%s' "${_tu_lines}" | jqr -s -c '
-    [ group_by(.uid) | .[]
-      | { uid: .[0].uid, rx: (map(.rx) | add) }
-      | select(.rx > 0) ]
-    | sort_by(.rx) | reverse | {ok:true, uids:.}'
+  _tu_out=$("${TS_SCRIPTS_DIR}/foxytail.stats" query uids 100000 2>/dev/null) || jerr "UID stats query failed"
+  printf '%s' "${_tu_out}" | jqr -e . >/dev/null 2>&1 || jerr "UID stats query returned invalid JSON"
+  printf '%s' "${_tu_out}" | jqr -c '. + {ok:true}'
 }
 
 cmd_apps() {
@@ -625,230 +761,62 @@ cmd_routes_get() {
 
 cmd_routes_set() {
   _rs_scope="$1"
-  case "${_rs_scope}" in
-    all | selected | bypass) ;;
-    *) jerr "routes-set: scope must be all|selected|bypass" ;;
-  esac
   _rs_uids=$(csv_to_json "$2")
   _rs_subs=$(csv_to_json "$3")
-
-  # Validate: numeric uids, CIDR-shaped subnets.
-  if ! printf '%s' "${_rs_uids}" | jqr -e 'all(test("^[0-9]+$"))' >/dev/null 2>&1; then
-    jerr "routes-set: uids must be numeric"
-  fi
-  if ! printf '%s' "${_rs_subs}" | jqr -e 'all(test("^[0-9a-fA-F.:]+/[0-9]+$"))' >/dev/null 2>&1; then
-    jerr "routes-set: subnets must be CIDR (e.g. 100.64.0.0/10)"
-  fi
-
   _rs_uid_list=$(printf '%s' "${_rs_uids}" | jqr -r 'join(" ")')
   _rs_sub_list=$(printf '%s' "${_rs_subs}" | jqr -r 'join(" ")')
-  _rs_empty=false
-  if [ -z "${_rs_sub_list}" ]; then
-    # load_conf re-defaults an empty ROUTE_SUBNETS to the CGNAT range; a
-    # single blank survives sourcing and yields no subnet rules.
-    _rs_sub_list=" "
-    _rs_empty=true
+  for _rs_key in ROUTE_SCOPE UID_LIST ROUTE_SUBNETS; do
+    case "${_rs_key}" in ROUTE_SCOPE) _rs_value=${_rs_scope} ;; UID_LIST) _rs_value=${_rs_uid_list} ;; *) _rs_value=${_rs_sub_list} ;; esac
+    _rs_why=$(_conf_value_error "${_rs_key}" "${_rs_value}") || jerr "routes-set: ${_rs_why}"
+  done
+  conf_lock_acquire || jerr 'routes-set: configuration is busy'
+  load_conf || { conf_lock_release; jerr 'routes-set: invalid current configuration'; }
+  if [ "${TS_MODE}" = tun ] && [ "${_rs_scope}" != all ]; then
+    conf_lock_release
+    jerr 'native tun supports only route scope all; use bridge for UID routing'
   fi
-
-  mkdir -p "${TS_CONF_DIR}"
   _rs_tmp="${TS_CONF_DIR}/.routes.conf.$$"
-  {
-    echo "# FoxyTail routing configuration."
-    echo "# Written by foxytail.webapi.sh routes-set on $(date +"%Y-%m-%d %H:%M:%S")."
-    echo "# ROUTE_SCOPE: all | selected | bypass"
-    echo "ROUTE_SCOPE=${_rs_scope}"
-    echo "UID_LIST=\"${_rs_uid_list}\""
-    echo "ROUTE_SUBNETS=\"${_rs_sub_list}\""
-  } >"${_rs_tmp}" || { rm -f "${_rs_tmp}"; jerr "routes-set: cannot write temp file"; }
-  mv "${_rs_tmp}" "${TS_CONF_DIR}/routes.conf" || { rm -f "${_rs_tmp}"; jerr "routes-set: cannot replace routes.conf"; }
-
-  # Best effort reload: routing only applies when the tunnel interface exists.
-  _rs_note="saved"
-  [ "${_rs_empty}" = true ] && _rs_note="saved (no subnets)"
+  if ! {
+    printf '# FoxyTail routing configuration.\nROUTE_SCOPE=%s\nUID_LIST="%s"\nROUTE_SUBNETS="%s"\n' "${_rs_scope}" "${_rs_uid_list}" "${_rs_sub_list}" >"${_rs_tmp}" &&
+    chmod 0600 "${_rs_tmp}" && mv "${_rs_tmp}" "${TS_CONF_DIR}/routes.conf"
+  }; then
+    rm -f "${_rs_tmp}"; conf_lock_release; jerr 'routes-set: cannot replace routes.conf'
+  fi
+  conf_mark_pending || { conf_lock_release; jerr "could not record pending configuration"; }
+  conf_lock_release
+  _rs_applied=false
+  _rs_note='saved; routing will apply when the tunnel is ready'
   if ip link show dev "${TUN_IFACE}" >/dev/null 2>&1; then
     if "${TS_SCRIPTS_DIR}/foxytail.route" reload >>"${TS_RUN_LOG_FILE}" 2>&1; then
-      _rs_note="${_rs_note}+reloaded"
-    else
-      _rs_note="${_rs_note} but reload failed (see log)"
-    fi
+      _rs_applied=true; _rs_note='saved and applied'
+    else _rs_note='saved, but routing reload failed; inspect the service log'; fi
   fi
-  jqr -n -c --arg n "${_rs_note}" '{ok:true,note:$n}'
+  jqr -n -c --arg n "${_rs_note}" --argjson a "${_rs_applied}" '{ok:true,saved:true,applied:$a,restartRequired:($a|not),note:$n}'
 }
 
 # --- settings (foxytail.conf) --------------------------------------------------
 
-# Whitelist: keys present in the shipped template, plus a fixed known list.
-_settings_keys() {
-  {
-    [ -f "${TS_CONF_DIR}/foxytail.conf" ] &&
-      grep -o '^[A-Z_][A-Z_]*=' "${TS_CONF_DIR}/foxytail.conf" | tr -d '='
-    printf '%s\n' TS_MODE SOCKS_PORT DNS_PORT MAGIC_DNS IPV6 ROUTE_TABLE FWMARK \
-      WATCHDOG WATCHDOG_INTERVAL STATS_INTERVAL LOG_MAX_KB
-  } | sort -u
-}
-
-# True when $1 is an integer within [$2, $3].
-_num_in_range() {
-  case "$1" in '' | *[!0-9]*) return 1 ;; esac
-  [ "$1" -ge "$2" ] && [ "$1" -le "$3" ]
-}
-
-# Per-key value domains, as documented in tailscale/conf/foxytail.conf (plus
-# the routes.conf keys managed by routes-set). Returns 0 when $2 is a legal
-# value for $1; otherwise prints the reason and returns 1.
-_conf_value_error() {
-  _cv_key="$1"
-  _cv_val="$2"
-  _cv_why=""
-  case "${_cv_key}" in
-    TS_MODE)
-      case "${_cv_val}" in
-        bridge | tun | proxy) return 0 ;;
-        *) _cv_why="expected bridge|tun|proxy" ;;
-      esac
-      ;;
-    MAGIC_DNS | IPV6 | WATCHDOG)
-      case "${_cv_val}" in
-        on | off) return 0 ;;
-        *) _cv_why="expected on|off" ;;
-      esac
-      ;;
-    ROUTE_SCOPE)
-      case "${_cv_val}" in
-        all | selected | bypass) return 0 ;;
-        *) _cv_why="expected all|selected|bypass" ;;
-      esac
-      ;;
-    SOCKS_PORT | DNS_PORT)
-      if _num_in_range "${_cv_val}" 1024 65535; then return 0; fi
-      _cv_why="expected 1024-65535"
-      ;;
-    ROUTE_TABLE)
-      if _num_in_range "${_cv_val}" 1 65535; then return 0; fi
-      _cv_why="expected 1-65535"
-      ;;
-    WATCHDOG_INTERVAL)
-      if _num_in_range "${_cv_val}" 5 300; then return 0; fi
-      _cv_why="expected 5-300"
-      ;;
-    STATS_INTERVAL)
-      if _num_in_range "${_cv_val}" 10 3600; then return 0; fi
-      _cv_why="expected 10-3600"
-      ;;
-    LOG_MAX_KB)
-      if _num_in_range "${_cv_val}" 64 10240; then return 0; fi
-      _cv_why="expected 64-10240"
-      ;;
-    FWMARK)
-      case "${_cv_val}" in
-        0x?* | 0X?*)
-          _cv_hex="${_cv_val#0x}"
-          _cv_hex="${_cv_hex#0X}"
-          case "${_cv_hex}" in
-            *[!0-9A-Fa-f]*) _cv_why="expected 0x-prefixed hex digits" ;;
-            *) return 0 ;;
-          esac
-          ;;
-        *) _cv_why="expected 0x-prefixed hex digits" ;;
-      esac
-      ;;
-    UID_LIST)
-      case "${_cv_val}" in
-        *[!0-9[:blank:]]*) _cv_why="expected space-separated numeric uids" ;;
-        *) return 0 ;;
-      esac
-      ;;
-    ROUTE_SUBNETS)
-      case "${_cv_val}" in
-        *[!0-9a-fA-F.:/[:blank:]]*) _cv_why="expected space-separated CIDRs" ;;
-        *) return 0 ;;
-      esac
-      ;;
-    *)
-      case "${_cv_val}" in
-        *[!A-Za-z0-9._:/@-]*) _cv_why="value has characters outside the safe set" ;;
-        *) return 0 ;;
-      esac
-      ;;
-  esac
-  echo "${_cv_why}"
-  return 1
-}
-
-# Validate one conf file exactly as load_conf will source it: blank lines,
-# comments and KEY=VALUE pairs whose value sits inside the per-key domain.
-# Prints "<file>:<line>: <reason>" for the first bad line; returns 0 when
-# the whole file is safe to source.
-_conf_file_error() {
-  _cfe_file="$1"
-  _cfe_name=$(basename "${_cfe_file}")
-  _cfe_n=0
-  while IFS= read -r _cfe_line || [ -n "${_cfe_line}" ]; do
-    _cfe_n=$((_cfe_n + 1))
-    case "${_cfe_line}" in
-      '' | '#'*) continue ;;
-      *=*) ;;
-      *) echo "${_cfe_name}:${_cfe_n}: not a KEY=value line"; return 1 ;;
-    esac
-    _cfe_key=${_cfe_line%%=*}
-    _cfe_val=${_cfe_line#*=}
-    case "${_cfe_key}" in
-      [A-Z_] | [A-Z_][A-Z0-9_]*) ;;
-      *) echo "${_cfe_name}:${_cfe_n}: invalid key '${_cfe_key}'"; return 1 ;;
-    esac
-    case "${_cfe_val}" in
-      \"*\")
-        _cfe_val=${_cfe_val#\"}
-        _cfe_val=${_cfe_val%\"}
-        ;;
-    esac
-    if ! _cfe_why=$(_conf_value_error "${_cfe_key}" "${_cfe_val}"); then
-      echo "${_cfe_name}:${_cfe_n}: ${_cfe_why}"
-      return 1
-    fi
-  done <"${_cfe_file}"
-  return 0
-}
-
+# All values come from the runtime parser, including defaults and migrations.
 cmd_settings_get() {
-  if [ ! -f "${TS_CONF_DIR}/foxytail.conf" ]; then
-    echo '{"ok":true,"settings":{}}'
-    return 0
-  fi
-  jqr -R -s -c '
-    split("\n")
-    | map(select(test("^[A-Za-z_][A-Za-z0-9_]*=")) | split("=")
-        | {key: .[0], value: (.[1:] | join("=") | gsub("^\"|\"$"; ""))})
-    | map({(.key): .value}) | add // {}
-    | {ok:true, settings:.}' "${TS_CONF_DIR}/foxytail.conf"
+  _sg_pending=false
+  [ ! -f "${TS_RUN_DIR}/settings.pending" ] || _sg_pending=true
+  _conf_keys foxytail.conf | while IFS= read -r _sg_key; do
+    # Explicit cases read only schema keys, including runtime defaults.
+    case "${_sg_key}" in
+      TS_MODE) _sg_val=$TS_MODE ;; SOCKS_PORT) _sg_val=$SOCKS_PORT ;; DNS_PORT) _sg_val=$DNS_PORT ;;
+      MAGIC_DNS) _sg_val=$MAGIC_DNS ;; IPV6) _sg_val=$IPV6 ;; ROUTE_TABLE) _sg_val=$ROUTE_TABLE ;;
+      FWMARK) _sg_val=$FWMARK ;; FWMARK_MASK) _sg_val=$FWMARK_MASK ;; WATCHDOG) _sg_val=$WATCHDOG ;;
+      WATCHDOG_INTERVAL) _sg_val=$WATCHDOG_INTERVAL ;; STATS_INTERVAL) _sg_val=$STATS_INTERVAL ;; LOG_MAX_KB) _sg_val=$LOG_MAX_KB ;;
+    esac
+    jqr -n -c --arg k "${_sg_key}" --arg v "${_sg_val}" '{key:$k,value:$v}'
+  done | jqr -s -c --argjson p "${_sg_pending}" '{ok:true,settings:from_entries,restartRequired:$p}'
 }
 
 cmd_settings_set() {
-  _sk="$1"
-  _sv="$2"
-  [ -n "${_sk}" ] || jerr "settings-set: missing key"
-  case "${_sk}" in
-    *[!A-Z0-9_]* | [0-9]*) jerr "settings-set: invalid key format: ${_sk}" ;;
-  esac
-  if ! _settings_keys | grep -qxF "${_sk}"; then
-    jerr "settings-set: key '${_sk}' is not allowed"
-  fi
-  if ! _sv_why=$(_conf_value_error "${_sk}" "${_sv}"); then
-    jerr "settings-set: ${_sk}: ${_sv_why}"
-  fi
-
-  _sk_conf="${TS_CONF_DIR}/foxytail.conf"
-  mkdir -p "${TS_CONF_DIR}"
-  [ -f "${_sk_conf}" ] || : >"${_sk_conf}"
-  _sk_tmp="${TS_CONF_DIR}/.foxytail.conf.$$"
-  awk -v k="${_sk}" -v v="${_sv}" '
-    BEGIN { done = 0 }
-    index($0, k "=") == 1 { print k "=" v; done = 1; next }
-    { print }
-    END { if (!done) print k "=" v }
-  ' "${_sk_conf}" >"${_sk_tmp}" || { rm -f "${_sk_tmp}"; jerr "settings-set: write failed"; }
-  mv "${_sk_tmp}" "${_sk_conf}" || { rm -f "${_sk_tmp}"; jerr "settings-set: replace failed"; }
-  jqr -n -c --arg k "${_sk}" --arg v "${_sv}" '{ok:true,key:$k,value:$v}'
+  [ -n "$1" ] || jerr 'settings-set: missing key'
+  [ "$1" != TS_MODE ] || jerr 'TS_MODE must be changed with mode-set'
+  _sk_why=$(conf_write_key foxytail.conf "$1" "$2" 2>&1) || jerr "settings-set: ${_sk_why}"
+  jqr -n -c --arg k "$1" --arg v "$2" '{ok:true,key:$k,value:$v,saved:true,applied:false,restartRequired:true,requiresRestart:true}'
 }
 
 # --- context rules -------------------------------------------------------------
@@ -863,13 +831,17 @@ cmd_context_get() {
 
 cmd_context_set() {
   [ -n "$1" ] || jerr "context-set: missing base64 payload"
+  conf_lock_acquire || jerr "context-set: configuration is busy"
   _cx_tmp="${TS_CONF_DIR}/.context.conf.$$"
   mkdir -p "${TS_CONF_DIR}"
   if ! printf '%s' "$1" | base64 -d >"${_cx_tmp}" 2>/dev/null; then
     rm -f "${_cx_tmp}"
+    conf_lock_release
     jerr "context-set: invalid base64"
   fi
-  mv "${_cx_tmp}" "${TS_CONF_DIR}/context.conf" || { rm -f "${_cx_tmp}"; jerr "context-set: replace failed"; }
+  mv "${_cx_tmp}" "${TS_CONF_DIR}/context.conf" || { rm -f "${_cx_tmp}"; conf_lock_release; jerr "context-set: replace failed"; }
+  conf_mark_pending || { conf_lock_release; jerr "context-set: cannot record pending configuration"; }
+  conf_lock_release
   # Restart the context watcher so the new rules take effect.
   if [ -x "${TS_SCRIPTS_DIR}/foxytail.context" ]; then
     "${TS_SCRIPTS_DIR}/foxytail.context" stop >>"${TS_RUN_LOG_FILE}" 2>&1
@@ -981,108 +953,131 @@ cmd_file_receive() {
 
 # --- backup / restore ---------------------------------------------------------------
 
-cmd_backup() {
-  _bk_ts=$(date +%Y%m%d-%H%M%S)
+cmd_backup() (
+  conf_lock_acquire || jerr 'backup: configuration is busy'
+  _bk_ts="$(date +%Y%m%d-%H%M%S)-$$"
   _bk_out="/sdcard/Download/foxytail-backup-${_bk_ts}.tar.gz"
-  mkdir -p /sdcard/Download 2>/dev/null
-  _bk_hooks=""
+  _bk_tmp="${_bk_out}.partial"
+  trap 'rm -f "${_bk_tmp}"; conf_lock_release' 0
+  trap 'exit 1' HUP INT TERM
+  mkdir -p /sdcard/Download || jerr 'backup: cannot create Download directory'
+  set --
   for _bk_h in foxytail.tun.up foxytail.tun.down; do
-    [ -f "${TS_SCRIPTS_DIR}/${_bk_h}" ] && _bk_hooks="${_bk_hooks} ${_bk_h}"
+    [ ! -f "${TS_SCRIPTS_DIR}/${_bk_h}" ] || set -- "$@" "${_bk_h}"
   done
-  if [ -n "${_bk_hooks}" ]; then
-    # shellcheck disable=SC2086 # intentional: hook names are fixed words
-    tar -czf "${_bk_out}" -C "${TS_DIR}" conf -C "${TS_SCRIPTS_DIR}" ${_bk_hooks} 2>/dev/null
-  else
-    tar -czf "${_bk_out}" -C "${TS_DIR}" conf 2>/dev/null
+  if ! tar -czf "${_bk_tmp}" -C "${TS_DIR}" conf -C "${TS_SCRIPTS_DIR}" "$@" 2>/dev/null ||
+     ! tar -tzf "${_bk_tmp}" >/dev/null 2>&1 ||
+     ! mv "${_bk_tmp}" "${_bk_out}"; then
+    jerr 'backup failed; incomplete archive was removed'
   fi
-  if [ -f "${_bk_out}" ]; then
-    jqr -n -c --arg p "${_bk_out}" '{ok:true,path:$p}'
-  else
-    jerr "backup failed (is /sdcard/Download writable?)"
-  fi
+  jqr -n -c --arg p "${_bk_out}" '{ok:true,path:$p}'
+)
+
+# Validate member paths and entry types before extraction. In particular, a
+# symlink earlier in an archive must never redirect a later extraction outside
+# the staging directory. Hard links and special device entries are disallowed.
+_restore_archive_safe() {
+  tar -tzf "$1" >"$2/members" 2>/dev/null || return 1
+  while IFS= read -r _ras_member; do
+    case "${_ras_member}" in
+      '' | /* | .. | ../* | */../* | */.. | -* | *\\*) return 1 ;;
+    esac
+  done <"$2/members"
+  tar -tvzf "$1" >"$2/types" 2>/dev/null || return 1
+  LC_ALL=C awk 'substr($0,1,1)!="-" && substr($0,1,1)!="d" {exit 1}' "$2/types"
 }
 
-cmd_restore() {
-  [ -n "$1" ] || jerr "restore: missing path"
-  case "$1" in
-    /sdcard/*.tar.gz) ;;
-    *) jerr "restore: path must be a .tar.gz under /sdcard/" ;;
-  esac
-  _rt_path=$(realpath "$1" 2>/dev/null)
-  case "${_rt_path}" in
-    /sdcard/*.tar.gz | /storage/emulated/*.tar.gz) ;;
-    *) jerr "restore: path must be a .tar.gz under /sdcard/" ;;
-  esac
-  [ -f "${_rt_path}" ] || jerr "restore: no such file: ${_rt_path}"
-  _rt_tmp=$(mktemp -d "${TS_RUN_DIR}/restore.XXXXXX" 2>/dev/null) ||
-    { _rt_tmp="${TS_RUN_DIR}/restore.$$"; rm -rf "${_rt_tmp}"; mkdir -p "${_rt_tmp}"; }
-  if ! tar --no-same-owner -xzf "${_rt_path}" -C "${_rt_tmp}" 2>/dev/null; then
-    rm -rf "${_rt_tmp}"
-    jerr "restore: cannot unpack ${_rt_path}"
+_restore_cleanup() {
+  if [ "${_rt_committed:-0}" != 1 ] && [ "${_rt_swapped:-0}" = 1 ]; then
+    if rm -rf "${TS_CONF_DIR}" && [ ! -e "${TS_CONF_DIR}" ] && [ ! -L "${TS_CONF_DIR}" ]; then
+      if [ "${_rt_moved:-0}" = 1 ]; then
+        mv "${_rt_old}" "${TS_CONF_DIR}" || echo "restore rollback failed: previous configuration retained at ${_rt_old}" >&2
+      fi
+    else
+      echo "restore rollback could not remove the replacement; previous configuration retained at ${_rt_old}" >&2
+    fi
+  elif [ "${_rt_committed:-0}" != 1 ] && [ "${_rt_moved:-0}" = 1 ]; then
+    if [ ! -e "${TS_CONF_DIR}" ] && [ ! -L "${TS_CONF_DIR}" ]; then
+      mv "${_rt_old}" "${TS_CONF_DIR}" || echo "restore rollback failed: previous configuration retained at ${_rt_old}" >&2
+    else
+      echo "restore rollback destination is occupied; previous configuration retained at ${_rt_old}" >&2
+    fi
   fi
-  _rt_src="${_rt_tmp}"
-  # Bundles created by cmd_backup contain conf/ at top level; the diag bundle
-  # nests under a diag.* dir. Look one level deep as a fallback.
+  [ "${_rt_committed:-0}" = 1 ] || [ -z "${_rt_parked:-}" ] || rm -rf "${_rt_parked}"
+  [ -z "${_rt_tmp:-}" ] || rm -rf "${_rt_tmp}"
+  conf_lock_release
+}
+
+cmd_restore() (
+  [ ! -f "${TS_DIR}/.installing" ] || jerr 'restore: an upgrade is in progress'
+  [ -n "$1" ] || jerr 'restore: missing path'
+  case "$1" in /sdcard/*.tar.gz) ;; *) jerr 'restore: expected .tar.gz under /sdcard/' ;; esac
+  _rt_path=$(realpath "$1" 2>/dev/null)
+  case "${_rt_path}" in /sdcard/*.tar.gz | /storage/emulated/*.tar.gz) ;; *) jerr 'restore: archive must resolve under shared storage' ;; esac
+  [ -f "${_rt_path}" ] || jerr 'restore: archive does not exist'
+  _rt_tmp=$(mktemp -d "${TS_DIR}/.restore.XXXXXX") || jerr 'restore: cannot create staging directory'
+  trap '_restore_cleanup' 0
+  trap 'exit 1' HUP INT TERM
+  mkdir "${_rt_tmp}/archive" "${_rt_tmp}/next" || jerr 'restore: staging failed'
+  _rt_input="${_rt_tmp}/input.tar.gz"
+  cat "${_rt_path}" >"${_rt_input}" && chmod 0600 "${_rt_input}" || jerr 'restore: cannot stage archive'
+  _restore_archive_safe "${_rt_input}" "${_rt_tmp}" || jerr 'restore: unsafe or damaged archive'
+  tar --no-same-owner -xzf "${_rt_input}" -C "${_rt_tmp}/archive" 2>/dev/null || jerr 'restore: archive extraction failed'
+  _rt_src="${_rt_tmp}/archive"
   if [ ! -d "${_rt_src}/conf" ]; then
-    for _rt_d in "${_rt_tmp}"/*/; do
-      [ -d "${_rt_d}conf" ] && _rt_src="${_rt_d%/}" && break
+    for _rt_d in "${_rt_src}"/*/; do
+      [ ! -d "${_rt_d}conf" ] || { _rt_src="${_rt_d%/}"; break; }
     done
   fi
-  if [ ! -d "${_rt_src}/conf" ] || [ -L "${_rt_src}/conf" ]; then
-    rm -rf "${_rt_tmp}"
-    jerr "restore: no conf/ directory inside the archive"
-  fi
-  # The conf directory is sourced as root by load_conf: foxytail.conf and
-  # routes.conf must pass line-by-line validation before anything is copied.
-  for _rt_cf in foxytail.conf routes.conf; do
-    _rt_c="${_rt_src}/conf/${_rt_cf}"
-    if [ -L "${_rt_c}" ]; then
-      rm -rf "${_rt_tmp}"
-      jerr "restore: ${_rt_cf} is a symlink in the archive"
-    fi
-    if [ -f "${_rt_c}" ]; then
-      if ! _rt_why=$(_conf_file_error "${_rt_c}"); then
-        rm -rf "${_rt_tmp}"
-        jerr "restore: rejecting archive: ${_rt_why}"
-      fi
-    fi
-  done
-  _rt_ts=$(date +%Y%m%d-%H%M%S)
-  cp -a "${TS_CONF_DIR}" "${TS_DIR}/conf.bak-${_rt_ts}" 2>/dev/null
-  mkdir -p "${TS_CONF_DIR}"
-  # Plain content copies: no modes or ownership from the archive survive.
+  [ -d "${_rt_src}/conf" ] && [ ! -L "${_rt_src}/conf" ] || jerr 'restore: missing conf directory'
+  # Validate every incoming entry before touching live configuration.
   for _rt_f in "${_rt_src}/conf/"*; do
-    if [ -L "${_rt_f}" ]; then
-      rm -rf "${_rt_tmp}"
-      jerr "restore: refusing symlink entry ${_rt_f##*/}"
-    fi
-    [ -f "${_rt_f}" ] || continue
-    if ! cat "${_rt_f}" >"${TS_CONF_DIR}/${_rt_f##*/}"; then
-      rm -rf "${_rt_tmp}"
-      jerr "restore: failed to copy conf files"
-    fi
+    [ -e "${_rt_f}" ] || continue
+    [ -f "${_rt_f}" ] && [ ! -L "${_rt_f}" ] || jerr 'restore: conf may contain only regular files'
+    case "${_rt_f##*/}" in
+      foxytail.conf | routes.conf)
+        _rt_why=$(_conf_file_error "${_rt_f}") || jerr "restore: ${_rt_why}" ;;
+      context.conf) ;;
+      *) jerr "restore: unknown configuration file ${_rt_f##*/}" ;;
+    esac
   done
-  # Hooks run as root when the tunnel comes up: restored hooks are parked as
-  # non-executable <hook>.restored for review instead of going live.
-  _rt_hooks=""
-  for _rt_h in foxytail.tun.up foxytail.tun.down; do
-    if [ -f "${_rt_src}/${_rt_h}" ] && [ ! -L "${_rt_src}/${_rt_h}" ]; then
-      if ! cat "${_rt_src}/${_rt_h}" >"${TS_SCRIPTS_DIR}/${_rt_h}.restored"; then
-        rm -rf "${_rt_tmp}"
-        jerr "restore: failed to copy ${_rt_h}"
-      fi
-      chmod 0644 "${TS_SCRIPTS_DIR}/${_rt_h}.restored"
-      _rt_hooks="${_rt_hooks}${_rt_h}.restored "
-    fi
+  conf_lock_acquire || jerr 'restore: configuration is busy'
+  [ ! -f "${TS_DIR}/.installing" ] || jerr 'restore: an upgrade is in progress'
+  # Prepare a complete replacement on the same filesystem. Any copy failure
+  # aborts before the first live rename; archive ownership/modes are discarded.
+  for _rt_f in foxytail.conf routes.conf context.conf; do
+    if [ -f "${_rt_src}/conf/${_rt_f}" ]; then _rt_from="${_rt_src}/conf/${_rt_f}"
+    elif [ -f "${TS_CONF_DIR}/${_rt_f}" ]; then _rt_from="${TS_CONF_DIR}/${_rt_f}"
+    else continue; fi
+    cat "${_rt_from}" >"${_rt_tmp}/next/${_rt_f}" && chmod 0600 "${_rt_tmp}/next/${_rt_f}" || jerr 'restore: cannot prepare configuration'
   done
-  rm -rf "${_rt_tmp}"
-  _rt_note=""
-  if [ -n "${_rt_hooks}" ]; then
-    _rt_note="hooks parked for review: ${_rt_hooks% }; rename to enable"
+  if ! ( TS_CONF_DIR="${_rt_tmp}/next"; load_conf && { [ "$TS_MODE" != tun ] || [ "$ROUTE_SCOPE" = all ]; } ); then
+    jerr 'restore: invalid configuration or native tun UID routing is unsupported'
   fi
-  jqr -n -c --arg b "${TS_DIR}/conf.bak-${_rt_ts}" --arg n "${_rt_note}" \
-    '{ok:true,previous:$b,note:(if $n == "" then null else $n end)}'
-}
+  _rt_ts="$(date +%Y%m%d-%H%M%S)-$$"
+  _rt_old="${TS_DIR}/conf.bak-${_rt_ts}"
+  _rt_note=''
+  # Restored hooks stay in a separate review directory, never executable and
+  # never overwrite a live hook or an earlier review copy.
+  for _rt_h in foxytail.tun.up foxytail.tun.down; do
+    if [ -f "${_rt_src}/${_rt_h}" ]; then
+      _rt_parked="${TS_DIR}/restored-hooks-${_rt_ts}"
+      mkdir -p "${_rt_parked}" || jerr 'restore: cannot prepare hook review directory'
+      cat "${_rt_src}/${_rt_h}" >"${_rt_parked}/${_rt_h}.restored" && chmod 0600 "${_rt_parked}/${_rt_h}.restored" || jerr 'restore: cannot park hook'
+      _rt_note="hooks parked for review in ${_rt_parked}"
+    fi
+  done
+  if [ -d "${TS_CONF_DIR}" ]; then
+    mv "${TS_CONF_DIR}" "${_rt_old}" || jerr 'restore: cannot retain previous configuration'
+    _rt_moved=1
+  fi
+  mv "${_rt_tmp}/next" "${TS_CONF_DIR}" || jerr 'restore: cannot activate configuration; rolling back'
+  _rt_swapped=1
+  conf_mark_pending || jerr 'restore: cannot record pending configuration; rolling back'
+  _rt_committed=1
+  conf_lock_release
+  jqr -n -c --arg b "${_rt_old}" --arg n "${_rt_note}" '{ok:true,previous:$b,saved:true,applied:false,restartRequired:true,note:(if $n=="" then null else $n end)}'
+)
 
 # --- key expiry --------------------------------------------------------------------
 
@@ -1100,7 +1095,18 @@ cmd_key_expiry() {
 
 # --- dispatch -------------------------------------------------------------------
 
+if [ "$1" = --request-id ]; then
+  [ "$#" -ge 3 ] || jerr 'missing request command'
+  _op_init "$2" "$3"
+  shift 2
+fi
 case "$1" in
+  control | mode-set | exitnode-set | exitnode-clear | login | login-authkey | logout | switch | serve-set | serve-del | funnel-set | funnel-del | routes-set | settings-set | context-set | file-send | file-receive | restore)
+    [ ! -f "${TS_DIR}/.installing" ] || jerr 'an upgrade is in progress; retry after it completes' ;;
+esac
+
+case "$1" in
+  cancel) shift; cmd_cancel "$1" ;;
   status) cmd_status ;;
   peers) cmd_peers ;;
   exitnodes) cmd_exitnodes ;;
@@ -1120,10 +1126,10 @@ case "$1" in
   switch) shift; cmd_switch "$1" ;;
   serve-list) _serve_list serve ;;
   serve-set) shift; _serve_set serve "$1" "$2" "$3" ;;
-  serve-del) shift; _serve_del serve "$1" "$2" ;;
+  serve-del) shift; _serve_del serve "$1" "$2" "$3" ;;
   funnel-list) _serve_list funnel ;;
   funnel-set) shift; _serve_set funnel "$1" "$2" "$3" ;;
-  funnel-del) shift; _serve_del funnel "$1" "$2" ;;
+  funnel-del) shift; _serve_del funnel "$1" "$2" "$3" ;;
   traffic) shift; cmd_traffic "$1" "$2" ;;
   traffic-uids) cmd_traffic_uids ;;
   apps) cmd_apps ;;

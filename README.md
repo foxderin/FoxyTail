@@ -16,8 +16,8 @@ FoxyTail is inspired by [anasfanani/Magisk-Tailscaled](https://github.com/anasfa
 | Feature | Status | Notes |
 |---|---|---|
 | Three run modes (`bridge` / `tun` / `proxy`) | ✅ | hot-switch via CLI; `tun` requires `/dev/net/tun` |
-| Route scope (`all` / `selected` / `bypass`) | ✅ | per-UID marking needs kernel `xt_owner` |
-| Dedicated policy routing (table 1052, fwmark `0xF7`) | ✅ | main table is never touched |
+| Route scope (`all` / `selected` / `bypass`) | ✅ | selected/bypass require bridge and kernel `xt_owner` |
+| Dedicated policy routing (table 1052, fwmark `0x40000000/0x40000000`) | ✅ | main table is never touched |
 | Traffic analytics (`foxytail.stats`) | ✅ | JSONL ring buffer, 7-day retention, screen-off throttling |
 | MagicDNS split-DNS (`foxytail.dns`) | ✅ | requires a user-supplied static `dnsmasq` (see below) |
 | IPv6 dual-stack | ✅ | `IPV6=on`, symmetric ip6tables rules |
@@ -68,7 +68,7 @@ All entry points live in `/data/adb/foxytail/scripts/` and are symlinked into `s
 |---|---|---|
 | `foxytail.service` | `start` `stop` `restart` `status [summary\|peer\|exit-node\|all]` `log [daemon\|service]` `mode [bridge\|tun\|proxy]` `help [all]` | tailscaled lifecycle, colored status, mode switching |
 | `foxytail.tun` | `start` `stop` `restart` `status` | hev-socks5-tunnel → `tailscale0` interface (bridge mode); runs the `foxytail.tun.up` / `.tun.down` user hooks |
-| `foxytail.route` | `apply` `teardown` `reload` `status` | idempotent policy-routing engine (`FOXY_*` chains, table 1052, fwmark `0xF7`) |
+| `foxytail.route` | `apply` `teardown` `reload` `status` | idempotent policy-routing engine (`FOXY_*` chains, table 1052, fwmark `0x40000000/0x40000000`) |
 | `foxytail.dns` | `start` `stop` `status` | MagicDNS split resolver (dnsmasq on port 1053 + coexistence-aware port-53 redirect) |
 | `foxytail.stats` | `start` `stop` `status` `collect-once` `query [hourly <date>\|daily\|topn <n>]` | traffic collector (per-peer Rx/Tx, per-UID counters) |
 | `foxytail.watchdog` | `start` `stop` `status` `check-once` | restart tailscaled on crash, rebind on default-route change (rate-limited) |
@@ -92,12 +92,20 @@ The WebUI is built in: it lives in `webroot/` (zero-build static HTML/JS, backed
 
 The WebUI source lives in `webui/` (Vite + SolidJS + Material Web 3 components + the `kernelsu` npm bridge). The built output is committed to `webroot/`, so the module stays self-contained and no Node toolchain is needed to use it.
 
-- `pnpm --dir webui install` — install dependencies (once)
+- `pnpm --dir webui install --frozen-lockfile` — install dependencies (once)
 - `pnpm --dir webui dev` — Vite dev server (no root bridge there; the UI shows the no-root banner)
 - `pnpm --dir webui build` — production build into `../webroot/` (commit the result)
 - `pnpm --dir webui typecheck` / `check:i18n` / `smoke` — TypeScript check, zh/en key parity, jsdom smoke (13 routes + task adoption + no-root banner)
 
 Contract: `webui/src/api.ts` is the only consumer of `tailscale/scripts/foxytail.webapi.sh`; its JSON contract is frozen.
+
+## Verification and release
+
+Use Node 22.14.0 and pnpm 10.30.3; the WebUI requires Android WebView 109+. After installing dependencies, run `bash .github/tools/verify.sh` for ShellCheck, isolated backend regression tests, types, i18n, smoke, release metadata and committed build consistency. Run `pnpm --dir webui build` after frontend changes to update `webroot/`.
+
+Run `.github/tools/version-bump.sh`, commit version files and build outputs, then tag that commit. Release builds only existing tags and verifies the reviewed `tailscale/checksums.txt`. An explicit `bash .github/tools/build.sh --update-checksums` creates a candidate manifest for source verification and review; it does not package binaries.
+
+Apply saved settings through the WebUI restart action or `/data/adb/foxytail/scripts/start.sh reload`, which refreshes resident helpers as well as the network service. `foxytail.service restart` affects the network service only. Upgrades preserve received files, supplied dnsmasq, configuration and identity, stop the old components before switching, and retain rollback journals on failure.
 
 ## Configuration
 
@@ -112,8 +120,8 @@ Three files in `/data/adb/foxytail/conf/`, installed **only if missing** — you
 | `DNS_PORT` | `1053` | dnsmasq listen port (MagicDNS) |
 | `MAGIC_DNS` | `off` | split-DNS for tailnet names via dnsmasq |
 | `IPV6` | `off` | dual-stack tailscale0 + ip6tables symmetry |
-| `ROUTE_TABLE` | `1052` | dedicated policy routing table (1–252) |
-| `FWMARK` | `0xF7` | fwmark for FoxyTail-routed packets (hex) |
+| `ROUTE_TABLE` | `1052` | dedicated policy routing table (1000–65535) |
+| `FWMARK` / `FWMARK_MASK` | `0x40000000` | fixed shared mark bit; legacy 0xF7 migrates on read |
 | `WATCHDOG` / `WATCHDOG_INTERVAL` | `on` / `30` | crash restart + rebind, seconds between checks |
 | `STATS_INTERVAL` | `60` | stats collection interval (auto-throttled when the screen is off) |
 | `LOG_MAX_KB` | `512` | log rotation threshold (one `.bak` kept) |
@@ -149,7 +157,7 @@ Actions: `up`, `down`, `exit-node <arg>`, `no-exit-node`.
 | How | userspace tailscaled + socks5 + hev-socks5-tunnel → `tailscale0` | tailscaled native TUN | socks5 only, no interface |
 | Needs | nothing special | `/dev/net/tun` | nothing |
 | Works without TUN support | ✅ | ❌ | ✅ |
-| Per-App routing / stats | ✅ | ✅ | ❌ (no interface) |
+| Per-App routing / stats | ✅ (UID 0 bypasses) | all only; peer/interface stats | ❌ (no interface) |
 | Performance | userspace copy overhead | best | app-level only |
 
 Switch with `foxytail.service mode <mode>` (writes `TS_MODE` and restarts). Switching to `tun` is refused when `/dev/net/tun` is missing.
@@ -159,8 +167,8 @@ Switch with `foxytail.service mode <mode>` (writes `TS_MODE` and restarts). Swit
 `foxytail.route` keeps **everything** off the beaten path so other modules stay intact:
 
 - all rules live in dedicated chains: `FOXY_MARK` (mangle) and `FOXY_STAT` (filter, counters for stats); built-in chains get exactly one jump each
-- policy routing uses dedicated table **1052** (configurable) with fwmark **`0xF7`** (configurable); the main table is never written
-- every rule is checked with `-C` before being added — `apply` is idempotent and safe to re-run; `teardown` removes only FoxyTail's own rules
+- policy routing uses dedicated table **1052** (1000–65535, no foreign resources) with fixed mark/mask **`0x40000000/0x40000000`**; other mark bits are preserved and whole tables are never flushed
+- `check` verifies configuration, both families, OUTPUT jumps and route snapshots; `apply` repairs drift, and `teardown` removes exact policy rules and protocol-186 routes on tailscale0 only
 - MagicDNS adds `FOXY_DNS` (nat) for the port-53 redirect, skipped when another module already hijacks port 53
 
 ## Coexistence guide
@@ -179,11 +187,11 @@ FoxyTail never touches other modules' chains and probes for neighbors at boot (`
 
 ## IPv6
 
-`IPV6=on` gives `tailscale0` a dual-stack address (`fd7a:115c:a1e0::1` in bridge mode), adds symmetric ip6tables policy rules, and routes `fd7a:115c:a1e0::/48` (add it to `ROUTE_SUBNETS`). Default is off.
+`IPV6=on` gives `tailscale0` a dual-stack address (`fd7a:115c:a1e0::1` in bridge mode), adds symmetric ip6tables policy rules, and routes `fd7a:115c:a1e0::/48` (add it to `ROUTE_SUBNETS`). Default is off. Add an IPv6 CIDR before enabling it; route application fails explicitly when none is configured.
 
 ## Traffic analytics & diagnostics
 
-- `foxytail.stats` samples per-peer Rx/Tx and per-UID chain counters every `STATS_INTERVAL` seconds into `/data/adb/foxytail/run/stats/YYYY-MM-DD.jsonl` (7-day ring, screen-off throttling). Query with `foxytail.stats query hourly <date> | daily | topn <n>`.
+- `foxytail.stats` samples per-peer Rx/Tx and dual-stack TUN OUTPUT per-UID transmit counters every `STATS_INTERVAL` seconds into `/data/adb/foxytail/run/stats/YYYY-MM-DD.jsonl` (7-day ring, screen-off throttling). Query with `foxytail.stats query hourly <date> | daily | topn <n>`.
 - `foxytail.diag collect` bundles log tails, `tailscale status --json`, `netcheck`, iptables self-check and config into `/sdcard/Download/foxytail-diag-<timestamp>.tar.gz` — attach this when asking for help.
 
 ## Limitations (honest list)
@@ -192,7 +200,7 @@ FoxyTail never touches other modules' chains and probes for neighbors at boot (`
 - Default `bridge` mode is userspace networking: throughput is lower than kernel TUN (`tun` mode where available).
 - QR-code login is not embedded in the WebUI — use the login URL printed by `tailscale login`.
 - SSID detection parses `dumpsys wifi` output, whose format varies across Android versions (tolerant parsing, worst case "unknown").
-- per-App routing requires kernel `xt_owner`; the installer prints a warning when it is missing.
+- kernel routing requires `xt_owner` to exempt control processes and fails closed when unavailable. selected/bypass require bridge; UID 0 bypasses the bridge tunnel.
 - MagicDNS requires a user-supplied dnsmasq binary (above).
 
 ## Troubleshooting

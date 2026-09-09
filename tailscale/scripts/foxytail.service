@@ -103,13 +103,22 @@ build_daemon_cmd() {
 
 start_service() {
   ensure_run_dirs
-  load_conf
+  load_conf || return 1
+  if [ -f "${TS_DIR}/.installing" ]; then
+    log Error "installation in progress; start deferred"
+    return 1
+  fi
+  if [ "$TS_MODE" = tun ] && [ "$ROUTE_SCOPE" != all ]; then
+    log Error "native tun supports ROUTE_SCOPE=all only; use bridge for per-app routing"
+    return 1
+  fi
   log Info "Starting tailscaled service (mode: ${TS_MODE})."
   rm -f "${TS_RUN_DIR}/manual-stop"
 
   if is_running; then
-    log Info "tailscaled is already running."
-    return 0
+    log Info "tailscaled is already running; reconciling companion layers."
+    reconcile_companions
+    return $?
   fi
 
   if ! command -v "${TS_DAEMON_CMD}" >/dev/null 2>&1; then
@@ -136,7 +145,8 @@ start_service() {
       log Error "tailscaled failed to start; see ${TS_LOG_FILE}."
       return 1
     fi
-    log Warning "socket ${TS_SOCKET} not ready after 10s; continuing anyway."
+    log Error "socket ${TS_SOCKET} not ready after 10s."
+    return 1
   fi
 
   # Re-resolve the real daemon PID: a concurrent (double) start may have made
@@ -151,6 +161,10 @@ start_service() {
   update_mod_desc running
   log Success "tailscaled started (PID: $(cat "${PID_FILE}" 2>/dev/null))."
 
+  reconcile_companions
+}
+
+reconcile_companions() {
   # Companion pieces. Missing helpers are tolerated: they are optional
   # layers. A present helper that fails must NOT be swallowed: propagate the
   # failure so callers (foxytail.webapi.sh control) can report ok:false.
@@ -173,8 +187,12 @@ start_service() {
       log Debug "proxy mode: no interface, skipping hev tunnel and policy routing."
       ;;
   esac
-  if [ "${MAGIC_DNS}" = "on" ] && [ -x "${TS_SCRIPTS_DIR}/foxytail.dns" ]; then
-    "${TS_SCRIPTS_DIR}/foxytail.dns" start || _ss_failed="${_ss_failed} foxytail.dns"
+  if [ -x "${TS_SCRIPTS_DIR}/foxytail.dns" ]; then
+    if [ "${MAGIC_DNS}" = "on" ]; then
+      "${TS_SCRIPTS_DIR}/foxytail.dns" start || _ss_failed="${_ss_failed} foxytail.dns"
+    else
+      "${TS_SCRIPTS_DIR}/foxytail.dns" stop || _ss_failed="${_ss_failed} foxytail.dns"
+    fi
   fi
   if [ -n "${_ss_failed}" ]; then
     log Error "companion layer(s) failed:${_ss_failed} (tailscaled itself is up)."
@@ -192,17 +210,24 @@ stop_service() {
   # start_service clears the marker again.
   date +%s >"${TS_RUN_DIR}/manual-stop"
 
-  # Tear down companion layers first (best effort, order: dns -> route -> tun).
-  [ -x "${TS_SCRIPTS_DIR}/foxytail.dns" ] && "${TS_SCRIPTS_DIR}/foxytail.dns" stop
-  [ -x "${TS_SCRIPTS_DIR}/foxytail.route" ] && "${TS_SCRIPTS_DIR}/foxytail.route" teardown
-  [ -x "${TS_SCRIPTS_DIR}/foxytail.tun" ] && "${TS_SCRIPTS_DIR}/foxytail.tun" stop
+  # Finish all cleanup attempts, but preserve failure for restart/upgrade.
+  _st_failed=0
+  if [ -x "${TS_SCRIPTS_DIR}/foxytail.dns" ]; then
+    "${TS_SCRIPTS_DIR}/foxytail.dns" stop || _st_failed=1
+  fi
+  if [ -x "${TS_SCRIPTS_DIR}/foxytail.route" ]; then
+    "${TS_SCRIPTS_DIR}/foxytail.route" teardown || _st_failed=1
+  fi
+  if [ -x "${TS_SCRIPTS_DIR}/foxytail.tun" ]; then
+    "${TS_SCRIPTS_DIR}/foxytail.tun" stop || _st_failed=1
+  fi
 
   _st_pids=$(daemon_pids)
   if [ -z "${_st_pids}" ]; then
     log Info "✘ tailscaled service is not running."
     rm -f "${PID_FILE}"
     update_mod_desc stopped
-    return 0
+    return "$_st_failed"
   fi
 
   # Graceful: TERM every matching PID, wait for self cleanup, then KILL and
@@ -214,7 +239,7 @@ stop_service() {
   rm -f "${PID_FILE}"
   update_mod_desc stopped
   log Info "✘ tailscaled shut down, service is stopped."
-  return 0
+  return "$_st_failed"
 }
 
 humanize_bytes() {
@@ -409,13 +434,7 @@ set_mode() {
     log Error "cannot switch to tun mode: /dev/net/tun does not exist."
     return 1
   fi
-  _sm_conf="${TS_CONF_DIR}/foxytail.conf"
-  if [ -f "${_sm_conf}" ] && grep -q '^TS_MODE=' "${_sm_conf}"; then
-    sed -i "s/^TS_MODE=.*/TS_MODE=${_sm_mode}/" "${_sm_conf}"
-  else
-    mkdir -p "${TS_CONF_DIR}"
-    echo "TS_MODE=${_sm_mode}" >>"${_sm_conf}"
-  fi
+  conf_write_key foxytail.conf TS_MODE "${_sm_mode}" || return 1
   log Success "TS_MODE set to ${_sm_mode}; restarting."
   restart_service
 }
@@ -531,7 +550,53 @@ restart_service() {
   start_service
 }
 
+# Serialize all controllers (WebUI, watchdog, context and boot).
+# PID ownership makes an interrupted controller recoverable without expiring a
+# lock still held by a slow, live operation.
+service_unlock() {
+  if [ "$(readlink "${TS_RUN_DIR}/.service-lock" 2>/dev/null)" = "${_SERVICE_LOCK_TOKEN}" ]; then
+    rm -f "${TS_RUN_DIR}/.service-lock"
+  fi
+}
+
+service_lock() {
+  ensure_run_dirs
+  _sl_i=0
+  _SERVICE_LOCK_TOKEN="$$:$(_conf_pid_stamp "$$")"
+  while ! ln -s "${_SERVICE_LOCK_TOKEN}" "${TS_RUN_DIR}/.service-lock" 2>/dev/null; do
+    # Publish the PID as the symlink itself: there is no empty owner-file
+    # window between claiming the lock and publishing its identity.
+    _sl_pid=$(readlink "${TS_RUN_DIR}/.service-lock" 2>/dev/null)
+    case "$_sl_pid" in
+      '') ;;
+      *)
+        if ! _conf_owner_alive "$_sl_pid" && mkdir "${TS_RUN_DIR}/.service-reap" 2>/dev/null; then
+          _sl_pid=$(readlink "${TS_RUN_DIR}/.service-lock" 2>/dev/null)
+          case "$_sl_pid" in
+            '') ;;
+            *) if ! _conf_owner_alive "$_sl_pid"; then rm -f "${TS_RUN_DIR}/.service-lock"; fi ;;
+          esac
+          rmdir "${TS_RUN_DIR}/.service-reap" 2>/dev/null
+        fi
+        ;;
+    esac
+    _sl_i=$((_sl_i + 1))
+    [ "$_sl_i" -lt 120 ] || { log Error "service controller busy"; return 1; }
+    sleep 0.5
+  done
+  trap 'service_unlock' 0
+  trap 'exit 1' INT TERM HUP
+}
+
 case "$1" in
+  start|stop|restart|mode|reconcile) service_lock || exit 1 ;;
+esac
+
+case "$1" in
+  reconcile)
+    [ -f "${TS_RUN_DIR}/manual-stop" ] && exit 0
+    start_service
+    ;;
   start)
     start_service
     ;;

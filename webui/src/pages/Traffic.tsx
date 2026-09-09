@@ -30,8 +30,8 @@ interface TopEntry {
 }
 
 interface UidEntry {
-  uid: number;
-  rx: number;
+  uid: string;
+  tx: number;
 }
 
 let seq = 0;
@@ -43,7 +43,7 @@ export default function Traffic(): JSX.Element {
   const [chartError, setChartError] = createSignal<string | null>(null);
   const [chartEmpty, setChartEmpty] = createSignal(false);
   const [topn, setTopn] = createSignal<{ entry: TopEntry; name: string }[] | null>(null);
-  const [uidRows, setUidRows] = createSignal<{ label: string; uid: number; rx: number }[] | null>(null);
+  const [uidRows, setUidRows] = createSignal<{ label: string; uid: string; tx: number }[] | null>(null);
 
   async function loadChart() {
     const m = mode();
@@ -105,7 +105,7 @@ export default function Traffic(): JSX.Element {
       (res.uids as UidEntry[]).slice(0, 50).map((u) => ({
         label: labels[String(u.uid)] || t('traffic_uid') + u.uid,
         uid: u.uid,
-        rx: u.rx,
+        tx: u.tx,
       })),
     );
   }
@@ -195,6 +195,7 @@ export default function Traffic(): JSX.Element {
       </Card>
 
       <Card title={t('traffic_by_app')} icon="group">
+        <p class="dim">{t('traffic_app_tx_hint')}</p>
         <Show when={uidRows() !== null} fallback={<SkeletonRows rows={3} />}>
           <Show
             when={uidRows()!.length > 0}
@@ -207,7 +208,7 @@ export default function Traffic(): JSX.Element {
                   <div class="title">{u.label}</div>
                   <div class="sub">{t('traffic_uid') + u.uid}</div>
                 </div>
-                <span class="dim">{fmtBytes(u.rx)}</span>
+                <span class="dim">{'↑' + fmtBytes(u.tx)}</span>
               </div>
             ))}
           </Show>

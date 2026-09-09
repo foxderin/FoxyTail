@@ -16,8 +16,8 @@ FoxyTail 的灵感来自 [anasfanani/Magisk-Tailscaled](https://github.com/anasf
 | 功能 | 状态 | 说明 |
 |---|---|---|
 | 三种运行模式（`bridge` / `tun` / `proxy`） | ✅ | CLI 热切换；`tun` 需要 `/dev/net/tun` |
-| 路由范围（`all` / `selected` / `bypass`） | ✅ | 按 UID 打标需要内核 `xt_owner` |
-| 独立策略路由（表 1052，fwmark `0xF7`） | ✅ | 绝不写 main 表 |
+| 路由范围（`all` / `selected` / `bypass`） | ✅ | selected/bypass 仅 bridge；需要内核 `xt_owner` |
+| 独立策略路由（表 1052，fwmark `0x40000000/0x40000000`） | ✅ | 绝不写 main 表 |
 | 流量分析（`foxytail.stats`） | ✅ | JSONL 环形存储 7 天，熄屏自动降频 |
 | MagicDNS 分流（`foxytail.dns`） | ✅ | 需用户自放静态 `dnsmasq`（见下文） |
 | IPv6 双栈 | ✅ | `IPV6=on`，ip6tables 对称规则 |
@@ -68,7 +68,7 @@ su -c 'foxytail.service mode tun'          # 切换运行模式并重启
 |---|---|---|
 | `foxytail.service` | `start` `stop` `restart` `status [summary\|peer\|exit-node\|all]` `log [daemon\|service]` `mode [bridge\|tun\|proxy]` `help [all]` | tailscaled 生命周期、彩色状态、模式切换 |
 | `foxytail.tun` | `start` `stop` `restart` `status` | hev-socks5-tunnel → `tailscale0` 接口（bridge 模式）；调用 `foxytail.tun.up` / `.tun.down` 用户钩子 |
-| `foxytail.route` | `apply` `teardown` `reload` `status` | 幂等策略路由引擎（`FOXY_*` 链、表 1052、fwmark `0xF7`） |
+| `foxytail.route` | `apply` `teardown` `reload` `status` | 幂等策略路由引擎（`FOXY_*` 链、表 1052、fwmark `0x40000000/0x40000000`） |
 | `foxytail.dns` | `start` `stop` `status` | MagicDNS 分流解析（dnsmasq 监听 1053 + 共存感知的 53 重定向） |
 | `foxytail.stats` | `start` `stop` `status` `collect-once` `query [hourly <日期>\|daily\|topn <n>]` | 流量采集（按 peer Rx/Tx、按 UID 计数） |
 | `foxytail.watchdog` | `start` `stop` `status` `check-once` | 崩溃重启、默认路由变化后 rebind（有限频） |
@@ -92,12 +92,20 @@ WebUI 已内置：位于 `webroot/`（纯静态零构建，后端为 `foxytail.w
 
 WebUI 源码位于 `webui/`（Vite + SolidJS + Material Web 3 组件 + `kernelsu` npm 桥接）。构建产物已提交进 `webroot/`，模块自包含，使用者无需安装 Node 工具链。
 
-- `pnpm --dir webui install` —— 安装依赖（一次性）
+- `pnpm --dir webui install --frozen-lockfile` —— 安装依赖（一次性）
 - `pnpm --dir webui dev` —— Vite 开发服务器（无 root 桥环境，界面显示 no-root 横幅）
 - `pnpm --dir webui build` —— 生产构建输出到 `../webroot/`（构建结果需提交）
 - `pnpm --dir webui typecheck` / `check:i18n` / `smoke` —— 类型检查、中英键值对齐校验、jsdom 冒烟（13 条路由 + 任务接管 + no-root 横幅）
 
 契约：`webui/src/api.ts` 是 `tailscale/scripts/foxytail.webapi.sh` 的唯一消费者，其 JSON 契约冻结不可改。
+
+## 验证与发布
+
+开发工具链固定为 Node 22.14.0、pnpm 10.30.3，WebUI 要求 Android WebView 109+。安装依赖后执行 `bash .github/tools/verify.sh`，统一检查 ShellCheck、隔离后端回归、类型、国际化、smoke、版本元数据和生产产物一致性；前端改动后先执行 `pnpm --dir webui build` 更新 `webroot/`。
+
+发布前运行 `.github/tools/version-bump.sh`，提交版本元数据与前端产物后创建版本标签。Release 工作流只构建现有标签，普通构建校验已审阅的 `tailscale/checksums.txt`。更新依赖时显式运行 `bash .github/tools/build.sh --update-checksums` 生成候选文件，核对上游来源后再审阅、替换并提交；该模式不打包。
+
+设置保存后以 WebUI 的“重启应用”或 `/data/adb/foxytail/scripts/start.sh reload` 刷新主服务和驻留组件。`foxytail.service restart` 仅重启网络服务层。升级保留接收文件、自备 dnsmasq、配置和身份；切换前停止旧组件，失败保留回滚记录。
 
 ## 配置
 
@@ -112,8 +120,8 @@ WebUI 源码位于 `webui/`（Vite + SolidJS + Material Web 3 组件 + `kernelsu
 | `DNS_PORT` | `1053` | dnsmasq 监听端口（MagicDNS） |
 | `MAGIC_DNS` | `off` | 经 dnsmasq 分流解析 tailnet 域名 |
 | `IPV6` | `off` | tailscale0 双栈 + ip6tables 对称规则 |
-| `ROUTE_TABLE` | `1052` | 独立策略路由表号（1–252） |
-| `FWMARK` | `0xF7` | FoxyTail 报文打标 fwmark（十六进制） |
+| `ROUTE_TABLE` | `1052` | 独立策略路由表号（1000–65535） |
+| `FWMARK` / `FWMARK_MASK` | `0x40000000` | 固定共享标记位；旧 0xF7 配置读取时迁移 |
 | `WATCHDOG` / `WATCHDOG_INTERVAL` | `on` / `30` | 崩溃重启 + rebind，检查间隔秒数 |
 | `STATS_INTERVAL` | `60` | 流量采集间隔（熄屏自动降频） |
 | `LOG_MAX_KB` | `512` | 日志轮转阈值（保留一个 `.bak`） |
@@ -149,7 +157,7 @@ cellular:-:no-exit-node       # 切到蜂窝时清除出口节点
 | 原理 | userspace tailscaled + socks5 + hev-socks5-tunnel → `tailscale0` | tailscaled 原生 TUN | 仅 socks5，不建接口 |
 | 依赖 | 无特殊要求 | `/dev/net/tun` | 无 |
 | 无 TUN 支持可用 | ✅ | ❌ | ✅ |
-| 按 App 路由 / 流量统计 | ✅ | ✅ | ❌（无接口） |
+| 按 App 路由 / 流量统计 | ✅（UID 0 绕行） | 仅 all；支持 peer/接口统计 | ❌（无接口） |
 | 性能 | userspace 拷贝开销 | 最佳 | 仅应用层 |
 
 切换：`foxytail.service mode <模式>`（写入 `TS_MODE` 并重启）。`/dev/net/tun` 缺失时拒绝切到 `tun`。
@@ -159,8 +167,8 @@ cellular:-:no-exit-node       # 切到蜂窝时清除出口节点
 `foxytail.route` 把一切放在独立位置，不影响其他模块：
 
 - 所有规则进专用链：`FOXY_MARK`（mangle）与 `FOXY_STAT`（filter，供流量统计计数）；内置链各只挂一跳
-- 策略路由使用独立表 **1052**（可配）与 fwmark **`0xF7`**（可配）；main 表零写入
-- 每条规则先 `-C` 检查再添加——`apply` 幂等可重复执行；`teardown` 只拆 FoxyTail 自己的规则
+- 策略路由使用独立表 **1052**（1000–65535，须无外部资源冲突）与固定 mark/mask **`0x40000000/0x40000000`**；保留其他标记位，不清空整张路由表
+- `check` 比较完整配置、双栈规则、OUTPUT 跳转及路由快照；`apply` 在失配时修复，`teardown` 只移除精确策略规则和协议 186、设备 tailscale0 的路由
 - MagicDNS 额外使用 `FOXY_DNS`（nat）做 53 重定向；检测到其他模块已劫持 53 端口时自动跳过
 
 ## 共存指南
@@ -179,11 +187,11 @@ FoxyTail 从不动其他模块的链，开机时自动探测邻居（`foxytail.c
 
 ## IPv6
 
-`IPV6=on` 为 `tailscale0` 配置双栈地址（bridge 模式下为 `fd7a:115c:a1e0::1`），添加对称的 ip6tables 策略规则，并路由 `fd7a:115c:a1e0::/48`（请加入 `ROUTE_SUBNETS`）。默认关闭。
+`IPV6=on` 为 `tailscale0` 配置双栈地址（bridge 模式下为 `fd7a:115c:a1e0::1`），添加对称的 ip6tables 策略规则，并路由 `fd7a:115c:a1e0::/48`（请加入 `ROUTE_SUBNETS`）。默认关闭。开启前必须在路由子网中添加 IPv6 CIDR，否则路由应用会明确失败。
 
 ## 流量分析与诊断包
 
-- `foxytail.stats` 每 `STATS_INTERVAL` 秒采样一次 per-peer Rx/Tx 与按 UID 链计数，写入 `/data/adb/foxytail/run/stats/YYYY-MM-DD.jsonl`（7 天环形，熄屏降频）。查询：`foxytail.stats query hourly <日期> | daily | topn <n>`。
+- `foxytail.stats` 每 `STATS_INTERVAL` 秒采样一次 per-peer Rx/Tx 与双栈隧道 OUTPUT 的 UID 发送计数，写入 `/data/adb/foxytail/run/stats/YYYY-MM-DD.jsonl`（7 天环形，熄屏降频）。查询：`foxytail.stats query hourly <日期> | daily | topn <n>`。
 - `foxytail.diag collect` 把日志尾部、`tailscale status --json`、`netcheck`、iptables 自检与配置打包到 `/sdcard/Download/foxytail-diag-<时间戳>.tar.gz`——求助时请附上它。
 
 ## 限制（如实说明）
@@ -192,7 +200,7 @@ FoxyTail 从不动其他模块的链，开机时自动探测邻居（`foxytail.c
 - 默认 `bridge` 模式为 userspace 网络栈：吞吐低于内核 TUN（有条件请用 `tun` 模式）。
 - WebUI 未内嵌登录二维码——请使用 `tailscale login` 打印的 URL。
 - SSID 探测解析 `dumpsys wifi` 输出，各 Android 版本格式有差异（已做容错，最坏情况返回 "unknown"）。
-- 按 App 路由需要内核 `xt_owner`；缺失时安装器会提示。
+- 内核路由需要 `xt_owner` 以排除控制进程；缺失时拒绝应用。按 App selected/bypass 仅支持 bridge，UID 0 不进入 bridge 隧道。
 - MagicDNS 需要用户自供 dnsmasq 二进制（见上文）。
 
 ## 故障排查

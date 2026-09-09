@@ -1,65 +1,39 @@
 #!/system/bin/sh
-# FoxyTail - module uninstall hook.
-# Stops every FoxyTail component, tears down routes/DNS chains, removes
-# /data/adb/foxytail but keeps a backup of tailscaled.state.
-
+# Stop verified module-owned processes before deleting their files and state.
 TS_DIR="/data/adb/foxytail"
 SCRIPTS_DIR="${TS_DIR}/scripts"
 STATE_BACKUP="/data/adb/foxytail-state.backup"
 
 say() {
-  if type ui_print >/dev/null 2>&1; then
-    ui_print "$1"
-  else
-    echo "$1"
-  fi
+  if type ui_print >/dev/null 2>&1; then ui_print "$1"; else echo "$1"; fi
 }
 
-# 1. Graceful stop, best effort.
-if [ -x "${SCRIPTS_DIR}/foxytail.service" ]; then
-  "${SCRIPTS_DIR}/foxytail.service" stop >/dev/null 2>&1
-fi
-for _s in foxytail.stats foxytail.watchdog foxytail.context; do
-  if [ -x "${SCRIPTS_DIR}/${_s}" ]; then
-    "${SCRIPTS_DIR}/${_s}" stop >/dev/null 2>&1
+if [ -x "${SCRIPTS_DIR}/start.sh" ]; then
+  if ! "${SCRIPTS_DIR}/start.sh" stop; then
+    say "! FoxyTail cleanup failed; data retained for recovery"
+    exit 1
   fi
-done
-
-# 2. Teardown policy routing and MagicDNS chains.
-if [ -x "${SCRIPTS_DIR}/foxytail.route" ]; then
-  "${SCRIPTS_DIR}/foxytail.route" teardown >/dev/null 2>&1
-fi
-if [ -x "${SCRIPTS_DIR}/foxytail.dns" ]; then
-  "${SCRIPTS_DIR}/foxytail.dns" stop >/dev/null 2>&1
+elif [ -d "$TS_DIR" ]; then
+  say "! FoxyTail control scripts are missing; data retained for recovery"
+  exit 1
 fi
 
-# 3. Kill leftovers. tailscaled is ours; dnsmasq/hev-socks5-tunnel/inotifyd
-#    may belong to other modules, so only kill instances whose cmdline
-#    references FoxyTail paths or scripts.
-for _pid in $(pidof tailscaled 2>/dev/null); do
-  if tr '\0' ' ' <"/proc/${_pid}/cmdline" 2>/dev/null | grep -qF "${TS_DIR}"; then
-    kill -TERM "$_pid" 2>/dev/null
-  fi
-done
-for _d in /proc/[0-9]*; do
-  _pid=${_d#/proc/}
-  [ "$_pid" = "$$" ] && continue
-  _cmd=$(tr '\0' ' ' <"${_d}/cmdline" 2>/dev/null)
-  case "$_cmd" in
-    *foxytail*)
-      kill -TERM "$_pid" 2>/dev/null
-      ;;
-  esac
-done
-
-# 4. Keep a state backup, then remove the data directory. foxytail.service
-#    uses --statedir=$TS_DIR/state; also check the legacy flat path.
+# Do not signal processes based on a substring in their command line. The
+# controller verified each daemon PID and stopped the exact watcher callback.
 for _state in "${TS_DIR}/state/tailscaled.state" "${TS_DIR}/tailscaled.state"; do
   if [ -f "$_state" ]; then
-    mv "$_state" "$STATE_BACKUP"
-    say "- tailscaled.state backed up to ${STATE_BACKUP}"
+    if ! cp "$_state" "${STATE_BACKUP}.tmp" ||
+      ! chmod 0600 "${STATE_BACKUP}.tmp" ||
+      ! mv "${STATE_BACKUP}.tmp" "$STATE_BACKUP"; then
+      say "! Unable to preserve tailscaled identity; data retained"
+      exit 1
+    fi
+    say "- tailscaled identity backed up to ${STATE_BACKUP}"
     break
   fi
 done
-rm -rf "$TS_DIR"
+if ! rm -rf "$TS_DIR"; then
+  say "! Could not remove all FoxyTail data"
+  exit 1
+fi
 say "- FoxyTail data removed"

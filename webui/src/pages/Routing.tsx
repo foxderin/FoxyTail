@@ -6,6 +6,7 @@
 import { createSignal, onCleanup, onMount, Show, type JSX } from 'solid-js';
 import { createApiScope, execRaw, hasRoot } from '../api';
 import { t } from '../i18n';
+import { status, refreshStatus } from '../state';
 import { Card, KvRow, SkeletonRows, EmptyState, ErrorState } from '../components/Basics';
 import { showToast, toastApiError } from '../components/Toast';
 import { MdIcon } from '../icons';
@@ -27,7 +28,8 @@ export default function Routing(): JSX.Element {
   const [scope_, setScope] = createSignal<Scope>('all');
   const [uids, setUids] = createSignal<string[]>([]);
   const [subnets, setSubnets] = createSignal<string[]>([]);
-  const [ownerOk, setOwnerOk] = createSignal(true);
+  const [ownerOk, setOwnerOk] = createSignal(false);
+  const perAppSupported = () => ownerOk() && status()?.mode === 'bridge';
   const [apps, setApps] = createSignal<AppInfo[] | null>(null);
   const [appsError, setAppsError] = createSignal<string | null>(null);
   const [filter, setFilter] = createSignal('');
@@ -36,9 +38,10 @@ export default function Routing(): JSX.Element {
 
   /* xt_owner probe: hide per-app scope when unsupported */
   onMount(() => {
+    void refreshStatus();
     execRaw('iptables -m owner --help >/dev/null 2>&1 && echo yes || echo no')
       .then((out) => {
-        if (String(out).indexOf('yes') === -1) setOwnerOk(false);
+        setOwnerOk(String(out).includes('yes'));
       })
       .catch(() => undefined);
 
@@ -113,7 +116,7 @@ export default function Routing(): JSX.Element {
   }
 
   async function apply() {
-    if (applyBusy()) return;
+    if (applyBusy() || (scope_() !== 'all' && !perAppSupported())) return;
     setApplyBusy(true);
     const u = uids().length ? uids().join(',') : '-';
     const s = subnets().length ? subnets().join(',') : '-';
@@ -121,37 +124,36 @@ export default function Routing(): JSX.Element {
     setApplyBusy(false);
     if (res.cancelled) return;
     if (res.ok) {
-      showToast(t('route_apply_done') + (res.note ? ' (' + String(res.note) + ')' : ''), 'ok');
+      const pending = res.applied === false || res.restartRequired === true;
+      showToast(t(pending ? 'set_restart_required' : 'route_apply_done') + (res.note ? ' (' + String(res.note) + ')' : ''), pending ? 'info' : 'ok');
     } else toastApiError(t('op_failed'), res);
   }
 
   return (
     <>
       <Card title={t('route_scope')} icon="alt_route">
-        <Show when={ownerOk()} fallback={
-          <>
-            <div class="banner warn">
-              <MdIcon name="warning" size={18} />
-              <span>{t('route_no_owner')}</span>
-            </div>
-            <KvRow k={t('route_scope')} v={scope_()} />
-          </>
-        }>
-          <div class="radio-cards">
-            {(['all', 'selected', 'bypass'] as Scope[]).map((s) => (
-              <div
-                class={'radio-card' + (scope_() === s ? ' selected' : '')}
-                onClick={() => setScope(s)}
-              >
-                {t(('route_scope_' + s) as 'route_scope_all')}
-              </div>
-            ))}
-          </div>
-          <div class="dim mt">{t(('route_scope_' + scope_() + '_hint') as 'route_scope_all_hint')}</div>
+        <Show when={status()?.mode === 'tun'}>
+          <div class="banner warn"><span>{t('route_native_scope')}</span></div>
         </Show>
+        <Show when={!ownerOk()}>
+          <div class="banner warn"><span>{t('route_no_owner')}</span></div>
+        </Show>
+        <div class="radio-cards">
+          {(['all', 'selected', 'bypass'] as Scope[]).map((s) => (
+            <Button
+              variant="outlined"
+              class={'radio-card' + (scope_() === s ? ' selected' : '')}
+              disabled={s !== 'all' && !perAppSupported()}
+              onClick={() => setScope(s)}
+            >
+              {t(('route_scope_' + s) as 'route_scope_all')}
+            </Button>
+          ))}
+        </div>
+        <div class="dim mt">{t(('route_scope_' + scope_() + '_hint') as 'route_scope_all_hint')}</div>
       </Card>
 
-      <Show when={ownerOk()}>
+      <Show when={perAppSupported()}>
         <Card title={t('route_apps')} icon="group">
           <TextField
             label={t('route_apps_search')}
@@ -224,7 +226,7 @@ export default function Routing(): JSX.Element {
 
       <Button
         style={{ width: '100%' }}
-        disabled={applyBusy() || !hasRoot}
+        disabled={applyBusy() || !hasRoot || (scope_() !== 'all' && !perAppSupported())}
         onClick={() => void apply()}
       >
         <MdIcon name="check_circle" size={18} /> {t('apply')}

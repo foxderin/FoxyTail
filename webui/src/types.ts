@@ -34,6 +34,7 @@ export interface InboxFile {
 
 export interface AccountEntry {
   name: string;
+  label?: string;
   current: boolean;
 }
 

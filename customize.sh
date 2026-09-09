@@ -69,6 +69,7 @@ PROP_FILE="$(echo "$MODPATH" | sed 's/_update//')/module.prop"
 [ ! -f "$PROP_FILE" ] && PROP_FILE="$MODPATH/module.prop"
 OLD_CODE=$(grep '^versionCode=' "$PROP_FILE" 2>/dev/null | cut -d= -f2)
 OLD_CODE="${OLD_CODE:-unknown}"
+case "$OLD_CODE" in *[!0-9]* | '') OLD_CODE=unknown ;; esac
 
 # --- Extract module files ----------------------------------------------------
 # Everything under tailscale/ except settings.sh lives in $TS_DIR, not in the
@@ -225,100 +226,187 @@ install_bin tailscaled "$TAILSCALE_REPO" "$TAILSCALE_VERSION" "tailscale_.*_${AR
 install_bin jq "$JQ_REPO" "$JQ_VERSION" "$JQ_ASSET"
 install_bin hev-socks5-tunnel "$HEV_REPO" "$HEV_VERSION" "hev-socks5-tunnel-linux-${HEV_ARCH}"
 
-# --- Swap in the new installation ----------------------------------------------
-#
-# Everything above is staged and verified; from here on the previous
-# installation is replaced. It is moved to $TS_DIR/backups/<old versionCode>/
-# EXCEPT user-owned data, which stays in place:
-#   ssh/ certs/ state/ tailscaled.state  (tailscaled identity/state)
-#   conf/                                (user configuration)
-#   scripts/foxytail.tun.up / .tun.down  (user hooks)
-#   backups/                             (previous backups)
-
-if [ -d "$TS_DIR" ]; then
-  ui_print "- Backing up previous installation"
-  rm -rf "${TS_DIR}/backups/${OLD_CODE}"
-  mkdir -p "${TS_DIR}/backups/${OLD_CODE}"
-  for p in "${TS_DIR}"/*; do
-    [ -e "$p" ] || continue
-    case "$(basename "$p")" in
-      ssh | certs | state | tailscaled.state | conf | backups)
-        : # user data: keep in place
-        ;;
-      scripts)
-        mkdir -p "${TS_DIR}/backups/${OLD_CODE}/scripts"
-        for s in "$p"/*; do
-          [ -e "$s" ] || continue
-          case "$(basename "$s")" in
-            foxytail.tun.up | foxytail.tun.down)
-              : # user hooks: keep in place
-              ;;
-            *)
-              mv -f -- "$s" "${TS_DIR}/backups/${OLD_CODE}/scripts/"
-              ;;
-          esac
-        done
-        ;;
-      *)
-        mv -f -- "$p" "${TS_DIR}/backups/${OLD_CODE}/"
-        ;;
-    esac
+# --- Prepare a complete replacement before stopping the installed version ----
+# Data (state, received files, certificates and backups) stays in place. The
+# candidate contains software/config only, including user-provided binaries.
+CANDIDATE="${TS_DIR}/.install-$$"
+BACKUP="${TS_DIR}/backups/${OLD_CODE}-$(date +%Y%m%d-%H%M%S)-$$"
+rollback_install() {
+  _ri_ok=0
+  for _ri_part in bin scripts conf settings.sh VERSIONS checksums.txt; do
+    if [ -e "${BACKUP}/${_ri_part}" ] || [ -e "${BACKUP}/.absent-${_ri_part}" ]; then
+      if ! rm -rf "${TS_DIR:?}/${_ri_part}"; then
+        _ri_ok=1
+        continue
+      fi
+      if [ -e "${BACKUP}/${_ri_part}" ]; then
+        mv "${BACKUP}/${_ri_part}" "${TS_DIR}/${_ri_part}" || _ri_ok=1
+      fi
+    fi
   done
+  if [ "$_ri_ok" = 0 ]; then
+    rm -f "${TS_DIR}/.installing" "${TS_DIR}/.install-transaction"
+  fi
+  return "$_ri_ok"
+}
+
+install_abort() {
+  ui_print "! Installation switch failed: $1"
+  _INSTALL_SWITCH_ACTIVE=0
+  if rollback_install; then
+    ui_print "! Previous software restored; restart FoxyTail after resolving the error"
+  else
+    ui_print "! Rollback incomplete; original files remain in ${BACKUP}"
+  fi
+  abort "! Installation failed; not reporting success"
+}
+
+switch_install() {
+  mkdir -p "$BACKUP" || return 1
+  for _sw_part in bin scripts conf settings.sh VERSIONS checksums.txt; do
+    # Record absence as well, so rollback removes a newly installed entry.
+    if [ -e "${TS_DIR}/${_sw_part}" ]; then
+      mv "${TS_DIR}/${_sw_part}" "${BACKUP}/${_sw_part}" || return 1
+    else
+      : >"${BACKUP}/.absent-${_sw_part}" || return 1
+    fi
+    mv "${CANDIDATE}/${_sw_part}" "${TS_DIR}/${_sw_part}" || return 1
+  done
+}
+
+# Recover an interrupted earlier switch before reading installed software.
+# Journal paths are constrained to our backups directory; configuration is not
+# executed to select the recovery source.
+if [ -f "${TS_DIR}/.install-transaction" ]; then
+  _RECOVERY_BACKUP=$(cat "${TS_DIR}/.install-transaction")
+  case "$_RECOVERY_BACKUP" in
+    "${TS_DIR}/backups/"*)
+      _RECOVERY_NAME=${_RECOVERY_BACKUP#"${TS_DIR}/backups/"}
+      case "$_RECOVERY_NAME" in ''|*[!A-Za-z0-9_-]*) abort "! Invalid installation journal" ;; esac
+      ;;
+    *) abort "! Invalid installation journal" ;;
+  esac
+  _NEXT_BACKUP=$BACKUP
+  BACKUP=$_RECOVERY_BACKUP
+  [ -d "$BACKUP" ] && rollback_install || abort "! Unable to recover previous interrupted installation"
+  BACKUP=$_NEXT_BACKUP
 fi
 
-mkdir -p "$TS_BIN_DIR" "$TS_SCRIPTS_DIR" "$TS_CONF_DIR"
+install_interrupted() {
+  if [ "${_INSTALL_SWITCH_ACTIVE:-0}" = 1 ]; then
+    _INSTALL_SWITCH_ACTIVE=0
+    ui_print "! Interrupted install; restoring previous software"
+    rollback_install || ui_print "! Recovery incomplete; retained journal for the next installation"
+  fi
+}
 
-# --- Restore state left behind by uninstall.sh --------------------------------
-# uninstall.sh moves tailscaled.state to /data/adb/foxytail-state.backup before
-# wiping $TS_DIR. On a reinstall with no state of its own yet, adopt that
-# backup so the node keeps its identity and login.
+mkdir -p "${CANDIDATE}/bin" "${CANDIDATE}/scripts" "${CANDIDATE}/conf" ||
+  abort "! Unable to create installation staging directory"
+for _part in bin scripts conf; do
+  if [ -d "${TS_DIR}/${_part}" ]; then
+    cp -a "${TS_DIR}/${_part}/." "${CANDIDATE}/${_part}/" ||
+      abort "! Unable to preserve installed ${_part}; old installation unchanged"
+  fi
+done
+for b in tailscaled jq hev-socks5-tunnel; do
+  cp -f "${STAGE}/bin/${b}-${ARCH}" "${CANDIDATE}/bin/${b}" ||
+    abort "! Unable to prepare ${b}; old installation unchanged"
+done
+ln -sf tailscaled "${CANDIDATE}/bin/tailscale" || abort "! Failed to prepare tailscale symlink"
+cp -f "${STAGE}/scripts/"* "${CANDIDATE}/scripts/" || abort "! Failed to prepare scripts"
+for hook in foxytail.tun.up foxytail.tun.down; do
+  if [ -f "${CANDIDATE}/scripts/${hook}" ]; then
+    if ! cmp -s "${STAGE}/hooks/${hook}" "${CANDIDATE}/scripts/${hook}"; then
+      cp "${STAGE}/hooks/${hook}" "${CANDIDATE}/scripts/${hook}.new" || abort "! Failed to stage hook template"
+      ui_print "- ${hook}: kept your copy; new template saved as ${hook}.new"
+    fi
+  else
+    cp "${STAGE}/hooks/${hook}" "${CANDIDATE}/scripts/${hook}" || abort "! Failed to stage hook"
+  fi
+done
+for f in "${STAGE}/conf/"*; do
+  [ -f "$f" ] || continue
+  if [ ! -e "${CANDIDATE}/conf/${f##*/}" ]; then
+    cp "$f" "${CANDIDATE}/conf/${f##*/}" || abort "! Failed to stage configuration"
+  fi
+done
+cp -f "${STAGE}/root/"* "$CANDIDATE/" || abort "! Failed to stage shared runtime"
 
+# Match executable paths and exact script/callback arguments, never a broad
+# `pkill -f foxytail`. The installer itself is outside these software paths.
+installed_pids() {
+  for _ip_proc in /proc/[0-9]*; do
+    _ip_pid=${_ip_proc##*/}
+    [ "$_ip_pid" != "$$" ] || continue
+    _ip_exe=$(readlink "${_ip_proc}/exe" 2>/dev/null)
+    case "$_ip_exe" in
+      "${TS_BIN_DIR}/"*) echo "$_ip_pid"; continue ;;
+    esac
+    if tr '\0' '\n' <"${_ip_proc}/cmdline" 2>/dev/null |
+      awk -v prefix="${TS_SCRIPTS_DIR}/" 'index($0,prefix)==1 {found=1} END {exit !found}'; then
+      echo "$_ip_pid"
+    fi
+  done
+}
+
+quiesce_installed() {
+  # Gate controllers in current/new versions. Old releases lack the gate,
+  # hence explicit watcher and resident shutdown before the old service.
+  : >"${TS_DIR}/.installing" || return 1
+  for _qi_pid in $(installed_pids); do
+    if tr '\0' '\n' <"/proc/${_qi_pid}/cmdline" 2>/dev/null |
+      grep -qxF "${TS_SCRIPTS_DIR}/foxytail.inotify"; then
+      kill -TERM "$_qi_pid" 2>/dev/null
+    fi
+  done
+  for _qi_name in foxytail.watchdog foxytail.context foxytail.stats foxytail.logd; do
+    [ ! -x "${TS_SCRIPTS_DIR}/${_qi_name}" ] ||
+      "${TS_SCRIPTS_DIR}/${_qi_name}" stop || return 1
+  done
+  [ ! -x "${TS_SCRIPTS_DIR}/foxytail.service" ] ||
+    "${TS_SCRIPTS_DIR}/foxytail.service" stop || return 1
+  _qi_left=$(installed_pids)
+  for _qi_pid in $_qi_left; do kill -TERM "$_qi_pid" 2>/dev/null; done
+  _qi_tries=0
+  while [ -n "$(installed_pids)" ] && [ "$_qi_tries" -lt 20 ]; do
+    sleep 0.2
+    _qi_tries=$((_qi_tries + 1))
+  done
+  [ -z "$(installed_pids)" ]
+}
+
+# Each successfully moved old entry is the rollback journal. Never replace an
+# earlier backup on a reinstall of the same version.
+# Old releases sourced configuration. Validate it with the newly shipped data
+# parser before invoking any old controller, including its destructive stop.
+if ! sh -c '. "$1"; load_conf' sh "${STAGE}/root/settings.sh"; then
+  abort "! Existing configuration is invalid; refusing to execute the old controller"
+fi
+ui_print "- Stopping and verifying the previous installation"
+if ! quiesce_installed; then
+  rm -f "${TS_DIR}/.installing"
+  abort "! Old processes did not stop; old files remain in place"
+fi
+if [ -d "$TS_CONF_DIR" ]; then
+  cp -a "${TS_CONF_DIR}/." "${CANDIDATE}/conf/" || install_abort "latest configuration snapshot failed"
+fi
+ui_print "- Switching software; backup: ${BACKUP}"
+printf '%s\n' "$BACKUP" >"${TS_DIR}/.install-transaction" || install_abort "cannot record installation journal"
+_INSTALL_SWITCH_ACTIVE=1
+trap 'install_interrupted' 0
+trap 'exit 1' HUP INT TERM
+switch_install || install_abort "file replacement failed"
+rmdir "$CANDIDATE" 2>/dev/null
+
+# Restore identity from an earlier uninstall, only when no active identity exists.
 STATE_BACKUP="/data/adb/foxytail-state.backup"
 if [ -f "$STATE_BACKUP" ] &&
   [ ! -f "${TS_DIR}/state/tailscaled.state" ] &&
   [ ! -f "${TS_DIR}/tailscaled.state" ]; then
-  mkdir -p "${TS_DIR}/state"
-  mv "$STATE_BACKUP" "${TS_DIR}/state/tailscaled.state"
-  ui_print "- Restored tailscaled state from a previous install"
-  ui_print "  (${STATE_BACKUP} -> state/tailscaled.state)"
+  mkdir -p "${TS_DIR}/state" &&
+    cp "$STATE_BACKUP" "${TS_DIR}/state/tailscaled.state" || install_abort "state restore failed"
+  ui_print "- Restored tailscaled identity from a previous install"
 fi
-
-# --- Install staged payloads ---------------------------------------------------
-
-ui_print "- Installing binaries"
-for b in tailscaled jq hev-socks5-tunnel; do
-  mv -f "${STAGE}/bin/${b}-${ARCH}" "${TS_BIN_DIR}/${b}"
-done
-ln -sf tailscaled "${TS_BIN_DIR}/tailscale"
-
-ui_print "- Installing scripts"
-cp -f "${STAGE}/scripts/"* "${TS_SCRIPTS_DIR}/" ||
-  abort "! Failed to install scripts"
-
-# User hooks: never overwrite local modifications. If the installed hook
-# differs from the new template, keep the user's copy and drop the template
-# next to it as <hook>.new.
-for hook in foxytail.tun.up foxytail.tun.down; do
-  if [ -f "${TS_SCRIPTS_DIR}/${hook}" ]; then
-    if ! cmp -s "${STAGE}/hooks/${hook}" "${TS_SCRIPTS_DIR}/${hook}"; then
-      cp "${STAGE}/hooks/${hook}" "${TS_SCRIPTS_DIR}/${hook}.new"
-      ui_print "- ${hook}: your modified copy was kept;"
-      ui_print "  new template saved as scripts/${hook}.new"
-    fi
-  else
-    mv "${STAGE}/hooks/${hook}" "${TS_SCRIPTS_DIR}/${hook}"
-  fi
-done
-
-# Configuration templates: install only when missing so user edits survive
-# module upgrades.
-for f in "${STAGE}/conf/"*; do
-  [ -f "$f" ] || continue
-  [ -e "${TS_CONF_DIR}/${f##*/}" ] || cp -f "$f" "${TS_CONF_DIR}/${f##*/}"
-done
-
-cp -f "${STAGE}/root/"* "$TS_DIR/" ||
-  abort "! Failed to install settings.sh / VERSIONS / checksums.txt"
 
 # --- Permissions -------------------------------------------------------------
 # /data/adb is NOT the system partition: plain ownership/modes only, no SELinux
@@ -326,10 +414,10 @@ cp -f "${STAGE}/root/"* "$TS_DIR/" ||
 # SELinux label untouched. $MODPATH gets the regular systemless labels.
 
 ui_print "- Setting permissions"
-set_perm_recursive "$TS_BIN_DIR" 0 0 0755 0755
-set_perm_recursive "$TS_SCRIPTS_DIR" 0 0 0755 0755
-set_perm_recursive "$TS_CONF_DIR" 0 0 0755 0644
-set_perm "${TS_DIR}/settings.sh" 0 0 0644
+set_perm_recursive "$TS_BIN_DIR" 0 0 0755 0755 || install_abort "binary permissions"
+set_perm_recursive "$TS_SCRIPTS_DIR" 0 0 0755 0755 || install_abort "script permissions"
+set_perm_recursive "$TS_CONF_DIR" 0 0 0700 0600 || install_abort "configuration permissions"
+set_perm "${TS_DIR}/settings.sh" 0 0 0644 || install_abort "runtime permissions"
 
 set_perm "$MODPATH/service.sh" 0 0 0755 "u:object_r:system_file:s0"
 set_perm "$MODPATH/uninstall.sh" 0 0 0755 "u:object_r:system_file:s0"
@@ -362,15 +450,17 @@ else
 fi
 if iptables -m owner --help >/dev/null 2>&1 ||
   grep -qw owner /proc/net/ip_tables_matches 2>/dev/null; then
-  ui_print "- xt_owner present: per-App routing available"
+  ui_print "- xt_owner present: bridge per-App routing available (native tun: all only)"
 else
-  ui_print "! xt_owner match missing: per-App route scopes"
-  ui_print "! (selected/bypass) will not work on this kernel"
+  ui_print "! xt_owner match missing: policy routing will refuse to apply"
+  ui_print "! Use proxy mode on this kernel"
 fi
 
 # --- Start service in background ----------------------------------------------
 
-ui_print "- Starting FoxyTail service in background"
+_INSTALL_SWITCH_ACTIVE=0
+rm -f "${TS_DIR}/.installing" "${TS_DIR}/.install-transaction"
+ui_print "- Starting FoxyTail service and resident helpers in background"
 "${TS_SCRIPTS_DIR}/start.sh" postinstall >/dev/null 2>&1 &
 
 # --- /dev shortcuts + quickstart ----------------------------------------------

@@ -187,7 +187,7 @@ export default function Account(): JSX.Element {
               <div class="list-row">
                 <div class="main">
                   <div class="title">
-                    {a.name}
+                    {a.label || a.name}
                     <Show when={a.current}>
                       <span class="badge">{t('acc_current_badge')}</span>
                     </Show>

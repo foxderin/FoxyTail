@@ -39,6 +39,10 @@ case $BUMP_TYPE in
     ;;
 esac
 
+if (( MAJOR > 999 || MINOR > 99 || PATCH > 99 )); then
+  echo "error: version exceeds versionCode component limits" >&2
+  exit 1
+fi
 NEW_VERSION="v${MAJOR}.${MINOR}.${PATCH}"
 NEW_VERSION_CODE=$((MAJOR * 10000 + MINOR * 100 + PATCH))
 
@@ -80,19 +84,27 @@ fi
 
 # --- Version files ------------------------------------------------------------
 
-sed -i "s/^version=.*/version=${NEW_VERSION}/" module.prop
-sed -i "s/^versionCode=.*/versionCode=${NEW_VERSION_CODE}/" module.prop
-
-# zipUrl is pointed at the real release asset by the release workflow after
-# the GitHub release exists; here we only bump the version fields.
-jq --arg v "$NEW_VERSION" --argjson vc "$NEW_VERSION_CODE" \
-  '.version = $v | .versionCode = $vc' \
-  update.json >update.json.tmp && mv update.json.tmp update.json
+# Set all metadata before the version commit and tag; release never rewrites it.
+python3 - "$NEW_VERSION" "$NEW_VERSION_CODE" <<'PYVERSION'
+import json, re, sys
+from pathlib import Path
+version, code = sys.argv[1], int(sys.argv[2])
+p = Path('module.prop')
+s = re.sub(r'^version=.*$', 'version=' + version, p.read_text(), flags=re.M)
+s = re.sub(r'^versionCode=.*$', 'versionCode=' + str(code), s, flags=re.M)
+p.write_text(s)
+p = Path('update.json'); d = json.loads(p.read_text())
+d.update(version=version, versionCode=code,
+         zipUrl=f'https://github.com/foxderin/FoxyTail/releases/download/{version}/FoxyTail-{version}.zip')
+p.write_text(json.dumps(d, indent=2) + '\n')
+p = Path('webui/package.json'); d = json.loads(p.read_text()); d['version'] = version.removeprefix('v')
+p.write_text(json.dumps(d, indent=2) + '\n')
+PYVERSION
 
 echo "Bumped ${BUMP_TYPE}: ${CURRENT} -> ${NEW_VERSION} (versionCode: ${NEW_VERSION_CODE})"
 echo ""
 echo "Next steps:"
-echo "  git add module.prop update.json CHANGELOG.md"
+echo "  git add module.prop update.json webui/package.json CHANGELOG.md"
 echo "  git commit -m 'Bump version to ${NEW_VERSION}'"
 echo "  git tag ${NEW_VERSION}"
 echo "  git push && git push --tags"

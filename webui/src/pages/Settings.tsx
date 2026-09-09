@@ -6,6 +6,7 @@
 import { createSignal, onMount, Show, type JSX } from 'solid-js';
 import { createApiScope, execRaw, hasRoot } from '../api';
 import { t, lang, setLang, type Lang } from '../i18n';
+import { refreshStatus } from '../state';
 import { mode, applyTheme, type ThemeMode } from '../theme';
 import { Card, SkeletonRows, EmptyState, ErrorState } from '../components/Basics';
 import { confirmDialog } from '../components/ConfirmDialog';
@@ -30,27 +31,55 @@ export default function Settings(): JSX.Element {
   const [hooks, setHooks] = createSignal<Record<string, string>>({});
   const [restorePath, setRestorePath] = createSignal('');
   const [backupBusy, setBackupBusy] = createSignal(false);
+  const [restartRequired, setRestartRequired] = createSignal(false);
+  const [restartBusy, setRestartBusy] = createSignal(false);
+  const [saving, setSaving] = createSignal(false);
 
-  async function loadSettings() {
+  async function loadSettings(): Promise<boolean | undefined> {
     const res = await scope.api('settings-get');
     if (res.cancelled) return;
     if (res.ok) {
       setSettings((res.settings as Record<string, string>) || {});
       setSettingsError(null);
+      if (typeof res.restartRequired === 'boolean') {
+        setRestartRequired(res.restartRequired);
+        return res.restartRequired;
+      }
     } else {
       setSettingsError(res.error || t('error'));
     }
   }
 
   async function saveKey(key: string, value: string): Promise<boolean> {
+    if (saving() || restartBusy()) return false;
+    setSaving(true);
     const res = await scope.api('settings-set', key, value);
+    setSaving(false);
     if (res.cancelled) return false;
     if (res.ok) {
-      showToast(t('set_saved') + ': ' + key, 'ok');
+      const pending = res.applied !== true;
+      if (pending) setRestartRequired(true);
+      showToast(t(pending ? 'set_restart_required' : 'set_saved') + ': ' + key, pending ? 'info' : 'ok');
       return true;
     }
     toastApiError(t('op_failed'), res);
     return false;
+  }
+
+  async function applySavedSettings() {
+    if (restartBusy() || saving()) return;
+    setRestartBusy(true);
+    const res = await scope.api('control', 'restart');
+    if (res.cancelled) { setRestartBusy(false); return; }
+    if (res.ok) {
+      let pending = res.applied !== true || res.restartRequired === true;
+      setRestartRequired(pending);
+      const observedPending = await loadSettings();
+      if (observedPending !== undefined) pending = observedPending;
+      showToast(t(pending ? 'set_restart_required' : 'set_applied'), pending ? 'info' : 'ok');
+      void refreshStatus();
+    } else toastApiError(t('op_failed'), res);
+    setRestartBusy(false);
   }
 
   async function saveContext() {
@@ -85,7 +114,11 @@ export default function Settings(): JSX.Element {
     if (!(await confirmDialog(t('set_restore_confirm')))) return;
     const res = await scope.api('restore', p);
     if (res.cancelled) return;
-    if (res.ok) showToast(t('set_restore_done') + String(res.previous || '') + ')', 'ok');
+    if (res.ok) {
+      setRestartRequired(true);
+      void loadSettings();
+      showToast(t('set_restore_done') + String(res.previous || '') + ')', 'info');
+    }
     else toastApiError(t('op_failed'), res);
   }
 
@@ -110,6 +143,12 @@ export default function Settings(): JSX.Element {
 
   return (
     <>
+      <Show when={restartRequired()}>
+        <div class="banner warn">
+          <span class="spacer">{t('set_restart_required')}</span>
+          <Button variant="tonal" disabled={!hasRoot || restartBusy() || saving()} onClick={() => void applySavedSettings()}>{t('set_apply_restart')}</Button>
+        </div>
+      </Show>
       <Card title={t('set_general')} icon="settings">
         <Show when={settings() !== null || settingsError() !== null} fallback={<SkeletonRows rows={4} />}>
           <Show
@@ -136,10 +175,13 @@ export default function Settings(): JSX.Element {
                 if (BOOL_KEYS.includes(key)) {
                   return (
                     <div class="setting-row">
-                      <div>{key}</div>
+                      <div>
+                        {key}
+                        <Show when={key === 'IPV6'}><div class="desc">{t('set_ipv6_hint')}</div></Show>
+                      </div>
                       <Switch
                         selected={val() === 'on'}
-                        disabled={!hasRoot}
+                        disabled={!hasRoot || saving() || restartBusy()}
                         onChange={(e: Event) => {
                           const el = e.target as unknown as { selected: boolean };
                           const v = el.selected ? 'on' : 'off';
@@ -157,7 +199,7 @@ export default function Settings(): JSX.Element {
                     <TextField
                       type={NUM_KEYS.includes(key) ? 'number' : 'text'}
                       value={val()}
-                      disabled={!hasRoot}
+                      disabled={!hasRoot || saving() || restartBusy()}
                       onChange={(e: Event) => {
                         const el = e.target as HTMLInputElement;
                         const v = el.value.trim();

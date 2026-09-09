@@ -15,8 +15,6 @@ import type { DerpRelay } from '../types';
 
 const TASK_KEY = 'derp-speedtest';
 
-let seq = 0;
-
 interface TunInfo {
   ifaceUp: boolean;
   gateway: string | null;
@@ -27,6 +25,8 @@ interface TunInfo {
 
 export default function Tunnel(): JSX.Element {
   const scope = createApiScope();
+  let seq = 0;
+  let loading = false;
   const [tun, setTun] = createSignal<TunInfo | null>(null);
   const [tunError, setTunError] = createSignal<string | null>(null);
   const [socksResult, setSocksResult] = createSignal<{ ok: boolean; text: string } | null>(null);
@@ -39,8 +39,11 @@ export default function Tunnel(): JSX.Element {
     task()?.result?.ok ? ((task()!.result!.preferred as string) ?? null) : null;
 
   async function loadTun() {
+    if (loading) return;
+    loading = true;
     const my = ++seq;
     const res = await scope.api('tun');
+    loading = false;
     if (res.cancelled || my !== seq) return;
     if (res.ok) {
       setTun(res as unknown as TunInfo);
@@ -52,14 +55,19 @@ export default function Tunnel(): JSX.Element {
 
   /* SOCKS5 self check via curl through the local proxy (user-triggered). */
   async function checkSocks() {
-    if (socksBusy()) return;
+    if (socksBusy() || !tun() || !['bridge', 'proxy'].includes(tun()!.mode)) return;
     setSocksBusy(true);
     setSocksResult(null);
-    const port = tun()?.socksPort || 1099;
+    const port = Number(tun()?.socksPort);
+    if (!Number.isInteger(port) || port < 1 || port > 65535) {
+      setSocksResult({ ok: false, text: t('tun_socks_fail') });
+      setSocksBusy(false);
+      return;
+    }
     const started = Date.now();
     try {
       const out = await execRaw(
-        'curl -x 127.0.0.1:' + port +
+        'curl --proxy socks5h://127.0.0.1:' + port +
           ' -sI --max-time 10 -o /dev/null -w "%{http_code}" https://1.1.1.1',
         15000,
       );
@@ -113,26 +121,28 @@ export default function Tunnel(): JSX.Element {
         </Card>
       </Show>
 
-      <Card title={t('tun_socks_check')} icon="network_check">
-        <Show when={socksBusy()}>
-          <div class="progress-row">
-            <LinearProgress indeterminate />
-            <span class="dim">{t('tun_socks_checking')}</span>
+      <Show when={tun() && ['bridge', 'proxy'].includes(tun()!.mode)}>
+        <Card title={t('tun_socks_check')} icon="network_check">
+          <Show when={socksBusy()}>
+            <div class="progress-row">
+              <LinearProgress indeterminate />
+              <span class="dim">{t('tun_socks_checking')}</span>
+            </div>
+          </Show>
+          <Show when={socksResult()}>
+            {(r) => <div class={r().ok ? 'lat-good' : 'lat-bad'}>{r().text}</div>}
+          </Show>
+          <div class="btn-row">
+            <Button
+              variant="tonal"
+              disabled={socksBusy() || !hasRoot}
+              onClick={() => void checkSocks()}
+            >
+              <MdIcon name="network_check" size={18} /> {t('tun_socks_check')}
+            </Button>
           </div>
-        </Show>
-        <Show when={socksResult()}>
-          {(r) => <div class={r().ok ? 'lat-good' : 'lat-bad'}>{r().text}</div>}
-        </Show>
-        <div class="btn-row">
-          <Button
-            variant="tonal"
-            disabled={socksBusy() || !hasRoot}
-            onClick={() => void checkSocks()}
-          >
-            <MdIcon name="network_check" size={18} /> {t('tun_socks_check')}
-          </Button>
-        </div>
-      </Card>
+        </Card>
+      </Show>
 
       <Card title={t('tun_derp')} icon="speed">
         <TaskProgress taskKey={TASK_KEY} />

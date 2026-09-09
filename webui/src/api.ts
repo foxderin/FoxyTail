@@ -8,9 +8,8 @@
  *
  * Every call is time-boxed (the old UI had no timeout and froze on any
  * hung exec) and cancellable: cancel() settles the front-end promise
- * immediately with a { cancelled: true } marker and fires a best-effort
- * backend cleanup (pkill scoped to the exact webapi subcommand) that never
- * blocks the UI. The backend JSON contract is frozen; shell files are untouched.
+ * after the backend acknowledges cancellation of that request identity.
+ * Replacements wait for that acknowledgement before launching.
  */
 import { exec as ksuExec } from 'kernelsu';
 import { getOwner, onCleanup } from 'solid-js';
@@ -150,7 +149,7 @@ export const hasRoot: boolean = execImpl !== null;
 
 /* Per-command timeout budget (ms). Heavy probes get a wider budget. */
 const DEFAULT_TIMEOUT_MS = 15000;
-const CLEANUP_TIMEOUT_MS = 5000;
+const CLEANUP_TIMEOUT_MS = 8000;
 
 const COMMAND_TIMEOUTS: Record<string, number> = {
   status: 15000,
@@ -182,32 +181,28 @@ const COMMAND_TIMEOUTS: Record<string, number> = {
   diag: 130000,
 };
 
-/* Best-effort backend kill patterns for cancellable commands. Patterns are
- * built ONLY from these constants — never from user input. Each is scoped
- * to the exact webapi subcommand (plus the underlying tailscale probe for
- * the speed tests) so one cancellation cannot kill a sibling call. */
-const KILL_PATTERNS: Record<string, string[]> = {
-  'speedtest-exitnodes': ['foxytail.webapi.sh speedtest-exitnodes', 'tailscale.*ping'],
-  'derp-speedtest': ['foxytail.webapi.sh derp-speedtest', 'tailscale.*netcheck'],
-  diag: ['foxytail.webapi.sh diag', 'foxytail.diag collect'],
-  'file-receive': ['foxytail.webapi.sh file-receive', 'tailscale.*file get'],
-  'file-send': ['foxytail.webapi.sh file-send', 'tailscale.*file cp'],
-  apps: ['foxytail.webapi.sh apps'],
-  login: ['foxytail.webapi.sh login( |$)', 'tailscale.*login'],
-  'login-authkey': ['foxytail.webapi.sh login-authkey', 'tailscale.*login'],
-};
-
-/* Fire-and-forget backend cleanup: never awaited by callers, own short
- * timeout, failures are silent by design. */
-function cleanupBackend(cmd: string): void {
-  const patterns = KILL_PATTERNS[cmd];
-  if (!patterns || !execImpl) return;
-  const line = patterns.map((p) => `pkill -f '${p}' 2>/dev/null`).join('; ');
-  const timeout = new Promise<never>((_, reject) => {
-    setTimeout(() => reject(new Error('cleanup timed out')), CLEANUP_TIMEOUT_MS);
-  });
-  Promise.race([execImpl(line), timeout]).catch(() => undefined);
+/* Cancellation addresses one registered backend request, never a process name. */
+async function cleanupBackend(requestId: string): Promise<ApiResult> {
+  try {
+    const out = await execRaw(WEBAPI + ' cancel ' + quote(requestId), CLEANUP_TIMEOUT_MS);
+    return parseResult(out, 'cancel');
+  } catch (err) {
+    return { ok: false, error: String(err instanceof Error ? err.message : err) };
+  }
 }
+
+function parseResult(out: string, cmd: string): ApiResult {
+  try {
+    const result: unknown = JSON.parse(out);
+    if (result && typeof result === 'object' && typeof (result as ApiResult).ok === 'boolean') {
+      return result as ApiResult;
+    }
+  } catch { /* report one consistent boundary error */ }
+  return { ok: false, error: `invalid JSON from webapi (${cmd}): ${out.slice(0, 200)}` };
+}
+
+let requestSequence = 0;
+const requestSession = Date.now().toString(36) + '_' + Math.random().toString(36).slice(2);
 
 export function execRaw(cmd: string, timeoutMs: number = DEFAULT_TIMEOUT_MS): Promise<string> {
   if (!execImpl) {
@@ -234,77 +229,79 @@ export function execRaw(cmd: string, timeoutMs: number = DEFAULT_TIMEOUT_MS): Pr
 
 export interface ApiCall {
   readonly promise: Promise<ApiResult>;
+  readonly requestId: string;
   readonly cancelled: boolean;
-  /* Front-end settle is immediate; the backend pkill is fire-and-forget
-   * and never blocks navigation or rendering. */
-  cancel(): void;
+  /* Resolves only after the backend has acknowledged termination. */
+  cancel(): Promise<ApiResult>;
 }
 
-/* Call the WebAPI backend; the result is always one parsed JSON document.
- * Timeouts and exec failures surface as { ok:false, error }; cancellation
- * resolves with a { cancelled: true } marker so pages can treat a user
- * abort as a quiet, neutral outcome. */
 export function apiCall(cmd: string, ...args: (string | number)[]): ApiCall {
+  return apiCallAfter(Promise.resolve({ ok: true }), cmd, ...args);
+}
+
+/* A replacement can be created synchronously for reactive UI state, while
+ * execution remains gated on the previous request's cancellation. */
+export function apiCallAfter(before: Promise<ApiResult>, cmd: string, ...args: (string | number)[]): ApiCall {
   const timeoutMs = COMMAND_TIMEOUTS[cmd] ?? DEFAULT_TIMEOUT_MS;
-  const line = WEBAPI + ' ' + cmd + (args.length ? ' ' + args.map(quote).join(' ') : '');
+  const requestId = Math.floor(Date.now() / 1000) + '_' + requestSession + '_' + (++requestSequence).toString(36);
+  const line = WEBAPI + ' --request-id ' + quote(requestId) + ' ' + quote(cmd) +
+    (args.length ? ' ' + args.map(quote).join(' ') : '');
   let isCancelled = false;
-  let cancelFn: () => void = () => undefined;
+  let launched = false;
+  let done = false;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  let cleanup: Promise<ApiResult> | undefined;
+  let resolveResult: (result: ApiResult) => void = () => undefined;
+  const promise = new Promise<ApiResult>((resolve) => { resolveResult = resolve; });
+  const finish = (result: ApiResult) => {
+    if (done) return;
+    done = true;
+    clearTimeout(timer);
+    resolveResult(result);
+  };
+  const cancel = (): Promise<ApiResult> => {
+    if (cleanup) return cleanup;
+    if (done) return Promise.resolve({ ok: true });
+    isCancelled = true;
+    clearTimeout(timer);
+    cleanup = (launched ? cleanupBackend(requestId) : before).then((res) => {
+      finish(res.ok
+        ? { ok: false, error: 'cancelled', cancelled: true }
+        : { ok: false, error: 'Cancellation failed: ' + (res.error || 'unknown error'), cleanupFailed: true });
+      return res;
+    });
+    return cleanup;
+  };
 
-  const promise = new Promise<ApiResult>((resolve) => {
-    let done = false;
-    const finish = (result: ApiResult) => {
-      if (done) return;
-      done = true;
-      clearTimeout(timer);
-      resolve(result);
-    };
-    const timer = setTimeout(() => {
-      finish({ ok: false, error: `${cmd}: timed out after ${Math.round(timeoutMs / 1000)}s` });
-      cleanupBackend(cmd);
-    }, timeoutMs);
-
-    cancelFn = () => {
-      if (done) return;
-      done = true;
-      clearTimeout(timer);
-      /* Resolve (not reject) with a marker: pages treat a cancelled call as
-       * a neutral outcome — no error toast, just a quiet "cancelled". */
-      resolve({ ok: false, error: 'cancelled', cancelled: true });
-    };
-
-    if (!execImpl) {
-      finish({
-        ok: false,
-        error: 'no root exec bridge (open this page in KernelSU manager or MMRL)',
-      });
+  void before.then((previous) => {
+    if (isCancelled || done) return;
+    if (!previous.ok) {
+      cleanup = Promise.resolve(previous);
+      finish({ ok: false, error: 'Previous operation could not be cancelled: ' + (previous.error || 'unknown error') });
       return;
     }
-    execImpl(line).then(
-      (out) => {
-        try {
-          finish(JSON.parse(out) as ApiResult);
-        } catch {
-          finish({ ok: false, error: `invalid JSON from webapi (${cmd}): ${out.slice(0, 200)}` });
-        }
-      },
-      (err) => {
-        finish({ ok: false, error: String(err instanceof Error ? err.message : err) });
-      },
-    );
-  });
-
-  return {
-    promise,
-    get cancelled() {
-      return isCancelled;
-    },
-    cancel() {
-      if (isCancelled) return;
+    if (!execImpl) {
+      finish({ ok: false, error: 'no root exec bridge (open this page in KernelSU manager or MMRL)' });
+      return;
+    }
+    launched = true;
+    timer = setTimeout(() => {
       isCancelled = true;
-      cancelFn();
-      cleanupBackend(cmd);
-    },
-  };
+      cleanup = cleanupBackend(requestId);
+      void cleanup.then((res) => finish({
+        ok: false,
+        error: `${cmd}: timed out after ${Math.round(timeoutMs / 1000)}s` +
+          (res.ok ? '' : '; cancellation failed: ' + (res.error || 'unknown error')),
+        cleanupFailed: !res.ok,
+      }));
+    }, timeoutMs);
+    execImpl(line).then(
+      (out) => { if (!isCancelled) finish(parseResult(out, cmd)); },
+      (err) => { if (!isCancelled) finish({ ok: false, error: String(err instanceof Error ? err.message : err) }); },
+    );
+  }, (err) => finish({ ok: false, error: String(err) }));
+
+  return { promise, requestId, get cancelled() { return isCancelled; }, cancel };
 }
 
 /* Convenience form for lightweight read-only calls. */
@@ -322,15 +319,15 @@ export interface ApiScope {
 }
 
 /* Page-scoped call registry. Mount-time: every call made through the scope
- * is cancelled on cleanup. Cleanup is fire-and-forget — the pkill execs it
- * triggers run in the background and never block the next page's render. */
+ * is cancelled on cleanup. Request identities keep delayed cancellation
+ * from affecting a new page's requests. */
 export function createApiScope(): ApiScope {
   const calls = new Set<ApiCall>();
   const cancelAll = () => {
     const pending = [...calls];
     calls.clear();
     /* Defer so route teardown stays synchronous and non-blocking. */
-    queueMicrotask(() => pending.forEach((c) => c.cancel()));
+    queueMicrotask(() => pending.forEach((c) => { void c.cancel(); }));
   };
   if (getOwner()) onCleanup(cancelAll);
   const track = (c: ApiCall): ApiCall => {

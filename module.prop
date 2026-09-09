@@ -1,7 +1,7 @@
 id=foxytail
 name=FoxyTail
-version=v1.0.3
-versionCode=10003
+version=v1.0.4
+versionCode=10004
 author=GlassFoxowo
 description=Tailscale mesh VPN for Magisk/KernelSU with WebUI.
 updateJson=https://raw.githubusercontent.com/foxderin/FoxyTail/master/update.json

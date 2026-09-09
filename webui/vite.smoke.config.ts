@@ -8,7 +8,7 @@ export default defineConfig({
   build: {
     outDir: '.smoke',
     emptyOutDir: true,
-    target: 'esnext',
+    target: 'chrome109',
     minify: false,
     rollupOptions: {
       input: 'index.html',

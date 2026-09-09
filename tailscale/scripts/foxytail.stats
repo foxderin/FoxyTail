@@ -12,7 +12,7 @@
 DIR=$(dirname "$(realpath "$0")")
 # shellcheck source=../settings.sh
 . "$DIR"/../settings.sh
-load_conf
+load_conf || exit 1
 ensure_run_dirs
 # KSU service context runs with umask 000; keep samples root-only readable.
 umask 027
@@ -112,19 +112,28 @@ collect_once() {
     _iface="{\"rx\":${_rx},\"tx\":${_tx}}"
   fi
 
-  # FOXY_STAT is created by foxytail.route; a missing chain means no per-UID
-  # rules are installed. One rule per UID: total bytes counted into rx.
-  _uids="[]"
-  if iptables -L FOXY_STAT -n >/dev/null 2>&1; then
-    _uids=$(iptables -nvxL FOXY_STAT 2>/dev/null \
-      | awk '/owner UID match/ {print $2, $NF}' \
-      | jqr -R -s -c 'split("\n") | map(select(length > 0) | split(" ")
-          | {uid:.[1],rx:(.[0] | tonumber),tx:0})')
-  fi
+  # OUTPUT counters measure only TX through tailscale0. Read both families;
+  # RETURN rules are mutually exclusive per UID and reach the terminal rule.
+  _uids=$({
+    for _uid_cmd in iptables ip6tables; do
+      "${_uid_cmd}" -t filter -nvxL FOXY_STAT 2>/dev/null |
+        awk '/owner UID match/ { for(i=1;i<=NF;i++) if($i=="match") print $2, $(i+1) }'
+    done
+  } | jqr -R -s -c 'split("\n") | map(select(length > 0) | split(" ")
+      | {uid:.[1],rx:0,tx:(.[0] | tonumber)}) | group_by(.uid)
+      | map({uid:.[0].uid,rx:0,tx:(map(.tx)|add)})')
 
+  _daemon_generation=$(for _sg_pid in $(pids_of_path "${TS_BIN_DIR}/tailscaled"); do
+    printf '%s:' "${_sg_pid}"
+    awk '{print $22}' "/proc/${_sg_pid}/stat" 2>/dev/null
+  done)
+  _iface_generation=$(cat /sys/class/net/tailscale0/ifindex 2>/dev/null)
+  _uid_generation=$(cat "${TS_RUN_DIR}/route.snapshot/generation" 2>/dev/null)
   jqr -n -c --argjson ts "$_ts" --argjson peers "$_peers" \
     --argjson iface "$_iface" --argjson uids "$_uids" \
-    '{ts:$ts,peers:$peers,iface:$iface,uids:$uids}' >>"$_file"
+    --arg dg "${_daemon_generation}" --arg ig "${_iface_generation}" --arg ug "${_uid_generation}" \
+    '{ts:$ts,peers:$peers,iface:$iface,uids:$uids,uidDirection:"tx",
+      generation:{peers:$dg,iface:$ig,uids:$ug}}' >>"$_file"
   chmod 0640 "$_file" 2>/dev/null
 
   prune_stats
@@ -140,6 +149,7 @@ do_start() {
   trap '_stats_stop' TERM INT
   log Info "foxytail.stats started (pid $$, interval ${STATS_INTERVAL}s)"
   while [ "$_stats_running" = "1" ]; do
+    load_conf || { log Error "stats: invalid configuration"; break; }
     collect_once
     _int="${STATS_INTERVAL}"
     is_screen_on || _int=$((_int * 5))
@@ -167,81 +177,78 @@ do_status() {
   fi
 }
 
+# Compute adjacent deltas before assigning buckets. A decrease or a known
+# generation change starts a new counter segment; the first sample is only a
+# baseline. The interval is attributed to its ending sample (including across
+# midnight). Missing/error samples are not fabricated as zero traffic.
+stats_deltas() {
+  for _sd_file in $(stats_recent_files); do cat "${_sd_file}"; done |
+    jqr -R -s -c '
+      def delta($old; $new; $changed):
+        if $old == null then 0
+        elif $changed or $new < $old then $new
+        else $new - $old end;
+      def pair($old; $new; $changed):
+        {rx:delta($old.rx; ($new.rx // 0); $changed),
+         tx:delta($old.tx; ($new.tx // 0); $changed)};
+      split("\n") | map(select(length>0) | fromjson? | select(type=="object")
+        | select(.error==null and (.ts|type)=="number")) | sort_by(.ts)
+      | reduce .[] as $s ({lastIface:null,lastPeers:{},lastUids:{},rows:[]};
+          . as $acc
+          | ($s.generation // {}) as $gen
+          | (if $s.iface == null then null else
+              pair(.lastIface.value; $s.iface;
+                .lastIface != null and ($gen.iface // "") != (.lastIface.gen // "")) end) as $iface
+          | [ $s.peers[]? | . as $p | ($acc.lastPeers[$p.id]) as $old
+              | pair($old.value; $p; $old != null and ($gen.peers // "") != ($old.gen // ""))
+                + {id:$p.id} ] as $peers
+          | [ $s.uids[]? | select($s.uidDirection == "tx") | . as $u
+              | ($acc.lastUids[$u.uid|tostring]) as $old
+              | pair($old.value; $u; $old != null and ($gen.uids // "") != ($old.gen // ""))
+                + {uid:($u.uid|tostring)} ] as $uids
+          | .rows += [{ts:$s.ts,iface:$iface,peers:$peers,uids:$uids}]
+          | if $s.iface != null then .lastIface={value:$s.iface,gen:$gen.iface} else . end
+          | reduce $s.peers[]? as $p (. ; .lastPeers[$p.id]={value:$p,gen:$gen.peers})
+          | if $s.uidDirection == "tx" then
+              reduce $s.uids[]? as $u (. ; .lastUids[$u.uid|tostring]={value:$u,gen:$gen.uids})
+            else . end)
+      | .rows'
+}
+
 query() {
-  _q="$1"
-  shift
+  _q="$1"; shift
   case "$_q" in
     hourly)
       _d="$1"
-      _f="${TS_STATS_DIR}/${_d}.jsonl"
-      if [ ! -f "$_f" ]; then
-        jqr -n -c --arg d "$_d" '{date:$d,hours:[]}'
-        return 0
-      fi
-      jqr -R -s -c --arg d "$_d" '
-        (split("\n")
-          | map(select(length > 0) | fromjson? | select(type == "object")
-              | select(.error == null))) as $s
-        | { date: $d,
-            hours: [ range(0; 24) | . as $h
-              | [ $s[] | select((.ts | strflocaltime("%H") | tonumber) == $h) ] as $b
-              | [ $b[] | .iface | select(. != null) ] as $i
-              | [ $b[] | .peers[]? ] as $p
-              | { hour: $h,
-                  samples: ($b | length),
-                  iface: (if ($i | length) > 1 then
-                            { rx: ([$i[-1].rx - $i[0].rx, 0] | max),
-                              tx: ([$i[-1].tx - $i[0].tx, 0] | max) }
-                          else { rx: 0, tx: 0 } end),
-                  peers: ($p | group_by(.id) | map(
-                            { id: .[0].id,
-                              rx: ([(map(.rx) | max) - (map(.rx) | min), 0] | max),
-                              tx: ([(map(.tx) | max) - (map(.tx) | min), 0] | max) })) } ] }' "$_f"
+      stats_deltas | jqr -c --arg d "$_d" '
+        [ .[] | select((.ts|strflocaltime("%F"))==$d) ] as $s
+        | {date:$d,attribution:"interval-end",hours:[range(0;24) | . as $h
+            | [$s[] | select((.ts|strflocaltime("%H")|tonumber)==$h)] as $b
+            | {hour:$h,samples:($b|length),
+                iface:{rx:([$b[].iface.rx // 0]|add // 0),tx:([$b[].iface.tx // 0]|add // 0)},
+                peers:([$b[].peers[]] | group_by(.id) | map(
+                  {id:.[0].id,rx:(map(.rx)|add),tx:(map(.tx)|add)}))}]}'
       ;;
     daily)
-      _lines=""
-      for _f in $(stats_recent_files); do
-        _d=$(basename "$_f" .jsonl)
-        _lines="${_lines}$(jqr -R -s -c --arg d "$_d" '
-          (split("\n")
-            | map(select(length > 0) | fromjson? | select(type == "object")
-                | select(.error == null and .iface != null))) as $s
-          | { date: $d, samples: ($s | length),
-              rx: (if ($s | length) > 1 then
-                     [($s[-1].iface.rx - $s[0].iface.rx), 0] | max
-                   else 0 end),
-              tx: (if ($s | length) > 1 then
-                     [($s[-1].iface.tx - $s[0].iface.tx), 0] | max
-                   else 0 end) }' "$_f")
-"
-      done
-      printf '%s' "$_lines" | jqr -s -c '{days:.}'
+      stats_deltas | jqr -c '
+        group_by(.ts|strflocaltime("%F")) | {attribution:"interval-end",days:map(
+          {date:(.[0].ts|strflocaltime("%F")),samples:([.[]|select(.iface!=null)]|length),
+           rx:([.[].iface.rx // 0]|add // 0),tx:([.[].iface.tx // 0]|add // 0)})}'
       ;;
-    topn)
-      _n="$1"
-      case "$_n" in '' | *[!0-9]*) _n=10 ;; esac
-      _lines=""
-      for _f in $(stats_recent_files); do
-        _lines="${_lines}$(jqr -R -s -c '
-          split("\n") | map(select(length > 0) | fromjson? | select(type == "object"))
-          | [ .[] | select(.error == null) | .peers[]? ]
-          | group_by(.id) | .[]
-          | { id: .[0].id,
-              rx: ([(map(.rx) | max) - (map(.rx) | min), 0] | max),
-              tx: ([(map(.tx) | max) - (map(.tx) | min), 0] | max) }' "$_f")
-"
-      done
-      printf '%s' "$_lines" | jqr -s -c --argjson n "$_n" '
-        [ group_by(.id) | .[]
-          | { id: .[0].id, rx: (map(.rx) | add), tx: (map(.tx) | add) }
-          | select(.rx + .tx > 0) ]
-        | sort_by(.rx + .tx) | reverse | .[0:$n]
-        | { topn: . }'
+    topn|uids)
+      _n="$1"; case "$_n" in ""|*[!0-9]*) _n=10 ;; esac
+      stats_deltas | jqr -c --arg q "$_q" --argjson n "$_n" '
+        if $q == "topn" then
+          [.[].peers[]] | group_by(.id) | map(
+            {id:.[0].id,rx:(map(.rx)|add),tx:(map(.tx)|add)})
+          | map(select(.rx+.tx>0)) | sort_by(.rx+.tx) | reverse | {topn:.[0:$n]}
+        else
+          [.[].uids[]] | group_by(.uid) | map(
+            {uid:.[0].uid,rx:0,tx:(map(.tx)|add)})
+          | map(select(.tx>0)) | sort_by(.tx) | reverse | {uids:.[0:$n],direction:"tx"}
+        end'
       ;;
-    *)
-      echo "usage: $0 query {hourly <YYYY-MM-DD>|daily|topn <n>}" >&2
-      return 1
-      ;;
+    *) echo "usage: $0 query {hourly <YYYY-MM-DD>|daily|topn <n>|uids <n>}" >&2; return 1 ;;
   esac
 }
 

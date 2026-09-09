@@ -13,8 +13,7 @@
  *     the new run cancelled
  *  8. tab buttons render non-empty labels
  *
- * Run after `vite build --config vite.smoke.config.ts` (enforced by the
- * bundle freshness guard below).
+ * Run `pnpm smoke`; the package script builds this bundle first.
  */
 import { readFileSync, existsSync, statSync, readdirSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
@@ -108,6 +107,8 @@ const stubDom = (w) => {
   w.Element.prototype.scrollTo = function () {};
   w.Element.prototype.scrollIntoView = function () {};
   w.document.execCommand = () => true;
+  w.HTMLDialogElement.prototype.showModal = function () { this.open = true; };
+  w.HTMLDialogElement.prototype.close = function () { this.open = false; this.dispatchEvent(new w.Event('close')); };
   stubInternals(w);
 };
 stubDom(window);
@@ -116,6 +117,9 @@ stubDom(window);
  * Answers webapi subcommands with canned JSON. speedtest-exitnodes is held
  * open until the test releases it, simulating a long-running probe. */
 let releaseSpeedtest = null;
+let holdCancel = false;
+const pendingCancels = [];
+const commandLog = [];
 const canned = {
   status: { ok: true, daemon: 'running', backend: 'NeedsLogin', mode: 'tun', self: { hostname: 'fox', ips: ['100.64.0.1'], relay: 'sin' }, exitNode: null, peers: { online: 1, offline: 0 }, magicDns: true, keyExpiry: null, uptime: 60 },
   peers: { ok: true, peers: [{ id: 'p1', hostname: 'peer-one', ip: '100.64.0.2', os: 'linux', relay: 'sin', online: true, rxBytes: 1024, txBytes: 2048, exitNodeOption: true }] },
@@ -131,9 +135,13 @@ const canned = {
   'traffic-uids': { ok: true, uids: [] },
   apps: { ok: true, apps: [{ label: 'com.example.app', package: 'com.example.app', uid: 10234 }] },
   'routes-get': { ok: true, scope: 'all', uids: [], subnets: ['100.64.0.0/10'] },
-  'settings-get': { ok: true, settings: { TS_MODE: 'tun', MAGIC_DNS: 'on', SOCKS_PORT: '1099' } },
+  'settings-get': { ok: true, restartRequired: false, settings: { TS_MODE: 'tun', MAGIC_DNS: 'on', IPV6: 'off', SOCKS_PORT: '1099' } },
   'context-get': { ok: true, rules: 'ssid:Home:down' },
   logs: { ok: true, lines: ['line one', 'line two'] },
+  'serve-del': { ok: true },
+  'funnel-del': { ok: true },
+  'settings-set': { ok: true, saved: true, applied: false, restartRequired: true },
+  control: { ok: true, applied: true, restartRequired: false },
   'files-inbox': { ok: true, files: [{ name: 'a.txt', size: 10, mtime: 1700000000 }] },
 };
 
@@ -147,10 +155,20 @@ window.ksu = {
   exec(cmd, opts, cbName) {
     execCount++;
     const cb = window[cbName];
-    const sub = cmd.includes('foxytail.webapi.sh')
-      ? cmd.replace(/^.*foxytail\.webapi\.sh\s+(\S+).*$/, '$1')
-      : null;
-    if (cmd.startsWith('pkill')) return void cb(0, '', '');
+    const apiArgs = cmd.includes('foxytail.webapi.sh')
+      ? (cmd.slice(cmd.indexOf('foxytail.webapi.sh') + 'foxytail.webapi.sh'.length)
+          .match(/'[^']*'|[^\s]+/g) || []).map((arg) => arg.startsWith("'") ? arg.slice(1, -1) : arg)
+      : [];
+    const requestId = apiArgs[0] === '--request-id' ? apiArgs[1] : null;
+    if (requestId) apiArgs.splice(0, 2);
+    const sub = apiArgs.shift();
+    commandLog.push({ cmd, sub, requestId, args: apiArgs });
+    if (sub === 'cancel' && !overrides.cancel) {
+      const acknowledge = () => cb(0, JSON.stringify({ ok: true }), '');
+      if (holdCancel) pendingCancels.push({ requestId: apiArgs[0], acknowledge });
+      else queueMicrotask(acknowledge);
+      return;
+    }
     if (sub && overrides[sub]) {
       const [e, out, err] = overrides[sub];
       return void queueMicrotask(() => cb(e, out, err));
@@ -167,9 +185,17 @@ window.ksu = {
       queueMicrotask(() => cb(0, JSON.stringify(canned[sub]), ''));
       return;
     }
-    if (sub) return void queueMicrotask(() => cb(0, JSON.stringify({ ok: true }), ''));
-    /* ad-hoc execRaw probes (iptables, curl, cat hooks) */
-    queueMicrotask(() => cb(0, 'yes', ''));
+    if (sub) return void queueMicrotask(() => cb(1, JSON.stringify({ ok: false, error: 'unmocked API command: ' + sub }), ''));
+    if (cmd.startsWith('iptables -m owner --help') || cmd.startsWith('cat /data/adb/foxytail/scripts/foxytail.tun.')) {
+      queueMicrotask(() => cb(0, 'yes', ''));
+      return;
+    }
+    if (cmd.startsWith('curl --proxy socks5h://127.0.0.1:')) {
+      queueMicrotask(() => cb(0, '200', ''));
+      return;
+    }
+    failures.push('unexpected raw command: ' + cmd);
+    queueMicrotask(() => cb(1, '', 'unmocked raw command'));
   },
 };
 
@@ -345,6 +371,131 @@ assert(
   tabButtons.every((el) => (el.textContent || '').trim() !== ''),
   'every tab button label is non-empty',
 );
+
+console.log('[9] first-load failures render recoverable errors');
+for (const [route, command] of [['peers', 'peers'], ['exitnodes', 'exitnodes'], ['files', 'files-inbox']]) {
+  nav('dashboard');
+  await flush();
+  overrides[command] = [1, JSON.stringify({ ok: false, error: 'first-load-' + route }), ''];
+  nav(route);
+  await flush();
+  const view = window.document.querySelector('#view');
+  assert(view.textContent.includes('first-load-' + route), route + ': first failure visible');
+  assert(!view.querySelector('.skeleton'), route + ': first failure leaves no loading skeleton');
+  const retry = view.querySelector('.state-box button');
+  assert(retry, route + ': retry offered');
+  delete overrides[command];
+  retry?.click();
+  await flush();
+  assert(!view.textContent.includes('first-load-' + route), route + ': retry recovers data');
+}
+
+console.log('[10] cancellation identity, delayed acknowledgement and replacement ordering');
+const old = window.__foxy.startTask('identity', 'speedtest-exitnodes');
+await flush();
+const oldFinish = releaseSpeedtest;
+const countBeforeReplace = speedtestExecCount;
+holdCancel = true;
+const replacement = window.__foxy.startTask('identity', 'speedtest-exitnodes');
+await flush();
+assert(speedtestExecCount === countBeforeReplace, 'replacement waits for cancellation acknowledgement');
+assert(pendingCancels.some((entry) => entry.requestId === old.requestId), 'cancel targets only the old request id');
+oldFinish();
+await flush();
+assert(window.__foxy.getTask('identity')?.status === 'running', 'late old response does not finish replacement');
+for (const entry of pendingCancels.splice(0)) entry.acknowledge();
+holdCancel = false;
+await flush();
+assert(speedtestExecCount === countBeforeReplace + 1, 'replacement launches once after acknowledgement');
+assert(replacement.requestId !== old.requestId, 'replacement has a distinct identity');
+releaseSpeedtest();
+await flush();
+assert(!commandLog.some(({ cmd }) => cmd.includes('pkill')), 'no cancellation uses process-name matching');
+
+const cannotCancel = window.__foxy.startTask('denied', 'speedtest-exitnodes');
+await flush();
+overrides.cancel = [1, JSON.stringify({ ok: false, error: 'still running' }), ''];
+const beforeDenied = speedtestExecCount;
+window.__foxy.startTask('denied', 'speedtest-exitnodes');
+await flush();
+assert(speedtestExecCount === beforeDenied, 'failed cancellation blocks replacement');
+assert(window.__foxy.getTask('denied')?.status === 'error', 'failed cancellation is visible as an error');
+window.__foxy.startTask('denied', 'speedtest-exitnodes');
+await flush();
+assert(speedtestExecCount === beforeDenied, 'repeated replacement cannot bypass a failed cancellation');
+delete overrides.cancel;
+releaseSpeedtest();
+await flush();
+
+console.log('[11] native TUN capabilities and SOCKS5 protocol');
+nav('tunnel');
+await flush();
+assert(!window.document.querySelector('#view').textContent.includes('SOCKS5'), 'native TUN has no SOCKS probe');
+canned.tun = { ...canned.tun, mode: 'bridge' };
+nav('dashboard');
+nav('tunnel');
+await flush();
+const probe = [...window.document.querySelectorAll('#view button')].find((button) => button.textContent.includes('SOCKS5'));
+assert(probe, 'bridge mode exposes SOCKS probe');
+probe?.click();
+await flush();
+assert(commandLog.some(({ cmd }) => cmd.startsWith('curl --proxy socks5h://127.0.0.1:1099')), 'probe explicitly uses SOCKS5 with proxy-side DNS');
+nav('routing');
+await flush();
+const scopeButtons = [...window.document.querySelectorAll('#view .radio-cards button')];
+assert(scopeButtons.length === 3 && !scopeButtons[0].disabled && scopeButtons.slice(1).every((b) => b.disabled), 'native TUN disables selected/bypass but permits All');
+
+console.log('[12] ServeConfig protocols, paths and Funnel visibility');
+const serveFixture = {
+  TCP: { '8443': { HTTPS: true }, '8080': { HTTP: true }, '2222': { TCPForward: 'localhost:22' }, '9443': { TCPForward: 'localhost:9000', TerminateTLS: 'fox.ts.net' } },
+  Web: {
+    'fox.ts.net:8443': { Handlers: { '/': { Proxy: 'http://localhost:3000' }, '/api': { Proxy: 'http://localhost:4000' } } },
+    'fox.ts.net:8080': { Handlers: { '/docs': { Path: '/srv/docs' } } },
+  },
+  AllowFunnel: { 'fox.ts.net:8443': true },
+};
+canned['serve-list'] = { ok: true, status: serveFixture };
+canned['funnel-list'] = { ok: true, status: serveFixture };
+nav('serve');
+await flush();
+const serveCards = window.document.querySelectorAll('#view .card');
+assert(serveCards[0].querySelectorAll('.list-row').length === 3, 'private section contains HTTP, TCP, and TLS terminated TCP only');
+assert(serveCards[1].querySelectorAll('.list-row').length === 2, 'public section preserves both HTTPS paths');
+assert(serveCards[1].textContent.includes('https fox.ts.net:8443/api'), 'HTTPS on 8443 remains HTTPS');
+assert(!serveCards[0].textContent.includes('8443'), 'HTTPS listener is not duplicated as TCP');
+const apiRow = [...serveCards[1].querySelectorAll('.list-row')].find((row) => row.textContent.includes('/api'));
+apiRow?.querySelector('button')?.click();
+await flush();
+window.document.querySelector('.md-dialog-actions button[autofocus]')?.click();
+await flush();
+assert(commandLog.some(({ sub, args }) => sub === 'funnel-del' && JSON.stringify(args) === JSON.stringify(['https', '8443', '/api'])), 'deletion preserves HTTPS protocol and the selected path');
+
+console.log('[13] saved settings distinguish pending application');
+nav('settings');
+await flush();
+assert(window.document.querySelector('#view').textContent.includes('fd7a:115c:a1e0::/48'), 'IPv6 switch explains the required routed subnet');
+const portField = window.document.querySelector('#view input[type="number"]');
+assert(portField, 'numeric settings field exists');
+if (portField) {
+  portField.value = '1100';
+  portField.dispatchEvent(new window.Event('change', { bubbles: true }));
+}
+await flush();
+assert(window.document.querySelector('#view .banner.warn'), 'saved but unapplied settings show a persistent restart notice');
+canned.control = { ok: true, applied: false, restartRequired: true };
+canned['settings-get'].restartRequired = true;
+const restartButton = window.document.querySelector('#view .banner.warn button');
+restartButton?.click();
+await flush();
+assert(commandLog.some(({ sub, args }) => sub === 'control' && args[0] === 'restart'), 'settings can apply through service restart');
+assert(window.document.querySelector('#view .banner.warn'), 'a newer configuration revision stays pending after restart');
+const latestToast = [...window.document.querySelectorAll('#toast-root .toast')].at(-1)?.textContent || '';
+assert(!/配置已应用|Configuration applied/.test(latestToast), 'partial application does not report all settings applied');
+canned.control = { ok: true, applied: true, restartRequired: false };
+canned['settings-get'].restartRequired = false;
+window.document.querySelector('#view .banner.warn button')?.click();
+await flush();
+assert(!window.document.querySelector('#view .banner.warn'), 'restart that applies the latest revision clears the pending notice');
 
 if (failures.length) {
   console.error('\nSMOKE FAILURES:');

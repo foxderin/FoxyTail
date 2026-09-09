@@ -73,7 +73,7 @@ export default function Files(): JSX.Element {
   return (
     <>
       <Card title={t('files_inbox')} icon="folder">
-        <Show when={files() !== null} fallback={<SkeletonRows rows={3} />}>
+        <Show when={files() !== null || loadError() !== null} fallback={<SkeletonRows rows={3} />}>
           <Show
             when={!loadError()}
             fallback={<ErrorState text={loadError()!} onRetry={() => void loadInbox()} />}

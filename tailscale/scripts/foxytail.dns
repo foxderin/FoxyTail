@@ -11,8 +11,8 @@
 #           `tailscale --socket=... status --json`. If any prerequisite fails
 #           the script logs a Warning, records state "degraded" and exits 0.
 #           If `foxytail.compat check-dns-hijack` reports a conflicting global
-#           DNS hijack (non-zero exit), the REDIRECT rule is skipped and only
-#           dnsmasq runs.
+#           DNS hijack (non-zero exit), interception is removed, dnsmasq
+#           remains available locally, and state stays degraded.
 #   stop    Remove the redirect chain and stop dnsmasq.
 #   status  Show running / degraded / stopped state. `status --json` prints
 #           the machine-readable form {"state","suffix","port","pid"} for
@@ -31,6 +31,7 @@ DNS_CONF="${TS_RUN_DIR}/dnsmasq.conf"
 DNS_LOG="${TS_RUN_DIR}/dnsmasq.log"
 PID_FILE="${TS_PID_DIR}/dnsmasq.pid"
 DNS_STATE_FILE="${TS_RUN_DIR}/dnsmasq.state"
+DNS_CONTEXT_FILE="${TS_RUN_DIR}/dnsmasq.context.json"
 CHAIN_DNS="FOXY_DNS"
 
 set_state() {
@@ -51,10 +52,9 @@ dns_pids() {
   done
 }
 
-# True when another module already hijacks port 53 globally; the compat
-# probe is optional (written in a later wave) and only consulted if present.
+# True when the installed coexistence probe finds a reachable DNS redirect.
 # Contract: `foxytail.compat check-dns-hijack` exits 0 when the coast is
-# clear, non-zero when someone else redirects/TProxys UDP/53.
+# clear, non-zero when someone else redirects/TProxys port 53.
 dns_hijack_conflict() {
   command -v foxytail.compat >/dev/null 2>&1 || return 1
   ! foxytail.compat check-dns-hijack >/dev/null 2>&1
@@ -69,10 +69,12 @@ redirect_apply() {
     iptables -t nat -I "${CHAIN_DNS}" 1 -m owner --uid-owner 9999 -j RETURN ||
       { log Warning "failed to add dnsmasq owner exemption to ${CHAIN_DNS}."; return 1; }
   fi
-  if ! iptables -t nat -C "${CHAIN_DNS}" -p udp --dport 53 -j REDIRECT --to-ports "${DNS_PORT}" 2>/dev/null; then
-    iptables -t nat -A "${CHAIN_DNS}" -p udp --dport 53 -j REDIRECT --to-ports "${DNS_PORT}" ||
-      { log Warning "failed to add DNS REDIRECT rule."; return 1; }
-  fi
+  for _dr_proto in udp tcp; do
+    if ! iptables -t nat -C "${CHAIN_DNS}" -p "${_dr_proto}" --dport 53 -j REDIRECT --to-ports "${DNS_PORT}" 2>/dev/null; then
+      iptables -t nat -A "${CHAIN_DNS}" -p "${_dr_proto}" --dport 53 -j REDIRECT --to-ports "${DNS_PORT}" ||
+        { log Warning "failed to add DNS REDIRECT rule."; return 1; }
+    fi
+  done
   if ! iptables -t nat -C OUTPUT -j "${CHAIN_DNS}" 2>/dev/null; then
     iptables -t nat -A OUTPUT -j "${CHAIN_DNS}" ||
       { log Warning "failed to mount ${CHAIN_DNS} on nat/OUTPUT."; return 1; }
@@ -84,6 +86,8 @@ redirect_teardown() {
   while iptables -t nat -D OUTPUT -j "${CHAIN_DNS}" 2>/dev/null; do :; done
   iptables -t nat -F "${CHAIN_DNS}" 2>/dev/null
   iptables -t nat -X "${CHAIN_DNS}" 2>/dev/null
+  iptables -t nat -C OUTPUT -j "${CHAIN_DNS}" 2>/dev/null && return 1
+  iptables -t nat -S "${CHAIN_DNS}" >/dev/null 2>&1 && return 1
   return 0
 }
 
@@ -93,10 +97,12 @@ redirect6_apply() {
     ip6tables -t nat -I "${CHAIN_DNS}" 1 -m owner --uid-owner 9999 -j RETURN ||
       { log Warning "failed to add v6 dnsmasq owner exemption to ${CHAIN_DNS}."; return 1; }
   fi
-  if ! ip6tables -t nat -C "${CHAIN_DNS}" -p udp --dport 53 -j REDIRECT --to-ports "${DNS_PORT}" 2>/dev/null; then
-    ip6tables -t nat -A "${CHAIN_DNS}" -p udp --dport 53 -j REDIRECT --to-ports "${DNS_PORT}" ||
-      { log Warning "failed to add v6 DNS REDIRECT rule."; return 1; }
-  fi
+  for _dr6_proto in udp tcp; do
+    if ! ip6tables -t nat -C "${CHAIN_DNS}" -p "${_dr6_proto}" --dport 53 -j REDIRECT --to-ports "${DNS_PORT}" 2>/dev/null; then
+      ip6tables -t nat -A "${CHAIN_DNS}" -p "${_dr6_proto}" --dport 53 -j REDIRECT --to-ports "${DNS_PORT}" ||
+        { log Warning "failed to add v6 DNS REDIRECT rule."; return 1; }
+    fi
+  done
   if ! ip6tables -t nat -C OUTPUT -j "${CHAIN_DNS}" 2>/dev/null; then
     ip6tables -t nat -A OUTPUT -j "${CHAIN_DNS}" ||
       { log Warning "failed to mount ${CHAIN_DNS} on ip6tables nat/OUTPUT."; return 1; }
@@ -108,36 +114,96 @@ redirect6_teardown() {
   while ip6tables -t nat -D OUTPUT -j "${CHAIN_DNS}" 2>/dev/null; do :; done
   ip6tables -t nat -F "${CHAIN_DNS}" 2>/dev/null
   ip6tables -t nat -X "${CHAIN_DNS}" 2>/dev/null
+  ip6tables -t nat -C OUTPUT -j "${CHAIN_DNS}" 2>/dev/null && return 1
+  ip6tables -t nat -S "${CHAIN_DNS}" >/dev/null 2>&1 && return 1
   return 0
+}
+
+# Reconcile redirect independently from process liveness. A running dnsmasq
+# without interception remains degraded and can recover on the next start.
+reconcile_redirect() {
+  if dns_hijack_conflict; then
+    _dr_cleanup=0
+    redirect_teardown || _dr_cleanup=1
+    redirect6_teardown || _dr_cleanup=1
+    log Warning "another tool hijacks DNS; local resolver runs without interception"
+    set_state degraded
+    return "${_dr_cleanup}"
+  fi
+  if ! redirect_apply || { [ "${IPV6}" = on ] && ! redirect6_apply; }; then
+    redirect_teardown
+    redirect6_teardown
+    set_state degraded
+    return 1
+  fi
+  if [ "${IPV6}" != on ] && ! redirect6_teardown; then
+    set_state degraded
+    return 1
+  fi
+  set_state running
+}
+
+redirect_present() {
+  for _dp_cmd in iptables ip6tables; do
+    [ "${_dp_cmd}" = ip6tables ] && [ "${IPV6}" != on ] && continue
+    "${_dp_cmd}" -t nat -C OUTPUT -j "${CHAIN_DNS}" 2>/dev/null || return 1
+    "${_dp_cmd}" -t nat -C "${CHAIN_DNS}" -m owner --uid-owner 9999 -j RETURN 2>/dev/null || return 1
+    for _dp_proto in udp tcp; do
+      "${_dp_cmd}" -t nat -C "${CHAIN_DNS}" -p "${_dp_proto}" --dport 53 -j REDIRECT --to-ports "${DNS_PORT}" 2>/dev/null || return 1
+    done
+  done
+}
+
+# A live resolver is useful only for the currently selected account/tailnet.
+# Keep the observed context as JSON data; suffixes are validated before they
+# are written to dnsmasq configuration. An unreachable daemon is not ready.
+current_dns_context() {
+  _dc_json=$(tmo 5 tailscale --socket="${TS_SOCKET}" status --json 2>/dev/null) || return 1
+  printf '%s' "${_dc_json}" | jqr -e -c '
+    select(.CurrentTailnet.MagicDNSEnabled == true)
+    | {suffix:(.MagicDNSSuffix // ""),tailnet:(.CurrentTailnet.Name // ""),self:(.Self.ID // "")}
+    | select(.suffix | test("^[A-Za-z0-9]([A-Za-z0-9.-]*[A-Za-z0-9])?$"))' 2>/dev/null
+}
+
+dns_context_matches() {
+  [ -f "${DNS_CONTEXT_FILE}" ] &&
+    [ "$(cat "${DNS_CONTEXT_FILE}" 2>/dev/null)" = "$1" ] &&
+    [ "$(awk -F/ '/^server=\// {print $2; exit}' "${DNS_CONF}" 2>/dev/null)" = "$(printf '%s' "$1" | jqr -r '.suffix')" ]
 }
 
 dns_start() {
   ensure_run_dirs
-  load_conf
+  load_conf || return 1
 
   if [ "${MAGIC_DNS}" != "on" ]; then
     log Debug "MAGIC_DNS=off; split DNS disabled."
-    set_state stopped
-    return 0
+    dns_stop
+    return $?
   fi
 
-  if [ -n "$(dns_pids)" ]; then
-    log Info "dnsmasq (FoxyTail) is already running."
-    set_state running
+  _ds_context=$(current_dns_context)
+  if [ -z "${_ds_context}" ]; then
+    log Warning "current tailnet MagicDNS is unavailable; removing stale resolver state"
+    dns_stop || { set_state degraded; return 1; }
+    set_state degraded
     return 0
+  fi
+  _ds_suffix=$(printf '%s' "${_ds_context}" | jqr -r '.suffix')
+
+  if [ -n "$(dns_pids)" ]; then
+    _ds_config_v6=off
+    grep -q '^listen-address=::1$' "${DNS_CONF}" 2>/dev/null && _ds_config_v6=on
+    if [ "$(sed -n 's/^port=//p' "${DNS_CONF}" 2>/dev/null)" = "${DNS_PORT}" ] &&
+      [ "${_ds_config_v6}" = "${IPV6}" ] && dns_context_matches "${_ds_context}"; then
+      log Info "dnsmasq is already running; reconciling DNS interception."
+      reconcile_redirect
+      return $?
+    fi
+    dns_stop || return 1
   fi
 
   if [ ! -x "${DNS_BIN}" ]; then
     log Warning "dnsmasq binary not found at ${DNS_BIN}; MagicDNS degraded."
-    set_state degraded
-    return 0
-  fi
-
-  _ds_json=$(timeout 10 tailscale --socket="${TS_SOCKET}" status --json 2>/dev/null || echo '{}')
-  _ds_suffix=$(echo "${_ds_json}" | jqr -r '.MagicDNSSuffix // empty' 2>/dev/null)
-  _ds_enabled=$(echo "${_ds_json}" | jqr -r '.CurrentTailnet.MagicDNSEnabled // false' 2>/dev/null)
-  if [ "${_ds_enabled}" != "true" ] || [ -z "${_ds_suffix}" ]; then
-    log Warning "MagicDNS not enabled on this tailnet (or daemon unreachable); split DNS degraded."
     set_state degraded
     return 0
   fi
@@ -169,47 +235,40 @@ dns_start() {
     return 0
   fi
 
-  if dns_hijack_conflict; then
-    log Warning "another module already hijacks UDP/53; skipping REDIRECT (dnsmasq still running on ${DNS_PORT})."
-  else
-    _ds_redir=1
-    redirect_apply || _ds_redir=0
-    if [ "${IPV6}" = "on" ]; then
-      redirect6_apply || _ds_redir=0
-    fi
-    if [ "${_ds_redir}" != 1 ]; then
-      log Error "DNS REDIRECT installation failed; MagicDNS degraded."
-      set_state degraded
-      return 1
-    fi
-  fi
+  printf '%s\n' "${_ds_context}" >"${DNS_CONTEXT_FILE}" || { set_state degraded; return 1; }
+  reconcile_redirect || return 1
+  [ "$(get_state)" = running ] || return 0
 
-  set_state running
   log Success "MagicDNS split resolver is up."
   return 0
 }
 
 dns_stop() {
   ensure_run_dirs
-  load_conf
-
-  redirect_teardown
-  redirect6_teardown
+  # Cleanup uses fixed chain names and the owned process path, not desired config.
 
   _dt_rc=0
+  redirect_teardown || _dt_rc=1
+  redirect6_teardown || _dt_rc=1
   _dt_pids=$(dns_pids)
   if [ -n "${_dt_pids}" ]; then
     stop_by_pids dnsmasq "${_dt_pids}" || _dt_rc=1
   fi
 
-  rm -f "${PID_FILE}"
-  set_state stopped
+  [ -z "$(dns_pids)" ] || _dt_rc=1
+  if [ "${_dt_rc}" = 0 ]; then
+    rm -f "${PID_FILE}" "${DNS_CONTEXT_FILE}"
+    set_state stopped
+  else
+    log Error "DNS cleanup incomplete; retaining degraded state for retry"
+    set_state degraded
+  fi
   return "${_dt_rc}"
 }
 
 dns_status() {
   ensure_run_dirs
-  load_conf
+  load_conf || return 1
 
   _dst_json=false
   [ "${1:-}" = "--json" ] && _dst_json=true
@@ -217,9 +276,14 @@ dns_status() {
   _dst_state=$(get_state)
   _dst_pids=$(dns_pids)
   if [ -n "${_dst_pids}" ]; then
-    _dst_state="running"
+    _dst_context=$(current_dns_context)
+    if [ "${_dst_state}" != running ] || [ -z "${_dst_context}" ] ||
+      ! dns_context_matches "${_dst_context}" || ! redirect_present || dns_hijack_conflict; then
+      _dst_state=degraded
+    fi
   elif [ "${_dst_state}" = "running" ]; then
-    _dst_state="stopped"
+    # An unexpectedly dead resolver may leave interception in place.
+    _dst_state="degraded"
   fi
 
   _dst_pid=null

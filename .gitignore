@@ -8,3 +8,7 @@ tailscale/bin/
 webui/node_modules/
 webui/dist/
 webui/.smoke/
+
+# Host regression test bytecode
+__pycache__/
+*.py[cod]

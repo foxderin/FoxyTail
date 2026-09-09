@@ -12,7 +12,7 @@
 #   - Functions provided:
 #       log <level> <message>        colored, timestamped log to stdout + file
 #       rotate_log <file>            rotate a log file when it exceeds LOG_MAX_KB
-#       load_conf                    source foxytail.conf / routes.conf + defaults
+#       load_conf                    parse foxytail.conf / routes.conf + defaults
 #       ensure_run_dirs              create run/pids/stats directories
 #       is_screen_on                 true if the screen is on (tolerant check)
 #       pids_of <pattern>            PIDs whose cmdline matches (pgrep -f)
@@ -65,15 +65,27 @@ orange="\033[1;38;5;208m"
 # --- Functions ---------------------------------------------------------------
 
 # Rotate <file> to <file>.bak (single backup) when it exceeds LOG_MAX_KB.
-rotate_log() {
+rotate_log() (
   _rl_file="$1"
-  [ -f "${_rl_file}" ] || return 0
+  [ -f "${_rl_file}" ] || exit 0
   _rl_max_kb="${LOG_MAX_KB:-512}"
+  _rl_max_bytes=$((_rl_max_kb * 1024))
   _rl_size=$(wc -c <"${_rl_file}" 2>/dev/null || echo 0)
-  if [ "${_rl_size}" -gt $((_rl_max_kb * 1024)) ]; then
-    mv "${_rl_file}" "${_rl_file}.bak"
+  [ "${_rl_size}" -gt "${_rl_max_bytes}" ] || exit 0
+  _rl_locked=0
+  if [ "${_CONF_LOCK_HELD:-0}" != 1 ]; then
+    conf_lock_acquire || exit 1
+    _rl_locked=1
   fi
-}
+  _rl_tmp="${_rl_file}.bak.$$"
+  trap 'rm -f "${_rl_tmp}"; [ "${_rl_locked}" = 0 ] || conf_lock_release' 0
+  trap 'exit 1' HUP INT TERM
+  # Preserve writer file descriptors and bound the backup, even if the source
+  # grew far beyond its target before the resident log monitor ran.
+  if tail -c "${_rl_max_bytes}" "${_rl_file}" >"${_rl_tmp}" && mv "${_rl_tmp}" "${_rl_file}.bak"; then
+    : >"${_rl_file}"
+  fi
+)
 
 # Log with a per-call timestamp and level-based color; always appends to
 # $TS_RUN_LOG_FILE (with rotation), and mirrors to stdout on a terminal.
@@ -94,31 +106,219 @@ log() {
   echo "${message}" >>"${TS_RUN_LOG_FILE}" 2>&1
 }
 
-# Source foxytail.conf (and routes.conf if present), then fill in defaults
-# for any key the config files did not set. This is the single source of
-# truth for defaults; the shipped conf templates only override them.
-load_conf() {
-  if [ -f "${TS_CONF_DIR}/foxytail.conf" ]; then
-    . "${TS_CONF_DIR}/foxytail.conf"
-  fi
-  if [ -f "${TS_CONF_DIR}/routes.conf" ]; then
-    . "${TS_CONF_DIR}/routes.conf"
-  fi
-  TS_MODE="${TS_MODE:-bridge}"
-  ROUTE_TABLE="${ROUTE_TABLE:-1052}"
-  FWMARK="${FWMARK:-0xF7}"
-  MAGIC_DNS="${MAGIC_DNS:-off}"
-  IPV6="${IPV6:-off}"
-  WATCHDOG="${WATCHDOG:-on}"
-  WATCHDOG_INTERVAL="${WATCHDOG_INTERVAL:-30}"
-  STATS_INTERVAL="${STATS_INTERVAL:-60}"
-  LOG_MAX_KB="${LOG_MAX_KB:-512}"
-  SOCKS_PORT="${SOCKS_PORT:-1099}"
-  DNS_PORT="${DNS_PORT:-1053}"
-  ROUTE_SCOPE="${ROUTE_SCOPE:-all}"
-  ROUTE_SUBNETS="${ROUTE_SUBNETS:-100.64.0.0/10}"
-  UID_LIST="${UID_LIST:-}"
+# Configuration is data, never shell source. Keys and value domains are fixed;
+# the same parser is used by runtime loading, writers, and archive restore.
+_conf_keys() {
+  case "$1" in
+    foxytail.conf) printf '%s\n' TS_MODE SOCKS_PORT DNS_PORT MAGIC_DNS IPV6 ROUTE_TABLE FWMARK FWMARK_MASK WATCHDOG WATCHDOG_INTERVAL STATS_INTERVAL LOG_MAX_KB ;;
+    routes.conf) printf '%s\n' ROUTE_SCOPE UID_LIST ROUTE_SUBNETS ;;
+    *) return 1 ;;
+  esac
 }
+
+_num_in_range() {
+  case "$1" in '' | *[!0-9]* | ??????*) return 1 ;; esac
+  [ "$1" -ge "$2" ] 2>/dev/null && [ "$1" -le "$3" ] 2>/dev/null
+}
+
+_conf_value_error() {
+  case "$1:$2" in
+    TS_MODE:bridge | TS_MODE:tun | TS_MODE:proxy | ROUTE_SCOPE:all | ROUTE_SCOPE:selected | ROUTE_SCOPE:bypass) return 0 ;;
+    MAGIC_DNS:on | MAGIC_DNS:off | IPV6:on | IPV6:off | WATCHDOG:on | WATCHDOG:off) return 0 ;;
+    FWMARK:0x40000000 | FWMARK_MASK:0x40000000 | FWMARK:0xF7 | FWMARK:0xf7) return 0 ;;
+  esac
+  case "$1" in
+    SOCKS_PORT | DNS_PORT) _num_in_range "$2" 1024 65535 && return 0 ;;
+    ROUTE_TABLE) _num_in_range "$2" 1000 65535 && return 0 ;;
+    WATCHDOG_INTERVAL) _num_in_range "$2" 5 300 && return 0 ;;
+    STATS_INTERVAL) _num_in_range "$2" 10 3600 && return 0 ;;
+    LOG_MAX_KB) _num_in_range "$2" 64 10240 && return 0 ;;
+    UID_LIST)
+      case "$2" in
+        *[!0-9\ ]*) ;;
+        *) if printf '%s\n' "$2" | awk '{for(i=1;i<=NF;i++) if($i+0==0 || $i+0>2147483647) exit 1}'; then return 0; fi ;;
+      esac
+      ;;
+    ROUTE_SUBNETS)
+      if printf '%s\n' "$2" | awk '
+        function ipv4(s, a,n,i) {
+          n=split(s,a,"."); if(n!=4) return 0
+          for(i=1;i<=n;i++) if(a[i]!~/^[0-9]+$/ || a[i]+0>255 || length(a[i])>3) return 0
+          return 1
+        }
+        function ipv6(s, a,n,i,c) {
+          if(s!~/^[0-9a-fA-F:]+$/ || s!~/:/ || s~/:::/) return 0
+          c=s; if(gsub(/::/,"",c)>1) return 0
+          n=split(s,a,":")
+          for(i=1;i<=n;i++) if(length(a[i])>4) return 0
+          if(s~/::/) return n<=8
+          if(n!=8) return 0
+          for(i=1;i<=n;i++) if(a[i]=="") return 0
+          return 1
+        }
+        {for(i=1;i<=NF;i++) {
+          if(split($i,p,"/")!=2 || p[2]!~/^[0-9]+$/) exit 1
+          if(index(p[1],":")) {if(!ipv6(p[1]) || p[2]+0>128) exit 1}
+          else if(!ipv4(p[1]) || p[2]+0>32) exit 1
+        }}' ; then return 0; fi
+      ;;
+  esac
+  printf '%s\n' "invalid value for $1 (unknown keys are not allowed)"
+  return 1
+}
+
+# Emit normalized KEY=value records only after each record passes the schema.
+# Callers capture the complete output and discard it if any line is invalid.
+_conf_parse_file() {
+  _cpf_file="$1"
+  _cpf_name="${2:-${_cpf_file##*/}}"
+  _cpf_seen=" "
+  _cpf_n=0
+  [ -f "${_cpf_file}" ] && [ ! -L "${_cpf_file}" ] || { echo "${_cpf_name}: expected regular file" >&2; return 1; }
+  while IFS= read -r _cpf_line || [ -n "${_cpf_line}" ]; do
+    _cpf_n=$((_cpf_n + 1))
+    case "${_cpf_line}" in '' | '#'*) continue ;; *=*) ;; *) echo "${_cpf_name}:${_cpf_n}: expected KEY=value" >&2; return 1 ;; esac
+    _cpf_key=${_cpf_line%%=*}
+    _cpf_val=${_cpf_line#*=}
+    if ! _conf_keys "${_cpf_name}" | grep -qxF -e "${_cpf_key}"; then
+      echo "${_cpf_name}:${_cpf_n}: unknown key" >&2; return 1
+    fi
+    case "${_cpf_seen}" in *" ${_cpf_key} "*) echo "${_cpf_name}:${_cpf_n}: duplicate key ${_cpf_key}" >&2; return 1 ;; esac
+    _cpf_seen="${_cpf_seen}${_cpf_key} "
+    case "${_cpf_val}" in
+      \"*\") _cpf_val=${_cpf_val#\"}; _cpf_val=${_cpf_val%\"} ;;
+    esac
+    if ! _cpf_why=$(_conf_value_error "${_cpf_key}" "${_cpf_val}"); then
+      echo "${_cpf_name}:${_cpf_n}: ${_cpf_why}" >&2; return 1
+    fi
+    # Upgrade the old unmasked low-byte mark; no shell evaluation occurs.
+    case "${_cpf_key}:${_cpf_val}" in FWMARK:0xF7 | FWMARK:0xf7) _cpf_val=0x40000000 ;; esac
+    printf '%s=%s\n' "${_cpf_key}" "${_cpf_val}"
+  done <"${_cpf_file}"
+}
+
+_conf_file_error() {
+  { _conf_parse_file "$1" "${2:-${1##*/}}" >/dev/null; } 2>&1
+}
+
+# Publish the owner atomically in a symlink: interruption cannot leave an empty
+# lock directory with no PID. /proc starttime also guards against PID reuse.
+_conf_pid_stamp() {
+  if [ -r "/proc/$1/stat" ]; then
+    awk '{sub(/^.*\) /, ""); print $20}' "/proc/$1/stat" 2>/dev/null
+  else printf '-'; fi
+}
+
+_conf_owner_alive() {
+  _coa_pid=${1%%:*}
+  _coa_stamp=${1#*:}
+  case "${_coa_pid}" in '' | *[!0-9]*) return 0 ;; esac
+  kill -0 "${_coa_pid}" 2>/dev/null || return 1
+  [ "$(_conf_pid_stamp "${_coa_pid}")" = "${_coa_stamp}" ]
+}
+
+conf_lock_acquire() {
+  mkdir -p "${TS_RUN_DIR}" || return 1
+  _cfl_dir="${TS_RUN_DIR}/.conf-write-lock"
+  _cfl_token="$$:$(_conf_pid_stamp "$$")"
+  _cfl_i=0
+  while ! ln -s "${_cfl_token}" "${_cfl_dir}" 2>/dev/null; do
+    _cfl_owner=$(readlink "${_cfl_dir}" 2>/dev/null)
+    if [ -n "${_cfl_owner}" ] && ! _conf_owner_alive "${_cfl_owner}"; then
+      # Only one stale-owner reaper can recheck/remove the primary lock. A
+      # recheck is required because another waiter may already own a new lock.
+      if ln -s "${_cfl_token}" "${_cfl_dir}.reap" 2>/dev/null; then
+        _cfl_owner=$(readlink "${_cfl_dir}" 2>/dev/null)
+        if [ -n "${_cfl_owner}" ] && ! _conf_owner_alive "${_cfl_owner}"; then rm -f "${_cfl_dir}"; fi
+        rm -f "${_cfl_dir}.reap"
+      fi
+    fi
+    _cfl_i=$((_cfl_i + 1))
+    [ "${_cfl_i}" -lt 100 ] || { echo 'configuration is busy; retry' >&2; return 1; }
+    sleep 0.1
+  done
+  _CONF_LOCK_HELD=1
+  _CONF_LOCK_TOKEN=${_cfl_token}
+}
+
+conf_lock_release() {
+  if [ "${_CONF_LOCK_HELD:-0}" = 1 ]; then
+    if [ "$(readlink "${TS_RUN_DIR}/.conf-write-lock" 2>/dev/null)" = "${_CONF_LOCK_TOKEN}" ]; then
+      rm -f "${TS_RUN_DIR}/.conf-write-lock"
+    fi
+    _CONF_LOCK_HELD=0
+  fi
+}
+
+# Must be called under conf_lock_acquire. A restart clears only the revision it
+# captured before loading settings, so later writes retain their pending marker.
+conf_mark_pending() {
+  _cmp_sum=$(cat "${TS_CONF_DIR}/foxytail.conf" "${TS_CONF_DIR}/routes.conf" "${TS_CONF_DIR}/context.conf" 2>/dev/null | cksum)
+  printf '%s-%s-%s\n' "$$" "$(date +%s)" "${_cmp_sum}" >"${TS_RUN_DIR}/.settings.pending.$$" &&
+    mv "${TS_RUN_DIR}/.settings.pending.$$" "${TS_RUN_DIR}/settings.pending"
+}
+
+# Read both files under the writer lock, so restore cannot expose a mixed pair.
+load_conf() {
+  TS_MODE=bridge ROUTE_TABLE=1052 FWMARK=0x40000000 FWMARK_MASK=0x40000000
+  MAGIC_DNS=off IPV6=off WATCHDOG=on WATCHDOG_INTERVAL=30 STATS_INTERVAL=60
+  LOG_MAX_KB=512 SOCKS_PORT=1099 DNS_PORT=1053 ROUTE_SCOPE=all
+  ROUTE_SUBNETS=100.64.0.0/10 UID_LIST=
+  _lc_locked=0
+  if [ "${_CONF_LOCK_HELD:-0}" != 1 ]; then
+    conf_lock_acquire || return 1
+    _lc_locked=1
+  fi
+  _lc_data=$(
+    for _lc_file in foxytail.conf routes.conf; do
+      if [ -e "${TS_CONF_DIR}/${_lc_file}" ] || [ -L "${TS_CONF_DIR}/${_lc_file}" ]; then
+        _conf_parse_file "${TS_CONF_DIR}/${_lc_file}" || exit 1
+      fi
+    done
+  )
+  _lc_rc=$?
+  [ "${_lc_locked}" = 0 ] || conf_lock_release
+  [ "${_lc_rc}" = 0 ] || return 1
+  while IFS= read -r _lc_record; do
+    [ -n "${_lc_record}" ] || continue
+    # shellcheck disable=SC2163 # fixed-schema KEY=value record, no evaluation
+    export "${_lc_record}"
+  done <<EOF_CONF_DATA
+${_lc_data}
+EOF_CONF_DATA
+
+}
+
+# Public writer for service mode changes and WebAPI settings. The subshell owns
+# its cleanup trap without replacing signal handlers in long-lived callers.
+conf_write_key() (
+  [ ! -f "${TS_DIR}/.installing" ] || { echo "upgrade in progress" >&2; exit 1; }
+  _cw_file="$1" _cw_key="$2" _cw_value="$3"
+  _conf_keys "${_cw_file}" | grep -qxF -e "${_cw_key}" || { echo 'unknown configuration key' >&2; exit 1; }
+  _conf_value_error "${_cw_key}" "${_cw_value}" >&2 || exit 1
+  case "${_cw_key}:${_cw_value}" in FWMARK:0xF7 | FWMARK:0xf7) echo 'FWMARK must be 0x40000000' >&2; exit 1 ;; esac
+  conf_lock_acquire || exit 1
+  trap 'rm -f "${_cw_tmp}"; conf_lock_release' 0
+  trap 'exit 1' HUP INT TERM
+  load_conf || exit 1
+  case "${_cw_key}:${_cw_value}" in
+    TS_MODE:tun) [ "${ROUTE_SCOPE}" = all ] || { echo 'native tun supports only ROUTE_SCOPE=all' >&2; exit 1; } ;;
+    ROUTE_SCOPE:selected | ROUTE_SCOPE:bypass) [ "${TS_MODE}" != tun ] || { echo 'UID routing requires bridge mode' >&2; exit 1; } ;;
+  esac
+  mkdir -p "${TS_CONF_DIR}" || exit 1
+  _cw_tmp="${TS_CONF_DIR}/.${_cw_file}.$$"
+  _cw_source="${TS_CONF_DIR}/${_cw_file}"
+  [ -f "${_cw_source}" ] || _cw_source=/dev/null
+  awk -v k="${_cw_key}" -v v="${_cw_value}" '
+    BEGIN {done=0}
+    index($0,k "=")==1 {print k "=\"" v "\""; done=1; next}
+    {print}
+    END {if(!done) print k "=\"" v "\""}
+  ' "${_cw_source}" >"${_cw_tmp}" || exit 1
+  _conf_parse_file "${_cw_tmp}" "${_cw_file}" >/dev/null || exit 1
+  chmod 0600 "${_cw_tmp}" || exit 1
+  mv "${_cw_tmp}" "${TS_CONF_DIR}/${_cw_file}" && conf_mark_pending
+)
 
 # Create runtime directories (run/pids/stats) if missing.
 ensure_run_dirs() {
@@ -154,11 +354,9 @@ pids_of_path() {
   _pop_candidates=$(pids_of "${2:-${_pop_name}}")
   for _pop_pid in ${_pop_candidates}; do
     _pop_argv0=$(tr '\0' '\n' <"/proc/${_pop_pid}/cmdline" 2>/dev/null | head -n 1)
-    case "${_pop_argv0}" in
-      "${_pop_path}" | "${_pop_name}")
-        echo "${_pop_pid}"
-        ;;
-    esac
+    case "${_pop_argv0}" in "${_pop_path}" | "${_pop_name}") ;; *) continue ;; esac
+    _pop_exe=$(readlink "/proc/${_pop_pid}/exe" 2>/dev/null)
+    case "${_pop_exe}" in "${_pop_path}" | "${_pop_path} (deleted)") echo "${_pop_pid}" ;; esac
   done
 }
 
@@ -339,18 +537,21 @@ daemon_pid_alive() {
 daemon_claim_pidfile() {
   _dcp_name="$1"
   _dcp_file="${TS_PID_DIR}/${_dcp_name}.pid"
+  conf_lock_acquire || return 1
   if [ -f "${_dcp_file}" ]; then
     _dcp_pid=$(cat "${_dcp_file}" 2>/dev/null)
     case "${_dcp_pid}" in '' | *[!0-9]*) _dcp_pid="" ;; esac
     if [ -n "${_dcp_pid}" ] && kill -0 "${_dcp_pid}" 2>/dev/null; then
       if tr '\0' ' ' <"/proc/${_dcp_pid}/cmdline" 2>/dev/null | grep -qF "${_dcp_name}"; then
         log Info "${_dcp_name} already running (pid ${_dcp_pid})"
+        conf_lock_release
         return 1
       fi
       log Warning "${_dcp_name}: stale pid file (pid ${_dcp_pid} belongs to another process); overwriting."
     fi
   fi
-  echo "$$" >"${_dcp_file}"
+  if ! echo "$$" >"${_dcp_file}"; then conf_lock_release; return 1; fi
+  conf_lock_release
   return 0
 }
 
@@ -372,6 +573,6 @@ daemon_stop_pidfile() {
   else
     log Info "${_dsp_name} is not running"
   fi
-  rm -f "${_dsp_file}"
+  [ "${_dsp_rc}" != 0 ] || rm -f "${_dsp_file}"
   return "${_dsp_rc}"
 }

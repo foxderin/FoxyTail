@@ -17,8 +17,9 @@ export function TaskProgress(props: { taskKey: string }): JSX.Element {
         <Button
           variant="text"
           onClick={() => {
-            cancelTask(props.taskKey);
-            showToast(t('cancelled'), 'info');
+            void cancelTask(props.taskKey).then((res) => {
+              if (res.ok) showToast(t('cancelled'), 'info');
+            });
           }}
         >
           {t('cancel')}

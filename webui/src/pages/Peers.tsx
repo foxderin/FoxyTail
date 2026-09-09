@@ -13,18 +13,21 @@ import { MdIcon } from '../icons';
 import { Button, Dialog, Tab, Tabs } from '../components/ui';
 import type { Peer } from '../types';
 
-let seq = 0;
-
 export default function Peers(): JSX.Element {
   const scope = createApiScope();
+  let seq = 0;
+  let loading = false;
   const [tab, setTab] = createSignal<'list' | 'topo'>('list');
   const [peers, setPeers] = createSignal<Peer[] | null>(null);
   const [loadError, setLoadError] = createSignal<string | null>(null);
   const [detail, setDetail] = createSignal<Peer | null>(null);
 
   async function loadPeers() {
+    if (loading) return;
+    loading = true;
     const my = ++seq;
     const res = await scope.api('peers');
+    loading = false;
     if (res.cancelled || my !== seq) return;
     if (res.ok) {
       setPeers((res.peers as Peer[]) || []);
@@ -58,7 +61,7 @@ export default function Peers(): JSX.Element {
 
       <Show when={tab() === 'list'}>
         <Card title={t('peers_title')} icon="group">
-          <Show when={peers() !== null} fallback={<SkeletonRows rows={4} />}>
+          <Show when={peers() !== null || loadError() !== null} fallback={<SkeletonRows rows={4} />}>
             <Show
               when={!loadError()}
               fallback={<ErrorState text={loadError()!} onRetry={() => void loadPeers()} />}
@@ -85,17 +88,19 @@ export default function Peers(): JSX.Element {
 
       <Show when={tab() === 'topo'}>
         <Card title={t('peers_topology')} icon="router">
-          <Show when={peers() !== null} fallback={<SkeletonRows rows={3} />}>
-            <Show
-              when={(peers() ?? []).length > 0}
-              fallback={<EmptyState text={t('peers_empty')} icon="group" />}
-            >
-              <div class="dim">{t('peers_tap_hint')}</div>
-              <TopologyChart
-                self={status()?.self ?? null}
-                peers={peers() ?? []}
-                onPeerClick={(p) => setDetail(p)}
-              />
+          <Show when={peers() !== null || loadError() !== null} fallback={<SkeletonRows rows={3} />}>
+            <Show when={!loadError()} fallback={<ErrorState text={loadError()!} onRetry={() => void loadPeers()} />}>
+              <Show
+                when={(peers() ?? []).length > 0}
+                fallback={<EmptyState text={t('peers_empty')} icon="group" />}
+              >
+                <div class="dim">{t('peers_tap_hint')}</div>
+                <TopologyChart
+                  self={status()?.self ?? null}
+                  peers={peers() ?? []}
+                  onPeerClick={(p) => setDetail(p)}
+                />
+              </Show>
             </Show>
           </Show>
         </Card>

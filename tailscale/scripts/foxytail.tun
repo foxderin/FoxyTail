@@ -73,7 +73,7 @@ run_hook() {
 
 tun_start() {
   ensure_run_dirs
-  load_conf
+  load_conf || return 1
 
   if [ "${TS_MODE}" != "bridge" ]; then
     log Debug "TS_MODE=${TS_MODE}: hev tunnel is only used in bridge mode; skipping."
@@ -81,8 +81,12 @@ tun_start() {
   fi
 
   if [ -n "$(hev_pids)" ]; then
-    log Info "${HEV_NAME} is already running."
-    return 0
+    if iface_exists; then
+      log Info "${HEV_NAME} is already running with its interface."
+      return 0
+    fi
+    log Warning "${HEV_NAME} is alive without its interface; restarting it."
+    stop_by_pids "${HEV_NAME}" "$(hev_pids)" || return 1
   fi
 
   if [ ! -x "${HEV_BIN}" ]; then
@@ -102,7 +106,8 @@ tun_start() {
       log Error "${HEV_NAME} died at startup; see ${HEV_LOG}."
       return 1
     fi
-    log Warning "interface ${TUN_IFACE} not up after 10s; continuing anyway."
+    log Error "interface ${TUN_IFACE} not ready after 10s."
+    return 1
   else
     log Success "${TUN_IFACE} is up."
   fi
@@ -116,7 +121,9 @@ tun_start() {
 
 tun_stop() {
   ensure_run_dirs
-  load_conf
+  # Cleanup only uses owned process paths and the fixed hook; bad desired
+  # configuration must not strand a running helper.
+  load_conf || :
 
   _ts_rc=0
   _ts_pids=$(hev_pids)
@@ -133,7 +140,7 @@ tun_stop() {
 
 tun_status() {
   ensure_run_dirs
-  load_conf
+  load_conf || return 1
 
   if iface_exists; then
     printf '%s\n' "${blue}Interface:${normal} ${green}${TUN_IFACE} up${normal}"

@@ -7,13 +7,13 @@
 #   check            verify FOXY_* iptables chains are still in place; on
 #                    tampering write $TS_RUN_DIR/compat-alert and exit 1
 #   check-dns-hijack exit 1 when someone else redirects/TProxy's port 53 in
-#                    the nat table, exit 0 when the coast is clear
+#                    IPv4/IPv6 nat or mangle, exit 0 when clear
 #   suggest          plain-text coexistence recommendations based on probe
 
 DIR=$(dirname "$(realpath "$0")")
 # shellcheck source=../settings.sh
 . "$DIR"/../settings.sh
-load_conf
+load_conf || exit 1
 ensure_run_dirs
 
 ALERT_FILE="${TS_RUN_DIR}/compat-alert"
@@ -91,7 +91,7 @@ probe() {
 "
   if check_dns_hijack_quiet; then
     _warns="${_warns}$(jqr -n -c \
-      --arg w "nat table already redirects/TPROXYs port 53; confirm the owner before enabling MagicDNS" \
+      --arg w "IPv4/IPv6 nat or mangle redirects/TPROXYs port 53; confirm the owner before enabling MagicDNS" \
       '$w')
 "
   fi
@@ -103,59 +103,58 @@ probe() {
     '{modules:$m,apps:$a,warnings:$w}'
 }
 
-# Quiet variant for internal use: 0 = hijack present, 1 = clear.
-# -S dumps every chain (built-in and user-defined) as rules, so hijacks
-# mounted via another module's chain are caught too; our own FOXY_* chains
-# are excluded. --dport 53 is the -S rendering of what -L shows as dpt:53.
+# Only reachable REDIRECT/DNAT/TPROXY rules count as DNS hijacks. Scan both
+# families and nat/mangle, carrying a port-53 match across custom-chain jumps.
+# An ACCEPT rule for DNS and an unmounted stale chain are not conflicts.
 check_dns_hijack_quiet() {
-  iptables -t nat -S 2>/dev/null |
-    grep -e '--dport 53 ' | grep -v -e '-A FOXY_' >/dev/null
+  for _dh_cmd in iptables ip6tables; do
+    for _dh_table in nat mangle; do
+      if "${_dh_cmd}" -t "${_dh_table}" -S 2>/dev/null | awk '
+        $1=="-A" && $2 !~ /^FOXY_/ {
+          n++; source[n]=$2; dns[n]=0
+          for(i=3;i<NF;i++) {
+            if(($i=="-j" || $i=="-g") && $(i+1)!~/^FOXY_/) target[n]=$(i+1)
+            if(($i=="--dport" || $i=="--dports") && $(i+1)~/(^|,)53(,|$)/) dns[n]=1
+          }
+        }
+        END {
+          reached["OUTPUT"]=1; reached["PREROUTING"]=1
+          for(pass=0;pass<=n;pass++) for(i=1;i<=n;i++) {
+            if(!reached[source[i]] || target[i]=="") continue
+            matched=marked[source[i]] || dns[i]
+            if(matched && target[i]~/^(REDIRECT|DNAT|TPROXY)$/) exit 0
+            reached[target[i]]=1
+            if(matched) marked[target[i]]=1
+          }
+          exit 1
+        }'; then
+        return 0
+      fi
+    done
+  done
+  return 1
 }
 
 check() {
-  # Nothing to verify while tailscaled is down or in proxy mode (no chains).
-  if [ "${TS_MODE}" = "proxy" ] || [ -z "$(pids_of_path "${TS_BIN_DIR}/tailscaled")" ]; then
+  if [ "${TS_MODE}" = proxy ] || [ -z "$(pids_of_path "${TS_BIN_DIR}/tailscaled")" ]; then
     rm -f "$ALERT_FILE"
     return 0
   fi
-
-  _problems=""
-  # Chain homes are defined by foxytail.route: FOXY_MARK lives in mangle,
-  # FOXY_STAT in filter. A bare `iptables -L` probes the filter table only.
-  if ! iptables -t mangle -L FOXY_MARK -n >/dev/null 2>&1; then
-    _problems="${_problems}- FOXY_MARK chain missing in the mangle table
-"
+  if "${TS_SCRIPTS_DIR}/foxytail.route" check >/dev/null 2>&1; then
+    rm -f "$ALERT_FILE"
+    return 0
   fi
-  if ! iptables -t filter -L FOXY_STAT -n >/dev/null 2>&1; then
-    _problems="${_problems}- FOXY_STAT chain missing in the filter table
-"
-  fi
-  if ! iptables -t mangle -S 2>/dev/null | grep -q 'FOXY_'; then
-    _problems="${_problems}- no jump to FOXY_* in the mangle table
-"
-  fi
-  if ! iptables -S 2>/dev/null | grep -q 'FOXY_'; then
-    _problems="${_problems}- no jump to FOXY_* in the filter table
-"
-  fi
-
-  if [ -n "$_problems" ]; then
-    log Error "FoxyTail iptables chains were wiped by another tool; run 'foxytail.route apply' to restore"
-    {
-      echo "time: $(date +"%Y-%m-%d %H:%M:%S")"
-      echo "problem: FoxyTail iptables chains missing while tailscaled is running"
-      printf '%s' "$_problems"
-    } >"$ALERT_FILE"
-    return 1
-  fi
-
-  rm -f "$ALERT_FILE"
-  return 0
+  log Error "FoxyTail desired routing is incomplete; run foxytail.route apply"
+  {
+    echo "time: $(date +"%Y-%m-%d %H:%M:%S")"
+    echo "problem: missing or changed FoxyTail chains, jumps, rules or routes"
+  } >"$ALERT_FILE"
+  return 1
 }
 
 check_dns_hijack() {
   if check_dns_hijack_quiet; then
-    log Warning "port 53 is already redirected/TProxied in the nat table by another tool"
+    log Warning "port 53 is already redirected/TProxied in nat/mangle by another tool"
     return 1
   fi
   return 0

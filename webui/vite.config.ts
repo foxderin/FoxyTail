@@ -7,6 +7,6 @@ export default defineConfig({
   build: {
     outDir: '../webroot',
     emptyOutDir: true,
-    target: 'esnext',
+    target: 'chrome109',
   },
 });

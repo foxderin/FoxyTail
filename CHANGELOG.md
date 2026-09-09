@@ -1,23 +1,21 @@
 # Changelog
 
-## v1.0.4 (unreleased)
+## v1.0.4 — 2026-09-09
 
-- Fix empty tab labels on the Logs/Peers/Traffic pages (Solid slot introspection regression)
-- WebUI now surfaces the real backend error message instead of a bare "exit code 1"
-- Fix the MagicDNS redirect loop that broke device-wide DNS when MAGIC_DNS=on (dnsmasq upstream queries are exempted via owner match)
-- Fix quad-100 self-assignment in bridge mode so the MagicDNS upstream is actually reachable
-- Fix file-send/restore rejecting every /sdcard path (realpath resolved the symlink before the prefix check)
-- settings-set: per-key type validation (ranges, enums, charset) and key exact-matching; shell metacharacters can no longer reach the sourced conf
-- restore: archives are unpacked to a temp dir and validated line by line before anything is applied; restored hooks are parked as `<hook>.restored` (0644) for review
-- Installer: all downloads and SHA256 checks are staged before the previous installation is touched; an aborted upgrade leaves the old module intact
-- Watchdog: a manual stop that lands during an in-flight restart now wins; status probes no longer emit broken JSON on pid races; daemon detection matches our binary path instead of a bare pidof
-- Route teardown is keyed on the parameters recorded at apply time: flipping IPV6/FWMARK/ROUTE_TABLE between apply and teardown no longer leaks iptables/ip rule state
-- Fix stats sampling always running at the idle rate (`\|` BRE alternation never matched on Android)
-- Context rules now replay on boot instead of waiting for the first context change
-- Add IPv6 parity for the DNS hijack (ip6tables REDIRECT with the same owner exemption)
-- WebUI: request-order guards on all polling pages, backend cleanup on timeout, timeout budgets matched to backend worst cases, topology view redraws on peer updates, LineChart follows window resize, stale-data banner on Dashboard
-- WebUI: settings switches stay in sync after saves, concurrent confirms cannot strand a promise, toasts are capped, SOCKS self-test no longer counts 4xx/5xx as success
-- Smoke suite: bundle freshness guard plus new cases for error propagation, task replacement and tab labels
+- Treat runtime configuration as validated data with a fixed schema; serialize writes and make backup/restore transactional.
+- Isolate policy routing with a masked mark, reserved-table protection, explicit resource ownership, complete drift detection and recoverable apply/cleanup.
+- Restrict native TUN to `all`; per-app selected/bypass routing requires bridge mode, and root UID 0 bypasses the bridge tunnel. IPv6 requires explicitly configured IPv6 subnets.
+- Stop and verify old components before an upgrade, preserve user files and supplied dnsmasq, and recover interrupted software switches from a rollback journal.
+- Reconcile partial service failures and DNS readiness; preserve degraded status and rebuild the resolver after an account or Tailnet change.
+- Apply saved settings through a full service/helper reload, keeping a newer concurrent configuration revision marked as pending.
+- Correct UID traffic direction and dual-stack counters; aggregate adjacent deltas across counter resets and time-bucket boundaries.
+- Replace global process-name cancellation with request IDs and verified child identities; wait for cancellation acknowledgement before replacing tasks.
+- Fix first-load error recovery, SOCKS5 probes, account listing, and Serve/Funnel protocol, path and deletion handling in the WebUI.
+- Bound runtime logs continuously while preserving open writer descriptors and retaining a capped backup.
+- Add 46 isolated backend regressions and expanded WebUI smoke coverage, pin Node/pnpm and WebView targets, and verify committed production assets in CI.
+- Build releases from existing version tags; verify reviewed upstream checksums and publish light/full packages with SHA256SUMS.
+
+Android device routing, module-manager installation and coexistence tests remain pending; host regression checks do not replace device validation.
 
 ## v1.0.3
 
@@ -43,11 +41,6 @@
 - Fix WebUI tunnel gateway parsing
 - Silence duplicate route apply on service start
 - Tighten stats sample file permissions
-
-## v1.0.0
-
-- Initial release.
-
 
 ## v1.0.0
 

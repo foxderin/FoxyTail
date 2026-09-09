@@ -102,7 +102,7 @@ export default function ExitNodes(): JSX.Element {
   return (
     <>
       <Card title={t('exit_title')} icon="logout">
-        <Show when={peers() !== null} fallback={<SkeletonRows rows={3} />}>
+        <Show when={peers() !== null || loadError() !== null} fallback={<SkeletonRows rows={3} />}>
           <Show
             when={!loadError()}
             fallback={<ErrorState text={loadError()!} onRetry={() => void loadList()} />}
