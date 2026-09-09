@@ -1,5 +1,15 @@
 # Changelog
 
+## v1.3.0
+
+- 新增不依赖特定 VPN 应用的 DNS 模式：内置 `foxydns` 本地端点，以及按内核能力启用的透明共存；升级保留旧模式与端口。
+- 新模式支持当前 Tailnet 的完整名、短名、A/AAAA/PTR，普通域名保留原 DNS 与 VPN 选路上下文，无公共兜底 DNS。
+- 原生 DNS 偏好修改增加账户身份校验、持久恢复日志和账户切换保护；透明故障由独立轻量守护撤规则。
+- 设置页增加 DNS 模式选择，隧道页显示实际端点、IPv4/IPv6 拦截与可操作的故障状态。
+- 固定 Go 1.27.1；arm/arm64 静态 helper 随 light/full 包内置并校验，新增并发、解析、生命周期与 UI 回归。
+- 透明路径仍需实际 Android 内核/VPN组合验证；不接管 DoH/DoT，不自动复制 Tailscale 公司分域 DNS 配置。
+
+
 ## v1.2.1 — 2026-09-09
 
 - Keep the login card hidden while Tailscale reports startup `NoState` or awaits administrator approval (`NeedsMachineAuth`); only an explicit `NeedsLogin` prompts reauthentication.

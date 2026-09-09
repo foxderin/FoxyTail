@@ -39,11 +39,19 @@ jobs:
       - uses: pnpm/action-setup@v4
         with:
           version: '10.30.3'
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: native/foxydns/go.mod
+          cache: false
       - name: Install verification tools
-        run: sudo apt-get update && sudo apt-get install -y zip jq shellcheck
+        run: sudo apt-get update && sudo apt-get install -y zip jq shellcheck iptables
       - run: pnpm --dir webui install --frozen-lockfile
       - name: Verify sources and committed WebUI
         run: bash .github/tools/verify.sh
+      - name: Verify real DNS paths in an isolated Linux network
+        env:
+          FOXYTAIL_REQUIRE_PRIVILEGED_TESTS: '1'
+        run: bash .github/tools/verify-native-linux.sh
       - name: Build from the reviewed manifest
         run: |
           bash .github/tools/build.sh

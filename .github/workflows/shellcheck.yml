@@ -13,6 +13,14 @@ jobs:
       - uses: pnpm/action-setup@v4
         with:
           version: '10.30.3'
-      - run: sudo apt-get update && sudo apt-get install -y shellcheck jq
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: native/foxydns/go.mod
+          cache: false
+      - run: sudo apt-get update && sudo apt-get install -y shellcheck jq iptables
       - run: pnpm --dir webui install --frozen-lockfile
       - run: bash .github/tools/verify.sh
+      - name: Verify real DNS paths in an isolated Linux network
+        env:
+          FOXYTAIL_REQUIRE_PRIVILEGED_TESTS: '1'
+        run: bash .github/tools/verify-native-linux.sh

@@ -86,6 +86,7 @@ if ! unzip -qqo "$ZIPFILE" -d "$MODPATH" \
   'tailscale/conf/*' \
   'tailscale/settings.sh' \
   'tailscale/checksums.txt' \
+  'tailscale/native-checksums.txt' \
   'tailscale/VERSIONS'; then
   abort "! Failed to extract module files (corrupt zip?)"
 fi
@@ -94,7 +95,7 @@ STAGE="${TMPDIR}/foxytail-stage"
 mkdir -p "${STAGE}/root" "${STAGE}/scripts" "${STAGE}/hooks" \
   "${STAGE}/conf" "${STAGE}/bin/unpack"
 
-for f in tailscale/settings.sh tailscale/VERSIONS tailscale/checksums.txt; do
+for f in tailscale/settings.sh tailscale/VERSIONS tailscale/checksums.txt tailscale/native-checksums.txt; do
   if ! unzip -qqjo "$ZIPFILE" "$f" -d "${STAGE}/root"; then
     abort "! Failed to extract $f"
   fi
@@ -189,6 +190,21 @@ verify_bin() {
   fi
 }
 
+# First-party helpers are mandatory in both package variants. Their manifest
+# is generated from the tagged source build, separate from reviewed upstream
+# hashes; installation never downloads a substitute or reuses an older helper.
+verify_native_bin() {
+  _vn_name="$1"
+  _vn_manifest="${STAGE}/root/native-checksums.txt"
+  [ -f "${STAGE}/bin/${_vn_name}" ] || abort "! Missing bundled ${_vn_name}"
+  _vn_count=$(awk -v name="$_vn_name" '$2==name {n++} END {print n+0}' "$_vn_manifest")
+  [ "$_vn_count" = 1 ] || abort "! Expected one native checksum for ${_vn_name}"
+  _vn_line=$(awk -v name="$_vn_name" '$2==name {print}' "$_vn_manifest")
+  if ! (cd "${STAGE}/bin" && printf '%s\n' "$_vn_line" | sha256sum -c - >/dev/null 2>&1); then
+    abort "! SHA256 mismatch for ${_vn_name} - refusing to install"
+  fi
+}
+
 # install_bin <name> <repo> <tag> <asset-regex> [tgz]: use the zip-bundled
 # <name>-$ARCH when present (full zip), otherwise download the pinned
 # release asset (light zip). With a 5th arg of "tgz" the downloaded asset is
@@ -218,9 +234,11 @@ install_bin() {
 # --- Binaries ----------------------------------------------------------------
 
 ui_print "- Downloading and verifying binaries"
-# Optional: bundled binaries of the -full zip. unzip exit 11 (no matching
-# files) is expected for the light zip and simply means "download instead".
-unzip -qqjo "$ZIPFILE" "tailscale/bin/*-${ARCH}" -d "${STAGE}/bin" 2>/dev/null
+# The native helper is present in both variants; upstream binaries are bundled
+# only in the full ZIP. Do not proceed after a failed extraction.
+unzip -qqjo "$ZIPFILE" "tailscale/bin/*-${ARCH}" -d "${STAGE}/bin" ||
+  abort "! Failed to extract bundled binaries"
+verify_native_bin "foxydns-${ARCH}"
 
 install_bin tailscaled "$TAILSCALE_REPO" "$TAILSCALE_VERSION" "tailscale_.*_${ARCH}\\.tgz" tgz
 install_bin jq "$JQ_REPO" "$JQ_VERSION" "$JQ_ASSET"
@@ -233,7 +251,7 @@ CANDIDATE="${TS_DIR}/.install-$$"
 BACKUP="${TS_DIR}/backups/${OLD_CODE}-$(date +%Y%m%d-%H%M%S)-$$"
 rollback_install() {
   _ri_ok=0
-  for _ri_part in bin scripts conf settings.sh VERSIONS checksums.txt; do
+  for _ri_part in bin scripts conf settings.sh VERSIONS checksums.txt native-checksums.txt; do
     if [ -e "${BACKUP}/${_ri_part}" ] || [ -e "${BACKUP}/.absent-${_ri_part}" ]; then
       if ! rm -rf "${TS_DIR:?}/${_ri_part}"; then
         _ri_ok=1
@@ -263,7 +281,7 @@ install_abort() {
 
 switch_install() {
   mkdir -p "$BACKUP" || return 1
-  for _sw_part in bin scripts conf settings.sh VERSIONS checksums.txt; do
+  for _sw_part in bin scripts conf settings.sh VERSIONS checksums.txt native-checksums.txt; do
     # Record absence as well, so rollback removes a newly installed entry.
     if [ -e "${TS_DIR}/${_sw_part}" ]; then
       mv "${TS_DIR}/${_sw_part}" "${BACKUP}/${_sw_part}" || return 1
@@ -308,7 +326,7 @@ for _part in bin scripts conf; do
       abort "! Unable to preserve installed ${_part}; old installation unchanged"
   fi
 done
-for b in tailscaled jq hev-socks5-tunnel; do
+for b in tailscaled jq hev-socks5-tunnel foxydns; do
   cp -f "${STAGE}/bin/${b}-${ARCH}" "${CANDIDATE}/bin/${b}" ||
     abort "! Unable to prepare ${b}; old installation unchanged"
 done
@@ -405,6 +423,15 @@ if [ -f "$STATE_BACKUP" ] &&
   [ ! -f "${TS_DIR}/tailscaled.state" ]; then
   mkdir -p "${TS_DIR}/state" &&
     cp "$STATE_BACKUP" "${TS_DIR}/state/tailscaled.state" || install_abort "state restore failed"
+  # A DNS preference journal belongs to the identity that created it. Restore
+  # it only alongside that identity; never attach an old journal to a current
+  # account or overwrite a journal retained by an ordinary module upgrade.
+  DNS_PREF_BACKUP="/data/adb/foxytail-dns-preferences.backup"
+  DNS_PREF_JOURNAL="${TS_DIR}/state/foxydns-preferences.json"
+  if [ -f "$DNS_PREF_BACKUP" ] && [ ! -e "$DNS_PREF_JOURNAL" ] && [ ! -L "$DNS_PREF_JOURNAL" ]; then
+    (umask 077; cp "$DNS_PREF_BACKUP" "$DNS_PREF_JOURNAL" && chmod 0600 "$DNS_PREF_JOURNAL") ||
+      install_abort "DNS preference journal restore failed"
+  fi
   ui_print "- Restored tailscaled identity from a previous install"
 fi
 

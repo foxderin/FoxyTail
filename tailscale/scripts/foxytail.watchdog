@@ -152,8 +152,9 @@ check_once() {
       "${TS_SCRIPTS_DIR}/foxytail.route" check >/dev/null 2>&1 || _wc_repair=1
     fi
     if [ "$MAGIC_DNS" = on ]; then
-      _wc_dns=$("${TS_SCRIPTS_DIR}/foxytail.dns" status --json 2>/dev/null | jqr -r '.state // "stopped"')
-      [ "$_wc_dns" = running ] || _wc_repair=1
+      _wc_dns=$("${TS_SCRIPTS_DIR}/foxytail.dns" status --json 2>/dev/null | jqr -r \
+        'if (.repairNeeded | type) == "boolean" then .repairNeeded else (.state != "running") end')
+      [ "$_wc_dns" = false ] || _wc_repair=1
     fi
     if [ "$_wc_repair" = 1 ]; then
       recover reconcile "companion-not-ready"

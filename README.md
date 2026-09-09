@@ -19,7 +19,7 @@ FoxyTail is inspired by [anasfanani/Magisk-Tailscaled](https://github.com/anasfa
 | Route scope (`all` / `selected` / `bypass`) | ✅ | selected/bypass require bridge and kernel `xt_owner` |
 | Dedicated policy routing (table 1052, fwmark `0x40000000/0x40000000`) | ✅ | main table is never touched |
 | Traffic analytics (`foxytail.stats`) | ✅ | JSONL ring buffer, 7-day retention, screen-off throttling |
-| MagicDNS split-DNS (`foxytail.dns`) | ✅ | uses system dnsmasq or a supplied binary (see below) |
+| MagicDNS split-DNS (`foxytail.dns`) | ✅ | Built-in generic DNS endpoint, optional transparent coexistence, legacy dnsmasq support |
 | IPv6 dual-stack | ✅ | `IPV6=on`, symmetric ip6tables rules |
 | Coexistence probes (`foxytail.compat`) | ✅ | Clash/mihomo, AFWall+, NetGuard detection |
 | Watchdog (`foxytail.watchdog`) | ✅ | crash restart + network-change rebind |
@@ -69,7 +69,7 @@ All entry points live in `/data/adb/foxytail/scripts/` and are symlinked into `s
 | `foxytail.service` | `start` `stop` `restart` `status [summary\|peer\|exit-node\|all]` `log [daemon\|service]` `mode [bridge\|tun\|proxy]` `help [all]` | tailscaled lifecycle, colored status, mode switching |
 | `foxytail.tun` | `start` `stop` `restart` `status` | hev-socks5-tunnel → `tailscale0` interface (bridge mode); runs the `foxytail.tun.up` / `.tun.down` user hooks |
 | `foxytail.route` | `apply` `teardown` `reload` `status` | idempotent policy-routing engine (`FOXY_*` chains, table 1052, fwmark `0x40000000/0x40000000`) |
-| `foxytail.dns` | `start` `stop` `status` | MagicDNS split resolver (dnsmasq on port 1053 + coexistence-aware port-53 redirect) |
+| `foxytail.dns` | `start` `stop` `status` | MagicDNS local endpoint, transparent coexistence and legacy DNS control |
 | `foxytail.stats` | `start` `stop` `status` `collect-once` `query [hourly <date>\|daily\|topn <n>]` | traffic collector (per-peer Rx/Tx, per-UID counters) |
 | `foxytail.watchdog` | `start` `stop` `status` `check-once` | restart tailscaled on crash, rebind on default-route change (rate-limited) |
 | `foxytail.context` | `start` `stop` `status` `check-once` | apply `context.conf` rules on SSID / cellular changes |
@@ -103,7 +103,7 @@ Contract: `webui/src/api.ts` is the only consumer of `tailscale/scripts/foxytail
 
 ## Verification and release
 
-Use Node 22.14.0 and pnpm 10.30.3; the WebUI requires Android WebView 109+. After installing dependencies, run `bash .github/tools/verify.sh` for ShellCheck, isolated backend regression tests, types, i18n, smoke, release metadata and committed build consistency. Run `pnpm --dir webui build` after frontend changes to update `webroot/`.
+Use Node 22.14.0, pnpm 10.30.3 and Go 1.27.1; the WebUI requires Android WebView 109+. After installing dependencies, run `bash .github/tools/verify.sh` for ShellCheck, isolated backend regression tests, types, i18n, smoke, release metadata and committed build consistency. Run `pnpm --dir webui build` after frontend changes to update `webroot/`.
 
 Run `.github/tools/version-bump.sh`, commit version files and build outputs, then tag that commit. Release builds only existing tags and verifies the reviewed `tailscale/checksums.txt`. An explicit `bash .github/tools/build.sh --update-checksums` creates a candidate manifest for source verification and review; it does not package binaries.
 
@@ -119,8 +119,9 @@ Three files in `/data/adb/foxytail/conf/`, installed **only if missing** — you
 |---|---|---|
 | `TS_MODE` | `bridge` | `bridge` (userspace + socks5 + hev → tailscale0) · `tun` (native TUN, needs `/dev/net/tun`) · `proxy` (socks5 only) |
 | `SOCKS_PORT` | `1099` | tailscaled's local socks5 port |
-| `DNS_PORT` | `1053` | dnsmasq listen port (MagicDNS) |
-| `MAGIC_DNS` | `off` | split-DNS for tailnet names via dnsmasq |
+| `DNS_MODE` | `legacy` | `legacy`, `local`, or `transparent`; apply with restart |
+| `DNS_PORT` | `1053` | Local DNS port; must be unused by other resolvers |
+| `MAGIC_DNS` | `off` | Enable Tailnet name resolution in the selected mode |
 | `IPV6` | `off` | dual-stack tailscale0 + ip6tables symmetry |
 | `ROUTE_TABLE` | `1052` | dedicated policy routing table (1000–65535) |
 | `FWMARK` / `FWMARK_MASK` | `0x40000000` | fixed shared mark bit; legacy 0xF7 migrates on read |
@@ -179,23 +180,35 @@ Switch with `foxytail.service mode <mode>` (writes `TS_MODE` and restarts). Swit
 - all rules live in dedicated chains: `FOXY_MARK` (mangle) and `FOXY_STAT` (filter, counters for stats); built-in chains get exactly one jump each
 - policy routing uses dedicated table **1052** (1000–65535, no foreign resources) with fixed mark/mask **`0x40000000/0x40000000`**; other mark bits are preserved and whole tables are never flushed
 - `check` verifies configuration, both families, OUTPUT jumps and route snapshots; `apply` repairs drift, and `teardown` removes exact policy rules and protocol-186 routes on tailscale0 only
-- MagicDNS adds `FOXY_DNS` (nat) for the port-53 redirect, skipped when another module already hijacks port 53
+- Legacy MagicDNS adds `FOXY_DNS` (nat) for the port-53 redirect, skipped when another module already hijacks port 53
 
 ## Coexistence guide
 
 FoxyTail never touches other modules' chains and probes for neighbors at boot (`foxytail.compat probe` → `/data/adb/foxytail/run/compat.json`).
 
-- **Clash / mihomo / box-for-magisk**: these usually hijack DNS (redirect or TPROXY UDP/53). `foxytail.dns` runs `foxytail.compat check-dns-hijack` before installing its redirect; on conflict the redirect is skipped (dnsmasq still runs on port 1053, state `degraded`). Coordinate the resolvers only when an active DNS redirect conflicts; installing a proxy app alone does not disable MagicDNS.
+- **Clash / mihomo / box-for-magisk**: these usually hijack DNS (redirect or TPROXY UDP/53). Legacy DNS runs `foxytail.compat check-dns-hijack` before installing its redirect; on conflict the redirect is skipped (dnsmasq still runs on port 1053, state `degraded`). Coordinate the resolvers only when an active DNS redirect conflicts; installing a proxy app alone does not disable MagicDNS.
 - **AFWall+**: firewall reloads may flush our jumps off the built-in chains. FoxyTail's rules are isolated in `FOXY_*` chains; run `foxytail.compat check` (or `foxytail.route apply`) to detect/restore tampering.
 - **NetGuard / other VPN apps**: FoxyTail does **not** use Android's VpnService, so it occupies zero VPN slots — but a VpnService app with "always-on" can still capture traffic before it reaches our routes.
 
 ## MagicDNS
 
-`MAGIC_DNS=on` starts a local dnsmasq that forwards tailnet names (`.<MagicDNSSuffix>`) to `100.100.100.100` and everything else to the system resolver, listening on port 1053 with a coexistence-aware port-53 redirect.
+Enable MagicDNS, choose a mode and unused port in Settings, then apply the restart. Upgrades preserve `DNS_MODE=legacy` and the saved port. Both light and full packages include the first-party `foxydns` helper, built with Go 1.27.1.
 
-The resolver selects `/data/adb/foxytail/bin/dnsmasq`, `/system/bin/dnsmasq`, then `/vendor/bin/dnsmasq`. Devices with a compatible system binary need no download. Otherwise supply a trusted dnsmasq for your architecture (mode 0755). Set `MAGIC_DNS=on`, then apply through the WebUI restart action. Android Private DNS settings remain unchanged; strict DoT or app-level DoH may bypass local port-53 resolution.
+| Mode | Behavior |
+|---|---|
+| `legacy` (default) | Existing dnsmasq behavior and DNS conflict checks. |
+| `local` | Standard loopback UDP/TCP endpoint at `127.0.0.1:DNS_PORT`, plus `[::1]:DNS_PORT` with IPv6 enabled. Configure the active Tailnet suffix in any resolver that supports split DNS. |
+| `transparent` | Intercept ordinary UDP/TCP port 53 only when kernel capabilities and the original routing context can be verified. Otherwise retain the local endpoint. Validate your actual device/VPN combination. |
 
-The local resolver derives short and full Tailnet names, including IPv4 and IPv6 records, from the current peer table and embeds them in the main configuration, which system dnsmasq reads before dropping privileges. This also preserves AAAA answers on native DNS implementations that only return IPv4 records for full Tailnet names. The watchdog reconciles changes to names, IPs and accounts. The Tunnel page DNS check distinguishes the local resolver, its enable switch and binary source, and upstream native DNS rules.
+The local endpoint answers current Tailnet full names, known short names, A/AAAA and PTR records. Unknown names under the Tailnet suffix return NXDOMAIN; public names return REFUSED. It is not a sole global resolver. Copy the actual endpoint and suffix from the Tunnel page; configure a search suffix or short-name policy in the consuming resolver when needed. A VPN without split-DNS controls cannot automatically use local mode.
+
+Transparent mode captures the original destination, source address, UID, mark and interface, validates the effective kernel route, and forwards public queries through that original context. Missing metadata leaves the packet on its original path. Missing context after takeover returns failure; there is no public fallback DNS. IPv4 and IPv6 interception are reported separately. Lack of IPv6 NAT retains IPv6 routing, AAAA answers and the local IPv6 listener.
+
+Both new modes temporarily disable the current Tailscale profile's `accept-dns` to remove the Android backend's global DNS redirect. A private persistent journal records the previous value before mutation. Stop and WebUI account transitions restore only the matching profile and node identity; uncertain restoration retains the journal and blocks the account change. External preference changes relinquish ownership instead of being overwritten repeatedly. Uninstall preserves unresolved records with the saved identity. Corporate split DNS, global upstreams and search domains from Tailscale are not automatically reproduced by these modes.
+
+Transparent mode requires root, NFQUEUE, conntrack, INET_DIAG, strict route queries and socket-context capabilities. It does not intercept DoH/DoT or reproduce arbitrary SELinux/cgroup credentials. Socket UID recovery requires an exact, unambiguous INET_DIAG match; unsupported flows retain their existing path. Existing root DNS redirects or incompatible OUTPUT policies prevent transparent takeover; use the local endpoint instead. Mark bit `0x20000000` must be unused by other programs; detected collisions stop interception. Helper failure has a short cleanup window, and passing capability probes does not establish compatibility with every VPN. The detailed implementation and validation limits are documented in the [Chinese design report](docs/reviews/2026-09-09-generic-dns.zh-CN.md).
+
+Legacy mode selects `/data/adb/foxytail/bin/dnsmasq`, `/system/bin/dnsmasq`, then `/vendor/bin/dnsmasq`; supply a trusted binary if none is available. Its previous public fallback behavior is unchanged.
 
 ## IPv6
 
@@ -217,7 +230,7 @@ When the module is absent or cannot load, the fallback retains IPv6 tunnel routi
 - QR-code login is not embedded in the WebUI — use the login URL printed by `tailscale login`.
 - SSID detection parses `dumpsys wifi` output, whose format varies across Android versions (tolerant parsing, worst case "unknown").
 - kernel routing requires `xt_owner` to exempt control processes and fails closed when unavailable. selected/bypass require bridge; UID 0 bypasses the bridge tunnel.
-- Devices without a compatible system dnsmasq still need a supplied resolver (above).
+- Legacy DNS still needs a supplied resolver when system dnsmasq is unavailable; new modes include their resolver but transparent capture needs supported kernel and routing capabilities.
 
 ## Troubleshooting
 

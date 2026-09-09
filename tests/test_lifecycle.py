@@ -149,7 +149,7 @@ echo leave >>"$TS_RUN_DIR/events"
             (self.dir / part / 'value').write_text('old-' + part)
             (self.dir / 'candidate' / part).mkdir(parents=True)
             (self.dir / 'candidate' / part / 'value').write_text('new-' + part)
-        for part in ['settings.sh', 'VERSIONS', 'checksums.txt']:
+        for part in ['settings.sh', 'VERSIONS', 'checksums.txt', 'native-checksums.txt']:
             (self.dir / part).write_text('old-' + part)
             (self.dir / 'candidate' / part).write_text('new-' + part)
         (self.dir / 'bin/dnsmasq').write_text('user-binary')
@@ -169,6 +169,42 @@ rollback_install
         self.assertEqual((self.dir / 'bin/dnsmasq').read_text(), 'user-binary')
         self.assertEqual((self.dir / 'files/received').read_text(), 'user-file')
         self.assertEqual((self.dir / 'settings.sh').read_text(), 'old-settings.sh')
+
+    def test_upgrade_rollback_restores_native_helper_and_manifest_or_their_absence(self):
+        source = (ROOT / 'customize.sh').read_text()
+        functions = source[source.index('rollback_install() {'):source.index('# Recover an interrupted earlier switch')]
+        for had_native in [False, True]:
+            with self.subTest(had_native=had_native):
+                directory = self.dir / str(had_native)
+                directory.mkdir()
+                for part in ['bin', 'scripts', 'conf']:
+                    (directory / part).mkdir()
+                    (directory / part / 'value').write_text('old-' + part)
+                    (directory / 'candidate' / part).mkdir(parents=True)
+                    (directory / 'candidate' / part / 'value').write_text('new-' + part)
+                for part in ['settings.sh', 'VERSIONS', 'checksums.txt']:
+                    (directory / part).write_text('old-' + part)
+                    (directory / 'candidate' / part).write_text('new-' + part)
+                (directory / 'candidate/native-checksums.txt').write_text('new-native-manifest')
+                (directory / 'candidate/bin/foxydns').write_text('new-helper')
+                if had_native:
+                    (directory / 'native-checksums.txt').write_text('old-native-manifest')
+                    (directory / 'bin/foxydns').write_text('old-helper')
+                run_sh(functions + '''
+TS_DIR="$PWD"; CANDIDATE="$PWD/candidate"; BACKUP="$PWD/backups/unique"
+switch_install || exit 7
+test "$(cat "$TS_DIR/bin/foxydns")" = new-helper || exit 8
+test "$(cat "$TS_DIR/native-checksums.txt")" = new-native-manifest || exit 9
+# A later permission failure must roll back every part of the switched tree.
+rollback_install
+''', directory)
+                if had_native:
+                    self.assertEqual((directory / 'native-checksums.txt').read_text(), 'old-native-manifest')
+                    self.assertEqual((directory / 'bin/foxydns').read_text(), 'old-helper')
+                else:
+                    self.assertFalse((directory / 'native-checksums.txt').exists())
+                    self.assertFalse((directory / 'bin/foxydns').exists())
+                self.assertEqual((directory / 'conf/value').read_text(), 'old-conf')
 
     def test_rollback_delete_failure_retains_backup_and_journal(self):
         source = (ROOT / 'customize.sh').read_text()

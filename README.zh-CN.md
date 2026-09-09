@@ -19,7 +19,7 @@ FoxyTail 的灵感来自 [anasfanani/Magisk-Tailscaled](https://github.com/anasf
 | 路由范围（`all` / `selected` / `bypass`） | ✅ | selected/bypass 仅 bridge；需要内核 `xt_owner` |
 | 独立策略路由（表 1052，fwmark `0x40000000/0x40000000`） | ✅ | 绝不写 main 表 |
 | 流量分析（`foxytail.stats`） | ✅ | JSONL 环形存储 7 天，熄屏自动降频 |
-| MagicDNS 分流（`foxytail.dns`） | ✅ | 自动使用系统 dnsmasq，也支持用户自备（见下文） |
+| MagicDNS 分流（`foxytail.dns`） | ✅ | 内置通用 DNS 端点，可选透明共存；保留旧 dnsmasq 模式 |
 | IPv6 双栈 | ✅ | `IPV6=on`，ip6tables 对称规则 |
 | 共存探针（`foxytail.compat`） | ✅ | 识别 Clash/mihomo、AFWall+、NetGuard |
 | 看门狗（`foxytail.watchdog`） | ✅ | 崩溃自动拉起 + 网络切换 rebind |
@@ -33,7 +33,7 @@ FoxyTail 的灵感来自 [anasfanani/Magisk-Tailscaled](https://github.com/anasf
 
 [Releases](../../releases) 页面发布两种包：
 
-- **`FoxyTail-<version>.zip`（light 轻量包）** —— 安装时从固定的上游 release 下载 `tailscaled`、`jq`、`hev-socks5-tunnel`，并按 `checksums.txt` 逐个 SHA256 校验。安装过程需要联网。
+- **`FoxyTail-<version>.zip`（light 轻量包）** —— 安装时从固定的上游 release 下载 `tailscaled`、`jq`、`hev-socks5-tunnel`，并按 `checksums.txt` 逐个 SHA256 校验。安装过程需要联网。自研 `foxydns` 已随轻量包内置。
 - **`FoxyTail-<version>-full.zip`（full 完整包）** —— 内置全部二进制，可离线安装。内置二进制同样做 SHA256 校验，被篡改的 zip 会被拒绝。
 
 在 Magisk Manager、KernelSU Manager 或 MMRL 中刷入任一 zip，然后重启（重启前可使用安装器打印的 `/dev/` 快捷方式）。
@@ -69,7 +69,7 @@ su -c 'foxytail.service mode tun'          # 切换运行模式并重启
 | `foxytail.service` | `start` `stop` `restart` `status [summary\|peer\|exit-node\|all]` `log [daemon\|service]` `mode [bridge\|tun\|proxy]` `help [all]` | tailscaled 生命周期、彩色状态、模式切换 |
 | `foxytail.tun` | `start` `stop` `restart` `status` | hev-socks5-tunnel → `tailscale0` 接口（bridge 模式）；调用 `foxytail.tun.up` / `.tun.down` 用户钩子 |
 | `foxytail.route` | `apply` `teardown` `reload` `status` | 幂等策略路由引擎（`FOXY_*` 链、表 1052、fwmark `0x40000000/0x40000000`） |
-| `foxytail.dns` | `start` `stop` `status` | MagicDNS 分流解析（dnsmasq 监听 1053 + 共存感知的 53 重定向） |
+| `foxytail.dns` | `start` `stop` `status` | MagicDNS 本地端点、透明共存和旧 DNS 控制 |
 | `foxytail.stats` | `start` `stop` `status` `collect-once` `query [hourly <日期>\|daily\|topn <n>]` | 流量采集（按 peer Rx/Tx、按 UID 计数） |
 | `foxytail.watchdog` | `start` `stop` `status` `check-once` | 崩溃重启、默认路由变化后 rebind（有限频） |
 | `foxytail.context` | `start` `stop` `status` `check-once` | SSID / 蜂窝变化时执行 `context.conf` 规则 |
@@ -101,7 +101,7 @@ WebUI 源码位于 `webui/`（Vite + SolidJS + Material Web 3 组件 + `kernelsu
 
 ## 验证与发布
 
-开发工具链固定为 Node 22.14.0、pnpm 10.30.3，WebUI 要求 Android WebView 109+。安装依赖后执行 `bash .github/tools/verify.sh`，统一检查 ShellCheck、隔离后端回归、类型、国际化、smoke、版本元数据和生产产物一致性；前端改动后先执行 `pnpm --dir webui build` 更新 `webroot/`。
+开发工具链固定为 Node 22.14.0、pnpm 10.30.3、Go 1.27.1，WebUI 要求 Android WebView 109+。安装依赖后执行 `bash .github/tools/verify.sh`，统一检查 ShellCheck、隔离后端回归、类型、国际化、smoke、版本元数据和生产产物一致性；前端改动后先执行 `pnpm --dir webui build` 更新 `webroot/`。
 
 发布前运行 `.github/tools/version-bump.sh`，提交版本元数据与前端产物后创建版本标签。Release 工作流只构建现有标签，普通构建校验已审阅的 `tailscale/checksums.txt`。更新依赖时显式运行 `bash .github/tools/build.sh --update-checksums` 生成候选文件，核对上游来源后再审阅、替换并提交；该模式不打包。
 
@@ -117,8 +117,9 @@ WebUI 源码位于 `webui/`（Vite + SolidJS + Material Web 3 组件 + `kernelsu
 |---|---|---|
 | `TS_MODE` | `bridge` | `bridge`（userspace + socks5 + hev → tailscale0）· `tun`（原生 TUN，需 `/dev/net/tun`）· `proxy`（仅 socks5） |
 | `SOCKS_PORT` | `1099` | tailscaled 本地 socks5 端口 |
-| `DNS_PORT` | `1053` | dnsmasq 监听端口（MagicDNS） |
-| `MAGIC_DNS` | `off` | 经 dnsmasq 分流解析 tailnet 域名 |
+| `DNS_PORT` | `1053` | 本地 DNS 端口；必须与其他解析器错开 |
+| `DNS_MODE` | `legacy` | `legacy` 旧模式 / `local` 本地端点 / `transparent` 透明共存 |
+| `MAGIC_DNS` | `off` | 启用所选模式的 Tailnet 域名解析 |
 | `IPV6` | `off` | tailscale0 双栈 + ip6tables 对称规则 |
 | `ROUTE_TABLE` | `1052` | 独立策略路由表号（1000–65535） |
 | `FWMARK` / `FWMARK_MASK` | `0x40000000` | 固定共享标记位；旧 0xF7 配置读取时迁移 |
@@ -169,23 +170,35 @@ cellular:-:no-exit-node       # 切到蜂窝时清除出口节点
 - 所有规则进专用链：`FOXY_MARK`（mangle）与 `FOXY_STAT`（filter，供流量统计计数）；内置链各只挂一跳
 - 策略路由使用独立表 **1052**（1000–65535，须无外部资源冲突）与固定 mark/mask **`0x40000000/0x40000000`**；保留其他标记位，不清空整张路由表
 - `check` 比较完整配置、双栈规则、OUTPUT 跳转及路由快照；`apply` 在失配时修复，`teardown` 只移除精确策略规则和协议 186、设备 tailscale0 的路由
-- MagicDNS 额外使用 `FOXY_DNS`（nat）做 53 重定向；检测到其他模块已劫持 53 端口时自动跳过
+- 旧 DNS 模式额外使用 `FOXY_DNS`（nat）做 53 重定向；检测到其他模块已劫持 53 端口时自动跳过
 
 ## 共存指南
 
 FoxyTail 从不动其他模块的链，开机时自动探测邻居（`foxytail.compat probe` → `/data/adb/foxytail/run/compat.json`）。
 
-- **Clash / mihomo / box-for-magisk**：这类工具通常劫持 DNS（redirect 或 TPROXY UDP/53）。`foxytail.dns` 安装重定向前先跑 `foxytail.compat check-dns-hijack`；冲突时跳过重定向（dnsmasq 仍在 1053 端口运行，状态记为 `degraded`）。只有检测到实际 DNS 重定向冲突时才需要协调两者；仅安装代理应用不会禁用 MagicDNS。
+- **Clash / mihomo / box-for-magisk**：这类工具通常劫持 DNS（redirect 或 TPROXY UDP/53）。旧 DNS 模式安装重定向前先跑 `foxytail.compat check-dns-hijack`；冲突时跳过重定向（dnsmasq 仍在 1053 端口运行，状态记为 `degraded`）。只有检测到实际 DNS 重定向冲突时才需要协调两者；仅安装代理应用不会禁用 MagicDNS。
 - **AFWall+**：防火墙重载可能清掉我们在内置链上的跳转。FoxyTail 的规则隔离在 `FOXY_*` 链中；用 `foxytail.compat check` 检测、`foxytail.route apply` 恢复。
 - **NetGuard / 其他 VPN 应用**：FoxyTail **不占用** Android VpnService，零 VPN 槽位冲突——但开启「始终在线」的 VpnService 应用仍可能在我们的路由之前截获流量。
 
 ## MagicDNS 说明
 
-`MAGIC_DNS=on` 启动本地 dnsmasq：把 tailnet 域名（`.<MagicDNSSuffix>`）转发到 `100.100.100.100`，其余交给系统解析器；监听 1053 端口，53 重定向为共存感知。
+在设置页打开 MagicDNS，选择 DNS 模式和空闲端口，再重启应用。升级沿用 `legacy`，不自动更改现有端口。新模式使用随两种安装包内置的 `foxydns`，无需自备 dnsmasq，也不依赖某个 VPN 应用的名称或私有接口。
 
-解析器按顺序选择 `/data/adb/foxytail/bin/dnsmasq`、`/system/bin/dnsmasq`、`/vendor/bin/dnsmasq`。支持系统版本的设备无需额外下载；三者均不存在时，可自备可信来源、对应架构的 dnsmasq（权限 0755）。将 `MAGIC_DNS` 设为 `on` 后通过 WebUI 重启应用。模块不会修改 Android 私人 DNS 设置；严格 DoT 或应用自己的 DoH 可能绕过本地端口 53 解析。
+| 模式 | 行为 | 适用条件 |
+|---|---|---|
+| `legacy` | 保留 dnsmasq 分流及原有 DNS 冲突检测 | 沿用现有配置 |
+| `local` | 提供 `127.0.0.1:DNS_PORT` 的 UDP/TCP DNS；启用 IPv6 时同时监听 `[::1]:DNS_PORT` | 在支持分域 DNS 的任意解析器中，把当前 Tailnet 后缀交给此端点 |
+| `transparent` | 内核和原请求选路信息都可验证时，接管普通 UDP/TCP 53 查询；无法启用时保留本地端点 | root、NFQUEUE、conntrack、INET_DIAG、严格路由查询及 socket 上下文能力可用；需验证实际设备/VPN组合 |
 
-Android 版 tailscaled 自带的 DNS 重定向支持完整 Tailnet 域名，但没有应用搜索域。本地解析器会从 Tailscale 当前节点表生成短名映射，保存在降权前读取的主配置中，以兼容系统 dnsmasq。节点名称、IP 或账户变化时，看门狗会更新映射。隧道页的“检查 DNS”可分别查看本地解析器状态、启用开关、依赖来源和上游原生 DNS 状态。
+本地端点只回答当前节点表中的完整名、已知短名、A/AAAA/PTR。未知 Tailnet 名返回 NXDOMAIN，公网名返回 REFUSED，不能把它设为唯一的全局 DNS。后缀与实际端口可在隧道页查看并复制；需要短名时，在使用端配置该 Tailnet 搜索域或相应短名规则。某些 VPN 不提供分域 DNS 配置，此时本地模式不能自动接管它的解析。
+
+透明模式先保留原请求的目标地址、UID、mark、源地址与出口信息，再验证内核路由。只有完整且一致的上下文才允许重定向；公网查询按原上下文访问原 DNS，不添加公共兜底 DNS。端口占用、能力缺失、规则丢失及策略恢复失败分别报告，只有实际 IPv4/IPv6 拦截就绪才显示对应能力。内核没有 IPv6 NAT 时保留 IPv6 隧道、AAAA 和本地 IPv6 监听，透明接管仅覆盖可用的 IPv4 路径。
+
+新模式会暂时关闭当前 Tailscale 账户的 `accept-dns`，避免 Android tailscaled 的全局 DNS 重定向与 VPN 争抢。原值在修改前记录到私有持久日志；停止或 WebUI 切换账户前，仅对匹配的 profile 和节点身份恢复。用户从外部更改该偏好后，模块停止争抢，不反复覆盖。无法确认身份或恢复结果时保留日志并报告，账户切换也会中止。卸载将未解决的记录随原身份备份保留。**Tailscale 配置的公司分域 DNS、全局上游和搜索域不会自动复制到新模式**，需要使用端保留相应策略。
+
+透明模式仍有明确边界：不接管 DoH/DoT，不重建 SELinux/cgroup 等任意应用身份；无法精确确认 socket UID 的流及不受支持的报文保持原路径。检测到其他 root 模块已劫持 DNS，或相关 OUTPUT 默认策略不兼容时，保留本地端点。保留位 `0x20000000` 必须不被其他程序使用；检测到冲突时停止透明拦截。辅助进程故障与规则移除之间存在短暂窗口，不能把能力探测成功等同于所有 VPN 已验证。完整设计、故障行为及验证范围见 [通用 DNS 共存实现说明](docs/reviews/2026-09-09-generic-dns.zh-CN.md)。
+
+旧模式依次使用 `/data/adb/foxytail/bin/dnsmasq`、`/system/bin/dnsmasq`、`/vendor/bin/dnsmasq`；三者都不存在时仍需用户提供可信二进制。其公网兜底策略保持原样，以上“无公共兜底”约束针对两个新模式。
 
 ## IPv6
 
@@ -203,7 +216,7 @@ Android 版 tailscaled 自带的 DNS 重定向支持完整 Tailnet 域名，但�
 - WebUI 未内嵌登录二维码——请使用 `tailscale login` 打印的 URL。
 - SSID 探测解析 `dumpsys wifi` 输出，各 Android 版本格式有差异（已做容错，最坏情况返回 "unknown"）。
 - 内核路由需要 `xt_owner` 以排除控制进程；缺失时拒绝应用。按 App selected/bypass 仅支持 bridge，UID 0 不进入 bridge 隧道。
-- 没有兼容系统 dnsmasq 的设备仍需自备解析器（见上文）。
+- 旧 DNS 模式在没有兼容系统 dnsmasq 时仍需自备；新模式内置解析器，但透明接管取决于设备内核和 VPN 选路能力。
 
 ## 故障排查
 

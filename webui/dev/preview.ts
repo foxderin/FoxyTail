@@ -8,12 +8,14 @@ const peers = [
   { id: 'tablet', hostname: 'travel-ipad', ip: '100.66.14.7', os: 'iOS', relay: '', online: false, rxBytes: 46183473, txBytes: 13282742, exitNodeOption: false },
   { id: 'phone', hostname: 'pixel-9', ip: '100.70.21.9', os: 'android', relay: '', online: false, rxBytes: 70843771, txBytes: 22645287, exitNodeOption: false },
 ];
-const config: Record<string,string> = { TS_MODE:'tun',SOCKS_PORT:'1099',DNS_PORT:'1053',MAGIC_DNS:'on',IPV6:'off',ROUTE_TABLE:'1052',FWMARK:'0x40000000',FWMARK_MASK:'0x40000000',WATCHDOG:'on',WATCHDOG_INTERVAL:'30',STATS_INTERVAL:'60',LOG_MAX_KB:'512' };
+const config: Record<string,string> = { TS_MODE:'tun',SOCKS_PORT:'1099',DNS_PORT:'1053',DNS_MODE:'legacy',MAGIC_DNS:'on',IPV6:'off',ROUTE_TABLE:'1052',FWMARK:'0x40000000',FWMARK_MASK:'0x40000000',WATCHDOG:'on',WATCHDOG_INTERVAL:'30',STATS_INTERVAL:'60',LOG_MAX_KB:'512' };
 let running = true, pending = false, acceptRoutes = false;
 let customRoutes = { scope: 'all', uids: [] as string[], subnets: ['100.64.0.0/10'] };
 let selected: typeof peers[number] | null = null;
 const params = new URLSearchParams(location.search);
 const scenario = params.get('state') || 'ready';
+if (['legacy', 'local', 'transparent'].includes(params.get('dns') || '')) config.DNS_MODE = params.get('dns')!;
+let appliedDns = { mode: config.DNS_MODE, port: Number(config.DNS_PORT), enabled: true, ipv6: false };
 if(params.has('theme')) localStorage.setItem('foxy.theme', params.get('theme')!);
 localStorage.setItem('foxy.lang', params.get('lang') || 'zh');
 const hours = Array.from({length:24},(_,hour)=>({hour,iface:{rx: Math.round((hour<7?8:45+Math.sin(hour*.74)*30+(hour>15?40:0))*1048576),tx:Math.round((hour<7?2:10+Math.sin(hour*.74)*6)*1048576)}}));
@@ -26,7 +28,15 @@ function result(cmd:string,args:string[]) {
     case 'exitnodes':return {ok:true,peers:scenario==='empty'?[]:peers.filter(p=>p.exitNodeOption)};
     case 'mode-get':return {ok:true,mode:config.TS_MODE};
     case 'tun':return {ok:true,ifaceUp:running,gateway:'100.69.138.97',hevPid:null,mode:config.TS_MODE,socksPort:1099};
-    case 'dns':return {ok:true,state:'running',reason:'running',enabled:true,suffix:'example.ts.net',port:1053,binary:'/system/bin/dnsmasq',upstreamNative:true};
+    case 'dns': {
+      if (appliedDns.mode === 'legacy') return {ok:true,mode:'legacy',state:running?'running':'stopped',reason:running?'running':'stopped',enabled:appliedDns.enabled,suffix:'example.ts.net',port:appliedDns.port,binary:'/system/bin/dnsmasq',upstreamNative:true};
+      const listenerReady = running && appliedDns.enabled && scenario !== 'dns-port-busy';
+      const interception4 = listenerReady && appliedDns.mode === 'transparent' && scenario !== 'dns-unsupported';
+      return {ok:true,mode:appliedDns.mode,state:listenerReady?'running':appliedDns.enabled?'degraded':'stopped',
+        reason:!appliedDns.enabled?'disabled':!listenerReady?'listener-failed':appliedDns.mode==='local'?'local':interception4?'running':'transparent-unavailable',
+        enabled:appliedDns.enabled,suffix:'example.ts.net',port:appliedDns.port,listenerReady,
+        interception4,interception6:interception4&&appliedDns.ipv6,repairNeeded:false,policyState:listenerReady?'owned':'restored',upstreamNative:false};
+    }
     case 'compat':return {ok:true,modules:[],apps:[],warnings:[],alert:null};
     case 'accounts':return {ok:true,accounts:[{name:'alex@example.com',label:'Personal network',current:true}]};
     case 'traffic':return {ok:true,hours:scenario==='empty'?[]:hours,days:scenario==='empty'?[]:Array.from({length:7},(_,i)=>({date:`2026-09-0${i+3}`,rx:(1200+Math.sin(i)*600)*1048576,tx:(230+i*45)*1048576})),topn:scenario==='empty'?[]:peers.slice(0,4).map(p=>({id:p.id,rx:p.rxBytes,tx:p.txBytes}))};
@@ -42,7 +52,7 @@ function result(cmd:string,args:string[]) {
     case 'subnet-routes-set':acceptRoutes=args[0] === 'on';return {ok:true,acceptRoutes,applied:true};
     case 'settings-get':return {ok:true,settings:config,restartRequired:pending};
     case 'settings-set':config[args[0]]=args[1];pending=true;return {ok:true,saved:true,applied:false,restartRequired:true};
-    case 'control':running=args[0]!=='stop';pending=false;return {ok:true,applied:true,restartRequired:false};
+    case 'control':running=args[0]!=='stop';pending=false;appliedDns={mode:config.DNS_MODE,port:Number(config.DNS_PORT),enabled:config.MAGIC_DNS==='on',ipv6:config.IPV6==='on'};return {ok:true,applied:true,restartRequired:false};
     case 'mode-set':config.TS_MODE=args[0];return {ok:true};
     case 'exitnode-set':selected=peers.find(p=>p.ip===args[0])||null;return {ok:true};
     case 'exitnode-clear':selected=null;return {ok:true};

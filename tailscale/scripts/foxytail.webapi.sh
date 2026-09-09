@@ -523,6 +523,10 @@ cmd_dns() {
   fi
   if [ -n "${_cd_out}" ] && printf '%s' "${_cd_out}" | jqr -e . >/dev/null 2>&1; then
     printf '%s' "${_cd_out}" | jqr -c '{ok:true,state:.state,suffix:.suffix,port:.port,
+      mode:(.mode // "legacy"),configuredMode:.configuredMode,pendingMode:.pendingMode,
+      listenerReady:(.listenerReady // false),interception4:(.interception4 // false),
+      interception6:(.interception6 // false),repairNeeded:.repairNeeded,policyState:.policyState,
+      capabilityError:.capabilityError,
       enabled:(.enabled // false),reason:(.reason // ""),binary:(.binary // null),
       upstreamNative:(.upstreamNative // false),
       ipv6DnsInterception:(.ipv6DnsInterception // null),
@@ -545,6 +549,40 @@ _login_probe() {
   grep -qi -e already -e success "${_cl_tmp}" 2>/dev/null
 }
 
+# Hold a profile-transition marker across preference restoration and the CLI
+# mutation. The DNS reconciler observes it under its own lifecycle lock.
+_dns_account_begin() {
+  [ "${DNS_MODE:-legacy}" != legacy ] || [ -f "${TS_DIR}/state/foxydns-preferences.json" ] || return 0
+  _DAC_MARKER="${TS_RUN_DIR}/dns-account-transition"
+  _DAC_TOKEN="$$:$(_conf_pid_stamp "$$")"
+  conf_lock_acquire || jerr 'account change: configuration is busy'
+  _dac_owner=$(readlink "${_DAC_MARKER}" 2>/dev/null)
+  if [ -n "${_dac_owner}" ] && _conf_owner_alive "${_dac_owner}"; then
+    conf_lock_release
+    jerr 'another account change is in progress'
+  fi
+  rm -f "${_DAC_MARKER}"
+  ln -s "${_DAC_TOKEN}" "${_DAC_MARKER}" || { conf_lock_release; jerr 'cannot prepare DNS account transition'; }
+  conf_lock_release
+  trap '_dns_account_finish; _op_finish' 0
+  trap 'exit 130' HUP INT TERM
+  [ -x "${TS_SCRIPTS_DIR}/foxytail.dns" ] || jerr 'cannot restore DNS policy: DNS controller is missing'
+  _op_exec 60 "${TS_SCRIPTS_DIR}/foxytail.dns" stop >>"${TS_RUN_LOG_FILE}" 2>&1 ||
+    jerr 'account unchanged: DNS cleanup or preference restoration failed; inspect DNS status'
+  _DAC_RESUME=1
+}
+
+_dns_account_finish() {
+  [ -n "${_DAC_TOKEN:-}" ] || return 0
+  if [ "$(readlink "${_DAC_MARKER}" 2>/dev/null)" = "${_DAC_TOKEN}" ]; then
+    rm -f "${_DAC_MARKER}"
+    if [ "${_DAC_RESUME:-0}" = 1 ] && [ ! -f "${TS_RUN_DIR}/manual-stop" ]; then
+      nohup "${TS_SCRIPTS_DIR}/foxytail.dns" start >>"${TS_RUN_LOG_FILE}" 2>&1 </dev/null &
+    fi
+  fi
+  _DAC_TOKEN=
+}
+
 cmd_login() {
   if daemon_up; then
     _cl_st=$(ts_status_json)
@@ -553,6 +591,7 @@ cmd_login() {
       return 0
     fi
   fi
+  _dns_account_begin
   _cl_tmp="${TS_RUN_DIR}/webapi-login.$$"
   rm -f "${_cl_tmp}"
   # The CLI blocks until auth completes; keep it alive after we grab the URL.
@@ -593,6 +632,7 @@ cmd_login_authkey() {
   case "$1" in
     *[!A-Za-z0-9._-]*) jerr "login-authkey: invalid characters in key" ;;
   esac
+  _dns_account_begin
   _la_out=$(ts_cli 60 login --authkey="$1" 2>&1)
   if [ $? -eq 0 ]; then
     echo '{"ok":true,"loggedIn":true}'
@@ -603,6 +643,7 @@ cmd_login_authkey() {
 
 cmd_logout() {
   daemon_up || jerr "tailscaled is not running"
+  _dns_account_begin
   _lo_out=$(ts_cli 30 logout 2>&1)
   if [ $? -eq 0 ]; then
     echo '{"ok":true}'
@@ -623,6 +664,7 @@ cmd_accounts() {
 
 cmd_switch() {
   [ -n "$1" ] || jerr "switch: missing account name"
+  _dns_account_begin
   _sw_out=$(ts_cli 30 switch "$1" 2>&1)
   if [ $? -eq 0 ]; then
     jqr -n -c --arg a "$1" '{ok:true,account:$a}'
@@ -938,7 +980,7 @@ cmd_settings_get() {
   _sg_pending=false
   [ ! -f "${TS_RUN_DIR}/settings.pending" ] || _sg_pending=true
   jqr -n -c --arg TS_MODE "$TS_MODE" --arg SOCKS_PORT "$SOCKS_PORT" \
-    --arg DNS_PORT "$DNS_PORT" --arg MAGIC_DNS "$MAGIC_DNS" --arg IPV6 "$IPV6" \
+    --arg DNS_PORT "$DNS_PORT" --arg MAGIC_DNS "$MAGIC_DNS" --arg DNS_MODE "$DNS_MODE" --arg IPV6 "$IPV6" \
     --arg ROUTE_TABLE "$ROUTE_TABLE" --arg FWMARK "$FWMARK" --arg FWMARK_MASK "$FWMARK_MASK" \
     --arg WATCHDOG "$WATCHDOG" --arg WATCHDOG_INTERVAL "$WATCHDOG_INTERVAL" \
     --arg STATS_INTERVAL "$STATS_INTERVAL" --arg LOG_MAX_KB "$LOG_MAX_KB" \

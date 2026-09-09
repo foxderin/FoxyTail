@@ -10,6 +10,7 @@ import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
 BINARIES = [f'{name}-{arch}' for name in ['tailscaled', 'jq', 'hev-socks5-tunnel'] for arch in ['arm', 'arm64']]
+NATIVE_BINARIES = ['foxydns-arm', 'foxydns-arm64']
 
 
 class ReleaseTests(unittest.TestCase):
@@ -17,12 +18,23 @@ class ReleaseTests(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
         self.root = Path(self.tmp.name)
-        for relative in ['.github/tools', 'tailscale/scripts', 'tailscale/conf', 'META-INF', 'webroot', 'unwanted']:
+        for relative in ['.github/tools', 'native/foxydns', 'tailscale/scripts', 'tailscale/conf', 'META-INF', 'webroot', 'unwanted']:
             (self.root / relative).mkdir(parents=True)
         shutil.copy(ROOT / '.github/tools/build.sh', self.root / '.github/tools/build.sh')
+        # Packaging tests intentionally mock compilation. The verification gate
+        # separately tests/vets the real Go source and builds both static ELFs.
+        (self.root / '.github/tools/build-native.sh').write_text('''#!/usr/bin/env bash
+set -euo pipefail
+mkdir -p "$1"
+for arch in arm arm64; do
+  printf 'source-built-foxydns-%s\\n' "$arch" >"$1/foxydns-$arch"
+  chmod 0755 "$1/foxydns-$arch"
+done
+''')
         shutil.copy(ROOT / 'tailscale/VERSIONS', self.root / 'tailscale/VERSIONS')
         for relative in ['customize.sh', 'service.sh', 'uninstall.sh', 'update.json', 'LICENSE',
                          'tailscale/settings.sh', 'tailscale/scripts/start.sh', 'webroot/index.html',
+                         'native/foxydns/THIRD_PARTY_NOTICES.txt',
                          'unwanted/private-data']:
             (self.root / relative).write_text('fixture\n')
         (self.root / 'module.prop').write_text('version=v1.0.3\n')
@@ -67,13 +79,37 @@ bash .github/tools/build.sh "$@"
         with zipfile.ZipFile(self.root / 'dist/FoxyTail-v1.0.3.zip') as archive:
             names = archive.namelist()
             self.assertIn('tailscale/scripts/start.sh', names)
-            self.assertFalse(any('unwanted' in x or '.github' in x or '/bin/' in x for x in names))
+            self.assertEqual(archive.read('THIRD_PARTY_NOTICES.txt'), b'fixture\n')
+            self.assertFalse(any('unwanted' in x or '.github' in x or 'native/foxydns' in x for x in names))
+            self.assertEqual(sorted(x for x in names if '/bin/' in x),
+                             ['tailscale/bin/' + x for x in NATIVE_BINARIES])
+            self.check_native_manifest(archive)
         with zipfile.ZipFile(self.root / 'dist/FoxyTail-v1.0.3-full.zip') as archive:
-            self.assertTrue(all('tailscale/bin/' + x in archive.namelist() for x in BINARIES))
+            self.assertEqual(archive.read('THIRD_PARTY_NOTICES.txt'), b'fixture\n')
+            self.assertTrue(all('tailscale/bin/' + x in archive.namelist() for x in BINARIES + NATIVE_BINARIES))
+            self.check_native_manifest(archive)
+        self.assertFalse((self.root / 'tailscale/native-checksums.txt').exists())
+        first_light = (self.root / 'dist/FoxyTail-v1.0.3.zip').read_bytes()
         first = (self.root / 'dist/FoxyTail-v1.0.3-full.zip').read_bytes()
         result = self.build(timezone="Asia/Shanghai")
         self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(first_light, (self.root / 'dist/FoxyTail-v1.0.3.zip').read_bytes())
         self.assertEqual(first, (self.root / 'dist/FoxyTail-v1.0.3-full.zip').read_bytes())
+
+    def check_native_manifest(self, archive):
+        lines = archive.read('tailscale/native-checksums.txt').decode().splitlines()
+        entries = [line.split() for line in lines if line and not line.startswith('#')]
+        self.assertEqual([entry[1] for entry in entries], NATIVE_BINARIES)
+        for digest, name in entries:
+            self.assertEqual(hashlib.sha256(archive.read('tailscale/bin/' + name)).hexdigest(), digest)
+        self.assertEqual(archive.read('tailscale/checksums.txt').decode(), self.manifest)
+
+    def test_native_build_failure_never_creates_an_incomplete_package(self):
+        (self.root / '.github/tools/build-native.sh').write_text('#!/bin/sh\nexit 42\n')
+        result = self.build()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertFalse(list((self.root / 'dist').glob('*.zip')))
+        self.assertEqual((self.root / 'tailscale/checksums.txt').read_text(), self.manifest)
 
     def test_changed_asset_fails_before_packaging(self):
         (self.root / 'binary-source/tailscaled').write_bytes(b'changed-upstream-asset\n')
@@ -88,6 +124,34 @@ bash .github/tools/build.sh "$@"
         self.assertTrue((self.root / 'tailscale/checksums.txt.candidate').is_file())
         self.assertEqual((self.root / 'tailscale/checksums.txt').read_text(), self.manifest)
         self.assertFalse(list((self.root / 'dist').glob('*.zip')))
+
+
+class NativeInstallerTests(unittest.TestCase):
+    def test_native_helper_must_be_present_and_match_one_manifest_entry(self):
+        source = (ROOT / 'customize.sh').read_text()
+        function = source[source.index('verify_native_bin() {'):source.index('# install_bin <name>')]
+        with tempfile.TemporaryDirectory() as directory:
+            stage = Path(directory)
+            (stage / 'root').mkdir()
+            (stage / 'bin').mkdir()
+            binary = stage / 'bin/foxydns-arm64'
+            binary.write_bytes(b'first-party-helper')
+            digest = hashlib.sha256(binary.read_bytes()).hexdigest()
+            manifest = stage / 'root/native-checksums.txt'
+            entry = f'{digest}  foxydns-arm64\n'
+            for case in ['valid', 'changed', 'missing', 'duplicate', 'no-entry']:
+                with self.subTest(case=case):
+                    manifest.write_text(entry if case not in ['duplicate', 'no-entry']
+                                        else entry * 2 if case == 'duplicate' else '# empty\n')
+                    binary.write_bytes(b'changed' if case == 'changed' else b'first-party-helper')
+                    if case == 'missing':
+                        binary.unlink()
+                    result = subprocess.run(['sh', '-c', function + '''
+STAGE="$1"
+abort() { echo "$*" >&2; exit 1; }
+verify_native_bin foxydns-arm64
+''', 'native-installer-test', directory], text=True, capture_output=True, timeout=10)
+                    self.assertEqual(result.returncode == 0, case == 'valid', result.stdout + result.stderr)
 
 
 if __name__ == '__main__':

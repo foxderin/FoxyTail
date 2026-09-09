@@ -35,6 +35,9 @@ DNS_REASON_FILE="${TS_RUN_DIR}/dnsmasq.reason"
 DNS_CONTEXT_FILE="${TS_RUN_DIR}/dnsmasq.context.json"
 CHAIN_DNS="FOXY_DNS"
 
+# New modes are opt-in. Older installs keep the existing dnsmasq behavior.
+[ ! -r "${TS_SCRIPTS_DIR}/foxytail.dns-modern.sh" ] || . "${TS_SCRIPTS_DIR}/foxytail.dns-modern.sh"
+
 set_state() {
   echo "$1" >"${DNS_STATE_FILE}"
   printf '%s\n' "${2:-$1}" >"${DNS_REASON_FILE}"
@@ -371,6 +374,15 @@ flush_android_dns_cache() {
 dns_start() {
   ensure_run_dirs
   load_conf || return 1
+  if [ "${DNS_MODE:-legacy}" != legacy ]; then
+    [ "${MAGIC_DNS}" = on ] || { dns_stop; return $?; }
+    modern_dns_start
+    return $?
+  fi
+  if command -v modern_dns_stop >/dev/null 2>&1 &&
+    { [ -e "${MODERN_CONF}" ] || [ -e "${MODERN_STATE}" ] || [ -e "${MODERN_JOURNAL}" ]; }; then
+    modern_dns_stop || return 1
+  fi
   select_dns_binary || :
 
   if [ "${MAGIC_DNS}" != "on" ]; then
@@ -461,6 +473,9 @@ dns_stop() {
   # Cleanup uses fixed chain names and the owned process path, not desired config.
 
   _dt_rc=0
+  if command -v modern_dns_stop >/dev/null 2>&1; then
+    modern_dns_stop || _dt_rc=1
+  fi
   redirect_teardown || _dt_rc=1
   redirect6_teardown || _dt_rc=1
   _dt_pids=$(dns_pids)
@@ -482,6 +497,11 @@ dns_stop() {
 dns_status() {
   ensure_run_dirs
   load_conf || return 1
+  if [ "${DNS_MODE:-legacy}" != legacy ] ||
+    { command -v modern_runtime_active >/dev/null 2>&1 && modern_runtime_active; }; then
+    modern_dns_status "$1"
+    return $?
+  fi
   select_dns_binary || :
 
   _dst_json=false
@@ -580,6 +600,9 @@ usage() {
 }
 
 case "$1" in
+  guard)
+    modern_dns_guard
+    ;;
   start)
     dns_start
     ;;

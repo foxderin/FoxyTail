@@ -95,6 +95,90 @@ done
 ! _conf_has_key foxytail.conf UID_LIST && ! _conf_has_key routes.conf TS_MODE &&
 ! _conf_has_key other.conf TS_MODE && ! _conf_has_key foxytail.conf PATH''')
 
+    def test_dns_modes_roundtrip_and_upgrade_default(self):
+        (self.conf / 'foxytail.conf').write_text('MAGIC_DNS=on\nDNS_PORT=1054\n')
+        result = json.loads(self.shell('load_conf && cmd_settings_get').stdout)
+        self.assertEqual(result['settings']['DNS_MODE'], 'legacy')
+        for mode in ['local', 'transparent', 'legacy']:
+            result = json.loads(self.shell(f'cmd_settings_set DNS_MODE {mode}').stdout)
+            self.assertTrue(result['restartRequired'])
+            result = json.loads(self.shell('load_conf && cmd_settings_get').stdout)
+            self.assertEqual(result['settings']['DNS_MODE'], mode)
+            self.assertEqual(result['settings']['DNS_PORT'], '1054')
+        for mode in ['auto', 'flclash', 'off', 'LOCAL', '']:
+            self.assertNotEqual(self.shell('cmd_settings_set DNS_MODE ' + shlex.quote(mode), ok=False).returncode, 0)
+
+    def test_dns_api_preserves_actual_capabilities_and_false_repair_flag(self):
+        fixture = {'mode':'transparent', 'state':'running', 'reason':'running', 'port':1054,
+                   'enabled':True, 'listenerReady':True, 'interception4':True,
+                   'interception6':False, 'repairNeeded':False, 'policyState':'owned'}
+        script = self.scripts / 'foxytail.dns'
+        script.write_text('#!/bin/sh\nprintf %s ' + shlex.quote(json.dumps(fixture)) + '\n')
+        script.chmod(0o755)
+        result = json.loads(self.shell('load_conf; cmd_dns').stdout)
+        for key, value in fixture.items():
+            self.assertEqual(result[key], value, key)
+
+    def dns_account_fixture(self, fail=False):
+        script = self.scripts / 'foxytail.dns'
+        script.write_text('#!/bin/sh\n' +
+            '[ "$1" != stop ] || test -L ' + shlex.quote(str(self.run / 'dns-account-transition')) + ' || exit 9\n' +
+            'echo "$1" >>' + shlex.quote(str(self.base / 'dns-actions')) + '\n' +
+            ('[ "$1" != stop ]\n' if fail else 'exit 0\n'))
+        script.chmod(0o755)
+        return '''load_conf; DNS_MODE=transparent
+_op_exec() { shift; "$@"; }
+daemon_up() { return 0; }
+ts_cli() { test -L "$TS_RUN_DIR/dns-account-transition" || return 9; echo "$*" >>"$TS_DIR/account-actions"; }
+'''
+
+    def test_account_transition_restores_dns_before_cli_and_cleans_marker(self):
+        prefix = self.dns_account_fixture()
+        for command in ['cmd_switch profile-two', 'cmd_logout', 'cmd_login_authkey tskey-test']:
+            result = self.shell(prefix + command)
+            self.assertTrue(json.loads(result.stdout)['ok'])
+            self.assertFalse((self.run / 'dns-account-transition').is_symlink())
+        self.assertEqual((self.base / 'account-actions').read_text().splitlines(),
+                         ['30 switch profile-two', '30 logout', '60 login --authkey=tskey-test'])
+        self.assertEqual((self.base / 'dns-actions').read_text().splitlines().count('stop'), 3)
+
+    def test_account_transition_aborts_on_unrestored_dns_policy(self):
+        result = self.shell(self.dns_account_fixture(fail=True) + 'cmd_switch profile-two', ok=False)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertFalse(json.loads(result.stdout)['ok'])
+        self.assertFalse((self.base / 'account-actions').exists())
+        self.assertFalse((self.run / 'dns-account-transition').is_symlink())
+
+    def test_legacy_account_transition_does_not_require_new_helper(self):
+        result = self.shell('load_conf; daemon_up() { return 0; }; ts_cli() { return 0; }; cmd_logout')
+        self.assertTrue(json.loads(result.stdout)['ok'])
+
+    def test_watchdog_respects_explicit_nonrepairable_dns_state(self):
+        source = (ROOT / 'tailscale/scripts/foxytail.watchdog').read_text()
+        check = source[source.index('check_once() {'):source.index('_watchdog_stop() {')]
+        fixture = self.scripts / 'foxytail.dns'
+        fixture.write_text('#!/bin/sh\ncat "$TS_DIR/dns-status.json"\n')
+        fixture.chmod(0o755)
+        prefix = check + """
+load_conf; export TS_DIR
+TS_MODE=proxy; MAGIC_DNS=on
+MANUAL_STOP_FILE="$TS_RUN_DIR/manual-stop"; BAD_COUNT_FILE="$TS_RUN_DIR/bad"; ROUTE_CACHE="$TS_RUN_DIR/route-cache"
+ts_status_json() { echo '{"BackendState":"Running"}'; }
+pids_of_path() { echo 123; }
+ip() { return 0; }
+log() { :; }
+recover() { echo "$*"; }
+check_once
+"""
+        for state, expected in [
+            ({'state':'degraded', 'repairNeeded':False}, ''),
+            ({'state':'running', 'repairNeeded':True}, 'reconcile companion-not-ready'),
+            ({'state':'degraded'}, 'reconcile companion-not-ready'),
+            ({'state':'running'}, ''),
+        ]:
+            (self.base / 'dns-status.json').write_text(json.dumps(state))
+            self.assertEqual(self.shell(prefix).stdout.strip(), expected)
+
     def cgroup_fixture(self, records):
         proc = self.base / 'proc' / 'self'
         proc.mkdir(parents=True)
@@ -398,6 +482,9 @@ cmd_apps''')
         self.assertEqual((self.run / 'jq-calls').read_text(), 'x')
 
     def test_dns_status_preserves_configuration_and_native_capability(self):
+        modern_defaults = {'mode': 'legacy', 'configuredMode': None, 'pendingMode': None,
+                           'listenerReady': False, 'interception4': False, 'interception6': False,
+                           'repairNeeded': None, 'policyState': None, 'capabilityError': None}
         status = {'state': 'stopped', 'suffix': '', 'port': 1053, 'enabled': False,
                   'reason': 'Local DNS helper is disabled', 'binary': '/system/bin/dnsmasq',
                   'upstreamNative': True, 'ipv6DnsInterception': 'disabled',
@@ -406,13 +493,13 @@ cmd_apps''')
         dns.write_text('#!/bin/sh\nprintf %s ' + shlex.quote(json.dumps(status)) + '\n')
         dns.chmod(0o755)
         result = json.loads(self.shell('load_conf; cmd_dns').stdout)
-        self.assertEqual(result, {'ok': True, **status})
+        self.assertEqual(result, {'ok': True, **modern_defaults, **status})
         for mode, module in [('available', 'not-needed'), ('module-loaded', 'loaded'),
                              ('fallback', 'missing'), ('fallback', 'load-failed')]:
             status.update(state='running', enabled=True, ipv6DnsInterception=mode,
                           ipv6ModuleStatus=module)
             dns.write_text('#!/bin/sh\nprintf %s ' + shlex.quote(json.dumps(status)) + '\n')
-            self.assertEqual(json.loads(self.shell('load_conf; cmd_dns').stdout), {'ok': True, **status})
+            self.assertEqual(json.loads(self.shell('load_conf; cmd_dns').stdout), {'ok': True, **modern_defaults, **status})
 
     def test_restore_validation_has_no_partial_writes(self):
         previous = self.snapshot()

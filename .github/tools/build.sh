@@ -3,8 +3,9 @@
 #
 # Downloads the pinned upstream binaries (tailscale/VERSIONS) for arm and
 # arm64, verifies the reviewed tailscale/checksums.txt, then produces:
-#   dist/FoxyTail-<version>.zip       light: binaries downloaded at install
+#   dist/FoxyTail-<version>.zip       light: upstream binaries downloaded at install
 #   dist/FoxyTail-<version>-full.zip  full:  all binaries bundled
+# The first-party foxydns helper is built from source and bundled in both.
 #
 # dnsmasq is intentionally NOT packaged: there is no trusted static-build
 # source. Runtime prefers a supplied binary, then the system/vendor dnsmasq.
@@ -124,14 +125,23 @@ for binary in tailscaled-arm tailscaled-arm64 jq-arm jq-arm64 hev-socks5-tunnel-
   test "$(awk -v name="$binary" '$2==name {n++} END {print n+0}' "$REVIEWED_MANIFEST")" = 1
  done
 
+NATIVE_DIR="${WORK_DIR}/native"
+bash .github/tools/build-native.sh "$NATIVE_DIR"
+
 # An explicit shipping allowlist prevents tests, local evidence, dependency
 # caches or future development directories from entering a root module ZIP.
 PACKAGE_DIR="${WORK_DIR}/package"
-mkdir -p "$PACKAGE_DIR/tailscale"
+mkdir -p "$PACKAGE_DIR/tailscale/bin"
 cp -R META-INF webroot "$PACKAGE_DIR/"
 cp customize.sh service.sh uninstall.sh module.prop update.json LICENSE "$PACKAGE_DIR/"
+cp native/foxydns/THIRD_PARTY_NOTICES.txt "$PACKAGE_DIR/THIRD_PARTY_NOTICES.txt"
 cp -R tailscale/scripts tailscale/conf "$PACKAGE_DIR/tailscale/"
 cp tailscale/settings.sh tailscale/VERSIONS tailscale/checksums.txt "$PACKAGE_DIR/tailscale/"
+cp "$NATIVE_DIR/foxydns-arm" "$NATIVE_DIR/foxydns-arm64" "$PACKAGE_DIR/tailscale/bin/"
+{
+  echo '# First-party helpers built from this release source with the pinned Go toolchain.'
+  (cd "$NATIVE_DIR" && sha256sum foxydns-arm foxydns-arm64)
+} >"$PACKAGE_DIR/tailscale/native-checksums.txt"
 # ZIP metadata gets a fixed timestamp from the source commit.
 SOURCE_DATE_EPOCH=${SOURCE_DATE_EPOCH:-$(git log -1 --format=%ct)}
 export SOURCE_DATE_EPOCH
@@ -144,7 +154,7 @@ for root, dirs, files in os.walk(sys.argv[1]):
 PYTIME
 rm -f "${DIST_DIR}/FoxyTail-${VERSION}.zip" "${DIST_DIR}/FoxyTail-${VERSION}-full.zip"
 (cd "$PACKAGE_DIR" && LC_ALL=C find . -type f | LC_ALL=C sort | zip -X -9 "${DIST_DIR}/FoxyTail-${VERSION}.zip" -@ >/dev/null)
-cp -R "$BIN_DIR" "$PACKAGE_DIR/tailscale/bin"
+cp "$BIN_DIR/"* "$PACKAGE_DIR/tailscale/bin/"
 python3 - "$PACKAGE_DIR/tailscale/bin" <<'PYTIME'
 import os, sys
 stamp = int(os.environ['SOURCE_DATE_EPOCH'])

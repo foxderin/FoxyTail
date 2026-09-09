@@ -16,12 +16,32 @@ import { MdIcon } from '../icons';
 import { Button, Select, Switch, TextField } from '../components/ui';
 import './tools.css';
 
-type Field = { key: string; label: ToolsKey; hint?: ToolsKey; range?: [number, number]; bool?: boolean };
+type Field = {
+  key: string;
+  label: ToolsKey;
+  hint?: ToolsKey;
+  range?: [number, number];
+  bool?: boolean;
+  defaultValue?: string;
+  choices?: { value: string; label: ToolsKey }[];
+};
+const DNS_MODE_HINTS: Record<string, ToolsKey> = {
+  legacy: 'tools_dns_mode_legacy_hint',
+  local: 'tools_dns_mode_local_hint',
+  transparent: 'tools_dns_mode_transparent_hint',
+};
 const NETWORK: Field[] = [
   { key: 'MAGIC_DNS', label: 'tools_magicdns', hint: 'tools_magicdns_desc', bool: true },
+  {
+    key: 'DNS_MODE', label: 'tools_dns_mode', defaultValue: 'legacy', choices: [
+      { value: 'legacy', label: 'tools_dns_mode_legacy' },
+      { value: 'local', label: 'tools_dns_mode_local' },
+      { value: 'transparent', label: 'tools_dns_mode_transparent_option' },
+    ],
+  },
   { key: 'IPV6', label: 'tools_ipv6', bool: true },
   { key: 'SOCKS_PORT', label: 'tools_socks_port', range: [1024, 65535] },
-  { key: 'DNS_PORT', label: 'tools_dns_port', range: [1024, 65535] },
+  { key: 'DNS_PORT', label: 'tools_dns_port', hint: 'tools_dns_port_hint', range: [1024, 65535] },
 ];
 const BACKGROUND: Field[] = [
   { key: 'WATCHDOG', label: 'tools_watchdog', hint: 'tools_watchdog_desc', bool: true },
@@ -72,11 +92,11 @@ export default function Settings(): JSX.Element {
     setRestartRequired(pending);
     return pending;
   }
-  async function saveKey(field: Field, value: string, el?: HTMLInputElement) {
-    const previous = settings()?.[field.key] ?? '';
+  async function saveKey(field: Field, value: string, el?: HTMLInputElement | HTMLSelectElement) {
+    const previous = settings()?.[field.key] ?? field.defaultValue ?? '';
     const restoreInput = () => {
       if (!el) return;
-      if (field.bool) el.checked = previous === 'on';
+      if (field.bool && 'checked' in el) el.checked = previous === 'on';
       else el.value = previous;
     };
     if (locked()) {
@@ -84,6 +104,10 @@ export default function Settings(): JSX.Element {
       return;
     }
     if (value === previous) return;
+    if (field.choices && !field.choices.some((choice) => choice.value === value)) {
+      restoreInput();
+      return;
+    }
     if (
       field.range &&
       (!/^\d+$/.test(value) || Number(value) < field.range[0] || Number(value) > field.range[1])
@@ -200,9 +224,9 @@ export default function Settings(): JSX.Element {
   }
   onMount(() => void loadSettings());
   function fieldRow(field: Field): JSX.Element {
-    const value = () => settings()?.[field.key] ?? '';
+    const value = () => settings()?.[field.key] ?? field.defaultValue ?? '';
     return (
-      <div class="tool-setting" data-setting={field.key}>
+      <div class="tool-setting" style={field.choices ? { 'grid-template-columns': 'minmax(0, 1fr)' } : undefined} data-setting={field.key}>
         <div class="tool-setting-copy">
           <span class="tool-setting-label">{t(field.label)}</span>
           <Show when={field.hint}>
@@ -210,6 +234,9 @@ export default function Settings(): JSX.Element {
           </Show>
           <Show when={field.key === 'IPV6'}>
             <span class="tool-hint">{t('set_ipv6_hint')}</span>
+          </Show>
+          <Show when={field.key === 'DNS_MODE'}>
+            <span class="tool-hint">{t(DNS_MODE_HINTS[value()] || 'tools_dns_mode_legacy_hint')}</span>
           </Show>
           <Show when={field.range}>
             <span class="tool-hint">
@@ -225,16 +252,26 @@ export default function Settings(): JSX.Element {
         <Show
           when={field.bool}
           fallback={
-            <TextField
-              aria-label={t(field.label)}
-              type="number"
-              value={value()}
-              disabled={locked()}
-              onChange={(e) => {
-                const el = e.target as HTMLInputElement;
-                void saveKey(field, el.value.trim(), el);
-              }}
-            />
+            <Show when={field.choices} fallback={
+              <TextField
+                aria-label={t(field.label)}
+                type="number"
+                value={value()}
+                disabled={locked()}
+                onChange={(e) => {
+                  const el = e.target as HTMLInputElement;
+                  void saveKey(field, el.value.trim(), el);
+                }}
+              />
+            }>
+              <Select aria-label={t(field.label)} value={value()} disabled={locked()} style={{ width: '100%' }}
+                onChange={(e) => {
+                  const el = e.target as HTMLSelectElement;
+                  void saveKey(field, el.value, el);
+                }}>
+                <For each={field.choices}>{(choice) => <option value={choice.value}>{t(choice.label)}</option>}</For>
+              </Select>
+            </Show>
           }
         >
           <Switch
