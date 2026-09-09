@@ -89,10 +89,10 @@ Go 固定为 1.27.1，依赖由 `go.mod`/`go.sum` 固定。两个架构使用 `C
 | IPv4 本地端点的 UDP/TCP 完整名、短名、A、AAAA、PTR | 全部正确；返回真实 Tailnet 地址 |
 | 未知 Tailnet 名、公网名直接请求本地端点 | 分别 NXDOMAIN、REFUSED；无公共上游回退 |
 | `::1:1053` 上的 AAAA 查询 | 正常，未关闭 IPv6 |
-| FlClash 运行时公网系统解析 | 升级前后仍返回原 Fake-IP，VPN 路径未被本地模式接管 |
+| FlClash 运行时公网系统解析 | 升级前后该公网查询仍按原 FlClash Fake-IP DNS 策略回答 |
 | 透明模式能力不足 | 保留本地监听，IPv4/IPv6 拦截均为 false；稳定降级不触发反复修复 |
 | DNS 停止与恢复 | `CorpDNS` 从受管的 false 恢复到原 true，再启动重新接管 |
-| WebAPI 服务开关 | 关闭约 7.37 秒、启动约 9.62 秒；关闭后 socket 与自有路由规则移除，状态确认为 stopped；启动后账户仍为 Running |
+| WebAPI 服务开关 | 关闭约 7.37 秒、启动约 9.62 秒；关闭后 socket 与自有 OUTPUT 规则移除，状态确认为 stopped；启动后账户仍为 Running |
 | 配置备份 | Android 上成功生成并返回实际归档路径、字节数 |
 
 该设备的 `CONFIG_NETFILTER_NETLINK_QUEUE=y`、`CONFIG_NF_CT_NETLINK=y`，但 **`CONFIG_NETFILTER_NETLINK_GLUE_CT` 未启用**。请求必需的 `NFQA_CFG_F_CONNTRACK` 会返回 `EOPNOTSUPP`。helper 已将这一类错误明确解释为 conntrack 队列元数据不受支持，权限、队列占用和其他绑定错误不会混用该诊断。它不是可以从本设备现有模块目录补载的独立功能，不能简单通过移除标志规避：首包尚未确认的 conntrack 记录无法用普通 CT_GET 等价获取。
