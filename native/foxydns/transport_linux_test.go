@@ -205,6 +205,43 @@ func TestLookupRequiresExactConntrackReplyAndObservedID(t *testing.T) {
 	}
 }
 
+func TestConntrackReplyAcceptsKernelSuccessAcknowledgement(t *testing.T) {
+	_, captured, tuple := observation(t)
+	flowMessage := netlink.Message{
+		Header: netlink.Header{Type: 1 << 8, Flags: netlink.Multi},
+		Data:   append([]byte{unix.AF_INET, 0, 0, 0}, (*captured.Ct)...),
+	}
+	ack := netlink.Message{Header: netlink.Header{Type: netlink.Error}, Data: make([]byte, 20)}
+	for _, messages := range [][]netlink.Message{{flowMessage}, {flowMessage, ack}} {
+		flow, err := decodeConntrackReply(messages)
+		if err != nil || flow.ID != 1234 || fromCTTuple(flow.TupleOrig) != tuple {
+			t.Fatalf("kernel CT_GET flow and success ACK rejected: flow=%+v err=%v", flow, err)
+		}
+	}
+	failedACK := ack
+	failedACK.Data = []byte{0xff, 0xff, 0xff, 0xff}
+	shortACK := ack
+	shortACK.Data = []byte{0}
+	for _, test := range []struct {
+		name     string
+		messages []netlink.Message
+	}{
+		{"missing-flow", nil},
+		{"only-ack", []netlink.Message{ack}},
+		{"two-flows", []netlink.Message{flowMessage, flowMessage}},
+		{"ack-first", []netlink.Message{ack, flowMessage}},
+		{"failed-ack", []netlink.Message{flowMessage, failedACK}},
+		{"short-ack", []netlink.Message{flowMessage, shortACK}},
+		{"extra-message", []netlink.Message{flowMessage, ack, ack}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if _, err := decodeConntrackReply(test.messages); err == nil {
+				t.Fatal("invalid conntrack response authorized an original flow")
+			}
+		})
+	}
+}
+
 func TestChangedEffectiveRouteDoesNotCaptureOrReviveFlow(t *testing.T) {
 	i, attr, tuple := observation(t)
 	i.lookupRoute = func(got flowTuple, uid, mark uint32, tos uint8) (int, error) {

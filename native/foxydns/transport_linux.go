@@ -513,11 +513,24 @@ func (i *Interceptor) getConntrack(reply flowTuple) (*conntrack.Flow, error) {
 	if err != nil {
 		return nil, err
 	}
-	if len(messages) != 1 {
-		return nil, errors.New("unexpected conntrack reply count")
+	return decodeConntrackReply(messages)
+}
+
+func decodeConntrackReply(messages []netlink.Message) (*conntrack.Flow, error) {
+	// CT_GET marks the flow multipart and terminates the response with the
+	// requested success ACK. netfilter.Query validates that ACK but retains it
+	// in the returned messages; it is not a second conntrack flow.
+	if len(messages) < 1 || len(messages) > 2 || messages[0].Header.Type != 1<<8 {
+		return nil, errors.New("conntrack reply must contain exactly one flow")
+	}
+	if len(messages) == 2 {
+		ack := messages[1]
+		if ack.Header.Type != netlink.Error || len(ack.Data) < 4 || binary.NativeEndian.Uint32(ack.Data[:4]) != 0 {
+			return nil, errors.New("conntrack reply contains an invalid acknowledgement")
+		}
 	}
 	var event conntrack.Event
-	if err = event.Unmarshal(messages[0]); err != nil {
+	if err := event.Unmarshal(messages[0]); err != nil {
 		return nil, err
 	}
 	if event.Flow == nil {
