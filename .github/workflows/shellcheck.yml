@@ -17,9 +17,18 @@ jobs:
         with:
           go-version-file: native/foxydns/go.mod
           cache: false
-      - run: sudo apt-get update && sudo apt-get install -y shellcheck jq iptables
+      - run: sudo apt-get update && sudo apt-get install -y shellcheck jq
       - run: pnpm --dir webui install --frozen-lockfile
       - run: bash .github/tools/verify.sh
+  native-kernel:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: native/foxydns/go.mod
+          cache: false
+      - run: sudo apt-get update && sudo apt-get install -y iptables
       - name: Verify real DNS paths in an isolated Linux network
         env:
           FOXYTAIL_REQUIRE_PRIVILEGED_TESTS: '1'

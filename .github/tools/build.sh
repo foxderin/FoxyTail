@@ -59,7 +59,7 @@ asset_url() {
 # download <url> <dest>
 download() {
   echo "- Downloading $(basename "$2")"
-  if ! curl -fL --retry 3 --connect-timeout 15 -o "$2" "$1"; then
+  if ! curl -fL --retry 3 --retry-all-errors --connect-timeout 15 -o "$2" "$1"; then
     echo "error: download failed: $1" >&2
     echo "       check the pins in tailscale/VERSIONS" >&2
     return 1
