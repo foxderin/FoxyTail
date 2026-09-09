@@ -355,6 +355,9 @@ cp -f "${STAGE}/root/"* "$CANDIDATE/" || abort "! Failed to stage shared runtime
 installed_pids() {
   for _ip_proc in /proc/[0-9]*; do
     _ip_pid=${_ip_proc##*/}
+    # Some Android vendors expose entries such as /proc/8350_reg. A leading
+    # digit is insufficient: only an entirely numeric name can be a PID.
+    case "${_ip_pid}" in ''|*[!0-9]*) continue ;; esac
     [ "$_ip_pid" != "$$" ] || continue
     _ip_exe=$(readlink "${_ip_proc}/exe" 2>/dev/null)
     case "$_ip_exe" in

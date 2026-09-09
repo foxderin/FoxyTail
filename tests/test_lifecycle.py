@@ -170,6 +170,44 @@ rollback_install
         self.assertEqual((self.dir / 'files/received').read_text(), 'user-file')
         self.assertEqual((self.dir / 'settings.sh').read_text(), 'old-settings.sh')
 
+    def test_installer_pid_scan_ignores_vendor_proc_entries_with_numeric_prefixes(self):
+        source = (ROOT / 'customize.sh').read_text()
+        function = source[source.index('installed_pids() {'):source.index('quiesce_installed() {')]
+        proc = self.dir / 'proc'
+        proc.mkdir()
+        function = function.replace('/proc/', str(proc) + '/')
+        for name in ('1234', '1235', '1236', '8350_reg', '9999_vendor'):
+            (proc / name).mkdir()
+        (proc / '1234/exe').symlink_to(self.dir / 'bin/tailscaled')
+        (proc / '1235/exe').symlink_to('/system/bin/sh')
+        (proc / '1235/cmdline').write_bytes(b'/system/bin/sh\0' +
+            str(self.dir / 'scripts/foxytail.watchdog').encode() + b'\0start\0')
+        (proc / '1236/exe').symlink_to('/system/bin/foreign')
+        (proc / '1236/cmdline').write_bytes(b'/system/bin/foreign\0--config=' +
+            str(self.dir / 'scripts/foxytail.watchdog').encode() + b'\0')
+        # A vendor entry must be skipped even if an exe link happens to point
+        # into our installation; it must never reach the list later signaled.
+        (proc / '8350_reg/exe').symlink_to(self.dir / 'bin/tailscaled')
+        result = subprocess.run(['sh', '-c', function + '''
+TS_BIN_DIR="$1/bin"; TS_SCRIPTS_DIR="$1/scripts"
+installed_pids
+''', 'installer-fixture', str(self.dir)], cwd=self.dir, text=True, capture_output=True, timeout=10)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout.splitlines(), ['1234', '1235'])
+        self.assertEqual(result.stderr, '')
+
+    def test_installer_pid_scan_with_no_numeric_entries_is_quiet(self):
+        source = (ROOT / 'customize.sh').read_text()
+        function = source[source.index('installed_pids() {'):source.index('quiesce_installed() {')]
+        proc = self.dir / 'proc'
+        proc.mkdir()
+        function = function.replace('/proc/', str(proc) + '/')
+        result = subprocess.run(['sh', '-c', function + '\ninstalled_pids\n'],
+                                cwd=self.dir, text=True, capture_output=True, timeout=10)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout, '')
+        self.assertEqual(result.stderr, '')
+
     def test_upgrade_rollback_restores_native_helper_and_manifest_or_their_absence(self):
         source = (ROOT / 'customize.sh').read_text()
         functions = source[source.index('rollback_install() {'):source.index('# Recover an interrupted earlier switch')]

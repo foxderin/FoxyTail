@@ -4,7 +4,7 @@
 
 本次把 DNS 共存从特定 VPN 的配置适配，改为模块自身提供标准 DNS 端点，并在内核允许时透明处理普通 DNS。设置新增 `DNS_MODE=legacy|local|transparent`，与现有 `MAGIC_DNS` 开关、`DNS_PORT` 和 `IPV6` 配合。升级默认仍为 `legacy`，不自动改端口或接管设备 DNS。
 
-这不是“所有 VPN 均已验证”的实现。当前没有连接的 ADB 设备，不能验证 Android SELinux、厂商内核、VpnService、网络切换和锁定模式的组合；主机回归与交叉编译的结论分开列出。
+已通过无线 ADB 在 PLR110、Android 16、KernelSU、FlClash 运行的设备上安装并验证。设备内核为 `6.12.38-android16-5`：本地模式通过，透明模式因内核和现有 mark 规则限制未启用。不能据此声称这台手机已实现免配置的透明共存，也不能外推到所有 VPN；实际结果与 Linux 内核门禁分别列出。
 
 ## 使用方式
 
@@ -74,13 +74,34 @@ DNS 解析成功与 Tailnet IP 可达是两件事。路由、ACL、接收子网�
 
 Go 固定为 1.27.1，依赖由 `go.mod`/`go.sum` 固定。两个架构使用 `CGO_ENABLED=0` 的 Linux 静态构建，验证 ELF 架构并拒绝动态加载器依赖。light 与 full 都内置 helper；其构建摘要使用独立 native 清单，原有已审阅上游二进制摘要不变。构建源码、依赖缓存和测试材料不进入模块包。
 
-本次完整主机门禁通过：133 项后端隔离回归、556 项中英词条、26 组 WebUI smoke、类型检查、ShellCheck、产物一致性；Go race/vet 与两个架构静态编译通过。
+本次完整主机门禁通过：133 项后端隔离回归、556 项中英词条、26 组 WebUI smoke、类型检查、ShellCheck、产物一致性；Go race/vet 与两个架构静态编译通过。设备安装后另外补充的两项 OEM procfs 回归也已通过，完整后端回归数量增至 135 项。
 
 主机验证覆盖真实 loopback UDP/TCP 查询、多次 TCP 查询、记录失效、大小与并发边界、上游响应保留、上下文丢失无回退；隔离 shell 回归覆盖偏好修改顺序、恢复与失败、规则归属、IPv6 降级、守护、账户变更与安装日志保留。WebUI smoke 覆盖默认模式、保存待应用、回滚、端点复制及能力不足不伪成功。
 
-新增严格 Linux 网络命名空间门禁，用真实 NFQUEUE/conntrack、模块规则和 netd 风格 socket 验证；CI 中禁止跳过而伪称通过。
+严格 Linux 网络命名空间门禁已通过，用真实 NFQUEUE/conntrack、模块规则和 netd 风格 socket 验证；CI 中禁止跳过而伪称通过。[首次完整通过记录](https://github.com/foxderin/FoxyTail/actions/runs/34369093681)覆盖 UDP/TCP、原始 DNS 转发、UID/mark、socket 歧义和规则清理。真实测试发现并修复原始 netlink 消息长度缺失，以及将 conntrack GET 的成功 ACK 误当作额外流的问题；测试错误诊断现在能指出具体失败步骤，不读取 DNS 报文内容。
 
-尚未完成真实 Android NFQUEUE → conntrack → VPN 上游的端到端验证，也未测实际 Wi-Fi/移动网络切换、锁定 VPN、DoH/DoT 客户端及不同 OEM 内核。设备重新连接后应先验证本地模式，再分别验证透明 IPv4/IPv6、公网请求出口、VPN 开关和故障撤规则。
+## Android 实测结果
+
+先保存现有模块、配置与身份备份，再通过 KernelSU 标准安装入口部署 full 包，保留原账户、`DNS_PORT=1053` 与 `IPV6=on`。当前 WebUI 同步为新版本，无需等重启才能使用新设置。安装过程中还发现 OEM `/proc/8350_reg` 被 PID 通配符误匹配，已修复为仅接受全数字 PID，避免无效读取或进入停止列表。
+
+| 检查 | 实测结果 |
+|---|---|
+| IPv4 本地端点的 UDP/TCP 完整名、短名、A、AAAA、PTR | 全部正确；返回真实 Tailnet 地址 |
+| 未知 Tailnet 名、公网名直接请求本地端点 | 分别 NXDOMAIN、REFUSED；无公共上游回退 |
+| `::1:1053` 上的 AAAA 查询 | 正常，未关闭 IPv6 |
+| FlClash 运行时公网系统解析 | 升级前后仍返回原 Fake-IP，VPN 路径未被本地模式接管 |
+| 透明模式能力不足 | 保留本地监听，IPv4/IPv6 拦截均为 false；稳定降级不触发反复修复 |
+| DNS 停止与恢复 | `CorpDNS` 从受管的 false 恢复到原 true，再启动重新接管 |
+| WebAPI 服务开关 | 关闭约 7.37 秒、启动约 9.62 秒；关闭后 socket 与自有路由规则移除，状态确认为 stopped；启动后账户仍为 Running |
+| 配置备份 | Android 上成功生成并返回实际归档路径、字节数 |
+
+该设备的 `CONFIG_NETFILTER_NETLINK_QUEUE=y`、`CONFIG_NF_CT_NETLINK=y`，但 **`CONFIG_NETFILTER_NETLINK_GLUE_CT` 未启用**。请求必需的 `NFQA_CFG_F_CONNTRACK` 会返回 `EOPNOTSUPP`。helper 已将这一类错误明确解释为 conntrack 队列元数据不受支持，权限、队列占用和其他绑定错误不会混用该诊断。它不是可以从本设备现有模块目录补载的独立功能，不能简单通过移除标志规避：首包尚未确认的 conntrack 记录无法用普通 CT_GET 等价获取。
+
+现有 OEM 网络规则还包含覆盖捕获位的宽 mark 掩码，保守冲突检测因此阻止透明接管；本次未改写这些规则。设备也没有 `CONFIG_IP6_NF_NAT`，但 AAAA 与本地 IPv6 DNS 不依赖该功能。
+
+**这台手机上的自动透明共存尚不可用。** 最终使用本地模式；支持分域 DNS 的 VPN/解析器需要将当前 Tailnet 后缀指向 `127.0.0.1:1053`。本次没有改动 FlClash 配置，因此系统直接查询 Tailnet 名仍可能得到 Fake-IP。要免配置透明接管，还需要同时满足内核元数据与 mark 兼容条件。
+
+未在手机上完成 NFQUEUE → conntrack → VPN 上游的端到端路径，也未测实际 Wi-Fi/移动网络切换、锁定 VPN、DoH/DoT 客户端及不同 OEM 内核。真实 Linux 透明路径通过与 Android 本地模式通过是两项独立结论。
 
 ## 核对的上游语义
 

@@ -4,11 +4,14 @@ package main
 
 import (
 	"encoding/binary"
+	"errors"
+	"fmt"
 	"github.com/miekg/dns"
 	"io"
 	"net"
 	"net/netip"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -20,6 +23,35 @@ import (
 )
 
 func ptr[T any](value T) *T { return &value }
+
+func TestQueueRegistrationDiagnosesOnlyUnsupportedMetadataACK(t *testing.T) {
+	unsupported := &netlink.OpError{Op: "receive", Err: unix.EOPNOTSUPP, Sequence: 1}
+	for _, test := range []struct {
+		name     string
+		err      error
+		metadata bool
+	}{
+		{"metadata-ack", unsupported, true},
+		{"permission", &netlink.OpError{Op: "receive", Err: unix.EPERM}, false},
+		{"queue-busy", &netlink.OpError{Op: "receive", Err: unix.EBUSY}, false},
+		{"invalid-config", &netlink.OpError{Op: "receive", Err: unix.EINVAL}, false},
+		{"unsupported-binding", fmt.Errorf("could not bind to requested queue 1053: %w", unsupported), false},
+		{"unsupported-family", fmt.Errorf("could not bind to family 0: %w", unsupported), false},
+		{"receive-syscall", &netlink.OpError{Op: "receive", Err: os.NewSyscallError("recvmsg", unix.EOPNOTSUPP)}, false},
+		{"send", &netlink.OpError{Op: "send", Err: unix.EOPNOTSUPP}, false},
+		{"unclassified", unix.EOPNOTSUPP, false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			got := queueRegistrationError(test.err)
+			if strings.Contains(got.Error(), "CONFIG_NETFILTER_NETLINK_GLUE_CT") != test.metadata {
+				t.Fatalf("wrong capability diagnosis: %v", got)
+			}
+			if !errors.Is(got, test.err) || !strings.Contains(got.Error(), test.err.Error()) {
+				t.Fatalf("original failure was lost: %v", got)
+			}
+		})
+	}
+}
 
 func capturedCT(t *testing.T, tuple flowTuple, id uint32) []byte {
 	t.Helper()

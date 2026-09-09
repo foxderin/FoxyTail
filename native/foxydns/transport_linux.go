@@ -115,9 +115,22 @@ func NewInterceptor(queue uint16) (*Interceptor, error) {
 		i.setError(fmt.Errorf("NFQUEUE receive: %w", err))
 		return 1
 	}); err != nil {
-		return fail(fmt.Errorf("NFQUEUE bind/metadata flags: %w", err))
+		return fail(queueRegistrationError(err))
 	}
 	return i, nil
+}
+
+func queueRegistrationError(err error) error {
+	// go-nfqueue wraps failures from family/queue binding, but returns the
+	// configuration ACK error directly. For our known flags (FAIL_OPEN,
+	// UID_GID, CONNTRACK), Linux rejects CONNTRACK with EOPNOTSUPP when the
+	// NFQUEUE/conntrack glue hook is absent. Copy parameters cannot produce
+	// that kernel error. Do not unwrap binding failures or syscall errors into
+	// this diagnosis: they do not prove the metadata capability is missing.
+	if ack, direct := err.(*netlink.OpError); direct && ack.Op == "receive" && ack.Err == unix.EOPNOTSUPP {
+		return fmt.Errorf("NFQUEUE kernel does not support required conntrack queue metadata (CONFIG_NETFILTER_NETLINK_GLUE_CT): %w", err)
+	}
+	return fmt.Errorf("NFQUEUE bind/metadata flags: %w", err)
 }
 
 func ProbeCapabilities(queue uint16) error {
