@@ -1,11 +1,18 @@
 /*
  * LoginHero — the prominent-but-non-blocking login/start card on top of the
- * Dashboard whenever the backend is not Running. Dismissible to a thin
+ * Dashboard when login is required or the daemon is stopped. Dismissible to a thin
  * banner (sessionStorage, per session, keyed by connection state so a state
  * change re-surfaces the hero). Every other page stays fully usable.
  */
 import { createSignal, onCleanup, Show, type JSX } from 'solid-js';
-import { status, connState, refreshStatus, type ConnState } from '../state';
+import {
+  status,
+  statusError,
+  statusLoading,
+  connState,
+  refreshStatus,
+  type ConnState,
+} from '../state';
 import { createApiScope, hasRoot } from '../api';
 import { t } from '../i18n';
 import { MdIcon } from '../icons';
@@ -65,6 +72,7 @@ export function LoginHero(props: { showStopped?: boolean } = {}): JSX.Element {
   );
 
   const heroState = (): 'login' | 'stopped' | null => {
+    if (statusLoading() || statusError()) return null;
     const c = cs();
     if (c === 'needs-login') return 'login';
     if (c === 'stopped' && props.showStopped !== false) return 'stopped';
@@ -97,7 +105,7 @@ export function LoginHero(props: { showStopped?: boolean } = {}): JSX.Element {
   };
 
   async function getLoginLink() {
-    if (waiting()) return;
+    if (waiting() || heroState() !== 'login') return;
     setWaiting(true);
     setLoginUrl(null);
     const res = await scope.api('login');
@@ -112,7 +120,7 @@ export function LoginHero(props: { showStopped?: boolean } = {}): JSX.Element {
 
   async function loginWithAuthkey() {
     const key = authkey().trim();
-    if (!key || authkeyBusy()) return;
+    if (!key || authkeyBusy() || heroState() !== 'login') return;
     setAuthkeyBusy(true);
     const res = await scope.api('login-authkey', key);
     setAuthkeyBusy(false);
@@ -142,7 +150,7 @@ export function LoginHero(props: { showStopped?: boolean } = {}): JSX.Element {
         <Show
           when={dismissed() !== st()}
           fallback={
-            <div class="banner info">
+            <div class="banner info" data-testid="login-hero" data-hero-state={st()}>
               <MdIcon name={st() === 'stopped' ? 'stop' : 'login'} size={18} />
               <span class="spacer">
                 {st() === 'stopped'
@@ -155,7 +163,7 @@ export function LoginHero(props: { showStopped?: boolean } = {}): JSX.Element {
             </div>
           }
         >
-          <div class="hero-wrap">
+          <div class="hero-wrap" data-testid="login-hero" data-hero-state={st()}>
             <div class="hero">
               <IconButton
                 class="hero-close"

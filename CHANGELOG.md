@@ -1,5 +1,13 @@
 # Changelog
 
+## v1.2.1 — 2026-09-09
+
+- Keep the login card hidden while Tailscale reports startup `NoState` or awaits administrator approval (`NeedsMachineAuth`); only an explicit `NeedsLogin` prompts reauthentication.
+- Hide stale login/start prompts when status reads fail, and recheck current state before submitting login actions.
+- Preserve immediate login access for actual authentication failures without adding polling or a fixed restart delay.
+- Fix configuration backups on Android toybox tar by staging the archive layout and using a single working directory; verify archive integrity and return the saved file path and size.
+- Keep backups running across page navigation, show persistent errors with retry, retain the latest successful path, and reject incomplete success responses.
+
 ## v1.2.0 — 2026-09-09
 
 - Add a Routing control for accepting subnet routes from other Tailscale nodes, backed by the current profile's actual preference and verified after changes.

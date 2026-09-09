@@ -467,10 +467,60 @@ cmd_restore ''' + shlex.quote(str(archive)), ok=False)
         self.assertFalse((self.scripts / 'foxytail.tun.up').exists())
 
     def test_failed_backup_removes_partial_archive(self):
-        result = self.shell('''tar() { [ "$1" != -czf ] || { printf truncated >"$2"; return 1; }; command tar "$@"; }
+        result = self.shell('''tar() { [ "$1" != -czf ] || { printf truncated >"$2"; echo 'storage write failed' >&2; return 1; }; command tar "$@"; }
 cmd_backup''', ok=False)
         self.assertNotEqual(result.returncode, 0)
+        self.assertIn('archive creation failed: storage write failed', json.loads(result.stdout)['error'])
         self.assertEqual(list((self.sdcard / 'Download').iterdir()), [])
+        self.assertEqual(list(self.run.glob('.backup.*')), [])
+        self.assertFalse((self.run / '.conf-write-lock').is_symlink())
+
+    def test_real_backup_preserves_configuration_and_optional_hooks_and_restores(self):
+        for with_hooks in (False, True):
+            with self.subTest(with_hooks=with_hooks):
+                before = self.snapshot()
+                hooks = {name: f'#!/system/bin/sh\n# fixture {name}\necho do-not-execute\n'.encode()
+                         for name in ('foxytail.tun.up', 'foxytail.tun.down')} if with_hooks else {}
+                for name, content in hooks.items():
+                    (self.scripts / name).write_bytes(content)
+                # macOS bsdtar otherwise adds AppleDouble metadata entries that
+                # Android tar does not produce and the restore format excludes.
+                result = json.loads(self.shell('export COPYFILE_DISABLE=1\ncmd_backup').stdout)
+                archive = Path(result['path'])
+                self.assertTrue(result['ok']); self.assertTrue(archive.is_file())
+                self.assertEqual(result['size'], archive.stat().st_size)
+                self.assertGreater(result['size'], 0)
+                # Real tar/gzip bytes, independently read and compared by Python.
+                with tarfile.open(archive, 'r:gz') as backup:
+                    files = {member.name: backup.extractfile(member).read()
+                             for member in backup.getmembers() if member.isfile()}
+                self.assertEqual(files, {**{'conf/' + name: content for name, content in before.items()}, **hooks})
+                self.assertEqual(self.snapshot(), before)
+                self.assertEqual(list(self.run.glob('.backup.*')), [])
+                self.assertFalse((self.run / '.conf-write-lock').is_symlink())
+                # The actual restore implementation consumes this archive in our
+                # private fixture; no host/device service commands are involved.
+                (self.conf / 'foxytail.conf').write_text('SOCKS_PORT=9999\n')
+                restored = json.loads(self.shell('cmd_restore ' + shlex.quote(str(archive))).stdout)
+                self.assertTrue(restored['ok']); self.assertEqual(self.snapshot(), before)
+                for name, content in hooks.items():
+                    parked = list(self.base.glob('restored-hooks-*/' + name + '.restored'))
+                    self.assertEqual(len(parked), 1)
+                    self.assertEqual(parked[0].read_bytes(), content)
+                    self.assertEqual(parked[0].stat().st_mode & 0o111, 0)
+
+    def test_backup_verification_and_shared_storage_failures_are_actionable(self):
+        result = self.shell('''tar() { [ "$1" != -tzf ] || { echo 'gzip checksum mismatch' >&2; return 1; }; command tar "$@"; }
+cmd_backup''', ok=False)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('archive verification failed: gzip checksum mismatch', json.loads(result.stdout)['error'])
+        self.assertEqual(list((self.sdcard / 'Download').iterdir()), [])
+        result = self.shell('''mkdir() { [ "$*" != '-p ''' + str(self.sdcard / 'Download') + '''' ] || { echo 'Permission denied' >&2; return 1; }; command mkdir "$@"; }
+cmd_backup''', ok=False)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('cannot create Download directory: Permission denied', json.loads(result.stdout)['error'])
+        self.assertEqual(list(self.run.glob('.backup.*')), [])
+        self.assertFalse((self.run / '.conf-write-lock').is_symlink())
 
     def test_cancel_before_registration_is_a_tombstone(self):
         request_id = str(int(time.time())) + '_delayed_123'
@@ -580,6 +630,23 @@ ts_status_json() { ''' + ('rm "$TS_RUN_DIR/alive";' if stopped else ':;') + ''' 
 cmd_status''').stdout)
                 expected = ('stopped', '-') if stopped else ('running', 'unreachable')
                 self.assertEqual((result['daemon'], result['backend']), expected)
+
+    def test_status_preserves_startup_login_and_machine_approval_states(self):
+        sock = socket.socket(socket.AF_UNIX)
+        sock.bind(str(self.run / 'tailscaled.sock'))
+        self.addCleanup(sock.close)
+        for backend in ('NoState', 'NeedsLogin', 'NeedsMachineAuth'):
+            with self.subTest(backend=backend):
+                (self.run / 'status.json').write_text(json.dumps({'BackendState': backend, 'Peer': {}, 'Self': None}))
+                result = json.loads(self.shell('''load_conf
+daemon_exists() { return 0; }
+daemon_uptime() { echo 1; }
+ts_status_json() { cat "$TS_RUN_DIR/status.json"; }
+ts_cli() { touch "$TS_RUN_DIR/unexpected-auth-probe"; return 99; }
+cmd_status''').stdout)
+                self.assertTrue(result['ok'])
+                self.assertEqual((result['daemon'], result['backend']), ('running', backend))
+                self.assertFalse((self.run / 'unexpected-auth-probe').exists())
 
     def test_process_identity_handles_spaces_and_parentheses(self):
         proc = self.base / 'proc'

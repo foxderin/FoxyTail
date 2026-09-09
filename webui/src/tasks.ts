@@ -50,9 +50,41 @@ export function listTasks(): Task[] {
 /* Start (or replace) a heavy task. Replacing cancels the previous run,
  * including its backend process via the ApiCall cancel path. */
 export function startTask(key: string, cmd: string, ...args: (string | number)[]): ApiCall {
+  return launchTask(key, cmd, args);
+}
+
+/** Validate command-specific success data before publishing a completed task. */
+export function startValidatedTask(
+  key: string,
+  cmd: string,
+  validate: (result: ApiResult) => ApiResult,
+  ...args: (string | number)[]
+): ApiCall {
+  return launchTask(key, cmd, args, validate);
+}
+
+function launchTask(
+  key: string,
+  cmd: string,
+  args: (string | number)[],
+  validate?: (result: ApiResult) => ApiResult,
+): ApiCall {
   const prev = taskMap().get(key);
   const settled = prev ? prev.call.cancel() : Promise.resolve({ ok: true });
-  const call = apiCallAfter(settled, cmd, ...args);
+  const request = apiCallAfter(settled, cmd, ...args);
+  const call: ApiCall = validate ? {
+    requestId: request.requestId,
+    get cancelled() { return request.cancelled; },
+    cancel: () => request.cancel(),
+    promise: request.promise.then((result) => {
+      if (!result.ok || result.cancelled) return result;
+      try {
+        return validate(result);
+      } catch (error) {
+        return { ok: false, error: error instanceof Error ? error.message : 'Invalid task result' };
+      }
+    }),
+  } : request;
   setTaskMap((prevMap) => {
     const next = new Map(prevMap);
     next.set(key, { key, status: 'running', result: null, startedAt: Date.now(), call });

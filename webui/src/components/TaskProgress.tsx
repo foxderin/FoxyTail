@@ -9,7 +9,7 @@ import { hasRoot } from '../api';
 import { MdIcon } from '../icons';
 import { Button, LinearProgress } from './ui';
 
-export function TaskProgress(props: { taskKey: string }): JSX.Element {
+export function TaskProgress(props: { taskKey: string; cancellable?: boolean }): JSX.Element {
   const running = () => getTask(props.taskKey)?.status === 'running';
   const [cancelling, setCancelling] = createSignal(false);
   return (
@@ -18,6 +18,7 @@ export function TaskProgress(props: { taskKey: string }): JSX.Element {
         <div class="task-progress-heading"><span class="task-progress-icon"><MdIcon name="sync" size={18} /></span><span><strong>{t('shell_task_running')}</strong><span class="task-progress-hint">{t('shell_task_keep_running')}</span></span></div>
         <div class="progress-row">
         <LinearProgress indeterminate aria-label={t('shell_task_running')} />
+        <Show when={props.cancellable !== false}>
         <Button
           variant="text"
           busy={cancelling()}
@@ -33,6 +34,7 @@ export function TaskProgress(props: { taskKey: string }): JSX.Element {
         >
           {t('cancel')}
         </Button>
+        </Show>
         </div>
       </div>
     </Show>

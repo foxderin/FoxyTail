@@ -152,6 +152,9 @@ const canned = {
   'funnel-del': { ok: true },
   'serve-set': { ok: true },
   'funnel-set': { ok: true },
+  login: { ok: true, url: 'https://login.example.test/device' },
+  logout: { ok: true },
+  backup: { ok: true, path: '/sdcard/Download/foxytail-backup-smoke-first.tar.gz' },
   'settings-set': { ok: true, saved: true, applied: false, restartRequired: true },
   control: { ok: true, applied: true, restartRequired: false },
   'files-inbox': { ok: true, files: [{ name: 'a.txt', size: 10, mtime: 1700000000 }] },
@@ -269,6 +272,12 @@ console.log('[1] boot without root bridge is covered separately; here a mock bri
 assert(window.document.querySelector('#app-header'), 'header rendered');
 assert(window.document.querySelectorAll('#bottom-nav .nav-item').length === 5, 'bottom nav has 5 items');
 assert(window.document.querySelector('#view'), 'view outlet exists');
+const firstLoginHero = window.document.querySelector('[data-testid="login-hero"][data-hero-state="login"]');
+assert(firstLoginHero && !firstLoginHero.querySelector('.hero-actions button.btn-filled')?.disabled, 'an initial explicit NeedsLogin snapshot exposes an enabled login action');
+const beforeFirstLogin = commandLog.length;
+firstLoginHero?.querySelector('.hero-actions button.btn-filled')?.click();
+await flush();
+assert(commandLog.slice(beforeFirstLogin).filter(entry => entry.sub === 'login').length === 1 && firstLoginHero?.textContent.includes('https://login.example.test/device'), 'an initially unauthenticated user can explicitly request a login link');
 
 console.log('[2] 13 routes x 3 rapid rounds');
 for (let round = 0; round < 3; round++) {
@@ -335,7 +344,9 @@ assert(/23\s*ms/.test(window.document.querySelector('#view').textContent), 'resu
 console.log('[4] cancel path');
 window.__foxy.startTask('speedtest-exitnodes', 'speedtest-exitnodes');
 await flush();
-window.__foxy.cancelTask('speedtest-exitnodes');
+const speedtestCancelButton = window.document.querySelector('#view .task-progress button');
+assert(speedtestCancelButton && !speedtestCancelButton.disabled && /Cancel|取消/.test(speedtestCancelButton.textContent), 'cancellable speed tests retain their enabled Cancel action');
+speedtestCancelButton?.click();
 await flush();
 assert(
   window.__foxy.getTask('speedtest-exitnodes')?.status === 'cancelled',
@@ -1212,6 +1223,177 @@ const beforeCompatibleFunnelDraft = commandLog.length;
 editMappingField('serve-kind', 'funnel');
 assert(mappingField('serve-protocol')?.value === 'tls-terminated-tcp' && mappingField('serve-port')?.value === '8443' && mappingField('serve-target')?.value === 'localhost:3000', 'a compatible TLS-terminated TCP draft retains its protocol, allowed port and target when switching to Funnel');
 assert(mappingWrites(beforeCompatibleFunnelDraft).length === 0, 'switching a compatible draft also requires an explicit submit to publish');
+
+console.log('[24] initialization and machine approval do not masquerade as a lost login');
+const loginHero = () => window.document.querySelector('[data-testid="login-hero"][data-hero-state="login"]');
+const loginWrites = since => commandLog.slice(since).filter(entry => entry.sub === 'login' || entry.sub === 'login-authkey');
+const dashboardSaysStopped = () => /^(Stopped|已停止)$/.test(window.document.querySelector('.network-health h2')?.textContent.trim() || '');
+canned.status = { ...runningSnapshot, backend: 'Running' };
+await window.__foxy.refreshStatus();
+nav('dashboard');
+await flush();
+holdNext.add('control');
+const beforeRestartReplyIndex = heldReplies.length;
+const beforeRestartLogin = commandLog.length;
+window.document.querySelector('[data-testid="service-restart"] button')?.click();
+await flush();
+const approveRestart = window.document.querySelector('.md-dialog-actions .btn-filled');
+assert(approveRestart, 'restarting the running service has an explicit confirmation');
+approveRestart?.click();
+await flush();
+const restartReply = heldReplies.slice(beforeRestartReplyIndex).find(reply => reply.sub === 'control');
+assert(restartReply && headerToggle?.disabled, 'the restart remains active while its control command is pending');
+canned.status = { ...runningSnapshot, backend: 'NoState', self: null, uptime: 0 };
+await window.__foxy.refreshStatus();
+assert(!loginHero() && !dashboardSaysStopped(), 'NoState during restart is initialization, not a login request or a stopped service');
+nav('peers');
+nav('dashboard');
+await flush();
+assert(!loginHero() && headerToggle?.disabled, 'the restart and its initializing presentation survive page navigation');
+overrides.status = [1, JSON.stringify({ ok: false, error: 'restart-status-unavailable' }), ''];
+await window.__foxy.refreshStatus();
+assert(!loginHero() && !dashboardSaysStopped() && headerToggle?.indeterminate, 'a failed status read during restart shows uncertainty without claiming logout or a stopped service');
+delete overrides.status;
+restartReply?.finish();
+await flush();
+assert(!loginHero() && !dashboardSaysStopped() && headerToggle?.checked && !headerToggle?.disabled, 'a completed restart may still initialize without presenting a login form');
+canned.status = { ...runningSnapshot, backend: 'Running' };
+await window.__foxy.refreshStatus();
+assert(window.document.querySelector('.network-health.is-connected') && !loginHero(), 'Running after initialization restores the connected dashboard');
+assert(loginWrites(beforeRestartLogin).length === 0, 'initialization, recovery and navigation never initiate an authentication request');
+
+canned.status = { ...runningSnapshot, backend: 'NeedsMachineAuth' };
+const beforeApprovalLogin = commandLog.length;
+await window.__foxy.refreshStatus();
+assert(!loginHero() && !dashboardSaysStopped() && loginWrites(beforeApprovalLogin).length === 0, 'a machine awaiting administrator approval is not prompted to sign in again');
+canned.status = { ...runningSnapshot, backend: 'NeedsLogin' };
+await window.__foxy.refreshStatus();
+assert(loginHero(), 'a genuine NeedsLogin state still exposes login immediately');
+const staleLoginAction = loginHero()?.querySelector('.hero-actions button.btn-filled');
+overrides.status = [1, JSON.stringify({ ok: false, error: 'login-status-unavailable' }), ''];
+await window.__foxy.refreshStatus();
+assert(!loginHero() && !dashboardSaysStopped(), 'a failed refresh hides the cached login form instead of presenting stale authentication state');
+const beforeStaleLoginClick = commandLog.length;
+staleLoginAction?.click();
+await flush();
+assert(loginWrites(beforeStaleLoginClick).length === 0, 'a stale login button cannot dispatch authentication after the state becomes unconfirmed');
+delete overrides.status;
+await window.__foxy.refreshStatus();
+assert(loginHero(), 'a fresh confirmed NeedsLogin snapshot restores the login entry');
+await window.__foxy.refreshStatus();
+assert(loginHero(), 'a persistent genuine NeedsLogin state remains actionable');
+
+canned.status = { ...runningSnapshot, backend: 'Running' };
+await window.__foxy.refreshStatus();
+nav('account');
+await flush();
+const beforeManualLogout = commandLog.length;
+window.document.querySelector('#view .tool-danger button')?.click();
+await flush();
+const approveLogout = window.document.querySelector('.md-dialog-actions .btn-filled');
+assert(approveLogout, 'manual logout retains its confirmation');
+canned.status = { ...runningSnapshot, backend: 'NeedsLogin', self: null };
+approveLogout?.click();
+await flush();
+nav('dashboard');
+await flush();
+assert(commandLog.slice(beforeManualLogout).filter(entry => entry.sub === 'logout').length === 1 && loginHero(), 'a confirmed manual logout still returns the user to an immediate login entry');
+assert(loginWrites(beforeManualLogout).length === 0, 'manual logout does not automatically start a new authentication flow');
+canned.status = { ...runningSnapshot, backend: 'Running' };
+await window.__foxy.refreshStatus();
+
+for (const initialBackend of ['NoState', 'NeedsMachineAuth']) {
+  const initializingDom = new JSDOM('<!DOCTYPE html><html><body><div id="app"></div></body></html>', {
+    url: 'https://foxytail.local/', runScripts: 'dangerously', pretendToBeVisual: true, virtualConsole: vc,
+  });
+  const initializingWindow = initializingDom.window;
+  stubDom(initializingWindow);
+  const initialCommands = [];
+  initializingWindow.ksu = { spawn(cmd, args, options, callbackName) {
+    initialCommands.push(cmd);
+    initializingWindow.setTimeout(() => {
+      const response = cmd.includes("'status'") ? { ...runningSnapshot, backend: initialBackend, self: null } : { ok: true, modules: [], warnings: [] };
+      initializingWindow[callbackName].stdout.emit('data', JSON.stringify(response));
+      initializingWindow[callbackName].emit('exit', 0);
+    }, 0);
+  } };
+  initializingWindow.eval(bundle);
+  await flush();
+  assert(!initializingWindow.document.querySelector('[data-testid="login-hero"]') && initializingWindow.document.querySelector('.network-health h2'), initialBackend + ' on the first snapshot renders initialization without a login card');
+  assert(!initialCommands.some(cmd => /'login(?:-authkey)?'/.test(cmd)), initialBackend + ' on first load sends no authentication request');
+  initializingDom.window.close();
+}
+
+console.log('[25] backup actions show progress and retain recoverable results across pages');
+nav('settings');
+await flush();
+const backupControls = () => window.document.querySelector('[data-testid="backup-controls"]');
+const backupButton = () => backupControls()?.querySelector('button');
+const backupPath = () => window.document.querySelector('[data-testid="backup-path"]')?.textContent.trim();
+const backupError = () => window.document.querySelector('[data-testid="backup-error"]');
+const firstBackupPath = '/sdcard/Download/foxytail-backup-smoke-first.tar.gz';
+canned.backup = { ok: true, path: firstBackupPath };
+holdNext.add('backup');
+const beforeBackupReplyIndex = heldReplies.length;
+const beforeBackupClick = commandLog.length;
+assert(backupButton() && !backupButton().disabled, 'Settings exposes an enabled backup button');
+backupButton()?.click();
+assert(backupButton()?.disabled && backupButton()?.getAttribute('aria-busy') === 'true', 'clicking Backup immediately shows busy feedback before a backend response');
+backupButton()?.click();
+await flush();
+const heldBackup = heldReplies.slice(beforeBackupReplyIndex).find(reply => reply.sub === 'backup');
+const backupRequestId = window.__foxy.getTask('backup')?.call.requestId;
+assert(heldBackup && window.__foxy.getTask('backup')?.status === 'running' && commandLog.slice(beforeBackupClick).filter(entry => entry.sub === 'backup').length === 1, 'the real backup button starts one session task and rejects duplicate clicks');
+const backupProgress = window.document.querySelector('#view .task-progress');
+assert(backupProgress?.querySelector('[role="progressbar"]') && !backupProgress.querySelector('button'), 'a running backup keeps its progress indicator without an unsupported Cancel action');
+nav('dashboard');
+await flush();
+assert(window.__foxy.getTask('backup')?.status === 'running' && window.document.querySelector('.task-menu a[href="#/settings"]'), 'a running backup survives navigation and links back to Settings from activity');
+assert(!commandLog.slice(beforeBackupClick).some(entry => entry.sub === 'cancel' && entry.args[0] === backupRequestId), 'leaving Settings does not cancel its backup request');
+heldBackup?.finish();
+await flush();
+assert(window.__foxy.getTask('backup')?.status === 'done', 'a backup can complete while its original page is closed');
+nav('settings');
+await flush();
+assert(backupPath() === firstBackupPath && commandLog.slice(beforeBackupClick).filter(entry => entry.sub === 'backup').length === 1, 'returning to Settings recovers the completed archive path without running another backup');
+const copyBackupButton = window.document.querySelector('[data-testid="backup-result"] button');
+const previousCopyCommand = window.document.execCommand;
+let copiedBackupPath = null;
+window.document.execCommand = command => {
+  if (command === 'copy') copiedBackupPath = window.document.querySelector('textarea[readonly]')?.value;
+  return true;
+};
+copyBackupButton?.click();
+window.document.execCommand = previousCopyCommand;
+assert(copyBackupButton && copiedBackupPath === firstBackupPath, 'the recovered backup result has a working copy-path action');
+
+overrides.backup = [1, JSON.stringify({ ok: false, error: 'backup-archive-write-failed' }), ''];
+backupButton()?.click();
+await flush();
+assert(window.__foxy.getTask('backup')?.status === 'error' && backupError()?.textContent.includes('backup-archive-write-failed'), 'a failed backup shows its actual error instead of silently clearing the busy state');
+nav('dashboard');
+nav('settings');
+await flush();
+assert(backupError()?.textContent.includes('backup-archive-write-failed') && backupButton() && !backupButton().disabled, 'backup failure feedback and an enabled retry survive page navigation');
+assert(backupPath() === firstBackupPath, 'a failed attempt preserves the previous successful backup path');
+delete overrides.backup;
+const recoveredBackupPath = '/sdcard/Download/foxytail-backup-smoke-recovered.tar.gz';
+canned.backup = { ok: true, path: recoveredBackupPath };
+const beforeBackupRetry = commandLog.length;
+backupButton()?.click();
+await flush();
+assert(commandLog.slice(beforeBackupRetry).filter(entry => entry.sub === 'backup').length === 1 && window.__foxy.getTask('backup')?.status === 'done' && backupPath() === recoveredBackupPath && !backupError(), 'retrying a backup clears its failure and presents the new verified result');
+
+for (const invalidBackupResult of [{ ok: true }, { ok: true, path: '   ' }, { ok: true, path: 'relative-backup.tar.gz' }]) {
+  canned.backup = invalidBackupResult;
+  const earlierToasts = new Set(window.document.querySelectorAll('#toast-root .toast'));
+  backupButton()?.click();
+  await flush();
+  const latestBackup = window.__foxy.getTask('backup');
+  assert(latestBackup?.status === 'error' && latestBackup.result?.ok === false && backupError()?.textContent.trim(), 'a backup response without a valid absolute archive path is a visible task error');
+  assert(backupPath() === recoveredBackupPath, 'an invalid backup result cannot replace the previous successful archive path');
+  assert(![...window.document.querySelectorAll('#toast-root .toast.ok')].some(toast => !earlierToasts.has(toast)), 'an invalid backup result never emits a new success notification');
+}
 
 for (const variant of ['kernelsu-spawn', 'legacy-exec']) {
   const isolated = new JSDOM('<!DOCTYPE html><html><body><div id="app"></div></body></html>', {

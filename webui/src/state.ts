@@ -97,6 +97,8 @@ export function connState(s: StatusSnapshot | null): ConnState {
   if (s.daemon !== 'running') return 'unknown';
   const b = s.backend || '';
   if (b === 'Running') return 'running';
-  if (b === 'NeedsLogin' || b === 'NeedsMachineAuth' || b === 'NoState') return 'needs-login';
+  if (b === 'NeedsLogin') return 'needs-login';
+  // NoState means the control client has not determined its state yet.
+  // NeedsMachineAuth awaits administrator approval, not another user login.
   return 'starting';
 }

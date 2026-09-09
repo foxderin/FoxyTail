@@ -238,6 +238,7 @@ const COMMAND_TIMEOUTS: Record<string, number> = {
   'file-send': 320000,
   'file-receive': 70000,
   diag: 130000,
+  backup: 60000,
 };
 
 /* Cancellation addresses one registered backend request, never a process name. */

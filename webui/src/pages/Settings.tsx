@@ -4,10 +4,13 @@ import { createApiScope, execRaw, hasRoot } from '../api';
 import { t, lang, setLang, type Lang } from '../i18n';
 import type { ToolsKey } from '../i18n-tools';
 import { refreshStatus } from '../state';
+import { getTask } from '../tasks';
+import { BACKUP_TASK, backupPath, createBackup } from '../backup';
 import { mode, applyTheme, type ThemeMode } from '../theme';
 import { Card, SkeletonRows, ErrorState, StatusBadge } from '../components/Basics';
 import { copyText } from '../components/LoginHero';
 import { confirmDialog } from '../components/ConfirmDialog';
+import { TaskProgress } from '../components/TaskProgress';
 import { showToast, toastApiError } from '../components/Toast';
 import { MdIcon } from '../icons';
 import { Button, Select, Switch, TextField } from '../components/ui';
@@ -46,14 +49,15 @@ export default function Settings(): JSX.Element {
   const [ctxError, setCtxError] = createSignal(false);
   const [ctxBusy, setCtxBusy] = createSignal(false);
   const [hooks, setHooks] = createSignal<Record<string, string>>({});
-  const [backupBusy, setBackupBusy] = createSignal(false);
-  const [backupPath, setBackupPath] = createSignal('');
+  const backupTask = () => getTask(BACKUP_TASK);
+  const backupBusy = () => backupTask()?.status === 'running';
+  const backupFailed = () => ['error', 'cancelled'].includes(backupTask()?.status || '');
   const [restorePath, setRestorePath] = createSignal('');
   const [restoreBusy, setRestoreBusy] = createSignal(false);
   const [restoreResult, setRestoreResult] = createSignal<{ previous: string; note: string } | null>(
     null,
   );
-  const locked = () => !hasRoot || Boolean(saving()) || restartBusy() || restoreBusy();
+  const locked = () => !hasRoot || Boolean(saving()) || restartBusy() || restoreBusy() || backupBusy();
 
   async function loadSettings(): Promise<boolean | undefined> {
     const res = await scope.api('settings-get');
@@ -166,16 +170,9 @@ export default function Settings(): JSX.Element {
       setCtxBusy(false);
     }
   }
-  async function doBackup() {
-    if (backupBusy()) return;
-    setBackupBusy(true);
-    const res = await scope.api('backup');
-    setBackupBusy(false);
-    if (res.cancelled) return;
-    if (res.ok) {
-      setBackupPath(String(res.path));
-      showToast(t('set_saved'), 'ok');
-    } else toastApiError(t('op_failed'), res);
+  function doBackup() {
+    if (locked()) return;
+    void createBackup();
   }
   async function doRestore() {
     const path = restorePath().trim();
@@ -397,16 +394,29 @@ export default function Settings(): JSX.Element {
         </div>
       </details>
       <Card title={t('set_backup')} icon="backup" description={t('tools_backup_desc')}>
-        <Button variant="tonal" busy={backupBusy()} disabled={locked()} onClick={() => void doBackup()}>
-          <MdIcon name="backup" size={18} />
-          {backupBusy() ? t('loading') : t('set_backup')}
-        </Button>
+        <TaskProgress taskKey={BACKUP_TASK} cancellable={false} />
+        <Show when={backupFailed()}>
+          <div data-testid="backup-error">
+            <ErrorState text={backupTask()?.status === 'cancelled' ? t('tools_backup_cancelled') : backupTask()?.result?.error || t('tools_backup_failed')} />
+          </div>
+        </Show>
+        <div class="tool-actions" data-testid="backup-controls">
+          <Button variant="tonal" busy={backupBusy()} disabled={locked()} onClick={doBackup}>
+            <Show when={!backupBusy()}><MdIcon name={backupFailed() ? 'refresh' : 'backup'} size={18} /></Show>
+            {backupBusy() ? t('tools_backup_running') : backupFailed() ? t('retry') : t('set_backup')}
+          </Button>
+        </div>
         <Show when={backupPath()}>
-          <div class="tool-result">
-            <p class="mono">{backupPath()}</p>
+          <div class="tool-result" data-testid="backup-result" role="status">
+            <strong>{t('tools_backup_latest')}</strong>
+            <p class="mono" data-testid="backup-path">{backupPath()}</p>
+            <p class="tool-hint">{t('tools_backup_file_hint')}</p>
             <Button
               variant="text"
-              onClick={() => showToast(t(copyText(backupPath()) ? 'copied' : 'op_failed'), 'info')}
+              onClick={() => {
+                const copied = copyText(backupPath());
+                showToast(t(copied ? 'copied' : 'op_failed'), copied ? 'ok' : 'err');
+              }}
             >
               <MdIcon name="content_copy" size={18} />
               {t('tools_copy_path')}

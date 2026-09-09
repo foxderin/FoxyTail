@@ -21,7 +21,7 @@ const logs = ['2026-09-09 09:41:00 [Info] tailscaled started successfully','2026
 function result(cmd:string,args:string[]) {
   if(scenario==='error' && ['status','peers','dns','settings-get','traffic','subnet-routes-get'].includes(cmd)) return {ok:false,error:'Preview: service temporarily unavailable'};
   switch(cmd){
-    case 'status': return {ok:true,daemon:running?'running':'stopped',backend:scenario==='login'?'NeedsLogin':running?'Running':'NoState',mode:config.TS_MODE,self:{hostname:'oneplus-ace',ips:['100.69.138.97','fd7a:115c:a1e0::873a:6110'],relay:''},exitNode:selected?{...selected,rx:selected.rxBytes,tx:selected.txBytes}:null,peers:{online:4,offline:2},magicDns:true,keyExpiry:null,uptime:running?184220:0};
+    case 'status': return {ok:true,daemon:running?'running':'stopped',backend:scenario==='login'?'NeedsLogin':scenario==='starting'?'NoState':scenario==='approval'?'NeedsMachineAuth':running?'Running':'NoState',mode:config.TS_MODE,self:{hostname:'oneplus-ace',ips:['100.69.138.97','fd7a:115c:a1e0::873a:6110'],relay:''},exitNode:selected?{...selected,rx:selected.rxBytes,tx:selected.txBytes}:null,peers:{online:4,offline:2},magicDns:true,keyExpiry:null,uptime:running?184220:0};
     case 'peers':return {ok:true,peers:scenario==='empty'?[]:peers};
     case 'exitnodes':return {ok:true,peers:scenario==='empty'?[]:peers.filter(p=>p.exitNodeOption)};
     case 'mode-get':return {ok:true,mode:config.TS_MODE};

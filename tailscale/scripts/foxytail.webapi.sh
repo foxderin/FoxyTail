@@ -61,7 +61,7 @@
 #   files-inbox         list $TS_DIR/files -> {files:[{name,size,mtime}]}
 #   file-send           file-send <abs-path-under-/sdcard> <peer-hostname>
 #   file-receive        pull waiting Taildrop files into $TS_DIR/files
-#   backup              tar conf+hooks to /sdcard/Download/foxytail-backup-<ts>.tar.gz -> {ok,path}
+#   backup              tar conf+hooks to /sdcard/Download/foxytail-backup-<ts>.tar.gz -> {ok,path,size}
 #   restore             restore <path-under-/sdcard> (existing conf backed up first;
 #                       conf validated line by line, hooks parked as <hook>.restored)
 #   key-expiry          {expiring:bool,date} from .Self.KeyExpiry
@@ -1092,19 +1092,33 @@ cmd_backup() (
   _bk_ts="$(date +%Y%m%d-%H%M%S)-$$"
   _bk_out="/sdcard/Download/foxytail-backup-${_bk_ts}.tar.gz"
   _bk_tmp="${_bk_out}.partial"
-  trap 'rm -f "${_bk_tmp}"; conf_lock_release' 0
+  _bk_stage=''
+  trap 'rm -f "${_bk_tmp}"; [ -z "${_bk_stage}" ] || rm -rf "${_bk_stage}"; conf_lock_release' 0
   trap 'exit 1' HUP INT TERM
-  mkdir -p /sdcard/Download || jerr 'backup: cannot create Download directory'
+  _bk_stage=$(mktemp -d "${TS_RUN_DIR}/.backup.XXXXXX") || jerr 'backup: cannot create staging directory'
+  _bk_err="${_bk_stage}/error"
+  _bk_fail() {
+    _bk_detail=$(tail -c 2048 "${_bk_err}" 2>/dev/null | _sanitize_text)
+    jerr "backup: $1${_bk_detail:+: ${_bk_detail}}"
+  }
+  mkdir -p /sdcard/Download 2>"${_bk_err}" || _bk_fail 'cannot create Download directory'
+  # Android toybox/busybox tar treats -C as one global directory, unlike the
+  # positional -C supported by GNU/BSD tar. Stage the portable archive layout
+  # first, while the config lock keeps the snapshot consistent.
+  cp -R "${TS_CONF_DIR}" "${_bk_stage}/conf" 2>"${_bk_err}" || _bk_fail 'cannot stage configuration'
   set --
   for _bk_h in foxytail.tun.up foxytail.tun.down; do
-    [ ! -f "${TS_SCRIPTS_DIR}/${_bk_h}" ] || set -- "$@" "${_bk_h}"
+    if [ -f "${TS_SCRIPTS_DIR}/${_bk_h}" ]; then
+      cat "${TS_SCRIPTS_DIR}/${_bk_h}" >"${_bk_stage}/${_bk_h}" 2>"${_bk_err}" || _bk_fail "cannot stage ${_bk_h}"
+      set -- "$@" "${_bk_h}"
+    fi
   done
-  if ! tar -czf "${_bk_tmp}" -C "${TS_DIR}" conf -C "${TS_SCRIPTS_DIR}" "$@" 2>/dev/null ||
-     ! tar -tzf "${_bk_tmp}" >/dev/null 2>&1 ||
-     ! mv "${_bk_tmp}" "${_bk_out}"; then
-    jerr 'backup failed; incomplete archive was removed'
-  fi
-  jqr -n -c --arg p "${_bk_out}" '{ok:true,path:$p}'
+  tar -czf "${_bk_tmp}" -C "${_bk_stage}" conf "$@" 2>"${_bk_err}" || _bk_fail 'archive creation failed'
+  tar -tzf "${_bk_tmp}" >/dev/null 2>"${_bk_err}" || _bk_fail 'archive verification failed'
+  _bk_size=$(wc -c <"${_bk_tmp}" 2>"${_bk_err}") || _bk_fail 'cannot read archive size'
+  [ "${_bk_size}" -gt 0 ] 2>/dev/null || jerr 'backup: archive is empty'
+  mv "${_bk_tmp}" "${_bk_out}" 2>"${_bk_err}" || _bk_fail 'cannot publish archive to Download'
+  jqr -n -c --arg p "${_bk_out}" --argjson size "${_bk_size}" '{ok:true,path:$p,size:$size}'
 )
 
 # Validate member paths and entry types before extraction. In particular, a
