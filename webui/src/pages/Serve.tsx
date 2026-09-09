@@ -1,5 +1,5 @@
 /* Listener protocol and handler path remain intact across list/delete actions. */
-import { createSignal, For, onMount, Show, type JSX } from 'solid-js';
+import { batch, createSignal, For, onMount, Show, type JSX } from 'solid-js';
 import { createApiScope, hasRoot } from '../api';
 import { t } from '../i18n';
 import { Card, SkeletonRows, EmptyState, ErrorState, StatusBadge } from '../components/Basics';
@@ -11,6 +11,11 @@ import { serveMappings, serveDeleteArgs, type ServeMapping as Mapping } from '..
 import './tools.css';
 import { createQueuedRefresh } from './tools-refresh';
 type Kind = 'serve' | 'funnel';
+const protocols: Record<Kind, string[]> = {
+  serve: ['https', 'http', 'tcp', 'tls-terminated-tcp'],
+  funnel: ['https', 'tcp', 'tls-terminated-tcp'],
+};
+const funnelPorts = ['443', '8443', '10000'];
 export default function Serve(): JSX.Element {
   const scope = createApiScope();
   const [mappings, setMappings] = createSignal<Record<Kind, Mapping[] | null>>({
@@ -28,6 +33,16 @@ export default function Serve(): JSX.Element {
   const [formError, setFormError] = createSignal('');
   const mutationBusy = () => addBusy() || delBusy() !== null;
   const mappingKey = (k: Kind, m: Mapping) => k + '/' + m.proto + '/' + m.port + (m.path ?? '');
+  function changeKind(next: Kind) {
+    batch(() => {
+      if (next === 'funnel') {
+        if (!protocols.funnel.includes(proto())) setProto('https');
+        setPort(funnelPorts.includes(port().trim()) ? port().trim() : '443');
+      }
+      setKind(next);
+      setFormError('');
+    });
+  }
   const refreshKinds = Object.fromEntries(
     (['serve', 'funnel'] as Kind[]).map((k) => [
       k,
@@ -67,6 +82,14 @@ export default function Serve(): JSX.Element {
     if (mutationBusy() || !target().trim()) return;
     if (!/^\d+$/.test(port().trim()) || Number(port()) < 1 || Number(port()) > 65535) {
       setFormError(t('tools_port_invalid'));
+      return;
+    }
+    if (!protocols[kind()].includes(proto())) {
+      setFormError(t('tools_serve_protocol_invalid'));
+      return;
+    }
+    if (kind() === 'funnel' && !funnelPorts.includes(port().trim())) {
+      setFormError(t('tools_funnel_port_invalid'));
       return;
     }
     setFormError('');
@@ -152,12 +175,13 @@ export default function Serve(): JSX.Element {
         {section('funnel')}
       </div>
       <Card title={t('serve_add')} icon="add">
-        <div class="tool-form">
+        <div class="tool-form" data-testid="serve-add-form">
           <Select
+            id="serve-kind"
             label={t('serve_kind')}
             value={kind()}
             disabled={mutationBusy()}
-            onChange={(e) => setKind((e.target as HTMLSelectElement).value as Kind)}
+            onChange={(e) => changeKind((e.target as HTMLSelectElement).value as Kind)}
           >
             <option value="serve">Serve · {t('tools_serve_private')}</option>
             <option value="funnel">Funnel · {t('tools_serve_public')}</option>
@@ -170,33 +194,67 @@ export default function Serve(): JSX.Element {
           </Show>
           <div class="tool-form-row">
             <Select
-              label={t('serve_proto')}
+              id="serve-protocol"
+              label={t('tools_serve_listener_protocol')}
               value={proto()}
               disabled={mutationBusy()}
-              onChange={(e) => setProto((e.target as HTMLSelectElement).value)}
-            >
-              <For each={['https', 'http', 'tcp', 'tls-terminated-tcp']}>
-                {(protocol) => <option value={protocol}>{protocol}</option>}
-              </For>
-            </Select>
-            <TextField
-              label={t('serve_port')}
-              type="number"
-              placeholder="443"
-              value={port()}
-              disabled={mutationBusy()}
-              onInput={(e) => {
-                setPort((e.target as HTMLInputElement).value);
+              onChange={(e) => {
+                setProto((e.target as HTMLSelectElement).value);
                 setFormError('');
               }}
-            />
+            >
+              <For each={protocols[kind()]}>
+                {(protocol) => (
+                  <option value={protocol}>
+                    {protocol === 'tls-terminated-tcp' ? 'TLS → TCP' : protocol.toUpperCase()}
+                  </option>
+                )}
+              </For>
+            </Select>
+            <Show
+              when={kind() === 'funnel'}
+              fallback={
+                <TextField
+                  id="serve-port"
+                  label={t('tools_serve_listener_port')}
+                  type="number"
+                  min={1}
+                  max={65535}
+                  step={1}
+                  placeholder="443"
+                  value={port()}
+                  disabled={mutationBusy()}
+                  onInput={(e) => {
+                    setPort((e.target as HTMLInputElement).value);
+                    setFormError('');
+                  }}
+                />
+              }
+            >
+              <Select
+                id="serve-port"
+                label={t('tools_serve_listener_port')}
+                value={port()}
+                disabled={mutationBusy()}
+                onChange={(e) => {
+                  setPort((e.target as HTMLSelectElement).value);
+                  setFormError('');
+                }}
+              >
+                <For each={funnelPorts}>{(value) => <option value={value}>{value}</option>}</For>
+              </Select>
+            </Show>
           </div>
           <TextField
-            label={t('serve_target')}
+            id="serve-target"
+            label={t('tools_serve_local_target')}
             placeholder={proto().includes('tcp') ? 'localhost:3000' : 'http://localhost:3000'}
             value={target()}
             disabled={mutationBusy()}
-            onInput={(e) => setTarget((e.target as HTMLInputElement).value)}
+            onInput={(e) => {
+              setTarget((e.target as HTMLInputElement).value);
+              setFormError('');
+            }}
           />
           <Show when={formError()}>
             <ErrorState text={formError()} />

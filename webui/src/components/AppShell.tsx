@@ -37,6 +37,7 @@ const TASK_DESTINATIONS: Record<string, { route: string; label: I18nKey; icon: I
   diag: { route: 'diag', label: 'diag_run', icon: 'bug_report' },
   'file-send': { route: 'files', label: 'files_send', icon: 'send' },
   'file-receive': { route: 'files', label: 'files_receive', icon: 'download' },
+  'subnet-routes': { route: 'routing', label: 'tools_subnet_accept', icon: 'alt_route' },
 };
 
 function TaskMenu(): JSX.Element {

@@ -9,7 +9,8 @@ const peers = [
   { id: 'phone', hostname: 'pixel-9', ip: '100.70.21.9', os: 'android', relay: '', online: false, rxBytes: 70843771, txBytes: 22645287, exitNodeOption: false },
 ];
 const config: Record<string,string> = { TS_MODE:'tun',SOCKS_PORT:'1099',DNS_PORT:'1053',MAGIC_DNS:'on',IPV6:'off',ROUTE_TABLE:'1052',FWMARK:'0x40000000',FWMARK_MASK:'0x40000000',WATCHDOG:'on',WATCHDOG_INTERVAL:'30',STATS_INTERVAL:'60',LOG_MAX_KB:'512' };
-let running = true, pending = false;
+let running = true, pending = false, acceptRoutes = false;
+let customRoutes = { scope: 'all', uids: [] as string[], subnets: ['100.64.0.0/10'] };
 let selected: typeof peers[number] | null = null;
 const params = new URLSearchParams(location.search);
 const scenario = params.get('state') || 'ready';
@@ -18,7 +19,7 @@ localStorage.setItem('foxy.lang', params.get('lang') || 'zh');
 const hours = Array.from({length:24},(_,hour)=>({hour,iface:{rx: Math.round((hour<7?8:45+Math.sin(hour*.74)*30+(hour>15?40:0))*1048576),tx:Math.round((hour<7?2:10+Math.sin(hour*.74)*6)*1048576)}}));
 const logs = ['2026-09-09 09:41:00 [Info] tailscaled started successfully','2026-09-09 09:41:01 [Info] Network state: connected','2026-09-09 09:41:01 [Success] Tunnel interface is ready','2026-09-09 09:41:02 [Info] MagicDNS resolver is ready','2026-09-09 09:42:00 [Info] Traffic samples collected','2026-09-09 09:43:00 [Warning] Peer travel-ipad is offline'];
 function result(cmd:string,args:string[]) {
-  if(scenario==='error' && ['status','peers','dns','settings-get','traffic'].includes(cmd)) return {ok:false,error:'Preview: service temporarily unavailable'};
+  if(scenario==='error' && ['status','peers','dns','settings-get','traffic','subnet-routes-get'].includes(cmd)) return {ok:false,error:'Preview: service temporarily unavailable'};
   switch(cmd){
     case 'status': return {ok:true,daemon:running?'running':'stopped',backend:scenario==='login'?'NeedsLogin':running?'Running':'NoState',mode:config.TS_MODE,self:{hostname:'oneplus-ace',ips:['100.69.138.97','fd7a:115c:a1e0::873a:6110'],relay:''},exitNode:selected?{...selected,rx:selected.rxBytes,tx:selected.txBytes}:null,peers:{online:4,offline:2},magicDns:true,keyExpiry:null,uptime:running?184220:0};
     case 'peers':return {ok:true,peers:scenario==='empty'?[]:peers};
@@ -31,7 +32,14 @@ function result(cmd:string,args:string[]) {
     case 'traffic':return {ok:true,hours:scenario==='empty'?[]:hours,days:scenario==='empty'?[]:Array.from({length:7},(_,i)=>({date:`2026-09-0${i+3}`,rx:(1200+Math.sin(i)*600)*1048576,tx:(230+i*45)*1048576})),topn:scenario==='empty'?[]:peers.slice(0,4).map(p=>({id:p.id,rx:p.rxBytes,tx:p.txBytes}))};
     case 'traffic-uids':return {ok:true,uids:scenario==='empty'?[]:[{uid:'10234',tx:604445050},{uid:'10402',tx:229307021},{uid:'10372',tx:98605230}]};
     case 'apps':return {ok:true,apps:[{label:'Firefox',package:'org.mozilla.firefox',uid:10234},{label:'Syncthing',package:'com.github.catfriend1.syncthingandroid',uid:10402},{label:'Termux',package:'com.termux',uid:10372}]};
-    case 'routes-get':return {ok:true,scope:'all',uids:[],subnets:['100.64.0.0/10']};
+    case 'routes-get':return {ok:true,...customRoutes};
+    case 'routes-set': {
+      customRoutes = {scope: args[0], uids: args[1] === '-' ? [] : args[1].split(','), subnets: args[2] === '-' ? [] : args[2].split(',')};
+      const ipv6Skipped = config.IPV6 === 'on' ? [] : customRoutes.subnets.filter(cidr => cidr.includes(':'));
+      return {ok:true,saved:true,applied:ipv6Skipped.length === 0,restartRequired:ipv6Skipped.length > 0,subnets:customRoutes.subnets,ipv6Skipped,requiresIpv6:ipv6Skipped.length > 0};
+    }
+    case 'subnet-routes-get':return {ok:true,acceptRoutes,mode:config.TS_MODE,ipv6Enabled:config.IPV6 === 'on',peers:scenario==='empty'?[]:[{id:'nas',hostname:'home-server',online:true,routes:[{cidr:'192.168.10.0/24',primary:true},{cidr:'fd12:3456:789a::/64',primary:true}]},{id:'work',hostname:'office-laptop',online:false,routes:[{cidr:'10.20.0.0/16',primary:false}]}]};
+    case 'subnet-routes-set':acceptRoutes=args[0] === 'on';return {ok:true,acceptRoutes,applied:true};
     case 'settings-get':return {ok:true,settings:config,restartRequired:pending};
     case 'settings-set':config[args[0]]=args[1];pending=true;return {ok:true,saved:true,applied:false,restartRequired:true};
     case 'control':running=args[0]!=='stop';pending=false;return {ok:true,applied:true,restartRequired:false};

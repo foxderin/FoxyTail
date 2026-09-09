@@ -91,7 +91,18 @@ export default function Dashboard(): JSX.Element {
         when={!statusLoading()}
         fallback={
           <div class="page-stack">
-            <SkeletonCard lines={4} />
+            <div
+              class="panel network-health network-health-skeleton"
+              role="status"
+              aria-busy="true"
+              aria-label={t('loading')}
+            >
+              <span class="sr-only">{t('loading')}</span>
+              <div class="skeleton network-health-icon" />
+              <div class="network-health-copy">
+                <div class="skeleton skel-title" />
+              </div>
+            </div>
             <div class="metric-grid network-metrics network-dashboard-metrics">
               <For each={[0, 1]}>
                 {() => (
@@ -114,7 +125,7 @@ export default function Dashboard(): JSX.Element {
           fallback={
             <div class="panel network-health">
               <div class="network-health-icon">
-                <MdIcon name="wifi" size={30} />
+                <MdIcon name="error" size={32} />
               </div>
               <div class="network-health-copy">
                 <h2>{t('net_status_stale')}</h2>
@@ -134,7 +145,9 @@ export default function Dashboard(): JSX.Element {
                   'panel network-health' +
                   (connected() && !statusError()
                     ? ' is-connected'
-                    : ' needs-attention')
+                    : !statusError() && (connection() === 'needs-login' || connection() === 'starting')
+                      ? ' needs-attention'
+                      : '')
                 }
                 aria-label={t('net_connection')}
               >
@@ -143,9 +156,13 @@ export default function Dashboard(): JSX.Element {
                     name={
                       connected() && !statusError()
                         ? 'check_circle'
-                        : statusError() || connection() === 'unknown' || running()
-                          ? 'wifi'
-                          : 'stop'
+                        : statusError() || connection() === 'unknown'
+                          ? 'error'
+                          : connection() === 'needs-login'
+                            ? 'vpn_key'
+                            : running()
+                              ? 'sync'
+                              : 'stop'
                     }
                     size={32}
                   />

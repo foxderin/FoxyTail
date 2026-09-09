@@ -48,3 +48,15 @@ export interface RoutesInfo {
   uids: string[];
   subnets: string[];
 }
+
+export interface SubnetRoutesInfo {
+  acceptRoutes: boolean | null;
+  mode: string;
+  ipv6Enabled?: boolean;
+  peers: Array<{
+    id: string;
+    hostname: string;
+    online: boolean;
+    routes: Array<{ cidr: string; primary: boolean }>;
+  }>;
+}

@@ -47,6 +47,8 @@
 #                       package name: dumpsys only exposes a label resource id,
 #                       not the resolved string.
 #   routes-get          {scope,uids[],subnets[]}
+#   subnet-routes-get   Current profile acceptRoutes preference and peer subnet routes.
+#   subnet-routes-set   on|off: change only tailscaled accept-routes, then read it back.
 #   routes-set          routes-set <scope> <csv-uids|-> <csv-subnets|-> :
 #                       atomic routes.conf rewrite + reload
 #   settings-get        all foxytail.conf keys as JSON
@@ -185,7 +187,7 @@ cmd_cancel() {
   mkdir -p "${_oc_dir}" || jerr 'cannot record cancellation'
   _oc_cmd=$(cat "${_oc_dir}/command" 2>/dev/null)
   case "${_oc_cmd}" in
-    control | mode-set | routes-set | settings-set | context-set | restore | backup)
+    control | mode-set | routes-set | subnet-routes-set | settings-set | context-set | restore | backup)
       if _op_pid_alive "${_oc_dir}/runner"; then jerr 'operation is committing changes and cannot be cancelled'; fi ;;
   esac
   : >"${_oc_dir}/cancelled" || jerr 'cannot record cancellation'
@@ -644,20 +646,47 @@ _serve_list() {
   printf '%s' "${_sl_out}" | jqr -c '{ok:true,status:.}'
 }
 
+# Validate a listener against the pinned CLI before invoking it. The upstream
+# target scheme is independent: Funnel HTTPS can proxy an http:// local target.
+# Publish the decimal port in _sv_port for both CLI flags and JSON responses.
+_serve_validate_listener() {
+  case "$1" in
+    serve)
+      case "$2" in
+        http | https | tcp | tls-terminated-tcp) ;;
+        *) jerr "serve supports only http, https, tcp, or tls-terminated-tcp listeners" ;;
+      esac ;;
+    funnel)
+      case "$2" in
+        https | tcp | tls-terminated-tcp) ;;
+        *) jerr "funnel supports only https, tcp, or tls-terminated-tcp listeners; HTTP targets must use an HTTPS listener" ;;
+      esac ;;
+    *) jerr 'invalid listener kind: expected serve or funnel' ;;
+  esac
+  case "$3" in
+    '' | *[!0-9]*) jerr "invalid port: ${3:-<empty>} (expected 1-65535)" ;;
+  esac
+  # Go numeric flags accept leading-zero octal, while the UI means decimal.
+  _sv_port=$(printf '%s' "$3" | sed 's/^0*//')
+  _num_in_range "${_sv_port}" 1 65535 || jerr 'invalid port: expected 1-65535'
+  if [ "$1" = funnel ]; then
+    case "${_sv_port}" in
+      443 | 8443 | 10000) ;;
+      *) jerr 'funnel public port must be 443, 8443, or 10000' ;;
+    esac
+  fi
+}
+
 _serve_set() {
   _ss_kind="$1"
   _ss_proto="$2"
-  _ss_port="$3"
   _ss_target="$4"
-  case "${_ss_proto}" in
-    http | https | tcp | tls-terminated-tcp) ;;
-    *) jerr "invalid proto: ${_ss_proto:-<empty>} (http|https|tcp|tls-terminated-tcp)" ;;
-  esac
-  case "${_ss_port}" in
-    '' | *[!0-9]*) jerr "invalid port: ${_ss_port:-<empty>}" ;;
-  esac
-  _num_in_range "${_ss_port}" 1 65535 || jerr "invalid port"
+  _serve_validate_listener "${_ss_kind}" "${_ss_proto}" "$3"
+  _ss_port=${_sv_port}
   [ -n "${_ss_target}" ] || jerr "missing target"
+  case "${_ss_target}" in
+    off | -*) jerr 'invalid target: off and CLI flags are control arguments, not service targets' ;;
+  esac
   _ss_out=$(ts_cli 25 "${_ss_kind}" --bg --"${_ss_proto}=${_ss_port}" "${_ss_target}" 2>&1)
   if [ $? -eq 0 ]; then
     jqr -n -c --arg k "${_ss_kind}" --arg p "${_ss_proto}" --argjson port "${_ss_port}" \
@@ -670,22 +699,17 @@ _serve_set() {
 _serve_del() {
   _sd_kind="$1"
   _sd_proto="$2"
-  _sd_port="$3"
   _sd_path="${4:-}"
-  case "${_sd_proto}" in
-    http | https | tcp | tls-terminated-tcp) ;;
-    *) jerr "invalid proto: ${_sd_proto:-<empty>}" ;;
-  esac
-  case "${_sd_port}" in
-    '' | *[!0-9]*) jerr "invalid port: ${_sd_port:-<empty>}" ;;
-  esac
-  _num_in_range "${_sd_port}" 1 65535 || jerr "invalid port"
+  _serve_validate_listener "${_sd_kind}" "${_sd_proto}" "$3"
+  _sd_port=${_sv_port}
+  # The WebUI already confirms deletion of this listener/path. Without --yes,
+  # the CLI can decline a multi-handler deletion on EOF and still exit zero.
   if [ -n "${_sd_path}" ]; then
     case "${_sd_proto}:${_sd_path}" in http:/* | https:/*) ;; *) jerr 'path applies only to HTTP(S) handlers and must start with /' ;; esac
     printf '%s' "${_sd_path}" | LC_ALL=C grep '[[:cntrl:]]' >/dev/null && jerr 'invalid path'
-    _sd_out=$(ts_cli 25 "${_sd_kind}" --bg --"${_sd_proto}=${_sd_port}" --set-path="${_sd_path}" off 2>&1)
+    _sd_out=$(ts_cli 25 "${_sd_kind}" --bg --yes --"${_sd_proto}=${_sd_port}" --set-path="${_sd_path}" off 2>&1)
   else
-    _sd_out=$(ts_cli 25 "${_sd_kind}" --bg --"${_sd_proto}=${_sd_port}" off 2>&1)
+    _sd_out=$(ts_cli 25 "${_sd_kind}" --bg --yes --"${_sd_proto}=${_sd_port}" off 2>&1)
   fi
   if [ $? -eq 0 ]; then
     jqr -n -c --arg k "${_sd_kind}" --arg p "${_sd_proto}" --argjson port "${_sd_port}" \
@@ -769,6 +793,85 @@ cmd_apps() {
 
 # --- routes.conf --------------------------------------------------------------
 
+_subnet_routes_error() {
+  _sre_ipv6=false
+  [ "${IPV6}" != on ] || _sre_ipv6=true
+  jqr -n -c --arg error "$1" --arg mode "${TS_MODE}" --argjson accept "${2:-null}" \
+    --argjson ipv6 "${_sre_ipv6}" \
+    '{ok:false,error:$error,acceptRoutes:$accept,mode:$mode,ipv6Enabled:$ipv6,peers:[],applied:false}'
+  return 1
+}
+
+# RouteAll is a persisted preference of the current Tailscale profile. Read
+# that authoritative value instead of duplicating it in module configuration.
+# Never return the rest of debug prefs, which can contain private state.
+read_accept_routes() {
+  _rar_prefs=$(ts_cli 5 debug prefs 2>/dev/null) || return 1
+  printf '%s' "${_rar_prefs}" | jqr -r \
+    'if (.RouteAll|type)=="boolean" then .RouteAll else error("RouteAll is unavailable") end' 2>/dev/null
+}
+
+cmd_subnet_routes_get() {
+  daemon_up || { _subnet_routes_error 'tailscaled is not available; accepted routes are unknown'; return 1; }
+  _srg_accept=$(read_accept_routes) || {
+    _subnet_routes_error 'could not read the current accepted-routes preference'; return 1;
+  }
+  _srg_status=$(ts_cli 10 status --json 2>/dev/null) || {
+    _subnet_routes_error 'could not read peer subnet routes' "${_srg_accept}"; return 1;
+  }
+  _srg_ipv6=false
+  [ "${IPV6}" != on ] || _srg_ipv6=true
+  _srg_result=$(printf '%s' "${_srg_status}" | jqr -c \
+    --argjson accept "${_srg_accept}" --arg mode "${TS_MODE}" --argjson ipv6 "${_srg_ipv6}" '
+    def array: if .==null then [] elif type=="array" then . else error("expected route array") end;
+    if type!="object" or (.BackendState|type)!="string" or
+      (.Peer!=null and (.Peer|type)!="object") then error("invalid status snapshot") else . end
+    | [.Peer // {} | .[]
+      | . as $peer
+      | (($peer.TailscaleIPs|array) | map(. + (if contains(":") then "/128" else "/32" end))) as $self
+      | ($peer.PrimaryRoutes|array) as $primary
+      | (($peer.AllowedIPs|array) + $primary | unique
+        | map(. as $cidr
+          | select(type=="string" and (endswith("/0")|not) and ($self|index($cidr)|not))
+          | {cidr:$cidr,primary:($primary|index($cidr)!=null)})) as $routes
+      | select($routes|length>0)
+      | {id:($peer.ID // ""),hostname:($peer.HostName // $peer.DNSName // "-"),
+         online:($peer.Online==true),routes:$routes}]
+    | sort_by(.hostname,.id)
+    | {ok:true,acceptRoutes:$accept,mode:$mode,ipv6Enabled:$ipv6,peers:.}' 2>/dev/null) || {
+    _subnet_routes_error 'invalid peer subnet routes snapshot' "${_srg_accept}"; return 1;
+  }
+  printf '%s\n' "${_srg_result}"
+}
+
+cmd_subnet_routes_set() {
+  case "$1" in
+    on) _srs_want=true ;;
+    off) _srs_want=false ;;
+    *) _subnet_routes_error 'subnet-routes-set: expected on|off'; return 1 ;;
+  esac
+  daemon_up || { _subnet_routes_error 'tailscaled is not available; no preference was changed'; return 1; }
+  _srs_before=$(read_accept_routes) || {
+    _subnet_routes_error 'accepted routes are unknown; no preference was changed'; return 1;
+  }
+  if [ "${_srs_before}" = "${_srs_want}" ]; then
+    jqr -n -c --argjson accept "${_srs_before}" '{ok:true,applied:true,acceptRoutes:$accept}'
+    return 0
+  fi
+  _srs_output=$(ts_cli 10 set "--accept-routes=${_srs_want}" 2>&1)
+  _srs_rc=$?
+  _srs_actual=$(read_accept_routes) || _srs_actual=null
+  if [ "${_srs_rc}" != 0 ]; then
+    _subnet_routes_error "could not change accepted subnet routes: ${_srs_output:-tailscale set failed}" "${_srs_actual}"
+    return 1
+  fi
+  if [ "${_srs_actual}" != "${_srs_want}" ]; then
+    _subnet_routes_error 'accepted-routes change could not be confirmed; refresh the current state' "${_srs_actual}"
+    return 1
+  fi
+  jqr -n -c --argjson accept "${_srs_actual}" '{ok:true,applied:true,acceptRoutes:$accept}'
+}
+
 cmd_routes_get() {
   jqr -n -c --arg s "${ROUTE_SCOPE}" --arg u "${UID_LIST}" --arg n "${ROUTE_SUBNETS}" '
     def words: split(" ") | map(select(length > 0));
@@ -781,6 +884,7 @@ cmd_routes_set() {
   _rs_subs=$(csv_to_json "$3")
   _rs_uid_list=$(printf '%s' "${_rs_uids}" | jqr -r 'join(" ")')
   _rs_sub_list=$(printf '%s' "${_rs_subs}" | jqr -r 'join(" ")')
+  _rs_sub_list=$(normalize_cidrs "${_rs_sub_list}") || jerr 'routes-set: invalid IPv4 or IPv6 CIDR'
   for _rs_key in ROUTE_SCOPE UID_LIST ROUTE_SUBNETS; do
     case "${_rs_key}" in ROUTE_SCOPE) _rs_value=${_rs_scope} ;; UID_LIST) _rs_value=${_rs_uid_list} ;; *) _rs_value=${_rs_sub_list} ;; esac
     _rs_why=$(_conf_value_error "${_rs_key}" "${_rs_value}") || jerr "routes-set: ${_rs_why}"
@@ -801,13 +905,30 @@ cmd_routes_set() {
   conf_mark_pending || { conf_lock_release; jerr "could not record pending configuration"; }
   conf_lock_release
   _rs_applied=false
+  _rs_apply_error=''
   _rs_note='saved; routing will apply when the tunnel is ready'
   if ip link show dev "${TUN_IFACE}" >/dev/null 2>&1; then
     if "${TS_SCRIPTS_DIR}/foxytail.route" reload >>"${TS_RUN_LOG_FILE}" 2>&1; then
       _rs_applied=true; _rs_note='saved and applied'
-    else _rs_note='saved, but routing reload failed; inspect the service log'; fi
+    else
+      _rs_apply_error='routing reload failed; inspect the service log'
+      _rs_note="saved, but ${_rs_apply_error}"
+    fi
   fi
-  jqr -n -c --arg n "${_rs_note}" --argjson a "${_rs_applied}" '{ok:true,saved:true,applied:$a,restartRequired:($a|not),note:$n}'
+  _rs_ipv6_skipped='[]'
+  if [ "${IPV6}" != on ]; then
+    _rs_ipv6_skipped=$(printf '%s' "${_rs_sub_list}" | jqr -R -c 'split(" ")|map(select(contains(":")))')
+    if [ "${_rs_ipv6_skipped}" != '[]' ]; then
+      if [ "${_rs_applied}" = true ]; then _rs_note='saved; IPv4 routing applied'; fi
+      _rs_applied=false
+      _rs_note="${_rs_note}; IPv6 destinations are not applied while IPv6 is disabled"
+    fi
+  fi
+  jqr -n -c --arg n "${_rs_note}" --argjson a "${_rs_applied}" --arg subnets "${_rs_sub_list}" \
+    --argjson skipped "${_rs_ipv6_skipped}" --arg applyError "${_rs_apply_error}" \
+    '{ok:true,saved:true,applied:$a,restartRequired:($a|not),note:$n,
+      applyError:(if $applyError=="" then null else $applyError end),
+      subnets:($subnets|split(" ")|map(select(length>0))),ipv6Skipped:$skipped,requiresIpv6:($skipped|length>0)}'
 }
 
 # --- settings (foxytail.conf) --------------------------------------------------
@@ -1114,7 +1235,7 @@ if [ "$1" = --request-id ]; then
   shift 2
 fi
 case "$1" in
-  control | mode-set | exitnode-set | exitnode-clear | login | login-authkey | logout | switch | serve-set | serve-del | funnel-set | funnel-del | routes-set | settings-set | context-set | file-send | file-receive | restore)
+  control | mode-set | exitnode-set | exitnode-clear | login | login-authkey | logout | switch | serve-set | serve-del | funnel-set | funnel-del | routes-set | subnet-routes-set | settings-set | context-set | file-send | file-receive | restore)
     [ ! -f "${TS_DIR}/.installing" ] || jerr 'an upgrade is in progress; retry after it completes' ;;
 esac
 
@@ -1148,6 +1269,8 @@ case "$1" in
   apps) cmd_apps ;;
   routes-get) cmd_routes_get ;;
   routes-set) shift; cmd_routes_set "$1" "$2" "$3" ;;
+  subnet-routes-get) cmd_subnet_routes_get ;;
+  subnet-routes-set) shift; cmd_subnet_routes_set "$1" ;;
   settings-get) cmd_settings_get ;;
   settings-set) shift; cmd_settings_set "$1" "$2" ;;
   context-get) cmd_context_get ;;

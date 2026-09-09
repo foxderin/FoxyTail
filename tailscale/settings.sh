@@ -177,6 +177,89 @@ _num_in_range() {
   [ "$1" -ge "$2" ] 2>/dev/null && [ "$1" -le "$3" ] 2>/dev/null
 }
 
+# Validate, mask host bits and deduplicate space-separated CIDRs. Keep host
+# routes (/32 and /128) and input order; callers decide which destinations
+# belong in their own routing policy. No platform ip command is needed.
+normalize_cidrs() {
+  printf '%s\n' "$1" | awk '
+    function ipv4(s, oct, n,i) {
+      n=split(s,oct,"."); if(n!=4) return 0
+      for(i=1;i<=4;i++) {
+        if(oct[i]!~/^[0-9]+$/ || length(oct[i])>3 || oct[i]+0>255) return 0
+        oct[i]+=0
+      }
+      return 1
+    }
+    function hex(s, i,v,d) {
+      if(s!~/^[0-9a-f]+$/ || length(s)>4) return -1
+      v=0
+      for(i=1;i<=length(s);i++) {d=index("0123456789abcdef",substr(s,i,1))-1;v=v*16+d}
+      return v
+    }
+    function mask(v,bits,width) {
+      if(bits<=0) return 0
+      if(bits>=width) return v
+      return int(v/(2^(width-bits)))*(2^(width-bits))
+    }
+    function norm4(s,p,oct,i,out) {
+      if(p>32 || !ipv4(s,oct)) return ""
+      out=""
+      for(i=1;i<=4;i++) out=out (i==1 ? "" : ".") mask(oct[i],p-(i-1)*8,8)
+      return out "/" p
+    }
+    function norm6(s,p,oct,left,right,words,pos,last,nl,nr,n,i,j,v,best,bestlen,out) {
+      if(p>128) return ""
+      s=tolower(s)
+      if(index(s,".")) {
+        last=0
+        for(i=1;i<=length(s);i++) if(substr(s,i,1)==":") last=i
+        if(!last || !ipv4(substr(s,last+1),oct)) return ""
+        s=substr(s,1,last) sprintf("%x:%x",oct[1]*256+oct[2],oct[3]*256+oct[4])
+      }
+      if(s!~/^[0-9a-f:]+$/ || index(s,":::")) return ""
+      pos=index(s,"::")
+      if(pos) {
+        if(index(substr(s,pos+2),"::")) return ""
+        nl=0;nr=0
+        if(pos>1) nl=split(substr(s,1,pos-1),left,":")
+        if(pos+2<=length(s)) nr=split(substr(s,pos+2),right,":")
+        if(nl+nr>=8) return ""
+        n=0
+        for(i=1;i<=nl;i++) {v=hex(left[i]);if(v<0)return "";words[++n]=v}
+        for(i=1;i<=8-nl-nr;i++) words[++n]=0
+        for(i=1;i<=nr;i++) {v=hex(right[i]);if(v<0)return "";words[++n]=v}
+      } else {
+        n=split(s,left,":");if(n!=8)return ""
+        for(i=1;i<=8;i++) {v=hex(left[i]);if(v<0)return "";words[i]=v}
+      }
+      for(i=1;i<=8;i++) words[i]=mask(words[i],p-(i-1)*16,16)
+      best=0;bestlen=1
+      for(i=1;i<=8;i++) if(words[i]==0) {
+        j=i;while(j<=8 && words[j]==0)j++
+        if(j-i>bestlen) {best=i;bestlen=j-i}
+        i=j-1
+      }
+      out="";i=1
+      while(i<=8) {
+        if(i==best) {out=out "::";i+=bestlen;continue}
+        if(out!="" && substr(out,length(out),1)!=":") out=out ":"
+        out=out sprintf("%x",words[i]);i++
+      }
+      return out "/" p
+    }
+    {
+      for(k=1;k<=NF;k++) {
+        if(split($k,pair,"/")!=2 || pair[2]!~/^[0-9]+$/ || length(pair[2])>3) {bad=1;exit 1}
+        prefix=pair[2]+0
+        cidr=index(pair[1],":") ? norm6(pair[1],prefix) : norm4(pair[1],prefix)
+        if(cidr=="") {bad=1;exit 1}
+        if(!seen[cidr]++) result=result (result=="" ? "" : " ") cidr
+      }
+    }
+    END {if(!bad) printf "%s",result}
+  '
+}
+
 _conf_value_error() {
   case "$1:$2" in
     TS_MODE:bridge | TS_MODE:tun | TS_MODE:proxy | ROUTE_SCOPE:all | ROUTE_SCOPE:selected | ROUTE_SCOPE:bypass) return 0 ;;
@@ -196,27 +279,7 @@ _conf_value_error() {
       esac
       ;;
     ROUTE_SUBNETS)
-      if printf '%s\n' "$2" | awk '
-        function ipv4(s, a,n,i) {
-          n=split(s,a,"."); if(n!=4) return 0
-          for(i=1;i<=n;i++) if(a[i]!~/^[0-9]+$/ || a[i]+0>255 || length(a[i])>3) return 0
-          return 1
-        }
-        function ipv6(s, a,n,i,c) {
-          if(s!~/^[0-9a-fA-F:]+$/ || s!~/:/ || s~/:::/) return 0
-          c=s; if(gsub(/::/,"",c)>1) return 0
-          n=split(s,a,":")
-          for(i=1;i<=n;i++) if(length(a[i])>4) return 0
-          if(s~/::/) return n<=8
-          if(n!=8) return 0
-          for(i=1;i<=n;i++) if(a[i]=="") return 0
-          return 1
-        }
-        {for(i=1;i<=NF;i++) {
-          if(split($i,p,"/")!=2 || p[2]!~/^[0-9]+$/) exit 1
-          if(index(p[1],":")) {if(!ipv6(p[1]) || p[2]+0>128) exit 1}
-          else if(!ipv4(p[1]) || p[2]+0>32) exit 1
-        }}' ; then return 0; fi
+      if normalize_cidrs "$2" >/dev/null; then return 0; fi
       ;;
   esac
   printf '%s\n' "invalid value for $1 (unknown keys are not allowed)"

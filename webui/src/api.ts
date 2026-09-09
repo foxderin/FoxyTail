@@ -31,6 +31,12 @@ export interface ApiResult {
   [key: string]: unknown;
 }
 
+class ApiExecutionError extends Error {
+  constructor(readonly result: ApiResult, message: string) {
+    super(message);
+  }
+}
+
 /* errno != 0: the webapi failure contract carries the reason in stdout as
  * {"ok":false,"error":...} JSON (stderr is usually empty). Prefer that
  * error, fall back to stderr, then the bare exit code. */
@@ -38,6 +44,11 @@ function execFailure(errno: unknown, stdout: unknown, stderr: unknown): Error {
   try {
     const parsed = JSON.parse(typeof stdout === 'string' ? stdout : '') as ApiResult;
     if (parsed && typeof parsed === 'object' && typeof parsed.error === 'string' && parsed.error) {
+      // A failed write/read may still report a verified actual preference.
+      // Preserve that explicit failure payload across the native exit event.
+      if (!Array.isArray(parsed) && parsed.ok === false) {
+        return new ApiExecutionError(parsed, parsed.error);
+      }
       return new Error(parsed.error);
     }
   } catch {
@@ -221,6 +232,8 @@ const COMMAND_TIMEOUTS: Record<string, number> = {
   apps: 90000,
   compat: 35000,
   'routes-set': 45000,
+  'subnet-routes-get': 20000,
+  'subnet-routes-set': 35000,
   'context-set': 45000,
   'file-send': 320000,
   'file-receive': 70000,
@@ -358,7 +371,13 @@ export function apiCallAfter(before: Promise<ApiResult>, cmd: string, ...args: (
       }, timeoutMs);
       execImpl(line).then(
         (out) => { if (!isCancelled) finish(parseResult(out, cmd)); },
-        (err) => { if (!isCancelled) finish({ ok: false, error: String(err instanceof Error ? err.message : err) }); },
+        (err) => {
+          if (!isCancelled) finish({
+            ...(err instanceof ApiExecutionError ? err.result : {}),
+            ok: false,
+            error: String(err instanceof Error ? err.message : err),
+          });
+        },
       );
     });
   }, (err) => finish({ ok: false, error: String(err) }));

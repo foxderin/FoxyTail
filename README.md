@@ -83,14 +83,16 @@ Plus the stock `tailscale` CLI (`tailscale` is a symlink to `tailscaled`; for ra
 The WebUI is built in: it lives in `webroot/` (zero-build static HTML/JS, backed by the `foxytail.webapi.sh` JSON API). How to use it:
 
 - Open it from the **KernelSU manager** or **MMRL**. The **official Magisk app does not support module WebUIs** — that button will not exist there.
-- 12 pages (bottom nav + "More" group): Dashboard · Peers (list + canvas topology) · Exit Nodes · Account · Tunnel · Routing · Traffic · Serve · Files (Taildrop) · Logs · Settings · Diagnostics.
-- No third-party libraries; i18n (Chinese/English) and light/dark themes.
+- 13 pages (bottom nav + "More" group): Dashboard · Peers (list + SVG topology) · Exit Nodes · Account · Tunnel · Routing · Traffic · Serve / Funnel · Files (Taildrop) · Logs · Settings · Diagnostics · More.
+- Chinese/English, light/dark themes, official Material Symbols, loading placeholders and accessible native controls.
+
+For Funnel, choose a supported public listener: HTTPS, TCP or TLS-terminated TCP on port 443, 8443 or 10000. A local HTTP service such as `http://localhost:3000` normally uses a public **HTTPS** listener; the target's protocol and port are independent of the public listener. Plain HTTP listeners remain available for private Serve mappings.
 
 <!-- Screenshots: docs/screenshots/*.png (to be added, see Roadmap) -->
 
 ## WebUI development
 
-The WebUI source lives in `webui/` (Vite + SolidJS + Material Web 3 components + the `kernelsu` npm bridge). The built output is committed to `webroot/`, so the module stays self-contained and no Node toolchain is needed to use it.
+The WebUI source lives in `webui/` (Vite + SolidJS, native controls with Material Design 3 tokens, and the `kernelsu` npm bridge). The built output is committed to `webroot/`, so the module stays self-contained and no Node toolchain is needed to use it.
 
 - `pnpm --dir webui install --frozen-lockfile` — install dependencies (once)
 - `pnpm --dir webui dev` — Vite dev server (no root bridge there; the UI shows the no-root banner)
@@ -133,6 +135,14 @@ Three files in `/data/adb/foxytail/conf/`, installed **only if missing** — you
 | `ROUTE_SCOPE` | `all` | `all` · `selected` (only `UID_LIST`) · `bypass` (everything except `UID_LIST`) |
 | `UID_LIST` | empty | space-separated app UIDs for selected/bypass |
 | `ROUTE_SUBNETS` | `100.64.0.0/10` | CIDRs routed through the tunnel |
+
+The Routing page can accept subnet routes from other Tailscale nodes. The switch reads and changes the current Tailscale profile's `accept-routes` preference; it does not create a duplicate module setting. Route advertisements are grouped by node. **Add subnet** copies a CIDR into the local draft, and **Apply** saves that draft separately. Refreshing advertisements preserves unsaved CIDR and application selections.
+
+The two controls have different scopes: accepting routes lets Tailscale use permitted peer routes, while the custom list selects destinations for FoxyTail's local policy routing. The list is not an acceptance whitelist and importing a subnet does not pin its next hop to that node. Node online status is not a reachability test; the advertising router, administrative route approval and Tailnet access policy still determine access.
+
+Native TUN receives routes through tailscaled; adding a custom CIDR is useful when it must also follow FoxyTail's local routing priority. Bridge mode needs the target CIDR in the custom list and remains subject to the selected application scope. Proxy mode handles traffic sent through its SOCKS5 listener and does not install an Android system route. Exit-node default routes are managed on the Exit page.
+
+Custom CIDRs are normalized to network addresses (`192.168.1.42/24` becomes `192.168.1.0/24`) and duplicates are removed. IPv6 CIDRs may be saved before enabling IPv6; the page explicitly reports that those destinations are not applied until IPv6 is enabled in Settings.
 
 ### `context.conf` (network-context rules)
 

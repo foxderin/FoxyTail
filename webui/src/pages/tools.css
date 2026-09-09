@@ -69,6 +69,28 @@
 .tool-hint {
   margin: 0;
 }
+.subnet-route-controls { display: grid; gap: 10px; }
+.subnet-route-controls-row { display: flex; align-items: center; gap: 8px; }
+.subnet-route-controls-label { display: flex; align-items: center; gap: 10px; flex: 1; min-width: 0; font-size: 14px; font-weight: 600; }
+.subnet-route-controls-label > .md-icon { color: var(--md-sys-color-primary); flex: none; }
+.subnet-route-feedback { display: flex; align-items: flex-start; gap: 8px; font-size: 12px; line-height: 1.5; color: var(--md-sys-color-on-surface-variant); }
+.subnet-route-feedback > .md-icon, .subnet-route-feedback > .circular-progress { flex: none; margin-top: 1px; }
+.subnet-route-peer + .subnet-route-peer { margin-top: 18px; padding-top: 14px; border-top: 1px solid var(--md-sys-color-outline-variant); }
+.subnet-route-peer-heading { display: flex; align-items: center; gap: 9px; padding: 3px 0 8px; }
+.subnet-route-peer-heading h3 { flex: 1; min-width: 0; font-size: 14px; margin: 0; overflow-wrap: anywhere; }
+.subnet-route-peer-heading > .md-icon { color: var(--md-sys-color-on-surface-variant); }
+.subnet-route-row { gap: 10px; }
+.subnet-route-row .main { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.subnet-route-row code, [data-custom-cidr] code { overflow-wrap: anywhere; word-break: break-word; }
+.subnet-route-row .btn { flex: none; white-space: nowrap; padding-inline: 9px; }
+.subnet-route-primary { color: var(--md-sys-color-on-surface-variant); font-size: 10px; }
+.subnet-route-add { display: flex; flex-wrap: nowrap; margin-bottom: 10px; }
+.subnet-route-add .text-field { flex: 1; min-width: 0; }
+.subnet-route-add .btn { flex: none; }
+.subnet-route-note { display: flex; flex-wrap: wrap; gap: 8px; padding-top: 10px; }
+.subnet-route-note a, .subnet-route-skipped a { color: var(--md-sys-color-primary); }
+.subnet-route-skipped { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; font-size: 12px; }
+.subnet-route-skipped > span { flex-basis: 100%; }
 .tool-group-heading h2 {
   font-size: 15px;
   margin: 0 0 5px;
@@ -295,7 +317,7 @@
 }
 .tool-sticky-actions {
   position: sticky;
-  bottom: calc(84px + env(safe-area-inset-bottom));
+  bottom: calc(var(--ft-bottom-nav-height, 74px) + 10px);
   z-index: 3;
   display: flex;
   align-items: center;
