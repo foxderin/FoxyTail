@@ -96,6 +96,7 @@ load_conf() { . "$TEST_DIR/config"; }
 log() { :; }
 pids_of_path() { echo 100; }
 jqr() { jq "$@"; }
+have_jq() { return 0; }
 ''')
   settings=(ROOT/'tailscale/settings.sh').read_text()
   with (self.dir/'settings.sh').open('a') as f:f.write(settings[settings.index('_conf_pid_stamp() {'):settings.index('# Read both files under the writer lock')])
@@ -114,6 +115,22 @@ jqr() { jq "$@"; }
   return r
  def read(self):return json.loads(self.state.read_text())
  def write(self,s):self.state.write_text(json.dumps(s))
+ def setup_binder(self):
+  (self.dir/'bin/service').write_text('''#!/bin/sh
+case "$1" in
+ list) printf '%s\\n' "${MOCK_DESCRIPTOR:-176 dnsresolver: [android.net.IDnsResolver]}" ;;
+ call)
+  printf '%s\\n' "$*" >>"$TEST_DIR/service-calls"
+  case "$3" in
+   16777215) printf "Result: Parcel( 00000000 %s '........')\\n" "${MOCK_RESOLVER_VERSION:-0000000f}" ;;
+   11) printf "Result: Parcel(00000000 '....')\\n" ;;
+   *) exit 1 ;;
+  esac ;;
+esac
+''')
+  (self.dir/'bin/service').chmod(0o755)
+  (self.dir/'bin/dumpsys').write_text('#!/bin/sh\nprintf "NetId: 102\\nNetId: 101\\nNetId: 102\\nNetId: -1\\nNetId: invalid\\nNetId: 999999\\n"\n')
+  (self.dir/'bin/dumpsys').chmod(0o755)
  def test_reserved_table_and_native_uid_refused_before_mutation(self):
   for table in ('0','52','253','254','255','999','garbage'):
    self.config(ROUTE_TABLE=table);self.run_script('foxytail.route','apply',ok=False)
@@ -165,13 +182,79 @@ jqr() { jq "$@"; }
   for chains in ({'OUTPUT':[['-p','udp','--dport','53','-j','ACCEPT']]},{'OUTPUT':[],'ORPHAN':[['-p','udp','--dport','53','-j','REDIRECT']]},{'OUTPUT':[['-j','FOXY_DNS']],'FOXY_DNS':[['-p','udp','--dport','53','-j','REDIRECT']]}):
    s=self.read();s['chains']={'iptables:nat':chains};self.write(s);self.run_script('foxytail.compat','check-dns-hijack')
 
+ def test_installed_proxy_is_inventory_until_dns_conflict_exists(self):
+  pm=self.dir/'bin/pm';pm.write_text('#!/bin/sh\necho package:com.follow.clash\n');pm.chmod(0o755)
+  data=json.loads(self.run_script('foxytail.compat','probe').stdout)
+  self.assertEqual(data['apps'],[{'package':'com.follow.clash','kind':'proxy'}]);self.assertEqual(data['warnings'],[])
+  s=self.read();s['chains']['iptables:nat']['OUTPUT']=[['-p','udp','--dport','53','-j','REDIRECT','--to-ports','5353']];self.write(s)
+  data=json.loads(self.run_script('foxytail.compat','probe').stdout)
+  self.assertEqual(len(data['warnings']),1);self.assertIn('port 53',data['warnings'][0])
+
+ def test_dns_cache_flush_requires_verified_interface_and_targets_existing_networks(self):
+  self.setup_binder()
+  dns=(ROOT/'tailscale/scripts/foxytail.dns').read_text()
+  flush=dns[dns.index('flush_android_dns_cache() {'):dns.index('\ndns_start() {')]
+  runner=self.dir/'flush.sh';runner.write_text('. "$TEST_DIR/settings.sh"\n'+flush+'\nflush_android_dns_cache\n')
+  def run():return subprocess.run(['sh',str(runner)],env=self.env,text=True,capture_output=True)
+  calls=self.dir/'service-calls'
+  for version in ('00000004','0000000f'):
+   self.env['MOCK_RESOLVER_VERSION']=version;calls.write_text('')
+   self.assertEqual(run().returncode,0)
+   self.assertEqual(calls.read_text().splitlines(),['call dnsresolver 16777215','call dnsresolver 11 i32 101','call dnsresolver 11 i32 102'])
+   self.assertEqual((self.dir/'run/dnsmasq.cache-status').read_text().strip(),'flushed:2')
+  for version in ('00000003','00000010','invalid'):
+   self.env['MOCK_RESOLVER_VERSION']=version;calls.write_text('')
+   self.assertNotEqual(run().returncode,0)
+   self.assertEqual(calls.read_text().splitlines(),['call dnsresolver 16777215'])
+   self.assertIn('unsupported-version',(self.dir/'run/dnsmasq.cache-status').read_text())
+  self.env['MOCK_DESCRIPTOR']='dnsresolver: [vendor.unverified.Resolver]';calls.write_text('')
+  self.assertNotEqual(run().returncode,0);self.assertEqual(calls.read_text(),'')
+
+ def test_pinned_native_dns_is_compatible_but_other_quad100_rules_are_not(self):
+  native=['!','-d','100.100.100.100/32','!','-o','tun+','-p','udp','-m','udp','--dport','53','-j','DNAT','--to-destination','100.100.100.100:53']
+  s=self.read();s['chains']={'iptables:nat':{'OUTPUT':[native]}};self.write(s)
+  self.run_script('foxytail.compat','check-dns-hijack')
+  v6=['!','-d','fd7a:115c:a1e0::53/128','!','-o','tun+','-p','udp','-m','udp','--dport','53','-j','DNAT','--to-destination','[fd7a:115c:a1e0::53]:53']
+  s=self.read();s['chains']['ip6tables:nat']={'OUTPUT':[v6]};self.write(s)
+  self.run_script('foxytail.compat','check-dns-hijack')
+  for rule in ([x.replace('100.100.100.100:53','192.0.2.1:53') for x in native],['-p','udp','--dport','53','-j','DNAT','--to-destination','100.100.100.100:53']):
+   s=self.read();s['chains']['iptables:nat']['OUTPUT']=[rule];self.write(s)
+   self.run_script('foxytail.compat','check-dns-hijack',ok=False)
+
+ def test_dns_upstream_is_independent_of_app_scope_and_keeps_owned_routes(self):
+  for scope in ('selected','bypass'):
+   self.config(ROUTE_SCOPE=scope,UID_LIST='9999 10101',ROUTE_SUBNETS='192.0.2.0/24',IPV6='off')
+   self.run_script('foxytail.route','apply')
+   s=self.read();rules=s['chains']['iptables:mangle']['FOXY_MARK']
+   dns=[r for r in rules if '--uid-owner' in r and r[r.index('--uid-owner')+1]=='9999' and '--dport' in r]
+   self.assertEqual(len(dns),2)
+   self.assertTrue(all('100.100.100.100/32' in r and r[-1]=='0x40000000/0x40000000' for r in dns))
+   self.assertIn(['100.100.100.100/32','dev','tailscale0','proto','186'],s['routes']['-4:1052'])
+   self.assertEqual(rules[0],['-m','owner','--uid-owner','0','-j','RETURN'])
+  self.config(MAGIC_DNS='off',IPV6='off');self.run_script('foxytail.route','apply')
+  self.assertFalse(any('--dport' in r for r in self.read()['chains']['iptables:mangle']['FOXY_MARK']))
+
+ def test_dns_binary_falls_back_to_trusted_system_paths(self):
+  dns=(ROOT/'tailscale/scripts/foxytail.dns').read_text()
+  select=dns[dns.index('select_dns_binary() {'):dns.index('\nget_state() {')]
+  for parent in ('system','vendor'):(self.dir/parent).mkdir()
+  select=select.replace('/system/bin/dnsmasq',str(self.dir/'system/dnsmasq')).replace('/vendor/bin/dnsmasq',str(self.dir/'vendor/dnsmasq'))
+  runner=self.dir/'binary.sh';runner.write_text('. "$TEST_DIR/settings.sh"\n'+select+'\nselect_dns_binary || exit 1\nprintf "%s" "$DNS_BIN"\n')
+  def selected():return subprocess.run(['sh',str(runner)],env=self.env,text=True,capture_output=True)
+  self.assertNotEqual(selected().returncode,0)
+  for path in (self.dir/'vendor/dnsmasq',self.dir/'system/dnsmasq',self.dir/'bin/dnsmasq'):
+   path.write_text('#!/bin/sh\n');path.chmod(0o755)
+   self.assertEqual(selected().stdout,str(path))
+
  def test_dns_live_process_preserves_degraded_and_recovers(self):
+  self.setup_binder()
   dns=(ROOT/'tailscale/scripts/foxytail.dns').read_text()
   runner=self.dir/'dns-runner.sh'
   runner.write_text(""". "$TEST_DIR/settings.sh"
 load_conf
 DNS_CONF="$TS_RUN_DIR/dnsmasq.conf"
 DNS_STATE_FILE="$TS_RUN_DIR/dnsmasq.state"
+DNS_REASON_FILE="$TS_RUN_DIR/dnsmasq.reason"
 DNS_CONTEXT_FILE="$TS_RUN_DIR/dnsmasq.context.json"
 DNS_BIN="$TS_BIN_DIR/dnsmasq"
 DNS_LOG="$TS_RUN_DIR/dnsmasq.log"
@@ -182,7 +265,7 @@ CHAIN_DNS=FOXY_DNS
   wrapper=self.dir/'bin/foxytail.compat';wrapper.write_text('#!/bin/sh\nexec sh "$TEST_DIR/scripts/foxytail.compat" "$@"\n');wrapper.chmod(0o755)
   daemon=self.dir/'bin/dnsmasq';daemon.write_text('#!/bin/sh\ntouch "$TEST_DIR/alive"\n');daemon.chmod(0o755)
   (self.dir/'alive').touch()
-  current={'MagicDNSSuffix':'example.ts.net','CurrentTailnet':{'Name':'example','MagicDNSEnabled':True},'Self':{'ID':'device1'}}
+  current={'MagicDNSSuffix':'example.ts.net','CurrentTailnet':{'Name':'example','MagicDNSEnabled':True},'Self':{'ID':'device1','DNSName':'phone.example.ts.net.','TailscaleIPs':['100.64.0.1']},'Peer':{'peer1':{'DNSName':'Laptop.example.ts.net.','TailscaleIPs':['100.64.0.2'],'Online':True}}}
   (self.dir/'current.json').write_text(json.dumps(current))
   (self.dir/'run/dnsmasq.context.json').write_text(json.dumps({'suffix':'example.ts.net','tailnet':'example','self':'device1'},separators=(',',':'))+'\n')
   (self.dir/'run/dnsmasq.conf').write_text('port=1053\nlisten-address=::1\nserver=/example.ts.net/100.100.100.100\n')
@@ -195,9 +278,34 @@ CHAIN_DNS=FOXY_DNS
   run('dns_start');self.assertEqual(json.loads(run('dns_status','--json'))['state'],'degraded')
   state=self.read();state['chains']['ip6tables:mangle']['OUTPUT']=[];self.write(state)
   run('dns_start');self.assertEqual(json.loads(run('dns_status','--json'))['state'],'running')
+  # A pinned native DNAT rule stays installed, behind the local resolver.
+  native=['!','-o','tun+','!','-d','100.100.100.100','-p','udp','--dport','53','-j','DNAT','--to-destination','100.100.100.100:53']
+  state=self.read();state['chains']['iptables:nat']['OUTPUT'].insert(0,native);self.write(state)
+  run('dns_start');status=json.loads(run('dns_status','--json'))
+  self.assertEqual(status['state'],'running');self.assertTrue(status['upstreamNative'])
+  self.assertEqual(self.read()['chains']['iptables:nat']['OUTPUT'],[['-j','FOXY_DNS'],native])
+  calls=self.dir/'service-calls';before=calls.read_text()
+  run('dns_start');self.assertEqual(calls.read_text(),before)
+  conf=(self.dir/'run/dnsmasq.conf').read_text()
+  self.assertIn('address=/laptop/100.64.0.2',conf);self.assertIn('address=/phone/100.64.0.1',conf)
+  self.assertNotIn('addn-hosts=',conf)
+  # Online/traffic fluctuations are excluded from the DNS context. Name and
+  # address changes are detected and reconciled by the watchdog status check.
+  current['Peer']['peer1']['Online']=False;current['Peer']['peer1']['RxBytes']=100
+  (self.dir/'current.json').write_text(json.dumps(current))
+  self.assertEqual(json.loads(run('dns_status','--json'))['state'],'running')
+  current['Peer']['peer1']['TailscaleIPs']=['100.64.0.3']
+  (self.dir/'current.json').write_text(json.dumps(current))
+  self.assertEqual(json.loads(run('dns_status','--json'))['state'],'degraded')
+  run('dns_start');self.assertIn('address=/laptop/100.64.0.3',(self.dir/'run/dnsmasq.conf').read_text())
+  self.assertEqual(calls.read_text()[len(before):].splitlines(),['call dnsresolver 16777215','call dnsresolver 11 i32 101','call dnsresolver 11 i32 102'])
   state=self.read()
   for cmd in ('iptables','ip6tables'):
    rules=state['chains'][cmd+':nat']['FOXY_DNS'];self.assertTrue(any('tcp' in r for r in rules));self.assertTrue(any('udp' in r for r in rules))
+   exemptions=[i for i,r in enumerate(rules) if r[-1]=='ACCEPT']
+   redirects=[i for i,r in enumerate(rules) if 'REDIRECT' in r]
+   self.assertEqual(len(exemptions),4);self.assertLess(max(exemptions),min(redirects))
+   self.assertFalse(any(r[-1]=='RETURN' for r in rules))
   state['chains']['iptables:nat']['OUTPUT']=[];self.write(state)
   self.assertEqual(json.loads(run('dns_status','--json'))['state'],'degraded')
   run('dns_start');self.assertEqual(json.loads(run('dns_status','--json'))['state'],'running')
@@ -213,6 +321,8 @@ CHAIN_DNS=FOXY_DNS
   self.env['FAIL_STOP']='1';run('dns_stop',ok=False)
   self.assertEqual(json.loads(run('dns_status','--json'))['state'],'degraded')
   self.env.pop('FAIL_STOP');run('dns_stop');self.assertEqual(json.loads(run('dns_status','--json'))['state'],'stopped')
+  self.assertEqual(json.loads(run('dns_status','--json'))['reason'],'apply-pending')
+  self.config(MAGIC_DNS='off');self.assertEqual(json.loads(run('dns_status','--json'))['reason'],'disabled')
 
  def test_route_lock_reclaims_stale_owner_without_parallel_entry(self):
   route=(ROOT/'tailscale/scripts/foxytail.route').read_text()

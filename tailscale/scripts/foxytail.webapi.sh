@@ -71,6 +71,7 @@
 DIR=$(dirname "$(realpath "$0")")
 # shellcheck source=../settings.sh
 . "${DIR}/../settings.sh"
+detach_from_app_cgroup || { echo '{"ok":false,"error":"cannot detach backend from the manager app freezer; no configuration lock was acquired"}'; exit 1; }
 load_conf || { printf '%s\n' '{"ok":false,"error":"invalid configuration; inspect the service log"}'; exit 1; }
 ensure_run_dirs
 
@@ -108,8 +109,9 @@ _op_recent_id() {
 # IDs older than the acceptance window can never start again. Retain live
 # operations, but collect old terminal records/tombstones at most once a minute.
 _op_gc() {
-  _og_now=$(date +%s)
-  _og_last=$(cat "${TS_RUN_DIR}/operations/.gc-last" 2>/dev/null)
+  _og_now="${1:-$(date +%s)}"
+  _og_last=
+  [ ! -f "${TS_RUN_DIR}/operations/.gc-last" ] || IFS= read -r _og_last <"${TS_RUN_DIR}/operations/.gc-last"
   case "${_og_last}" in '' | *[!0-9]*) _og_last=0 ;; esac
   [ $((_og_now - _og_last)) -ge 60 ] || return 0
   printf '%s\n' "${_og_now}" >"${TS_RUN_DIR}/operations/.gc-last"
@@ -128,8 +130,7 @@ _op_gc() {
 }
 
 _op_starttime() {
-  [ -r "/proc/$1/stat" ] || return 1
-  awk '{sub(/^.*\) /, ""); if($1!="Z") print $20}' "/proc/$1/stat" 2>/dev/null
+  _proc_starttime "$1"
 }
 
 _op_pid_alive() {
@@ -160,8 +161,8 @@ _op_finish() {
 _op_init() {
   _op_valid_id "$1" || jerr 'invalid request ID'
   _op_recent_id "$1" || jerr 'request ID has expired or is from the future'
-  mkdir -p "${TS_RUN_DIR}/operations" || jerr 'cannot create operation registry'
-  _op_gc
+  [ -d "${TS_RUN_DIR}/operations" ] || mkdir -p "${TS_RUN_DIR}/operations" || jerr 'cannot create operation registry'
+  _op_gc "${_ori_now}"
   _OP_DIR="${TS_RUN_DIR}/operations/$1"
   # mkdir claims the ID; an existing ID is either a cancellation tombstone or
   # a previous invocation. Both must prevent duplicate execution.
@@ -504,10 +505,13 @@ cmd_dns() {
     _cd_out=$("${TS_SCRIPTS_DIR}/foxytail.dns" status --json 2>/dev/null)
   fi
   if [ -n "${_cd_out}" ] && printf '%s' "${_cd_out}" | jqr -e . >/dev/null 2>&1; then
-    # Contract freeze: only the original {ok,state,suffix,port} fields.
-    printf '%s' "${_cd_out}" | jqr -c '{ok:true,state:.state,suffix:.suffix,port:.port}'
+    printf '%s' "${_cd_out}" | jqr -c '{ok:true,state:.state,suffix:.suffix,port:.port,
+      enabled:(.enabled // false),reason:(.reason // ""),binary:(.binary // null),
+      upstreamNative:(.upstreamNative // false)}'
   else
-    jqr -n -c --argjson p "${DNS_PORT}" '{ok:true,state:"stopped",suffix:"",port:$p}'
+    jqr -n -c --argjson p "${DNS_PORT}" --arg enabled "${MAGIC_DNS}" \
+      '{ok:true,state:"stopped",suffix:"",port:$p,enabled:($enabled=="on"),
+        reason:"DNS status is unavailable",binary:null,upstreamNative:false}'
   fi
 }
 
@@ -716,14 +720,12 @@ cmd_apps() {
   # dumpsys loop took minutes on devices with many apps.
   _ap_list=$(timeout 30 pm list packages -3 -U 2>/dev/null | tr -d '\r')
   if printf '%s' "${_ap_list}" | grep -q ' uid:[0-9]'; then
-    printf '%s\n' "${_ap_list}" | sed -n 's/^package:\([^ ]*\) uid:\([0-9]*\).*/\1 \2/p' |
-      while IFS=' ' read -r _ap_pkg _ap_uid; do
-        [ -n "${_ap_pkg}" ] || continue
-        # dumpsys exposes only labelRes (a resource id), never the resolved
-        # label string; without aapt the package name is the best label.
-        jqr -n -c --arg l "${_ap_pkg}" --arg p "${_ap_pkg}" --argjson u "${_ap_uid:-0}" \
-          '{label:$l,package:$p,uid:$u}'
-      done | jqr -s -c 'sort_by(.package) | {ok:true,apps:.}'
+    # One jq process for the complete package list. Spawning jq for every app
+    # made an otherwise single-binder-call path take seconds on Android.
+    printf '%s\n' "${_ap_list}" | jqr -R -s -c '
+      split("\n") | map(capture("^package:(?<package>[^ ]+) uid:(?<uid>[0-9]+)(?: .*)?$")?
+        | {label:.package,package:.package,uid:(.uid|tonumber)})
+      | sort_by(.package) | {ok:true,apps:.}'
     return 0
   fi
   # Fallback for ancient pm without -U: per-package dumpsys loop.
@@ -751,12 +753,9 @@ cmd_apps() {
 # --- routes.conf --------------------------------------------------------------
 
 cmd_routes_get() {
-  _rg_uids=$(printf '%s' "${UID_LIST}" | tr ' ' '\n' | grep -v '^$' |
-    jqr -R -s -c 'split("\n") | map(select(length > 0))')
-  _rg_subs=$(printf '%s' "${ROUTE_SUBNETS}" | tr ' ' '\n' | grep -v '^$' |
-    jqr -R -s -c 'split("\n") | map(select(length > 0))')
-  jqr -n -c --arg s "${ROUTE_SCOPE}" --argjson u "${_rg_uids}" --argjson n "${_rg_subs}" \
-    '{ok:true,scope:$s,uids:$u,subnets:$n}'
+  jqr -n -c --arg s "${ROUTE_SCOPE}" --arg u "${UID_LIST}" --arg n "${ROUTE_SUBNETS}" '
+    def words: split(" ") | map(select(length > 0));
+    {ok:true,scope:$s,uids:($u|words),subnets:($n|words)}'
 }
 
 cmd_routes_set() {
@@ -800,16 +799,13 @@ cmd_routes_set() {
 cmd_settings_get() {
   _sg_pending=false
   [ ! -f "${TS_RUN_DIR}/settings.pending" ] || _sg_pending=true
-  _conf_keys foxytail.conf | while IFS= read -r _sg_key; do
-    # Explicit cases read only schema keys, including runtime defaults.
-    case "${_sg_key}" in
-      TS_MODE) _sg_val=$TS_MODE ;; SOCKS_PORT) _sg_val=$SOCKS_PORT ;; DNS_PORT) _sg_val=$DNS_PORT ;;
-      MAGIC_DNS) _sg_val=$MAGIC_DNS ;; IPV6) _sg_val=$IPV6 ;; ROUTE_TABLE) _sg_val=$ROUTE_TABLE ;;
-      FWMARK) _sg_val=$FWMARK ;; FWMARK_MASK) _sg_val=$FWMARK_MASK ;; WATCHDOG) _sg_val=$WATCHDOG ;;
-      WATCHDOG_INTERVAL) _sg_val=$WATCHDOG_INTERVAL ;; STATS_INTERVAL) _sg_val=$STATS_INTERVAL ;; LOG_MAX_KB) _sg_val=$LOG_MAX_KB ;;
-    esac
-    jqr -n -c --arg k "${_sg_key}" --arg v "${_sg_val}" '{key:$k,value:$v}'
-  done | jqr -s -c --argjson p "${_sg_pending}" '{ok:true,settings:from_entries,restartRequired:$p}'
+  jqr -n -c --arg TS_MODE "$TS_MODE" --arg SOCKS_PORT "$SOCKS_PORT" \
+    --arg DNS_PORT "$DNS_PORT" --arg MAGIC_DNS "$MAGIC_DNS" --arg IPV6 "$IPV6" \
+    --arg ROUTE_TABLE "$ROUTE_TABLE" --arg FWMARK "$FWMARK" --arg FWMARK_MASK "$FWMARK_MASK" \
+    --arg WATCHDOG "$WATCHDOG" --arg WATCHDOG_INTERVAL "$WATCHDOG_INTERVAL" \
+    --arg STATS_INTERVAL "$STATS_INTERVAL" --arg LOG_MAX_KB "$LOG_MAX_KB" \
+    --argjson pending "${_sg_pending}" \
+    '{ok:true,settings:($ARGS.named|del(.pending)),restartRequired:$pending}'
 }
 
 cmd_settings_set() {

@@ -19,7 +19,7 @@ FoxyTail is inspired by [anasfanani/Magisk-Tailscaled](https://github.com/anasfa
 | Route scope (`all` / `selected` / `bypass`) | ✅ | selected/bypass require bridge and kernel `xt_owner` |
 | Dedicated policy routing (table 1052, fwmark `0x40000000/0x40000000`) | ✅ | main table is never touched |
 | Traffic analytics (`foxytail.stats`) | ✅ | JSONL ring buffer, 7-day retention, screen-off throttling |
-| MagicDNS split-DNS (`foxytail.dns`) | ✅ | requires a user-supplied static `dnsmasq` (see below) |
+| MagicDNS split-DNS (`foxytail.dns`) | ✅ | uses system dnsmasq or a supplied binary (see below) |
 | IPv6 dual-stack | ✅ | `IPV6=on`, symmetric ip6tables rules |
 | Coexistence probes (`foxytail.compat`) | ✅ | Clash/mihomo, AFWall+, NetGuard detection |
 | Watchdog (`foxytail.watchdog`) | ✅ | crash restart + network-change rebind |
@@ -175,7 +175,7 @@ Switch with `foxytail.service mode <mode>` (writes `TS_MODE` and restarts). Swit
 
 FoxyTail never touches other modules' chains and probes for neighbors at boot (`foxytail.compat probe` → `/data/adb/foxytail/run/compat.json`).
 
-- **Clash / mihomo / box-for-magisk**: these usually hijack DNS (redirect or TPROXY UDP/53). `foxytail.dns` runs `foxytail.compat check-dns-hijack` before installing its redirect; on conflict the redirect is skipped (dnsmasq still runs on port 1053, state `degraded`). If you run such a module, prefer `MAGIC_DNS=off`.
+- **Clash / mihomo / box-for-magisk**: these usually hijack DNS (redirect or TPROXY UDP/53). `foxytail.dns` runs `foxytail.compat check-dns-hijack` before installing its redirect; on conflict the redirect is skipped (dnsmasq still runs on port 1053, state `degraded`). Coordinate the resolvers only when an active DNS redirect conflicts; installing a proxy app alone does not disable MagicDNS.
 - **AFWall+**: firewall reloads may flush our jumps off the built-in chains. FoxyTail's rules are isolated in `FOXY_*` chains; run `foxytail.compat check` (or `foxytail.route apply`) to detect/restore tampering.
 - **NetGuard / other VPN apps**: FoxyTail does **not** use Android's VpnService, so it occupies zero VPN slots — but a VpnService app with "always-on" can still capture traffic before it reaches our routes.
 
@@ -183,7 +183,9 @@ FoxyTail never touches other modules' chains and probes for neighbors at boot (`
 
 `MAGIC_DNS=on` starts a local dnsmasq that forwards tailnet names (`.<MagicDNSSuffix>`) to `100.100.100.100` and everything else to the system resolver, listening on port 1053 with a coexistence-aware port-53 redirect.
 
-**dnsmasq is not bundled** — there is no trusted static-build source for Android. To enable MagicDNS, drop any static `dnsmasq` binary for your arch into `/data/adb/foxytail/bin/dnsmasq` (mode 0755), then `foxytail.service restart`. If the binary is missing, MagicDNS is off, or the tailnet has MagicDNS disabled, `foxytail.dns` logs a warning, records state `degraded`, and exits cleanly — nothing breaks.
+The resolver selects `/data/adb/foxytail/bin/dnsmasq`, `/system/bin/dnsmasq`, then `/vendor/bin/dnsmasq`. Devices with a compatible system binary need no download. Otherwise supply a trusted dnsmasq for your architecture (mode 0755). Set `MAGIC_DNS=on`, then apply through the WebUI restart action. Android Private DNS settings remain unchanged; strict DoT or app-level DoH may bypass local port-53 resolution.
+
+The Android tailscaled DNS redirect resolves full Tailnet names but does not apply search domains. The local resolver derives short names from the current peer table and embeds them in the main configuration, which system dnsmasq reads before dropping privileges. The watchdog reconciles changes to names, IPs and accounts. The Tunnel page DNS check distinguishes the local resolver, its enable switch and binary source, and upstream native DNS rules.
 
 ## IPv6
 
@@ -201,7 +203,7 @@ FoxyTail never touches other modules' chains and probes for neighbors at boot (`
 - QR-code login is not embedded in the WebUI — use the login URL printed by `tailscale login`.
 - SSID detection parses `dumpsys wifi` output, whose format varies across Android versions (tolerant parsing, worst case "unknown").
 - kernel routing requires `xt_owner` to exempt control processes and fails closed when unavailable. selected/bypass require bridge; UID 0 bypasses the bridge tunnel.
-- MagicDNS requires a user-supplied dnsmasq binary (above).
+- Devices without a compatible system dnsmasq still need a supplied resolver (above).
 
 ## Troubleshooting
 

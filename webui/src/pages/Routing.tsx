@@ -1,12 +1,12 @@
 /*
  * Routing — scope (all/selected/bypass), per-app checklist (apps list loads
- * on entry with skeleton + timeout; droppable on page switch), subnet editor,
+ * only when a per-app scope is selected), subnet editor,
  * apply. xt_owner probe hides per-app scope when unsupported.
  */
-import { createSignal, onCleanup, onMount, Show, type JSX } from 'solid-js';
+import { createEffect, createSignal, onCleanup, onMount, Show, type JSX } from 'solid-js';
 import { createApiScope, execRaw, hasRoot } from '../api';
 import { t } from '../i18n';
-import { status, refreshStatus } from '../state';
+import { status } from '../state';
 import { Card, KvRow, SkeletonRows, EmptyState, ErrorState } from '../components/Basics';
 import { showToast, toastApiError } from '../components/Toast';
 import { MdIcon } from '../icons';
@@ -35,11 +35,12 @@ export default function Routing(): JSX.Element {
   const [filter, setFilter] = createSignal('');
   const [newSubnet, setNewSubnet] = createSignal('');
   const [applyBusy, setApplyBusy] = createSignal(false);
+  const probeAbort = new AbortController();
+  onCleanup(() => probeAbort.abort());
 
   /* xt_owner probe: hide per-app scope when unsupported */
   onMount(() => {
-    void refreshStatus();
-    execRaw('iptables -m owner --help >/dev/null 2>&1 && echo yes || echo no')
+    execRaw('iptables -m owner --help >/dev/null 2>&1 && echo yes || echo no', 15000, probeAbort.signal)
       .then((out) => {
         setOwnerOk(String(out).includes('yes'));
       })
@@ -56,8 +57,14 @@ export default function Routing(): JSX.Element {
       setUids(info.uids || []);
       setSubnets(info.subnets || []);
     });
+  });
 
-    void loadApps();
+  let appsRequested = false;
+  createEffect(() => {
+    if (perAppSupported() && scope_() !== 'all' && !appsRequested) {
+      appsRequested = true;
+      void loadApps();
+    }
   });
 
   async function loadApps() {
@@ -153,7 +160,7 @@ export default function Routing(): JSX.Element {
         <div class="dim mt">{t(('route_scope_' + scope_() + '_hint') as 'route_scope_all_hint')}</div>
       </Card>
 
-      <Show when={perAppSupported()}>
+      <Show when={perAppSupported() && scope_() !== 'all'}>
         <Card title={t('route_apps')} icon="group">
           <TextField
             label={t('route_apps_search')}

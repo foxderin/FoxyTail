@@ -1,10 +1,10 @@
 /*
  * FoxyTail WebUI — KernelSU / MMRL root bridge + WebAPI client.
  *
- * Bridge probing order mirrors the previous hand-written build:
- * window.ksu.exec (KernelSU manager WebUI) -> window.kernelsu.exec
- * (MMRL compat) -> global exec() (MMRL direct injection). When none is
- * found `hasRoot` stays false and the UI disables root-only controls.
+ * Prefer KernelSU/MMRL spawn: their callback-based exec still executes the
+ * entire shell command synchronously inside the JavaScript interface.
+ * Legacy managers without spawn fall back to exec. Without either bridge
+ * `hasRoot` stays false and the UI disables root-only controls.
  *
  * Every call is time-boxed (the old UI had no timeout and froze on any
  * hung exec) and cancellable: cancel() settles the front-end promise
@@ -13,11 +13,12 @@
  */
 import { exec as ksuExec } from 'kernelsu';
 import { getOwner, onCleanup } from 'solid-js';
+import { afterPaint } from './schedule';
 
 declare global {
   interface Window {
-    ksu?: { exec?: unknown };
-    kernelsu?: { exec?: unknown };
+    ksu?: { exec?: unknown; spawn?: unknown };
+    kernelsu?: { exec?: unknown; spawn?: unknown };
     exec?: unknown;
   }
 }
@@ -55,6 +56,49 @@ export function quote(value: string | number): string {
 }
 
 type KsuBridgeFn = (cmd: string, options: string, cbName: string) => void;
+type KsuSpawnFn = (cmd: string, args: string, options: string, cbName: string) => void;
+
+/* Native spawn emits one data event per output line, followed by exit and
+ * (on some managers) a second error event for a nonzero exit. Install all
+ * listeners before entering Java, including the synchronous throw path. */
+function wrapKsuSpawn(bridge: { spawn?: unknown }): RawExec {
+  return (cmd) => new Promise<string>((resolve, reject) => {
+    const cbName = '__foxy_spawn_' + Math.random().toString(36).slice(2);
+    const callbacks = window as unknown as Record<string, unknown>;
+    const stdout: string[] = [];
+    const stderr: string[] = [];
+    let settled = false;
+    const finish = (errno: unknown, err?: unknown) => {
+      if (settled) return;
+      settled = true;
+      const out = stdout.join('\n');
+      const errors = stderr.join('\n');
+      stdout.length = 0;
+      stderr.length = 0;
+      // Keep a no-op receiver briefly: KernelSU posts error after exit in
+      // a separate WebView callback. Deleting immediately raises an error.
+      setTimeout(() => { delete callbacks[cbName]; }, 1000);
+      if (err === undefined && (errno == null || errno === 0)) resolve(out);
+      else reject(execFailure(errno ?? -1, out, errors ||
+        (err instanceof Error ? err.message : err == null ? '' : String(err))));
+    };
+    callbacks[cbName] = {
+      stdout: { emit: (event: string, data: unknown) => { if (!settled && event === 'data') stdout.push(String(data ?? '')); } },
+      stderr: { emit: (event: string, data: unknown) => { if (!settled && event === 'data') stderr.push(String(data ?? '')); } },
+      emit: (event: string, value: unknown) => {
+        if (event === 'exit') finish(value);
+        else if (event === 'error') finish((value as { exitCode?: unknown } | null)?.exitCode, value);
+      },
+    };
+    try {
+      // The native implementation concatenates args without shell quoting.
+      // Pass our already-quoted full command as one string and no raw args.
+      (bridge.spawn as KsuSpawnFn)(cmd, '[]', '{}', cbName);
+    } catch (err) {
+      finish(undefined, err);
+    }
+  });
+}
 
 /* KernelSU / MMRL @JavascriptInterface bridge. Both extra arguments must be
  * STRINGS — passing a JS object or function straight to Java raises
@@ -123,6 +167,8 @@ function wrapGlobalExec(
 
 function detectExec(): RawExec | null {
   try {
+    if (window.ksu && typeof window.ksu.spawn === 'function') return wrapKsuSpawn(window.ksu);
+    if (window.kernelsu && typeof window.kernelsu.spawn === 'function') return wrapKsuSpawn(window.kernelsu);
     if (window.ksu && typeof window.ksu.exec === 'function') {
       /* The kernelsu npm package targets the global `ksu` bridge directly. */
       return async (cmd) => {
@@ -204,26 +250,36 @@ function parseResult(out: string, cmd: string): ApiResult {
 let requestSequence = 0;
 const requestSession = Date.now().toString(36) + '_' + Math.random().toString(36).slice(2);
 
-export function execRaw(cmd: string, timeoutMs: number = DEFAULT_TIMEOUT_MS): Promise<string> {
+/* An abort signal drops a bounded raw read; process-owning operations must
+ * use apiCall instead so cancellation is acknowledged by the backend. */
+export function execRaw(cmd: string, timeoutMs: number = DEFAULT_TIMEOUT_MS, signal?: AbortSignal): Promise<string> {
   if (!execImpl) {
     return Promise.reject(
       new Error('no root exec bridge (open this page in KernelSU manager or MMRL)'),
     );
   }
   return new Promise<string>((resolve, reject) => {
-    const timer = setTimeout(() => {
-      reject(new Error(`exec timed out after ${Math.round(timeoutMs / 1000)}s: ${cmd.slice(0, 120)}`));
-    }, timeoutMs);
-    execImpl(cmd).then(
-      (out) => {
-        clearTimeout(timer);
-        resolve(out);
-      },
-      (err) => {
-        clearTimeout(timer);
-        reject(err instanceof Error ? err : new Error(String(err)));
-      },
-    );
+    let settled = false;
+    let unschedule: (() => void) | undefined;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const finish = (out?: string, err?: unknown) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      unschedule?.();
+      signal?.removeEventListener('abort', abort);
+      if (err !== undefined) reject(err instanceof Error ? err : new Error(String(err)));
+      else resolve(out ?? '');
+    };
+    const abort = () => finish(undefined, new Error('cancelled'));
+    if (signal?.aborted) return abort();
+    signal?.addEventListener('abort', abort, { once: true });
+    timer = setTimeout(() => finish(undefined,
+      new Error(`exec timed out after ${Math.round(timeoutMs / 1000)}s: ${cmd.slice(0, 120)}`)), timeoutMs);
+    unschedule = afterPaint(() => execImpl(cmd).then(
+      (out) => finish(out),
+      (err) => finish(undefined, err),
+    ));
   });
 }
 
@@ -250,12 +306,14 @@ export function apiCallAfter(before: Promise<ApiResult>, cmd: string, ...args: (
   let launched = false;
   let done = false;
   let timer: ReturnType<typeof setTimeout> | undefined;
+  let unschedule: (() => void) | undefined;
   let cleanup: Promise<ApiResult> | undefined;
   let resolveResult: (result: ApiResult) => void = () => undefined;
   const promise = new Promise<ApiResult>((resolve) => { resolveResult = resolve; });
   const finish = (result: ApiResult) => {
     if (done) return;
     done = true;
+    unschedule?.();
     clearTimeout(timer);
     resolveResult(result);
   };
@@ -263,6 +321,7 @@ export function apiCallAfter(before: Promise<ApiResult>, cmd: string, ...args: (
     if (cleanup) return cleanup;
     if (done) return Promise.resolve({ ok: true });
     isCancelled = true;
+    unschedule?.();
     clearTimeout(timer);
     cleanup = (launched ? cleanupBackend(requestId) : before).then((res) => {
       finish(res.ok
@@ -284,21 +343,24 @@ export function apiCallAfter(before: Promise<ApiResult>, cmd: string, ...args: (
       finish({ ok: false, error: 'no root exec bridge (open this page in KernelSU manager or MMRL)' });
       return;
     }
-    launched = true;
-    timer = setTimeout(() => {
-      isCancelled = true;
-      cleanup = cleanupBackend(requestId);
-      void cleanup.then((res) => finish({
-        ok: false,
-        error: `${cmd}: timed out after ${Math.round(timeoutMs / 1000)}s` +
-          (res.ok ? '' : '; cancellation failed: ' + (res.error || 'unknown error')),
-        cleanupFailed: !res.ok,
-      }));
-    }, timeoutMs);
-    execImpl(line).then(
-      (out) => { if (!isCancelled) finish(parseResult(out, cmd)); },
-      (err) => { if (!isCancelled) finish({ ok: false, error: String(err instanceof Error ? err.message : err) }); },
-    );
+    unschedule = afterPaint(() => {
+      if (isCancelled || done) return;
+      launched = true;
+      timer = setTimeout(() => {
+        isCancelled = true;
+        cleanup = cleanupBackend(requestId);
+        void cleanup.then((res) => finish({
+          ok: false,
+          error: `${cmd}: timed out after ${Math.round(timeoutMs / 1000)}s` +
+            (res.ok ? '' : '; cancellation failed: ' + (res.error || 'unknown error')),
+          cleanupFailed: !res.ok,
+        }));
+      }, timeoutMs);
+      execImpl(line).then(
+        (out) => { if (!isCancelled) finish(parseResult(out, cmd)); },
+        (err) => { if (!isCancelled) finish({ ok: false, error: String(err instanceof Error ? err.message : err) }); },
+      );
+    });
   }, (err) => finish({ ok: false, error: String(err) }));
 
   return { promise, requestId, get cancelled() { return isCancelled; }, cancel };
@@ -326,8 +388,9 @@ export function createApiScope(): ApiScope {
   const cancelAll = () => {
     const pending = [...calls];
     calls.clear();
-    /* Defer so route teardown stays synchronous and non-blocking. */
-    queueMicrotask(() => pending.forEach((c) => { void c.cancel(); }));
+    /* Mark queued calls cancelled before their launch microtask can run.
+     * Native cancellation itself goes through the frame-aware exec path. */
+    pending.forEach((c) => { void c.cancel(); });
   };
   if (getOwner()) onCleanup(cancelAll);
   const track = (c: ApiCall): ApiCall => {

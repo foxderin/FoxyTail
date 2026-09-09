@@ -36,7 +36,7 @@ route_validate() {
 }
 
 route_fingerprint() {
-  printf '%s\n' "${TS_MODE}|${ROUTE_SCOPE}|${UID_LIST}|${ROUTE_SUBNETS}|${IPV6}|${ROUTE_TABLE}|${FWMARK}/${FWMARK_MASK}|${ROUTE_RULE_PREF}"
+  printf '%s\n' "${TS_MODE}|${ROUTE_SCOPE}|${UID_LIST}|${ROUTE_SUBNETS}|${IPV6}|${ROUTE_TABLE}|${FWMARK}/${FWMARK_MASK}|${ROUTE_RULE_PREF}|${MAGIC_DNS}"
 }
 
 # State is data, never shell input. Bad/incomplete state cannot select a table.
@@ -186,6 +186,15 @@ apply_family() {
   "${_af_cmd}" -t filter -N "${CHAIN_STAT}" 2>/dev/null || return 1
   "${_af_cmd}" -t mangle -A "${CHAIN_MARK}" -m owner --uid-owner 0 -j RETURN || return 1
   "${_af_cmd}" -t mangle -A "${CHAIN_MARK}" -m mark ! --mark 0x0/0x1e000000 -j RETURN || return 1
+  # The local resolver must reach Quad100 even when the user's selected/bypass
+  # UID scope excludes nobody. Restrict the exception to DNS, its UID and one
+  # service address; preserve the daemon/root and Tailscale mark exemptions.
+  if [ "${TS_MODE}" = bridge ] && [ "${MAGIC_DNS}" = on ] && [ "${_af_family}" = -4 ]; then
+    for _af_proto in udp tcp; do
+      "${_af_cmd}" -t mangle -A "${CHAIN_MARK}" -m owner --uid-owner 9999 -d 100.100.100.100/32 -p "${_af_proto}" --dport 53 -j MARK --set-xmark "${FWMARK}/${FWMARK_MASK}" || return 1
+    done
+    ip -4 route add 100.100.100.100/32 dev "${TUN_IFACE}" table "${ROUTE_TABLE}" proto "${ROUTE_PROTOCOL}" || return 1
+  fi
   if [ "${ROUTE_SCOPE}" = bypass ]; then
     for _af_uid in ${UID_LIST}; do
       "${_af_cmd}" -t mangle -A "${CHAIN_MARK}" -m owner --uid-owner "${_af_uid}" -j RETURN || return 1
@@ -200,7 +209,9 @@ apply_family() {
     else
       "${_af_cmd}" -t mangle -A "${CHAIN_MARK}" -d "${_af_net}" -j MARK --set-xmark "${FWMARK}/${FWMARK_MASK}" || return 1
     fi
-    ip "${_af_family}" route add "${_af_net}" dev "${TUN_IFACE}" table "${ROUTE_TABLE}" proto "${ROUTE_PROTOCOL}" || return 1
+    if [ "${_af_net}" != 100.100.100.100/32 ] || [ "${TS_MODE}:${MAGIC_DNS}:${_af_family}" != bridge:on:-4 ]; then
+      ip "${_af_family}" route add "${_af_net}" dev "${TUN_IFACE}" table "${ROUTE_TABLE}" proto "${ROUTE_PROTOCOL}" || return 1
+    fi
   done
   # OUTPUT on the actual TUN interface counts transmitted overlay bytes only.
   # UID rules precede the terminal return and are summed over both families.

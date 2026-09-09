@@ -64,6 +64,53 @@ orange="\033[1;38;5;208m"
 
 # --- Functions ---------------------------------------------------------------
 
+# A root command launched by a manager WebView still inherits the manager's
+# app cgroup. Android freezes that cgroup when the manager is backgrounded;
+# freezing a configuration-lock owner then blocks every module operation.
+# Move only this process before it can acquire a lock. Its children inherit
+# the detached group; the manager and Android's freezer remain untouched.
+detach_from_app_cgroup() {
+  [ -r /proc/self/cgroup ] || return 0
+  IFS= read -r _dac_stat </proc/self/stat || return 1
+  _dac_pid=${_dac_stat%% *}
+  case "${_dac_pid}" in '' | *[!0-9]*) return 1 ;; esac
+  _dac_v2=0 _dac_freezer=0 _dac_cpuset=0 _dac_cpu=0
+  while IFS=: read -r _dac_id _dac_controllers _dac_path; do
+    case "${_dac_id}:${_dac_controllers}:${_dac_path}" in
+      0::/apps/* | 0::/uid_*) _dac_v2=1 ;;
+      *:freezer:/frozen | *:freezer:/frozen/*) _dac_freezer=1 ;;
+      *:cpuset:/background | *:cpuset:/background/*) _dac_cpuset=1 ;;
+      *:cpu:/background | *:cpu:/background/*) _dac_cpu=1 ;;
+    esac
+  done </proc/self/cgroup
+  if [ "${_dac_v2}" = 1 ]; then
+    if ! { [ -w /sys/fs/cgroup/cgroup.procs ] && echo "${_dac_pid}" >/sys/fs/cgroup/cgroup.procs; } 2>/dev/null; then
+      echo 'cannot detach root command from the manager app freezer' >&2; return 1
+    fi
+  fi
+  if [ "${_dac_freezer}" = 1 ]; then
+    if ! { [ -w /dev/freezer/cgroup.procs ] && echo "${_dac_pid}" >/dev/freezer/cgroup.procs; } 2>/dev/null; then
+      echo 'cannot detach root command from the manager freezer' >&2; return 1
+    fi
+  fi
+  if [ "${_dac_v2}" = 1 ] || [ "${_dac_freezer}" = 1 ]; then
+    while IFS=: read -r _dac_id _dac_controllers _dac_path; do
+      case "${_dac_id}:${_dac_controllers}:${_dac_path}" in
+        0::/apps/* | 0::/uid_* | *:freezer:/frozen | *:freezer:/frozen/*)
+          echo 'root command is still in the manager app freezer' >&2; return 1 ;;
+      esac
+    done </proc/self/cgroup
+  fi
+  # Drop inherited background CPU restrictions too. These optional moves
+  # affect only this root job and do not promote the manager to top-app.
+  if [ "${_dac_cpuset}" = 1 ] && [ -w /dev/cpuset/cgroup.procs ]; then
+    { echo "${_dac_pid}" >/dev/cpuset/cgroup.procs; } 2>/dev/null || :
+  fi
+  if [ "${_dac_cpu}" = 1 ] && [ -w /dev/cpuctl/cgroup.procs ]; then
+    { echo "${_dac_pid}" >/dev/cpuctl/cgroup.procs; } 2>/dev/null || :
+  fi
+}
+
 # Rotate <file> to <file>.bak (single backup) when it exceeds LOG_MAX_KB.
 rotate_log() (
   _rl_file="$1"
@@ -112,6 +159,15 @@ _conf_keys() {
   case "$1" in
     foxytail.conf) printf '%s\n' TS_MODE SOCKS_PORT DNS_PORT MAGIC_DNS IPV6 ROUTE_TABLE FWMARK FWMARK_MASK WATCHDOG WATCHDOG_INTERVAL STATS_INTERVAL LOG_MAX_KB ;;
     routes.conf) printf '%s\n' ROUTE_SCOPE UID_LIST ROUTE_SUBNETS ;;
+    *) return 1 ;;
+  esac
+}
+
+# Keep membership checks in the shell. load_conf runs for every WebAPI request;
+# launching grep for every record serializes dozens of processes under its lock.
+_conf_has_key() {
+  case "$1:$2" in
+    foxytail.conf:TS_MODE | foxytail.conf:SOCKS_PORT | foxytail.conf:DNS_PORT | foxytail.conf:MAGIC_DNS | foxytail.conf:IPV6 | foxytail.conf:ROUTE_TABLE | foxytail.conf:FWMARK | foxytail.conf:FWMARK_MASK | foxytail.conf:WATCHDOG | foxytail.conf:WATCHDOG_INTERVAL | foxytail.conf:STATS_INTERVAL | foxytail.conf:LOG_MAX_KB | routes.conf:ROUTE_SCOPE | routes.conf:UID_LIST | routes.conf:ROUTE_SUBNETS) return 0 ;;
     *) return 1 ;;
   esac
 }
@@ -180,7 +236,7 @@ _conf_parse_file() {
     case "${_cpf_line}" in '' | '#'*) continue ;; *=*) ;; *) echo "${_cpf_name}:${_cpf_n}: expected KEY=value" >&2; return 1 ;; esac
     _cpf_key=${_cpf_line%%=*}
     _cpf_val=${_cpf_line#*=}
-    if ! _conf_keys "${_cpf_name}" | grep -qxF -e "${_cpf_key}"; then
+    if ! _conf_has_key "${_cpf_name}" "${_cpf_key}"; then
       echo "${_cpf_name}:${_cpf_n}: unknown key" >&2; return 1
     fi
     case "${_cpf_seen}" in *" ${_cpf_key} "*) echo "${_cpf_name}:${_cpf_n}: duplicate key ${_cpf_key}" >&2; return 1 ;; esac
@@ -188,12 +244,14 @@ _conf_parse_file() {
     case "${_cpf_val}" in
       \"*\") _cpf_val=${_cpf_val#\"}; _cpf_val=${_cpf_val%\"} ;;
     esac
-    if ! _cpf_why=$(_conf_value_error "${_cpf_key}" "${_cpf_val}"); then
-      echo "${_cpf_name}:${_cpf_n}: ${_cpf_why}" >&2; return 1
+    if ! _conf_value_error "${_cpf_key}" "${_cpf_val}" >/dev/null; then
+      echo "${_cpf_name}:${_cpf_n}: invalid value for ${_cpf_key}" >&2; return 1
     fi
     # Upgrade the old unmasked low-byte mark; no shell evaluation occurs.
     case "${_cpf_key}:${_cpf_val}" in FWMARK:0xF7 | FWMARK:0xf7) _cpf_val=0x40000000 ;; esac
-    printf '%s=%s\n' "${_cpf_key}" "${_cpf_val}"
+    # Android mksh invokes external printf. Validated schema values contain no
+    # backslashes and the fixed KEY= prefix cannot be an echo option.
+    echo "${_cpf_key}=${_cpf_val}"
   done <"${_cpf_file}"
 }
 
@@ -203,10 +261,26 @@ _conf_file_error() {
 
 # Publish the owner atomically in a symlink: interruption cannot leave an empty
 # lock directory with no PID. /proc starttime also guards against PID reuse.
+_proc_starttime() {
+  [ -r "/proc/$1/stat" ] || return 1
+  IFS= read -r _pst_line <"/proc/$1/stat" 2>/dev/null || return 1
+  # comm may contain spaces and closing parentheses; fields begin after the
+  # last ') '. Starttime is field 20 after comm (field 22 in the complete stat).
+  _pst_fields=${_pst_line##*) }
+  [ "${_pst_fields}" != "${_pst_line}" ] || return 1
+  case "${_pst_fields}" in Z\ *) return 1 ;; esac
+  _pst_i=1
+  while [ "${_pst_i}" -lt 20 ]; do
+    _pst_fields=${_pst_fields#* }
+    _pst_i=$((_pst_i + 1))
+  done
+  _pst_start=${_pst_fields%% *}
+  case "${_pst_start}" in '' | *[!0-9]*) return 1 ;; esac
+  echo "${_pst_start}"
+}
+
 _conf_pid_stamp() {
-  if [ -r "/proc/$1/stat" ]; then
-    awk '{sub(/^.*\) /, ""); print $20}' "/proc/$1/stat" 2>/dev/null
-  else printf '-'; fi
+  _proc_starttime "$1" || printf '%s' '-'
 }
 
 _conf_owner_alive() {
@@ -218,7 +292,7 @@ _conf_owner_alive() {
 }
 
 conf_lock_acquire() {
-  mkdir -p "${TS_RUN_DIR}" || return 1
+  [ -d "${TS_RUN_DIR}" ] || mkdir -p "${TS_RUN_DIR}" || return 1
   _cfl_dir="${TS_RUN_DIR}/.conf-write-lock"
   _cfl_token="$$:$(_conf_pid_stamp "$$")"
   _cfl_i=0
@@ -294,7 +368,7 @@ EOF_CONF_DATA
 conf_write_key() (
   [ ! -f "${TS_DIR}/.installing" ] || { echo "upgrade in progress" >&2; exit 1; }
   _cw_file="$1" _cw_key="$2" _cw_value="$3"
-  _conf_keys "${_cw_file}" | grep -qxF -e "${_cw_key}" || { echo 'unknown configuration key' >&2; exit 1; }
+  _conf_has_key "${_cw_file}" "${_cw_key}" || { echo 'unknown configuration key' >&2; exit 1; }
   _conf_value_error "${_cw_key}" "${_cw_value}" >&2 || exit 1
   case "${_cw_key}:${_cw_value}" in FWMARK:0xF7 | FWMARK:0xf7) echo 'FWMARK must be 0x40000000' >&2; exit 1 ;; esac
   conf_lock_acquire || exit 1
@@ -322,6 +396,7 @@ conf_write_key() (
 
 # Create runtime directories (run/pids/stats) if missing.
 ensure_run_dirs() {
+  [ -d "${TS_RUN_DIR}" ] && [ -d "${TS_PID_DIR}" ] && [ -d "${TS_STATS_DIR}" ] && return 0
   mkdir -p "${TS_RUN_DIR}" "${TS_PID_DIR}" "${TS_STATS_DIR}"
 }
 

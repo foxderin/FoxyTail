@@ -57,6 +57,7 @@ export function mountApp(target: HTMLElement): void {
   initTheme();
   const route = createRouter();
   render(() => <AppShell route={route} routes={ROUTES} />, target);
+  document.getElementById('boot-screen')?.remove();
 }
 
 /* Auto-boot in a real browser; the jsdom smoke harness calls mountApp

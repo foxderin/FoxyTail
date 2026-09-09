@@ -85,6 +85,55 @@ class ConfigApiTests(unittest.TestCase):
         result = self.shell('load_conf && printf "%s|%s|%s" "$FWMARK" "$UID_LIST" "$ROUTE_SUBNETS"')
         self.assertEqual(result.stdout, '0x40000000||')
 
+    def test_parser_key_membership_matches_public_schema(self):
+        self.shell('''for file in foxytail.conf routes.conf; do
+  for key in $(_conf_keys "$file"); do _conf_has_key "$file" "$key" || exit 1; done
+done
+! _conf_has_key foxytail.conf UID_LIST && ! _conf_has_key routes.conf TS_MODE &&
+! _conf_has_key other.conf TS_MODE && ! _conf_has_key foxytail.conf PATH''')
+
+    def cgroup_fixture(self, records):
+        proc = self.base / 'proc' / 'self'
+        proc.mkdir(parents=True)
+        (proc / 'stat').write_text('4321 (foxytail.webapi) S 1 2 3\n')
+        (proc / 'cgroup').write_text(records)
+        sys = self.base / 'sys' / 'fs' / 'cgroup'
+        sys.mkdir(parents=True)
+        (sys / 'cgroup.procs').touch()
+        settings = (ROOT / 'tailscale/settings.sh').read_text()
+        function = settings[settings.index('detach_from_app_cgroup() {'):settings.index('# Rotate <file>')]
+        function = function.replace('/proc/self/', str(proc) + '/').replace('/sys/fs/cgroup/', str(sys) + '/')
+        for controller in ['freezer', 'cpuset', 'cpuctl']:
+            function = function.replace('/dev/' + controller + '/', str(self.base / 'dev' / controller) + '/')
+        return function
+
+    def test_backend_moves_only_itself_out_of_app_freezer(self):
+        function = self.cgroup_fixture('0::/apps/uid_10379/pid_10154\n5:freezer:/\n')
+        # A cgroupfs write updates membership; emulate that kernel effect with
+        # a shell builtin while retaining the actual PID destination write.
+        result = self.shell(function + '''
+echo() {
+  if [ "$*" = 4321 ]; then command echo '0::/' >"$TS_DIR/proc/self/cgroup"; fi
+  command echo "$@"
+}
+detach_from_app_cgroup''')
+        self.assertEqual(result.stdout, '')
+        self.assertEqual((self.base / 'sys/fs/cgroup/cgroup.procs').read_text(), '4321\n')
+
+    def test_backend_refuses_lock_when_freezer_detach_fails(self):
+        function = self.cgroup_fixture('0::/apps/uid_10379/pid_10154\n')
+        # A writable destination that fails to move us is also rejected by the
+        # post-write membership check; never proceed to load/lock configuration.
+        result = self.shell(function + '\ndetach_from_app_cgroup && load_conf', ok=False)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('still in the manager app freezer', result.stderr)
+        self.assertFalse((self.run / '.conf-write-lock').exists())
+
+    def test_backend_keeps_existing_system_cgroup(self):
+        function = self.cgroup_fixture('0::/\n5:freezer:/\n3:cpuset:/foreground\n')
+        self.shell(function + '\ndetach_from_app_cgroup')
+        self.assertEqual((self.base / 'sys/fs/cgroup/cgroup.procs').read_text(), '')
+
     def test_schema_rejects_reserved_tables_and_invalid_subnets(self):
         for table in ['0', '52', '253', '254', '255', '999', '65536']:
             self.assertNotEqual(self.shell('_conf_value_error ROUTE_TABLE ' + table, ok=False).returncode, 0)
@@ -122,6 +171,46 @@ cmd_accounts''')
 tailscale() { echo 'permission denied by policy' >&2; return 1; }
 cmd_exitnode_clear''', ok=False)
         self.assertIn('permission denied by policy', json.loads(result.stdout)['error'])
+
+    def test_settings_and_routes_use_one_json_process_per_snapshot(self):
+        result = self.shell('''load_conf
+jqr() { printf x >>"$TS_RUN_DIR/jq-calls"; command jq "$@"; }
+cmd_settings_get
+cmd_routes_get''')
+        settings, routes = [json.loads(line) for line in result.stdout.splitlines()]
+        self.assertEqual(settings['settings']['TS_MODE'], 'bridge')
+        self.assertEqual(settings['settings']['FWMARK'], '0x40000000')
+        self.assertNotIn('pending', settings['settings'])
+        self.assertEqual(routes['scope'], 'all')
+        self.assertEqual(routes['uids'], [])
+        self.assertEqual(routes['subnets'], ['100.64.0.0/10'])
+        self.assertEqual((self.run / 'jq-calls').read_text(), 'xx')
+
+    def test_large_package_list_has_constant_json_process_count(self):
+        # Hundreds of apps must not launch hundreds of jq processes while the
+        # root bridge holds the WebView callback. Keep parsing real jq output.
+        (self.base / 'packages').write_text(''.join(
+            f'package:com.example.app{i:03d} uid:{10000 + i}\n' for i in reversed(range(300))
+        ) + 'unrelated diagnostic\n')
+        result = self.shell('''timeout() { shift; "$@"; }
+pm() { cat "$TS_DIR/packages"; }
+jqr() { printf x >>"$TS_RUN_DIR/jq-calls"; command jq "$@"; }
+cmd_apps''')
+        apps = json.loads(result.stdout)['apps']
+        self.assertEqual(len(apps), 300)
+        self.assertEqual(apps[0], {'label': 'com.example.app000', 'package': 'com.example.app000', 'uid': 10000})
+        self.assertEqual(apps[-1]['uid'], 10299)
+        self.assertEqual((self.run / 'jq-calls').read_text(), 'x')
+
+    def test_dns_status_preserves_configuration_and_native_capability(self):
+        status = {'state': 'stopped', 'suffix': '', 'port': 1053, 'enabled': False,
+                  'reason': 'Local DNS helper is disabled', 'binary': '/system/bin/dnsmasq',
+                  'upstreamNative': True}
+        dns = self.scripts / 'foxytail.dns'
+        dns.write_text('#!/bin/sh\nprintf %s ' + shlex.quote(json.dumps(status)) + '\n')
+        dns.chmod(0o755)
+        result = json.loads(self.shell('load_conf; cmd_dns').stdout)
+        self.assertEqual(result, {'ok': True, **status})
 
     def test_restore_validation_has_no_partial_writes(self):
         previous = self.snapshot()
@@ -196,6 +285,14 @@ cmd_cancel 1_old''')
         self.assertNotIn('unexpected kill', result.stderr)
         self.assertTrue(json.loads(result.stdout)['cancelled'])
 
+    def test_fast_cli_does_not_wait_for_timeout_monitor(self):
+        start = time.monotonic()
+        result = self.shell('''_op_starttime() { kill -0 "$1" 2>/dev/null && printf 100; }
+_op_exec 3 sh -c 'printf ready; exit 7' ''', ok=False)
+        self.assertEqual(result.stdout, 'ready')
+        self.assertEqual(result.returncode, 7)
+        self.assertLess(time.monotonic() - start, 1.5, 'completed CLI waited for its timeout monitor')
+
     def test_cancellation_stops_only_registered_child(self):
         request_id = str(int(time.time())) + '_live'
         # The host may lack /proc; substitute only the starttime reader. Kill
@@ -230,6 +327,20 @@ cmd_cancel 1_old''')
         function = function.replace('/proc/', str(proc) + '/')
         result = self.shell(function + '\npids_of() { printf \'101 102\'; }\nreadlink() { printf \'%s\' "$TS_BIN_DIR/tailscaled"; }\npids_of_path "$TS_BIN_DIR/tailscaled"')
         self.assertEqual(result.stdout.strip(), '101')
+
+    def test_process_identity_handles_spaces_and_parentheses(self):
+        proc = self.base / 'proc'
+        (proc / '101').mkdir(parents=True)
+        settings = (ROOT / 'tailscale/settings.sh').read_text()
+        function = settings[settings.index('_proc_starttime() {'):settings.index('_conf_pid_stamp() {')]
+        function = function.replace('/proc/', str(proc) + '/')
+        # Fields after comm are state then 18 numeric fields before starttime.
+        rest = ' '.join(['S'] + ['0'] * 18 + ['123456', '999'])
+        (proc / '101' / 'stat').write_text('101 (tailscale (worker) name) ' + rest + '\n')
+        result = self.shell(function + '\n_proc_starttime 101')
+        self.assertEqual(result.stdout.strip(), '123456')
+        (proc / '101' / 'stat').write_text('101 (tailscaled) ' + rest.replace('S ', 'Z ', 1) + '\n')
+        self.assertNotEqual(self.shell(function + '\n_proc_starttime 101', ok=False).returncode, 0)
 
     def test_expired_requests_never_restart_and_gc_is_bounded(self):
         result = self.shell("_op_init 1_expired status", ok=False)

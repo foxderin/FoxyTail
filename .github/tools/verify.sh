@@ -17,6 +17,7 @@ python3 -m unittest discover -s tests -p 'test_*.py' -v
 for file in tests/*.sh; do [ ! -f "$file" ] || bash "$file"; done
 pnpm --dir webui typecheck
 pnpm --dir webui check:i18n
+pnpm --dir webui check:theme
 pnpm --dir webui smoke
 build_dir=$(mktemp -d)
 trap 'rm -rf "$build_dir"' EXIT

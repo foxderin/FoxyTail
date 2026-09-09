@@ -7,8 +7,8 @@
 #   dist/FoxyTail-<version>-full.zip  full:  all binaries bundled
 #
 # dnsmasq is intentionally NOT packaged: there is no trusted static-build
-# source. Users can drop a static dnsmasq into /data/adb/foxytail/bin/ to
-# enable MagicDNS (see README).
+# source. Runtime prefers a supplied binary, then the system/vendor dnsmasq.
+# Devices without either can supply a trusted binary (see README).
 set -euo pipefail
 export TZ=UTC
 

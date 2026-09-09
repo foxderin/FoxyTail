@@ -19,7 +19,7 @@ FoxyTail 的灵感来自 [anasfanani/Magisk-Tailscaled](https://github.com/anasf
 | 路由范围（`all` / `selected` / `bypass`） | ✅ | selected/bypass 仅 bridge；需要内核 `xt_owner` |
 | 独立策略路由（表 1052，fwmark `0x40000000/0x40000000`） | ✅ | 绝不写 main 表 |
 | 流量分析（`foxytail.stats`） | ✅ | JSONL 环形存储 7 天，熄屏自动降频 |
-| MagicDNS 分流（`foxytail.dns`） | ✅ | 需用户自放静态 `dnsmasq`（见下文） |
+| MagicDNS 分流（`foxytail.dns`） | ✅ | 自动使用系统 dnsmasq，也支持用户自备（见下文） |
 | IPv6 双栈 | ✅ | `IPV6=on`，ip6tables 对称规则 |
 | 共存探针（`foxytail.compat`） | ✅ | 识别 Clash/mihomo、AFWall+、NetGuard |
 | 看门狗（`foxytail.watchdog`） | ✅ | 崩溃自动拉起 + 网络切换 rebind |
@@ -175,7 +175,7 @@ cellular:-:no-exit-node       # 切到蜂窝时清除出口节点
 
 FoxyTail 从不动其他模块的链，开机时自动探测邻居（`foxytail.compat probe` → `/data/adb/foxytail/run/compat.json`）。
 
-- **Clash / mihomo / box-for-magisk**：这类工具通常劫持 DNS（redirect 或 TPROXY UDP/53）。`foxytail.dns` 安装重定向前先跑 `foxytail.compat check-dns-hijack`；冲突时跳过重定向（dnsmasq 仍在 1053 端口运行，状态记为 `degraded`）。与这类模块共存时建议 `MAGIC_DNS=off`。
+- **Clash / mihomo / box-for-magisk**：这类工具通常劫持 DNS（redirect 或 TPROXY UDP/53）。`foxytail.dns` 安装重定向前先跑 `foxytail.compat check-dns-hijack`；冲突时跳过重定向（dnsmasq 仍在 1053 端口运行，状态记为 `degraded`）。只有检测到实际 DNS 重定向冲突时才需要协调两者；仅安装代理应用不会禁用 MagicDNS。
 - **AFWall+**：防火墙重载可能清掉我们在内置链上的跳转。FoxyTail 的规则隔离在 `FOXY_*` 链中；用 `foxytail.compat check` 检测、`foxytail.route apply` 恢复。
 - **NetGuard / 其他 VPN 应用**：FoxyTail **不占用** Android VpnService，零 VPN 槽位冲突——但开启「始终在线」的 VpnService 应用仍可能在我们的路由之前截获流量。
 
@@ -183,7 +183,9 @@ FoxyTail 从不动其他模块的链，开机时自动探测邻居（`foxytail.c
 
 `MAGIC_DNS=on` 启动本地 dnsmasq：把 tailnet 域名（`.<MagicDNSSuffix>`）转发到 `100.100.100.100`，其余交给系统解析器；监听 1053 端口，53 重定向为共存感知。
 
-**dnsmasq 不随模块打包**——Android 上没有可信的静态编译源。启用方法：把任意对应架构的静态 `dnsmasq` 放到 `/data/adb/foxytail/bin/dnsmasq`（权限 0755），然后 `foxytail.service restart`。若二进制缺失、MagicDNS 关闭或 tailnet 未启用 MagicDNS，`foxytail.dns` 只记录警告、状态标记为 `degraded` 并正常退出——不会影响其他功能。
+解析器按顺序选择 `/data/adb/foxytail/bin/dnsmasq`、`/system/bin/dnsmasq`、`/vendor/bin/dnsmasq`。支持系统版本的设备无需额外下载；三者均不存在时，可自备可信来源、对应架构的 dnsmasq（权限 0755）。将 `MAGIC_DNS` 设为 `on` 后通过 WebUI 重启应用。模块不会修改 Android 私人 DNS 设置；严格 DoT 或应用自己的 DoH 可能绕过本地端口 53 解析。
+
+Android 版 tailscaled 自带的 DNS 重定向支持完整 Tailnet 域名，但没有应用搜索域。本地解析器会从 Tailscale 当前节点表生成短名映射，保存在降权前读取的主配置中，以兼容系统 dnsmasq。节点名称、IP 或账户变化时，看门狗会更新映射。隧道页的“检查 DNS”可分别查看本地解析器状态、启用开关、依赖来源和上游原生 DNS 状态。
 
 ## IPv6
 
@@ -201,7 +203,7 @@ FoxyTail 从不动其他模块的链，开机时自动探测邻居（`foxytail.c
 - WebUI 未内嵌登录二维码——请使用 `tailscale login` 打印的 URL。
 - SSID 探测解析 `dumpsys wifi` 输出，各 Android 版本格式有差异（已做容错，最坏情况返回 "unknown"）。
 - 内核路由需要 `xt_owner` 以排除控制进程；缺失时拒绝应用。按 App selected/bypass 仅支持 bridge，UID 0 不进入 bridge 隧道。
-- MagicDNS 需要用户自供 dnsmasq 二进制（见上文）。
+- 没有兼容系统 dnsmasq 的设备仍需自备解析器（见上文）。
 
 ## 故障排查
 

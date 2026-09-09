@@ -90,6 +90,9 @@ const stubInternals = (w) => {
   };
 };
 const stubDom = (w) => {
+  // Keep real frame/task ordering while making frame cadence deterministic.
+  w.requestAnimationFrame = (run) => w.setTimeout(() => run(w.performance.now()), 0);
+  w.cancelAnimationFrame = (id) => w.clearTimeout(id);
   w.matchMedia = (q) => ({
     matches: false,
     media: q,
@@ -199,8 +202,32 @@ window.ksu = {
   },
 };
 
+/* Modern managers provide both APIs. exec can synchronously block for the
+ * whole command, while spawn returns before its separate output events. */
+const mockExec = window.ksu.exec.bind(window.ksu);
+let nativeExecCount = 0;
+let throwSpawn = false;
+const spawnLog = [];
+window.ksu.exec = (...args) => { nativeExecCount++; return mockExec(...args); };
+window.ksu.spawn = (cmd, args, options, callbackName) => {
+  spawnLog.push({ cmd, args, options });
+  if (throwSpawn) throw new Error('spawn-shell-unavailable');
+  const receiver = window[callbackName];
+  const resultName = callbackName + '_mock_result';
+  window[resultName] = (errno, stdout, stderr) => {
+    delete window[resultName];
+    if (stdout) stdout.split('\n').forEach((line) => receiver.stdout.emit('data', line));
+    if (stderr) stderr.split('\n').forEach((line) => receiver.stderr.emit('data', line));
+    receiver.emit('exit', errno);
+    // KernelSU also reports error after a failed exit; it must not settle
+    // a request twice or lose the stdout JSON error in favor of stderr.
+    if (errno !== 0) window.setTimeout(() => window[callbackName]?.emit('error', new Error(stderr)), 0);
+  };
+  window.setTimeout(() => mockExec(cmd, options, resultName), 0);
+};
+
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-async function flush(rounds = 6) {
+async function flush(rounds = 12) {
   for (let i = 0; i < rounds; i++) await sleep(0);
 }
 
@@ -221,6 +248,7 @@ try {
   console.error('bundle evaluation threw:', e);
   process.exit(1);
 }
+assert(execCount === 0 && spawnLog.length === 0, 'first UI renders before any native bridge invocation');
 await flush();
 
 console.log('[1] boot without root bridge is covered separately; here a mock bridge exists');
@@ -230,6 +258,7 @@ assert(window.document.querySelector('#view'), 'view outlet exists');
 
 console.log('[2] 13 routes x 3 rapid rounds');
 for (let round = 0; round < 3; round++) {
+  const beforeNavigation = execCount;
   for (const r of ROUTES) {
     nav(r);
     /* same-frame check: navigation is synchronous, skeleton is immediate */
@@ -237,6 +266,7 @@ for (let round = 0; round < 3; round++) {
     assert(view && view.childNodes.length > 0, `route ${r} (round ${round + 1}) rendered synchronously`);
   }
   await flush(3);
+  assert(execCount === beforeNavigation, 'rapid routes drop abandoned reads before launch without cancel calls (round ' + (round + 1) + '): ' + commandLog.slice(beforeNavigation).map((entry) => entry.sub || entry.cmd).join(', '));
 }
 await flush();
 
@@ -496,6 +526,79 @@ canned['settings-get'].restartRequired = false;
 window.document.querySelector('#view .banner.warn button')?.click();
 await flush();
 assert(!window.document.querySelector('#view .banner.warn'), 'restart that applies the latest revision clears the pending notice');
+
+console.log('[14] lightweight page reads and explicit DNS checks');
+assert(!commandLog.some(({ sub }) => sub === 'key-expiry'), 'Dashboard derives key expiry from the shared status snapshot');
+nav('more');
+await flush();
+const beforeTraffic = commandLog.length;
+nav('traffic');
+await flush();
+const trafficCalls = commandLog.slice(beforeTraffic);
+assert(!trafficCalls.some(({ sub }) => sub === 'apps' || sub === 'peers'), 'empty traffic skips package enumeration and peer-name queries');
+nav('routing');
+await flush();
+assert(!commandLog.slice(beforeTraffic).some(({ sub }) => sub === 'apps'), 'native TUN routing skips unsupported per-app enumeration');
+canned.dns = { ok: true, enabled: false, state: 'stopped', reason: 'disabled', upstreamNative: true, suffix: 'fox.ts.net' };
+const beforeDns = commandLog.filter(({ sub }) => sub === 'dns').length;
+nav('tunnel');
+await flush();
+assert(commandLog.filter(({ sub }) => sub === 'dns').length === beforeDns, 'DNS inspection is not an automatic page probe');
+const dnsButton = [...window.document.querySelectorAll('#view button')].find((button) => /Check DNS status|检查 DNS 状态/.test(button.textContent));
+assert(dnsButton, 'manual DNS status check is available');
+dnsButton?.click();
+await flush();
+const dnsCard = [...window.document.querySelectorAll('#view .card')].find((card) => card.textContent.includes('MagicDNS'));
+assert(dnsCard?.textContent.includes('Tailnet MagicDNS may still be enabled') || dnsCard?.textContent.includes('不代表 Tailnet MagicDNS 关闭'), 'disabled local resolver is distinguished from Tailnet MagicDNS');
+assert(dnsCard?.textContent.includes('fox.ts.net') && dnsCard?.textContent.includes('✓'), 'DNS inspection shows native routing configuration and suffix');
+
+console.log('[15] native asynchronous spawn selection, errors and shell quoting');
+assert(spawnLog.length > 0 && nativeExecCount === 0, 'modern manager uses spawn for every read, task and cancellation');
+assert(spawnLog.every((entry) => entry.args === '[]' && entry.options === '{}'), 'spawn never concatenates unquoted arguments or environment options');
+overrides['login-authkey'] = [0, '{\n  "ok": true,\n  "message": "streamed"\n}', ''];
+const hostileArgument = "alpha';$(echo unsafe)`echo unsafe`\nlast";
+const quotedCall = window.__foxy.startTask('spawn-quote', 'login-authkey', hostileArgument);
+await flush();
+assert((await quotedCall.promise).message === 'streamed', 'line-oriented stdout reconstructs complete multiline JSON');
+assert(spawnLog.some(({ cmd }) => cmd.endsWith("'alpha'\\'';$(echo unsafe)`echo unsafe`\nlast'")), 'quotes, substitutions and newlines remain within the prequoted command argument');
+delete overrides['login-authkey'];
+overrides['mode-get'] = [1, '', 'first stderr line\nsecond stderr line'];
+const stderrFailure = window.__foxy.startTask('spawn-stderr', 'mode-get');
+await flush();
+assert((await stderrFailure.promise).error === 'first stderr line\nsecond stderr line', 'stderr lines survive a nonzero streamed exit');
+delete overrides['mode-get'];
+throwSpawn = true;
+const failedSpawn = window.__foxy.startTask('spawn-error', 'mode-get');
+await flush();
+assert((await failedSpawn.promise).error.includes('spawn-shell-unavailable'), 'synchronous spawn failure settles immediately instead of waiting for timeout');
+throwSpawn = false;
+
+for (const variant of ['kernelsu-spawn', 'legacy-exec']) {
+  const isolated = new JSDOM('<!DOCTYPE html><html><body><div id="app"></div></body></html>', {
+    url: 'https://foxytail.local/', runScripts: 'dangerously', pretendToBeVisual: true, virtualConsole: vc,
+  });
+  const w = isolated.window;
+  stubDom(w);
+  let calls = 0;
+  if (variant === 'kernelsu-spawn') {
+    w.kernelsu = { spawn(cmd, args, options, name) {
+      calls++;
+      w.setTimeout(() => {
+        w[name].stdout.emit('data', JSON.stringify(canned.status));
+        w[name].emit('exit', 0);
+      }, 0);
+    } };
+  } else {
+    w.ksu = { exec(cmd, options, name) {
+      calls++;
+      w.setTimeout(() => w[name](0, JSON.stringify(canned.status), ''), 0);
+    } };
+  }
+  w.eval(bundle);
+  await flush();
+  assert(calls > 0 && !w.document.querySelector('.root-banner'), variant + ' bridge remains supported');
+  isolated.window.close();
+}
 
 if (failures.length) {
   console.error('\nSMOKE FAILURES:');

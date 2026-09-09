@@ -81,28 +81,38 @@ export default function Traffic(): JSX.Element {
   }
 
   async function loadTopn() {
-    const [res, peersRes] = await Promise.all([scope.api('traffic', 'topn', 10), scope.api('peers')]);
-    if (res.cancelled || peersRes.cancelled) return;
-    const names: Record<string, string> = {};
-    if (peersRes.ok) ((peersRes.peers as Peer[]) || []).forEach((p) => (names[p.id] = p.hostname));
+    const res = await scope.api('traffic', 'topn', 10);
+    if (res.cancelled) return;
     if (!res.ok || !Array.isArray(res.topn) || !(res.topn as TopEntry[]).length) {
       setTopn([]);
       return;
     }
+    // Render counters immediately; name lookup can complete independently.
+    setTopn((res.topn as TopEntry[]).map((r) => ({ entry: r, name: r.id })));
+    const peersRes = await scope.api('peers');
+    if (peersRes.cancelled) return;
+    const names: Record<string, string> = {};
+    if (peersRes.ok) ((peersRes.peers as Peer[]) || []).forEach((p) => (names[p.id] = p.hostname));
     setTopn((res.topn as TopEntry[]).map((r) => ({ entry: r, name: names[r.id] || r.id })));
   }
 
   async function loadUids() {
-    const [res, appsRes] = await Promise.all([scope.api('traffic-uids'), scope.api('apps')]);
-    if (res.cancelled || appsRes.cancelled) return;
-    const labels: Record<string, string> = {};
-    if (appsRes.ok) ((appsRes.apps as AppInfo[]) || []).forEach((a) => (labels[String(a.uid)] = a.label));
+    const res = await scope.api('traffic-uids');
+    if (res.cancelled) return;
     if (!res.ok || !Array.isArray(res.uids) || !(res.uids as UidEntry[]).length) {
       setUidRows([]);
       return;
     }
+    const rows = (res.uids as UidEntry[]).slice(0, 50);
+    setUidRows(rows.map((u) => ({ label: t('traffic_uid') + u.uid, uid: u.uid, tx: u.tx })));
+    // Package manager enumeration is expensive on phones with many apps.
+    // Skip it entirely when there are no UID counters to label.
+    const appsRes = await scope.api('apps');
+    if (appsRes.cancelled) return;
+    const labels: Record<string, string> = {};
+    if (appsRes.ok) ((appsRes.apps as AppInfo[]) || []).forEach((a) => (labels[String(a.uid)] = a.label));
     setUidRows(
-      (res.uids as UidEntry[]).slice(0, 50).map((u) => ({
+      rows.map((u) => ({
         label: labels[String(u.uid)] || t('traffic_uid') + u.uid,
         uid: u.uid,
         tx: u.tx,

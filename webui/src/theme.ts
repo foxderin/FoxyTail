@@ -1,15 +1,12 @@
 /*
  * FoxyTail WebUI — MD3 theme: full --md-sys-color-* token set derived from
- * the fox-orange seed #E0632F via material-color-utilities, with
+ * the fox-orange seed #E0632F via precomputed material-color-utilities, with
  * dark / light / auto (prefers-color-scheme) modes persisted to
  * localStorage under "foxy.theme".
  */
-import { argbFromHex, themeFromSourceColor, applyTheme as applyMcuTheme } from '@material/material-color-utilities';
+import { THEME_TOKENS } from './theme.generated';
 
 export type ThemeMode = 'dark' | 'light' | 'auto';
-
-const SEED = argbFromHex('#E0632F');
-const MCU_THEME = themeFromSourceColor(SEED);
 
 import { createSignal } from 'solid-js';
 
@@ -38,7 +35,9 @@ function resolveDark(m: ThemeMode): boolean {
 function paint(m: ThemeMode): void {
   const isDark = resolveDark(m);
   const root = document.documentElement;
-  applyMcuTheme(MCU_THEME, { target: root, dark: isDark });
+  for (const [token, value] of Object.entries(THEME_TOKENS[isDark ? 'dark' : 'light'])) {
+    root.style.setProperty(token, value);
+  }
   root.setAttribute('data-theme', m);
   root.setAttribute('data-theme-effective', isDark ? 'dark' : 'light');
   root.style.colorScheme = isDark ? 'dark' : 'light';

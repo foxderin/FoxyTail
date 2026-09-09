@@ -96,7 +96,6 @@ export default function ExitNodes(): JSX.Element {
 
   onMount(() => {
     void loadList();
-    void refreshStatus();
   });
 
   return (

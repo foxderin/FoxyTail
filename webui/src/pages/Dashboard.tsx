@@ -16,18 +16,16 @@ import { Button, Select } from '../components/ui';
 
 export default function Dashboard(): JSX.Element {
   const scope = createApiScope();
-  const [keyExpiring, setKeyExpiring] = createSignal<string | null>(null);
+  const keyExpiring = () => {
+    const date = status()?.keyExpiry;
+    return date && Date.parse(date) - Date.now() < 7 * 24 * 60 * 60 * 1000 ? date : null;
+  };
   const [compatWarnings, setCompatWarnings] = createSignal<string[]>([]);
   const [ctlBusy, setCtlBusy] = createSignal(false);
   const [modeBusy, setModeBusy] = createSignal(false);
 
   onMount(() => {
-    /* Banners are light one-shot reads. */
-    void scope.api('key-expiry').then((res) => {
-      if (!res.cancelled && res.ok && res.expiring && typeof res.date === 'string') {
-        setKeyExpiring(res.date);
-      }
-    });
+    /* Key expiry is already present in the shared status snapshot. */
     void scope.api('compat').then((res) => {
       if (res.cancelled || !res.ok) return;
       const warns: string[] = [];

@@ -38,7 +38,6 @@ probe() {
   _mods=""
   _apps=""
   _warns=""
-  _proxy_names=""
   _firewall_names=""
   _vpn_names=""
 
@@ -54,7 +53,6 @@ probe() {
       '{name:$n,path:$p,kind:$k}')
 "
     case "$_k" in
-      proxy) _proxy_names="${_proxy_names}${_n} " ;;
       firewall) _firewall_names="${_firewall_names}${_n} " ;;
       vpn) _vpn_names="${_vpn_names}${_n} " ;;
     esac
@@ -70,17 +68,15 @@ probe() {
         '{package:$p,kind:$k}')
 "
       case "$_k" in
-        proxy) _proxy_names="${_proxy_names}${_p} " ;;
         firewall) _firewall_names="${_firewall_names}${_p} " ;;
         vpn) _vpn_names="${_vpn_names}${_p} " ;;
       esac
     done
   fi
 
-  [ -n "$_proxy_names" ] && _warns="${_warns}$(jqr -n -c \
-    --arg w "Proxy tool detected: ${_proxy_names% }. Its DNS hijack may conflict with MagicDNS; consider MAGIC_DNS=off" \
-    '$w')
-"
+  # Installed proxy packages are inventory, not evidence of a running DNS
+  # conflict. Only the reachable kernel DNS redirect probe below warns about
+  # MagicDNS; an installed but inactive Clash app must not raise an alarm.
   [ -n "$_firewall_names" ] && _warns="${_warns}$(jqr -n -c \
     --arg w "Firewall tool detected: ${_firewall_names% }. Its rule reloads may wipe the FOXY_* chains; run foxytail.compat check periodically" \
     '$w')
@@ -109,7 +105,25 @@ probe() {
 check_dns_hijack_quiet() {
   for _dh_cmd in iptables ip6tables; do
     for _dh_table in nat mangle; do
-      if "${_dh_cmd}" -t "${_dh_table}" -S 2>/dev/null | awk '
+      if "${_dh_cmd}" -t "${_dh_table}" -S 2>/dev/null | awk -v table="${_dh_table}" '
+        # Exact rules emitted by the pinned Android tailscaled DNS manager
+        # are compatible with our earlier local resolver jump. Do not exempt
+        # arbitrary rules merely because they mention Quad100 or port 53.
+        function native_rule(line, ip, family) {
+          if (table != "nat") return 0
+          gsub(/ -m udp/, "", line)
+          gsub(/100\.100\.100\.100\/32/, "100.100.100.100", line)
+          gsub(/fd7a:115c:a1e0::53\/128/, "fd7a:115c:a1e0::53", line)
+          gsub(/\[fd7a:115c:a1e0::53\]:53/, "fd7a:115c:a1e0::53:53", line)
+          for (family=1; family<=2; family++) {
+            ip=(family==1 ? "100.100.100.100" : "fd7a:115c:a1e0::53")
+            if (line == "-A OUTPUT ! -d " ip " ! -o tun+ -p udp --dport 53 -j DNAT --to-destination " ip ":53" ||
+                line == "-A OUTPUT ! -o tun+ ! -d " ip " -p udp --dport 53 -j DNAT --to-destination " ip ":53" ||
+                line == "-A PREROUTING ! -i tun+ -p udp --dport 53 -j DNAT --to-destination " ip ":53") return 1
+          }
+          return 0
+        }
+        native_rule($0) {next}
         $1=="-A" && $2 !~ /^FOXY_/ {
           n++; source[n]=$2; dns[n]=0
           for(i=3;i<NF;i++) {
@@ -174,7 +188,7 @@ suggest() {
   if [ -n "$_names" ]; then
     _found=1
     echo "$_names" | while IFS= read -r _n; do
-      echo "Proxy tool detected (${_n}): consider MAGIC_DNS=off and avoid overlapping its fake-ip/TPROXY subnets"
+      echo "Proxy tool installed (${_n}): check-dns-hijack reports whether DNS interception is currently active; installation alone does not require disabling MagicDNS"
     done
   fi
 

@@ -3,7 +3,7 @@
  * rules (base64 round-trip), read-only tun hooks, backup / restore,
  * theme + language.
  */
-import { createSignal, onMount, Show, type JSX } from 'solid-js';
+import { createSignal, onCleanup, onMount, Show, type JSX } from 'solid-js';
 import { createApiScope, execRaw, hasRoot } from '../api';
 import { t, lang, setLang, type Lang } from '../i18n';
 import { refreshStatus } from '../state';
@@ -24,6 +24,8 @@ const HOOKS: [string, 'set_hook_up' | 'set_hook_down'][] = [
 
 export default function Settings(): JSX.Element {
   const scope = createApiScope();
+  const hookAbort = new AbortController();
+  onCleanup(() => hookAbort.abort());
   const [settings, setSettings] = createSignal<Record<string, string> | null>(null);
   const [settingsError, setSettingsError] = createSignal<string | null>(null);
   const [ctxRules, setCtxRules] = createSignal('');
@@ -128,7 +130,7 @@ export default function Settings(): JSX.Element {
       if (!res.cancelled && res.ok) setCtxRules((res.rules as string) || '');
     });
     HOOKS.forEach(([file, key]) => {
-      void execRaw('cat /data/adb/foxytail/scripts/' + file + ' 2>/dev/null || echo "(missing)"')
+      void execRaw('cat /data/adb/foxytail/scripts/' + file + ' 2>/dev/null || echo "(missing)"', 15000, hookAbort.signal)
         .then((out) => {
           /* the shell side marks a missing hook with "(missing)"; the
            * displayed string goes through the dictionary */
@@ -137,7 +139,9 @@ export default function Settings(): JSX.Element {
             [key]: out === '(missing)' ? t('misc_missing') : out || t('misc_empty'),
           }));
         })
-        .catch(() => setHooks((h) => ({ ...h, [key]: t('misc_unavailable') })));
+        .catch(() => {
+          if (!hookAbort.signal.aborted) setHooks((h) => ({ ...h, [key]: t('misc_unavailable') }));
+        });
     });
   });
 
