@@ -3,7 +3,7 @@
  * ported from webroot/js/charts.js drawTopology; colors from MD3 tokens.
  * Emits hit-tests through onPeerClick.
  */
-import { onCleanup, onMount, type JSX } from 'solid-js';
+import { createEffect, on, onCleanup, onMount, type JSX } from 'solid-js';
 import { token } from '../theme';
 import { t } from '../i18n';
 import type { Peer } from '../types';
@@ -123,6 +123,9 @@ export function TopologyChart(props: {
   };
 
   const onResize = () => draw();
+
+  createEffect(on(() => props.peers, draw));
+  createEffect(on(() => props.self, draw));
 
   onMount(() => {
     draw();

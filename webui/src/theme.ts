@@ -27,9 +27,8 @@ function loadSaved(): ThemeMode {
 }
 
 const [mode, setModeSignal] = createSignal<ThemeMode>(loadSaved());
-const [dark, setDark] = createSignal(true);
 
-export { mode, dark };
+export { mode };
 
 function resolveDark(m: ThemeMode): boolean {
   if (m === 'auto') return !(mql && mql.matches);
@@ -38,7 +37,6 @@ function resolveDark(m: ThemeMode): boolean {
 
 function paint(m: ThemeMode): void {
   const isDark = resolveDark(m);
-  setDark(isDark);
   const root = document.documentElement;
   applyMcuTheme(MCU_THEME, { target: root, dark: isDark });
   root.setAttribute('data-theme', m);

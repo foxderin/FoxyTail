@@ -15,6 +15,8 @@ import type { DerpRelay } from '../types';
 
 const TASK_KEY = 'derp-speedtest';
 
+let seq = 0;
+
 interface TunInfo {
   ifaceUp: boolean;
   gateway: string | null;
@@ -37,8 +39,9 @@ export default function Tunnel(): JSX.Element {
     task()?.result?.ok ? ((task()!.result!.preferred as string) ?? null) : null;
 
   async function loadTun() {
+    const my = ++seq;
     const res = await scope.api('tun');
-    if (res.cancelled) return;
+    if (res.cancelled || my !== seq) return;
     if (res.ok) {
       setTun(res as unknown as TunInfo);
       setTunError(null);
@@ -62,7 +65,7 @@ export default function Tunnel(): JSX.Element {
       );
       const ms = Date.now() - started;
       const code = String(out).trim();
-      const ok = /^[23]/.test(code) || code === '301' || code === '302' || code.length === 3;
+      const ok = /^[23]/.test(code);
       setSocksResult({
         ok,
         text:
@@ -123,7 +126,7 @@ export default function Tunnel(): JSX.Element {
         <div class="btn-row">
           <Button
             variant="tonal"
-            disabled={socksBusy() || !hasRoot || false}
+            disabled={socksBusy() || !hasRoot}
             onClick={() => void checkSocks()}
           >
             <MdIcon name="network_check" size={18} /> {t('tun_socks_check')}

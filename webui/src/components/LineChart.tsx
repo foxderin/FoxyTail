@@ -23,25 +23,30 @@ export function LineChart(props: { labels: string[]; series: ChartSeries[] }): J
   let canvas!: HTMLCanvasElement;
 
   onMount(() => {
-    const dpr = window.devicePixelRatio || 1;
-    const w = canvas.clientWidth || canvas.parentElement?.clientWidth || 320;
-    const hgt = 220;
-    canvas.width = w * dpr;
-    canvas.height = hgt * dpr;
-    canvas.style.height = hgt + 'px';
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
-    ctx.scale(dpr, dpr);
+    const hgt = 220;
+    let w = 320;
+    const padL = 46, padR = 10, padT = 12, padB = 26;
+    const ih = hgt - padT - padB;
+    let iw = w - padL - padR;
+    const labels = props.labels;
+    const series = props.series;
+    const n = labels.length;
+
+    const measure = () => {
+      const dpr = window.devicePixelRatio || 1;
+      w = canvas.clientWidth || canvas.parentElement?.clientWidth || 320;
+      iw = w - padL - padR;
+      canvas.width = w * dpr;
+      canvas.height = hgt * dpr;
+      canvas.style.height = hgt + 'px';
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    };
 
     const cFg = token('--md-sys-color-on-surface', '#e8e6f0');
     const cDim = token('--md-sys-color-on-surface-variant', '#6d6a7c');
     const cLine = token('--md-sys-color-outline-variant', '#33333f');
-
-    const padL = 46, padR = 10, padT = 12, padB = 26;
-    const iw = w - padL - padR, ih = hgt - padT - padB;
-    const labels = props.labels;
-    const series = props.series;
-    const n = labels.length;
 
     let maxV = 1;
     series.forEach((s) => s.values.forEach((v) => { if (v > maxV) maxV = v; }));
@@ -118,7 +123,14 @@ export function LineChart(props: { labels: string[]; series: ChartSeries[] }): J
         ctx.fillText(txt, Math.min(Math.max(hx, 90), w - 90), padT + 2);
       }
     };
-    paint(null);
+    const draw = () => {
+      measure();
+      paint(null);
+    };
+    draw();
+
+    const onResize = () => draw();
+    window.addEventListener('resize', onResize);
 
     /* rAF throttle: collapse a burst of pointer/touch moves into one repaint
      * per frame; clientX is captured synchronously because touch point lists
@@ -147,6 +159,7 @@ export function LineChart(props: { labels: string[]; series: ChartSeries[] }): J
       canvas.removeEventListener('pointermove', onTouch);
       canvas.removeEventListener('touchstart', onTouch);
       canvas.removeEventListener('touchmove', onTouch);
+      window.removeEventListener('resize', onResize);
     });
   });
 

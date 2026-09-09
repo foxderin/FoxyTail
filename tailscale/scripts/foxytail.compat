@@ -7,7 +7,7 @@
 #   check            verify FOXY_* iptables chains are still in place; on
 #                    tampering write $TS_RUN_DIR/compat-alert and exit 1
 #   check-dns-hijack exit 1 when someone else redirects/TProxy's port 53 in
-#                    the nat OUTPUT chain, exit 0 when the coast is clear
+#                    the nat table, exit 0 when the coast is clear
 #   suggest          plain-text coexistence recommendations based on probe
 
 DIR=$(dirname "$(realpath "$0")")
@@ -91,7 +91,7 @@ probe() {
 "
   if check_dns_hijack_quiet; then
     _warns="${_warns}$(jqr -n -c \
-      --arg w "nat OUTPUT already redirects/TPROXYs port 53; confirm the owner before enabling MagicDNS" \
+      --arg w "nat table already redirects/TPROXYs port 53; confirm the owner before enabling MagicDNS" \
       '$w')
 "
   fi
@@ -104,13 +104,17 @@ probe() {
 }
 
 # Quiet variant for internal use: 0 = hijack present, 1 = clear.
+# -S dumps every chain (built-in and user-defined) as rules, so hijacks
+# mounted via another module's chain are caught too; our own FOXY_* chains
+# are excluded. --dport 53 is the -S rendering of what -L shows as dpt:53.
 check_dns_hijack_quiet() {
-  iptables -t nat -L OUTPUT -n 2>/dev/null | grep -q 'dpt:53'
+  iptables -t nat -S 2>/dev/null |
+    grep -e '--dport 53 ' | grep -v -e '-A FOXY_' >/dev/null
 }
 
 check() {
   # Nothing to verify while tailscaled is down or in proxy mode (no chains).
-  if [ "${TS_MODE}" = "proxy" ] || ! pidof tailscaled >/dev/null 2>&1; then
+  if [ "${TS_MODE}" = "proxy" ] || [ -z "$(pids_of_path "${TS_BIN_DIR}/tailscaled")" ]; then
     rm -f "$ALERT_FILE"
     return 0
   fi
@@ -151,7 +155,7 @@ check() {
 
 check_dns_hijack() {
   if check_dns_hijack_quiet; then
-    log Warning "port 53 is already redirected/TProxied in nat OUTPUT by another tool"
+    log Warning "port 53 is already redirected/TProxied in the nat table by another tool"
     return 1
   fi
   return 0

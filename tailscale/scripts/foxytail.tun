@@ -107,7 +107,10 @@ tun_start() {
     log Success "${TUN_IFACE} is up."
   fi
 
-  run_hook up
+  if ! run_hook up; then
+    log Error "foxytail.tun.up hook failed; ${TUN_IFACE} is up but post-up setup incomplete."
+    return 1
+  fi
   return 0
 }
 

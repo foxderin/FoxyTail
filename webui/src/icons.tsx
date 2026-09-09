@@ -25,7 +25,6 @@ import playArrow from '@material-symbols/svg-400/outlined/play_arrow.svg?raw';
 import stop from '@material-symbols/svg-400/outlined/stop.svg?raw';
 import restartAlt from '@material-symbols/svg-400/outlined/restart_alt.svg?raw';
 import checkCircle from '@material-symbols/svg-400/outlined/check_circle.svg?raw';
-import check from '@material-symbols/svg-400/outlined/check.svg?raw';
 import errorIcon from '@material-symbols/svg-400/outlined/error.svg?raw';
 import warning from '@material-symbols/svg-400/outlined/warning.svg?raw';
 import info from '@material-symbols/svg-400/outlined/info.svg?raw';
@@ -95,10 +94,6 @@ const ICONS = {
 } as const;
 
 export type IconName = keyof typeof ICONS;
-
-export function iconSvg(name: IconName): string {
-  return ICONS[name];
-}
 
 export function MdIcon(props: { name: IconName; size?: number; class?: string }): JSX.Element {
   const size = () => props.size ?? 24;

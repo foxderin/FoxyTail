@@ -10,18 +10,22 @@ import { Card, KvRow, SkeletonRows, EmptyState, ErrorState } from '../components
 import { showToast, toastApiError } from '../components/Toast';
 import { MdIcon } from '../icons';
 import { Button, Checkbox, IconButton, TextField } from '../components/ui';
-import type { AppInfo } from '../types';
+import type { AppInfo, RoutesInfo } from '../types';
 
 type Scope = 'all' | 'selected' | 'bypass';
 
 function validCidr(s: string): boolean {
-  return /^(\d{1,3}\.){3}\d{1,3}\/\d{1,2}$/.test(s) || /^[0-9a-fA-F:]+\/\d{1,3}$/.test(s);
+  const v4 = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})\/(\d{1,2})$/.exec(s);
+  if (v4) return v4.slice(1, 5).every((o) => Number(o) <= 255) && Number(v4[5]) <= 32;
+  const v6 = /^[0-9a-fA-F:]+\/(\d{1,3})$/.exec(s);
+  if (v6) return Number(v6[1]) <= 128;
+  return false;
 }
 
 export default function Routing(): JSX.Element {
   const scope = createApiScope();
   const [scope_, setScope] = createSignal<Scope>('all');
-  const [uids, setUids] = createSignal<number[]>([]);
+  const [uids, setUids] = createSignal<string[]>([]);
   const [subnets, setSubnets] = createSignal<string[]>([]);
   const [ownerOk, setOwnerOk] = createSignal(true);
   const [apps, setApps] = createSignal<AppInfo[] | null>(null);
@@ -44,9 +48,10 @@ export default function Routing(): JSX.Element {
         toastApiError(t('op_failed'), res);
         return;
       }
-      setScope((res.scope as Scope) || 'all');
-      setUids((res.uids as number[]) || []);
-      setSubnets((res.subnets as string[]) || []);
+      const info = res as unknown as RoutesInfo;
+      setScope((info.scope as Scope) || 'all');
+      setUids(info.uids || []);
+      setSubnets(info.subnets || []);
     });
 
     void loadApps();
@@ -74,13 +79,11 @@ export default function Routing(): JSX.Element {
     searchTimer = setTimeout(() => setFilter(v), 300);
   }
 
-  const selStrings = () => uids().map(String);
-
   const visibleApps = () => {
     const list = apps();
     if (!list) return [];
     const f = filter().toLowerCase();
-    const sel = selStrings();
+    const sel = uids();
     const rows = list.filter(
       (a) => !f || a.label.toLowerCase().includes(f) || a.package.toLowerCase().includes(f),
     );
@@ -94,9 +97,9 @@ export default function Routing(): JSX.Element {
 
   function toggleUid(uid: number, on: boolean) {
     const s = String(uid);
-    const i = selStrings().indexOf(s);
-    if (on && i < 0) setUids([...uids(), uid]);
-    if (!on && i >= 0) setUids(uids().filter((u) => String(u) !== s));
+    const i = uids().indexOf(s);
+    if (on && i < 0) setUids([...uids(), s]);
+    if (!on && i >= 0) setUids(uids().filter((u) => u !== s));
   }
 
   function addSubnet() {
@@ -173,7 +176,7 @@ export default function Routing(): JSX.Element {
                 {visibleApps().map((a) => (
                   <label class="list-row" style={{ cursor: 'pointer' }}>
                     <Checkbox
-                      checked={selStrings().includes(String(a.uid))}
+                      checked={uids().includes(String(a.uid))}
                       onChange={(e: Event) =>
                         toggleUid(a.uid, (e.target as HTMLInputElement).checked)
                       }
@@ -221,7 +224,7 @@ export default function Routing(): JSX.Element {
 
       <Button
         style={{ width: '100%' }}
-        disabled={applyBusy() || !hasRoot || false}
+        disabled={applyBusy() || !hasRoot}
         onClick={() => void apply()}
       >
         <MdIcon name="check_circle" size={18} /> {t('apply')}

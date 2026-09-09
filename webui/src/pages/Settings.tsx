@@ -142,7 +142,10 @@ export default function Settings(): JSX.Element {
                         disabled={!hasRoot}
                         onChange={(e: Event) => {
                           const el = e.target as unknown as { selected: boolean };
-                          void saveKey(key, el.selected ? 'on' : 'off');
+                          const v = el.selected ? 'on' : 'off';
+                          void saveKey(key, v).then((ok) => {
+                            if (ok) setSettings((s) => ({ ...(s ?? {}), [key]: v }));
+                          });
                         }}
                       />
                     </div>
@@ -184,7 +187,7 @@ export default function Settings(): JSX.Element {
         <div class="btn-row">
           <Button
             variant="filled"
-            disabled={ctxBusy() || !hasRoot || false}
+            disabled={ctxBusy() || !hasRoot}
             onClick={() => void saveContext()}
           >
             <MdIcon name="check_circle" size={18} /> {t('save')}
@@ -206,7 +209,7 @@ export default function Settings(): JSX.Element {
         <div class="btn-row" style={{ 'margin-top': '0' }}>
           <Button
             variant="tonal"
-            disabled={backupBusy() || !hasRoot || false}
+            disabled={backupBusy() || !hasRoot}
             onClick={() => void doBackup()}
           >
             <MdIcon name="backup" size={18} /> {t('set_backup')}
@@ -221,7 +224,7 @@ export default function Settings(): JSX.Element {
         <div class="btn-row">
           <Button
             variant="outlined"
-            disabled={!restorePath().trim() || !hasRoot || false}
+            disabled={!restorePath().trim() || !hasRoot}
             onClick={() => void doRestore()}
           >
             <MdIcon name="refresh" size={18} /> {t('set_restore')}

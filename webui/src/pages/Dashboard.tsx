@@ -6,13 +6,13 @@
 import { createSignal, onMount, Show, type JSX } from 'solid-js';
 import { createApiScope, hasRoot } from '../api';
 import { t } from '../i18n';
-import { status, statusLoading, refreshStatus } from '../state';
+import { status, statusError, statusLoading, refreshStatus } from '../state';
 import { fmtUptime, fmtBytes } from '../format';
 import { Card, KvRow, StatusDot, SkeletonCard } from '../components/Basics';
 import { LoginHero } from '../components/LoginHero';
 import { showToast, toastApiError } from '../components/Toast';
 import { MdIcon } from '../icons';
-import { Button, Select, Switch, TextField } from '../components/ui';
+import { Button, Select } from '../components/ui';
 
 export default function Dashboard(): JSX.Element {
   const scope = createApiScope();
@@ -63,6 +63,13 @@ export default function Dashboard(): JSX.Element {
 
   return (
     <>
+      <Show when={statusError() && status()}>
+        <div class="banner warn">
+          <MdIcon name="warning" size={18} />
+          <span>{t('dash_status_stale')}</span>
+        </div>
+      </Show>
+
       <LoginHero />
 
       <Show when={keyExpiring()}>
@@ -109,7 +116,7 @@ export default function Dashboard(): JSX.Element {
                     <Select
                       label={t('dash_mode')}
                       value={s().mode}
-                      disabled={modeBusy() || !hasRoot || false}
+                      disabled={modeBusy() || !hasRoot}
                       onChange={(e: Event) => {
                         const v = (e.target as HTMLSelectElement).value;
                         if (v && v !== s().mode) void switchMode(v);
@@ -133,21 +140,21 @@ export default function Dashboard(): JSX.Element {
                 <div class="btn-row" style={{ 'margin-top': '0' }}>
                   <Button
                     variant="filled"
-                    disabled={running() || ctlBusy() || !hasRoot || false}
+                    disabled={running() || ctlBusy() || !hasRoot}
                     onClick={() => void ctl('start')}
                   >
                     <MdIcon name="play_arrow" size={18} /> {t('dash_start')}
                   </Button>
                   <Button
                     variant="tonal"
-                    disabled={!running() || ctlBusy() || !hasRoot || false}
+                    disabled={!running() || ctlBusy() || !hasRoot}
                     onClick={() => void ctl('stop')}
                   >
                     <MdIcon name="stop" size={18} /> {t('dash_stop')}
                   </Button>
                   <Button
                     variant="outlined"
-                    disabled={!running() || ctlBusy() || !hasRoot || false}
+                    disabled={!running() || ctlBusy() || !hasRoot}
                     onClick={() => void ctl('restart')}
                   >
                     <MdIcon name="restart_alt" size={18} /> {t('dash_restart')}
@@ -195,6 +202,3 @@ export default function Dashboard(): JSX.Element {
     </>
   );
 }
-
-// Remove unused TextArea placeholder import; UI kit TextField handles rows.
-function TextArea() { return null; }

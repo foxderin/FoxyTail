@@ -25,6 +25,7 @@ export default function Account(): JSX.Element {
   const [accounts, setAccounts] = createSignal<AccountEntry[] | null>(null);
   const [accountsDenied, setAccountsDenied] = createSignal(false);
   const [switching, setSwitching] = createSignal<string | null>(null);
+  const [loggingOut, setLoggingOut] = createSignal(false);
 
   async function doLogin(extraArgs: string[] = []) {
     if (waiting()) return;
@@ -88,8 +89,11 @@ export default function Account(): JSX.Element {
   }
 
   async function doLogout() {
+    if (loggingOut()) return;
     if (!(await confirmDialog(t('acc_logout_confirm')))) return;
+    setLoggingOut(true);
     const res = await scope.api('logout');
+    setLoggingOut(false);
     if (res.cancelled) return;
     if (res.ok) {
       showToast(t('acc_logged_out'), 'ok');
@@ -138,7 +142,7 @@ export default function Account(): JSX.Element {
           )}
         </Show>
         <div class="btn-row">
-          <Button variant="filled" disabled={waiting() || !hasRoot || false} onClick={() => void doLogin()}>
+          <Button variant="filled" disabled={waiting() || !hasRoot} onClick={() => void doLogin()}>
             <MdIcon name="login" size={18} /> {t('acc_login')}
           </Button>
         </div>
@@ -154,7 +158,7 @@ export default function Account(): JSX.Element {
         />
         <Button
           variant="tonal"
-          disabled={!authkey().trim() || authkeyBusy() || !hasRoot || false}
+          disabled={!authkey().trim() || authkeyBusy() || !hasRoot}
           onClick={() => void loginAuthkey()}
         >
           <MdIcon name="vpn_key" size={18} /> {t('acc_login_authkey')}
@@ -168,7 +172,7 @@ export default function Account(): JSX.Element {
           value={hsServer()}
           onInput={(e: InputEvent) => setHsServer((e.target as HTMLInputElement).value)}
         />
-        <Button variant="tonal" disabled={waiting() || !hasRoot || false} onClick={loginHeadscale}>
+        <Button variant="tonal" disabled={waiting() || !hasRoot} onClick={loginHeadscale}>
           <MdIcon name="login" size={18} /> {t('acc_login_server')}
         </Button>
       </Card>
@@ -191,7 +195,7 @@ export default function Account(): JSX.Element {
                 </div>
                 <Button
                   variant="outlined"
-                  disabled={a.current || switching() !== null || !hasRoot || false}
+                  disabled={a.current || switching() !== null || !hasRoot}
                   onClick={() => void switchAccount(a.name)}
                 >
                   {t('acc_switch')}
@@ -204,7 +208,7 @@ export default function Account(): JSX.Element {
           <Button
             variant="filled"
             class="danger"
-            disabled={accountsDenied() || !hasRoot || false}
+            disabled={accountsDenied() || loggingOut() || !hasRoot}
             onClick={() => void doLogout()}
           >
             <MdIcon name="logout" size={18} /> {t('acc_logout')}

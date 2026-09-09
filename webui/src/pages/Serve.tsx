@@ -25,8 +25,9 @@ function flatten(status: unknown): Mapping[] {
   if (!status || typeof status !== 'object') return out;
   const st = status as Record<string, unknown>;
   if (st.TCP && typeof st.TCP === 'object') {
-    Object.keys(st.TCP as object).forEach((port) => {
-      out.push({ proto: 'tcp', port, target: '' });
+    Object.entries(st.TCP as Record<string, unknown>).forEach(([port, handler]) => {
+      const hd = handler as { TCPForward?: string; Target?: string } | null;
+      out.push({ proto: 'tcp', port, target: hd?.TCPForward || hd?.Target || '' });
     });
   }
   if (st.Web && typeof st.Web === 'object') {
@@ -41,7 +42,7 @@ function flatten(status: unknown): Mapping[] {
           if (tg) target = path + ' → ' + tg;
         });
       }
-      out.push({ proto: hp.includes(':443') ? 'https' : 'http', port, target });
+      out.push({ proto: port === '443' ? 'https' : 'http', port, target });
     });
   }
   return out;
@@ -62,6 +63,7 @@ export default function Serve(): JSX.Element {
   const [port, setPort] = createSignal('');
   const [target, setTarget] = createSignal('');
   const [addBusy, setAddBusy] = createSignal(false);
+  const [delBusy, setDelBusy] = createSignal<string | null>(null);
 
   async function loadKind(k: Kind) {
     const res = await scope.api(k + '-list');
@@ -76,8 +78,11 @@ export default function Serve(): JSX.Element {
   }
 
   async function del(k: Kind, m: Mapping) {
+    if (delBusy() !== null) return;
     if (!(await confirmDialog(t('serve_del_confirm')))) return;
+    setDelBusy(k + '/' + m.proto + '/' + m.port);
     const res = await scope.api(k + '-del', m.proto, m.port);
+    setDelBusy(null);
     if (res.cancelled) return;
     if (res.ok) void loadKind(k);
     else toastApiError(t('op_failed'), res);
@@ -122,7 +127,7 @@ export default function Serve(): JSX.Element {
                 </div>
                 <IconButton
                   aria-label={t('delete')}
-                  disabled={!hasRoot || false}
+                  disabled={!hasRoot || delBusy() !== null}
                   onClick={() => void del(k, m)}
                 >
                   <MdIcon name="delete" size={20} />
@@ -172,7 +177,7 @@ export default function Serve(): JSX.Element {
           onInput={(e: InputEvent) => setTarget((e.target as HTMLInputElement).value)}
         />
         <Button
-          disabled={!port().trim() || !target().trim() || addBusy() || !hasRoot || false}
+          disabled={!port().trim() || !target().trim() || addBusy() || !hasRoot}
           onClick={() => void add()}
         >
           <MdIcon name="add" size={18} /> {t('serve_add')}

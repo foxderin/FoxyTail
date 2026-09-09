@@ -14,19 +14,6 @@ DIR=$(dirname "$(realpath "$0")")
 load_conf
 ensure_run_dirs
 
-case "$1" in
-  postinstall)
-    rm -rf "$TS_RUN_DIR"
-    ensure_run_dirs
-    if [ -x "${TS_SCRIPTS_DIR}/foxytail.service" ]; then
-      "${TS_SCRIPTS_DIR}/foxytail.service" restart >/dev/null 2>&1 &
-    else
-      log Warning "foxytail.service not found, skipping postinstall restart"
-    fi
-    exit 0
-    ;;
-esac
-
 run_script() {
   # run_script <script> <args...>: call a sibling script when executable.
   _rs_name="$1"
@@ -54,6 +41,32 @@ start_inotifyd() {
     log Warning "foxytail.inotify not found or not executable, skipped"
   fi
 }
+
+case "$1" in
+  postinstall)
+    # Stop the resident components first: wiping the run dir would orphan
+    # their pid files and the next start would spawn duplicates.
+    for _pi_s in foxytail.stats foxytail.watchdog foxytail.context; do
+      if [ -x "${TS_SCRIPTS_DIR}/${_pi_s}" ]; then
+        "${TS_SCRIPTS_DIR}/${_pi_s}" stop >/dev/null 2>&1
+      fi
+    done
+    rm -rf "$TS_RUN_DIR"
+    ensure_run_dirs
+    if [ -f "${TS_MOD_DIR}/disable" ]; then
+      log Info "module is disabled; skipping postinstall service restart"
+      start_inotifyd
+      exit 0
+    fi
+    if [ -x "${TS_SCRIPTS_DIR}/foxytail.service" ]; then
+      "${TS_SCRIPTS_DIR}/foxytail.service" restart >/dev/null 2>&1 &
+    else
+      log Warning "foxytail.service not found, skipping postinstall restart"
+    fi
+    start_inotifyd
+    exit 0
+    ;;
+esac
 
 module_version=$(awk -F'=' '!/^ *#/ && /version=/ { print $2 }' "$TS_MOD_PROP" 2>/dev/null)
 log Info "FoxyTail version: ${module_version}"

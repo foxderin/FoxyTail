@@ -48,7 +48,7 @@
 #   routes-set          routes-set <scope> <csv-uids|-> <csv-subnets|-> :
 #                       atomic routes.conf rewrite + reload
 #   settings-get        all foxytail.conf keys as JSON
-#   settings-set        settings-set <KEY> <value> (whitelisted keys, injection-filtered value)
+#   settings-set        settings-set <KEY> <value> (whitelisted keys, type-checked values)
 #   context-get         {rules:<raw context.conf text>}
 #   context-set         context-set <base64> (whole rules file, base64 to dodge escaping)
 #   logs                logs daemon|service [lines] -> {lines:[...]} (default 200)
@@ -58,7 +58,8 @@
 #   file-send           file-send <abs-path-under-/sdcard> <peer-hostname>
 #   file-receive        pull waiting Taildrop files into $TS_DIR/files
 #   backup              tar conf+hooks to /sdcard/Download/foxytail-backup-<ts>.tar.gz -> {ok,path}
-#   restore             restore <path-under-/sdcard> (existing conf backed up first)
+#   restore             restore <path-under-/sdcard> (existing conf backed up first;
+#                       conf validated line by line, hooks parked as <hook>.restored)
 #   key-expiry          {expiring:bool,date} from .Self.KeyExpiry
 #
 # Failure contract: {"ok":false,"error":"..."} with a non-zero exit code.
@@ -121,6 +122,17 @@ csv_to_json() {
   [ "$1" = "-" ] && { echo '[]'; return 0; }
   printf '%s' "$1" | tr ',' '\n' | sed 's/^ *//;s/ *$//' | grep -v '^$' |
     jqr -R -s -c 'split("\n") | map(select(length > 0))'
+}
+
+# jq is a strict UTF-8 parser: strip invalid bytes before raw text (log
+# tails, file names) reaches it. iconv -c keeps valid multi-byte sequences;
+# when iconv is unusable the high bytes are dropped instead.
+_sanitize_text() {
+  if printf '\377' | iconv -c -f UTF-8 -t UTF-8 >/dev/null 2>&1; then
+    iconv -c -f UTF-8 -t UTF-8
+  else
+    tr -d '\200-\377'
+  fi
 }
 
 # --- status / peers -----------------------------------------------------------
@@ -339,7 +351,22 @@ cmd_dns() {
 _login_probe() {
   [ -f "${_cl_tmp}" ] || return 1
   grep -q 'https://' "${_cl_tmp}" 2>/dev/null && return 0
-  grep -qi 'already\|success' "${_cl_tmp}" 2>/dev/null
+  grep -qi -e already -e success "${_cl_tmp}" 2>/dev/null
+}
+
+# TERM stale `tailscale login` clients that run against OUR socket. The
+# cmdline must contain the socket path, so a user's own `tailscale login`
+# and a concurrent authkey login are never touched.
+_login_kill_stale() {
+  for _lk_pid in $(pids_of 'tailscale.*login'); do
+    _lk_cmd=$(tr '\0' ' ' <"/proc/${_lk_pid}/cmdline" 2>/dev/null)
+    case "${_lk_cmd}" in
+      *"${TS_SOCKET}"*login*)
+        case "${_lk_cmd}" in *authkey*) continue ;; esac
+        kill "${_lk_pid}" 2>/dev/null
+        ;;
+    esac
+  done
 }
 
 cmd_login() {
@@ -354,7 +381,7 @@ cmd_login() {
   rm -f "${_cl_tmp}"
   # Stale `tailscale login` clients from earlier attempts make the daemon
   # answer new attempts with EOF; clear them before starting a fresh one.
-  pkill -f 'tailscale.*login' 2>/dev/null
+  _login_kill_stale
   sleep 1
   # The CLI blocks until auth completes; keep it alive after we grab the URL.
   ( timeout 180 tailscale --socket="${TS_SOCKET}" login "$@" >"${_cl_tmp}" 2>&1 ) &
@@ -372,7 +399,7 @@ cmd_login() {
   rm -f "${_cl_tmp}"
   # Best-effort cleanup: a lingering `tailscale login` process is useless once
   # we have given up; kill it so the next attempt starts fresh.
-  pkill -f 'tailscale.*login' 2>/dev/null
+  _login_kill_stale
   _cl_hint=""
   # If the daemon logged a control-plane reachability error, surface it so the
   # user sees *why* the URL never arrived (common cause: proxy/DNS conflict).
@@ -526,10 +553,11 @@ cmd_traffic() {
 
 cmd_traffic_uids() {
   _tu_lines=""
-  for _tu_f in "${TS_STATS_DIR}"/????-??-??.jsonl; do
+  for _tu_f in $("${TS_SCRIPTS_DIR}/foxytail.stats" recent-files 2>/dev/null); do
     [ -f "${_tu_f}" ] || continue
-    _tu_lines="${_tu_lines}$(jqr -s -c '
-      [ .[] | select(.error == null) | .uids[]? ]
+    _tu_lines="${_tu_lines}$(jqr -R -s -c '
+      split("\n") | map(select(length > 0) | fromjson? | select(type == "object"))
+      | [ .[] | select(.error == null) | .uids[]? ]
       | group_by(.uid) | .[]
       | { uid: .[0].uid,
           rx: ([(map(.rx) | max) - (map(.rx) | min), 0] | max) }' "${_tu_f}" 2>/dev/null)
@@ -614,7 +642,13 @@ cmd_routes_set() {
 
   _rs_uid_list=$(printf '%s' "${_rs_uids}" | jqr -r 'join(" ")')
   _rs_sub_list=$(printf '%s' "${_rs_subs}" | jqr -r 'join(" ")')
-  [ -z "${_rs_sub_list}" ] && _rs_sub_list="100.64.0.0/10"
+  _rs_empty=false
+  if [ -z "${_rs_sub_list}" ]; then
+    # load_conf re-defaults an empty ROUTE_SUBNETS to the CGNAT range; a
+    # single blank survives sourcing and yields no subnet rules.
+    _rs_sub_list=" "
+    _rs_empty=true
+  fi
 
   mkdir -p "${TS_CONF_DIR}"
   _rs_tmp="${TS_CONF_DIR}/.routes.conf.$$"
@@ -630,11 +664,12 @@ cmd_routes_set() {
 
   # Best effort reload: routing only applies when the tunnel interface exists.
   _rs_note="saved"
+  [ "${_rs_empty}" = true ] && _rs_note="saved (no subnets)"
   if ip link show dev "${TUN_IFACE}" >/dev/null 2>&1; then
     if "${TS_SCRIPTS_DIR}/foxytail.route" reload >>"${TS_RUN_LOG_FILE}" 2>&1; then
-      _rs_note="saved+reloaded"
+      _rs_note="${_rs_note}+reloaded"
     else
-      _rs_note="saved but reload failed (see log)"
+      _rs_note="${_rs_note} but reload failed (see log)"
     fi
   fi
   jqr -n -c --arg n "${_rs_note}" '{ok:true,note:$n}'
@@ -650,6 +685,129 @@ _settings_keys() {
     printf '%s\n' TS_MODE SOCKS_PORT DNS_PORT MAGIC_DNS IPV6 ROUTE_TABLE FWMARK \
       WATCHDOG WATCHDOG_INTERVAL STATS_INTERVAL LOG_MAX_KB
   } | sort -u
+}
+
+# True when $1 is an integer within [$2, $3].
+_num_in_range() {
+  case "$1" in '' | *[!0-9]*) return 1 ;; esac
+  [ "$1" -ge "$2" ] && [ "$1" -le "$3" ]
+}
+
+# Per-key value domains, as documented in tailscale/conf/foxytail.conf (plus
+# the routes.conf keys managed by routes-set). Returns 0 when $2 is a legal
+# value for $1; otherwise prints the reason and returns 1.
+_conf_value_error() {
+  _cv_key="$1"
+  _cv_val="$2"
+  _cv_why=""
+  case "${_cv_key}" in
+    TS_MODE)
+      case "${_cv_val}" in
+        bridge | tun | proxy) return 0 ;;
+        *) _cv_why="expected bridge|tun|proxy" ;;
+      esac
+      ;;
+    MAGIC_DNS | IPV6 | WATCHDOG)
+      case "${_cv_val}" in
+        on | off) return 0 ;;
+        *) _cv_why="expected on|off" ;;
+      esac
+      ;;
+    ROUTE_SCOPE)
+      case "${_cv_val}" in
+        all | selected | bypass) return 0 ;;
+        *) _cv_why="expected all|selected|bypass" ;;
+      esac
+      ;;
+    SOCKS_PORT | DNS_PORT)
+      if _num_in_range "${_cv_val}" 1024 65535; then return 0; fi
+      _cv_why="expected 1024-65535"
+      ;;
+    ROUTE_TABLE)
+      if _num_in_range "${_cv_val}" 1 65535; then return 0; fi
+      _cv_why="expected 1-65535"
+      ;;
+    WATCHDOG_INTERVAL)
+      if _num_in_range "${_cv_val}" 5 300; then return 0; fi
+      _cv_why="expected 5-300"
+      ;;
+    STATS_INTERVAL)
+      if _num_in_range "${_cv_val}" 10 3600; then return 0; fi
+      _cv_why="expected 10-3600"
+      ;;
+    LOG_MAX_KB)
+      if _num_in_range "${_cv_val}" 64 10240; then return 0; fi
+      _cv_why="expected 64-10240"
+      ;;
+    FWMARK)
+      case "${_cv_val}" in
+        0x?* | 0X?*)
+          _cv_hex="${_cv_val#0x}"
+          _cv_hex="${_cv_hex#0X}"
+          case "${_cv_hex}" in
+            *[!0-9A-Fa-f]*) _cv_why="expected 0x-prefixed hex digits" ;;
+            *) return 0 ;;
+          esac
+          ;;
+        *) _cv_why="expected 0x-prefixed hex digits" ;;
+      esac
+      ;;
+    UID_LIST)
+      case "${_cv_val}" in
+        *[!0-9[:blank:]]*) _cv_why="expected space-separated numeric uids" ;;
+        *) return 0 ;;
+      esac
+      ;;
+    ROUTE_SUBNETS)
+      case "${_cv_val}" in
+        *[!0-9a-fA-F.:/[:blank:]]*) _cv_why="expected space-separated CIDRs" ;;
+        *) return 0 ;;
+      esac
+      ;;
+    *)
+      case "${_cv_val}" in
+        *[!A-Za-z0-9._:/@-]*) _cv_why="value has characters outside the safe set" ;;
+        *) return 0 ;;
+      esac
+      ;;
+  esac
+  echo "${_cv_why}"
+  return 1
+}
+
+# Validate one conf file exactly as load_conf will source it: blank lines,
+# comments and KEY=VALUE pairs whose value sits inside the per-key domain.
+# Prints "<file>:<line>: <reason>" for the first bad line; returns 0 when
+# the whole file is safe to source.
+_conf_file_error() {
+  _cfe_file="$1"
+  _cfe_name=$(basename "${_cfe_file}")
+  _cfe_n=0
+  while IFS= read -r _cfe_line || [ -n "${_cfe_line}" ]; do
+    _cfe_n=$((_cfe_n + 1))
+    case "${_cfe_line}" in
+      '' | '#'*) continue ;;
+      *=*) ;;
+      *) echo "${_cfe_name}:${_cfe_n}: not a KEY=value line"; return 1 ;;
+    esac
+    _cfe_key=${_cfe_line%%=*}
+    _cfe_val=${_cfe_line#*=}
+    case "${_cfe_key}" in
+      [A-Z_] | [A-Z_][A-Z0-9_]*) ;;
+      *) echo "${_cfe_name}:${_cfe_n}: invalid key '${_cfe_key}'"; return 1 ;;
+    esac
+    case "${_cfe_val}" in
+      \"*\")
+        _cfe_val=${_cfe_val#\"}
+        _cfe_val=${_cfe_val%\"}
+        ;;
+    esac
+    if ! _cfe_why=$(_conf_value_error "${_cfe_key}" "${_cfe_val}"); then
+      echo "${_cfe_name}:${_cfe_n}: ${_cfe_why}"
+      return 1
+    fi
+  done <"${_cfe_file}"
+  return 0
 }
 
 cmd_settings_get() {
@@ -669,16 +827,15 @@ cmd_settings_set() {
   _sk="$1"
   _sv="$2"
   [ -n "${_sk}" ] || jerr "settings-set: missing key"
-  if ! _settings_keys | grep -qx "${_sk}"; then
+  case "${_sk}" in
+    *[!A-Z0-9_]* | [0-9]*) jerr "settings-set: invalid key format: ${_sk}" ;;
+  esac
+  if ! _settings_keys | grep -qxF "${_sk}"; then
     jerr "settings-set: key '${_sk}' is not allowed"
   fi
-  # Injection filter: no quotes, dollar, backslash, backtick, newline.
-  case "${_sv}" in
-    *\"* | *\'* | *\$* | *\\* | *\`* | *"$_FTNL"*) jerr "settings-set: forbidden character in value" ;;
-  esac
-  case "${_sv}" in
-    *\ * | *"$_FTTB"*) jerr "settings-set: whitespace is not allowed in values" ;;
-  esac
+  if ! _sv_why=$(_conf_value_error "${_sk}" "${_sv}"); then
+    jerr "settings-set: ${_sk}: ${_sv_why}"
+  fi
 
   _sk_conf="${TS_CONF_DIR}/foxytail.conf"
   mkdir -p "${TS_CONF_DIR}"
@@ -686,7 +843,7 @@ cmd_settings_set() {
   _sk_tmp="${TS_CONF_DIR}/.foxytail.conf.$$"
   awk -v k="${_sk}" -v v="${_sv}" '
     BEGIN { done = 0 }
-    $0 ~ "^" k "=" { print k "=" v; done = 1; next }
+    index($0, k "=") == 1 { print k "=" v; done = 1; next }
     { print }
     END { if (!done) print k "=" v }
   ' "${_sk_conf}" >"${_sk_tmp}" || { rm -f "${_sk_tmp}"; jerr "settings-set: write failed"; }
@@ -736,6 +893,7 @@ cmd_logs() {
     return 0
   fi
   tail -n "${_lg_lines}" "${_lg_file}" 2>/dev/null |
+    _sanitize_text |
     jqr -R -s -c 'split("\n") | map(select(length > 0)) | {ok:true,lines:.}'
 }
 
@@ -779,6 +937,7 @@ cmd_files_inbox() {
     _fi_mtime=$(stat -c %Y "${_fi_path}" 2>/dev/null)
     case "${_fi_size}" in '' | *[!0-9]*) _fi_size=0 ;; esac
     case "${_fi_mtime}" in '' | *[!0-9]*) _fi_mtime=0 ;; esac
+    _fi_name=$(printf '%s' "${_fi_name}" | _sanitize_text)
     jqr -n -c --arg n "${_fi_name}" --argjson s "${_fi_size}" --argjson m "${_fi_mtime}" \
       '{name:$n,size:$s,mtime:$m}'
   done | jqr -s -c 'sort_by(-.mtime) | {ok:true,files:.}'
@@ -786,9 +945,15 @@ cmd_files_inbox() {
 
 cmd_file_send() {
   [ -n "$1" ] && [ -n "$2" ] || jerr "file-send: expected <path> <peer>"
+  # /sdcard is a symlink to /storage/emulated/0 on Android: validate the raw
+  # input first, then require the resolved path to stay in shared storage.
+  case "$1" in
+    /sdcard/*) ;;
+    *) jerr "file-send: path must live under /sdcard/" ;;
+  esac
   _fs_path=$(realpath "$1" 2>/dev/null)
   case "${_fs_path}" in
-    /sdcard/*) ;;
+    /sdcard/* | /storage/emulated/*) ;;
     *) jerr "file-send: path must live under /sdcard/" ;;
   esac
   [ -f "${_fs_path}" ] || jerr "file-send: no such file: ${_fs_path}"
@@ -821,7 +986,7 @@ cmd_backup() {
   _bk_out="/sdcard/Download/foxytail-backup-${_bk_ts}.tar.gz"
   mkdir -p /sdcard/Download 2>/dev/null
   _bk_hooks=""
-  for _bk_h in foxytail.tun.up foxytail.tun.down foxytail.tun.config.yaml; do
+  for _bk_h in foxytail.tun.up foxytail.tun.down; do
     [ -f "${TS_SCRIPTS_DIR}/${_bk_h}" ] && _bk_hooks="${_bk_hooks} ${_bk_h}"
   done
   if [ -n "${_bk_hooks}" ]; then
@@ -839,15 +1004,19 @@ cmd_backup() {
 
 cmd_restore() {
   [ -n "$1" ] || jerr "restore: missing path"
+  case "$1" in
+    /sdcard/*.tar.gz) ;;
+    *) jerr "restore: path must be a .tar.gz under /sdcard/" ;;
+  esac
   _rt_path=$(realpath "$1" 2>/dev/null)
   case "${_rt_path}" in
-    /sdcard/*.tar.gz) ;;
+    /sdcard/*.tar.gz | /storage/emulated/*.tar.gz) ;;
     *) jerr "restore: path must be a .tar.gz under /sdcard/" ;;
   esac
   [ -f "${_rt_path}" ] || jerr "restore: no such file: ${_rt_path}"
   _rt_tmp=$(mktemp -d "${TS_RUN_DIR}/restore.XXXXXX" 2>/dev/null) ||
     { _rt_tmp="${TS_RUN_DIR}/restore.$$"; rm -rf "${_rt_tmp}"; mkdir -p "${_rt_tmp}"; }
-  if ! tar -xzf "${_rt_path}" -C "${_rt_tmp}" 2>/dev/null; then
+  if ! tar --no-same-owner -xzf "${_rt_path}" -C "${_rt_tmp}" 2>/dev/null; then
     rm -rf "${_rt_tmp}"
     jerr "restore: cannot unpack ${_rt_path}"
   fi
@@ -859,25 +1028,60 @@ cmd_restore() {
       [ -d "${_rt_d}conf" ] && _rt_src="${_rt_d%/}" && break
     done
   fi
-  if [ ! -d "${_rt_src}/conf" ]; then
+  if [ ! -d "${_rt_src}/conf" ] || [ -L "${_rt_src}/conf" ]; then
     rm -rf "${_rt_tmp}"
     jerr "restore: no conf/ directory inside the archive"
   fi
+  # The conf directory is sourced as root by load_conf: foxytail.conf and
+  # routes.conf must pass line-by-line validation before anything is copied.
+  for _rt_cf in foxytail.conf routes.conf; do
+    _rt_c="${_rt_src}/conf/${_rt_cf}"
+    if [ -L "${_rt_c}" ]; then
+      rm -rf "${_rt_tmp}"
+      jerr "restore: ${_rt_cf} is a symlink in the archive"
+    fi
+    if [ -f "${_rt_c}" ]; then
+      if ! _rt_why=$(_conf_file_error "${_rt_c}"); then
+        rm -rf "${_rt_tmp}"
+        jerr "restore: rejecting archive: ${_rt_why}"
+      fi
+    fi
+  done
   _rt_ts=$(date +%Y%m%d-%H%M%S)
   cp -a "${TS_CONF_DIR}" "${TS_DIR}/conf.bak-${_rt_ts}" 2>/dev/null
   mkdir -p "${TS_CONF_DIR}"
-  cp -a "${_rt_src}/conf/." "${TS_CONF_DIR}/" || {
-    rm -rf "${_rt_tmp}"
-    jerr "restore: failed to copy conf files"
-  }
+  # Plain content copies: no modes or ownership from the archive survive.
+  for _rt_f in "${_rt_src}/conf/"*; do
+    if [ -L "${_rt_f}" ]; then
+      rm -rf "${_rt_tmp}"
+      jerr "restore: refusing symlink entry ${_rt_f##*/}"
+    fi
+    [ -f "${_rt_f}" ] || continue
+    if ! cat "${_rt_f}" >"${TS_CONF_DIR}/${_rt_f##*/}"; then
+      rm -rf "${_rt_tmp}"
+      jerr "restore: failed to copy conf files"
+    fi
+  done
+  # Hooks run as root when the tunnel comes up: restored hooks are parked as
+  # non-executable <hook>.restored for review instead of going live.
+  _rt_hooks=""
   for _rt_h in foxytail.tun.up foxytail.tun.down; do
-    if [ -f "${_rt_src}/${_rt_h}" ]; then
-      cp -a "${_rt_src}/${_rt_h}" "${TS_SCRIPTS_DIR}/${_rt_h}"
-      chmod 0755 "${TS_SCRIPTS_DIR}/${_rt_h}"
+    if [ -f "${_rt_src}/${_rt_h}" ] && [ ! -L "${_rt_src}/${_rt_h}" ]; then
+      if ! cat "${_rt_src}/${_rt_h}" >"${TS_SCRIPTS_DIR}/${_rt_h}.restored"; then
+        rm -rf "${_rt_tmp}"
+        jerr "restore: failed to copy ${_rt_h}"
+      fi
+      chmod 0644 "${TS_SCRIPTS_DIR}/${_rt_h}.restored"
+      _rt_hooks="${_rt_hooks}${_rt_h}.restored "
     fi
   done
   rm -rf "${_rt_tmp}"
-  jqr -n -c --arg b "${TS_DIR}/conf.bak-${_rt_ts}" '{ok:true,previous:$b}'
+  _rt_note=""
+  if [ -n "${_rt_hooks}" ]; then
+    _rt_note="hooks parked for review: ${_rt_hooks% }; rename to enable"
+  fi
+  jqr -n -c --arg b "${TS_DIR}/conf.bak-${_rt_ts}" --arg n "${_rt_note}" \
+    '{ok:true,previous:$b,note:(if $n == "" then null else $n end)}'
 }
 
 # --- key expiry --------------------------------------------------------------------
@@ -895,11 +1099,6 @@ cmd_key_expiry() {
 }
 
 # --- dispatch -------------------------------------------------------------------
-
-# Whitespace tokens used in settings-set validation (POSIX-safe constants).
-_FTNL='
-'
-_FTTB='	'
 
 case "$1" in
   status) cmd_status ;;

@@ -41,3 +41,9 @@ export interface DerpRelay {
   code: string;
   latencyMs: number;
 }
+
+export interface RoutesInfo {
+  scope: string;
+  uids: string[];
+  subnets: string[];
+}

@@ -13,6 +13,8 @@ import { MdIcon } from '../icons';
 import { Button, Dialog, Tab, Tabs } from '../components/ui';
 import type { Peer } from '../types';
 
+let seq = 0;
+
 export default function Peers(): JSX.Element {
   const scope = createApiScope();
   const [tab, setTab] = createSignal<'list' | 'topo'>('list');
@@ -21,8 +23,9 @@ export default function Peers(): JSX.Element {
   const [detail, setDetail] = createSignal<Peer | null>(null);
 
   async function loadPeers() {
+    const my = ++seq;
     const res = await scope.api('peers');
-    if (res.cancelled) return;
+    if (res.cancelled || my !== seq) return;
     if (res.ok) {
       setPeers((res.peers as Peer[]) || []);
       setLoadError(null);
@@ -34,7 +37,7 @@ export default function Peers(): JSX.Element {
   onMount(() => {
     void loadPeers();
     const id = setInterval(() => {
-      if (!document.hidden && tab() === 'list') void loadPeers();
+      if (!document.hidden) void loadPeers();
     }, 8000);
     onCleanup(() => clearInterval(id));
   });
@@ -46,6 +49,7 @@ export default function Peers(): JSX.Element {
         onChange={(e: Event) => {
           const idx = (e.target as unknown as { activeTabIndex: number }).activeTabIndex;
           setTab(idx === 0 ? 'list' : 'topo');
+          void loadPeers();
         }}
       >
         <Tab icon="group" label={t('peers_list')} />

@@ -37,7 +37,9 @@ fi
 #    may belong to other modules, so only kill instances whose cmdline
 #    references FoxyTail paths or scripts.
 for _pid in $(pidof tailscaled 2>/dev/null); do
-  kill -TERM "$_pid" 2>/dev/null
+  if tr '\0' ' ' <"/proc/${_pid}/cmdline" 2>/dev/null | grep -qF "${TS_DIR}"; then
+    kill -TERM "$_pid" 2>/dev/null
+  fi
 done
 for _d in /proc/[0-9]*; do
   _pid=${_d#/proc/}

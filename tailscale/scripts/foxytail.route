@@ -27,6 +27,7 @@ scripts_name=$(basename "$0")
 TUN_IFACE="tailscale0"
 CHAIN_MARK="FOXY_MARK"
 CHAIN_STAT="FOXY_STAT"
+ROUTE_STATE_FILE="${TS_RUN_DIR}/route.state"
 
 iface_exists() {
   ip link show dev "${TUN_IFACE}" >/dev/null 2>&1
@@ -65,99 +66,124 @@ owner_supported() {
 }
 
 apply_marking_v4() {
+  _am_failed=""
   case "${ROUTE_SCOPE}" in
     all)
       rule_ensure iptables mangle "${CHAIN_MARK}" -j MARK --set-xmark "${FWMARK}" ||
-        log Warning "failed to add catch-all MARK rule."
+        { log Warning "failed to add catch-all MARK rule."; _am_failed=1; }
       ;;
     selected)
       if ! owner_supported; then
         log Warning "xt_owner not supported by this kernel; falling back to ROUTE_SCOPE=all semantics."
         rule_ensure iptables mangle "${CHAIN_MARK}" -j MARK --set-xmark "${FWMARK}" ||
-          log Warning "failed to add catch-all MARK rule."
-        return 0
+          { log Warning "failed to add catch-all MARK rule."; _am_failed=1; }
+      else
+        # shellcheck disable=SC2086 # intentional: UID_LIST is space-separated
+        for _am_uid in ${UID_LIST}; do
+          rule_ensure iptables mangle "${CHAIN_MARK}" -m owner --uid-owner "${_am_uid}" -j MARK --set-xmark "${FWMARK}" ||
+            { log Warning "failed to add MARK rule for UID ${_am_uid}."; _am_failed=1; }
+        done
       fi
-      # shellcheck disable=SC2086 # intentional: UID_LIST is space-separated
-      for _am_uid in ${UID_LIST}; do
-        rule_ensure iptables mangle "${CHAIN_MARK}" -m owner --uid-owner "${_am_uid}" -j MARK --set-xmark "${FWMARK}" ||
-          log Warning "failed to add MARK rule for UID ${_am_uid}."
-      done
       ;;
     bypass)
       if ! owner_supported; then
         log Warning "xt_owner not supported by this kernel; falling back to ROUTE_SCOPE=all semantics."
         rule_ensure iptables mangle "${CHAIN_MARK}" -j MARK --set-xmark "${FWMARK}" ||
-          log Warning "failed to add catch-all MARK rule."
-        return 0
+          { log Warning "failed to add catch-all MARK rule."; _am_failed=1; }
+      else
+        # Exempted UIDs RETURN first, everything else gets marked.
+        # shellcheck disable=SC2086 # intentional: UID_LIST is space-separated
+        for _am_uid in ${UID_LIST}; do
+          rule_ensure iptables mangle "${CHAIN_MARK}" -m owner --uid-owner "${_am_uid}" -j RETURN ||
+            { log Warning "failed to add bypass rule for UID ${_am_uid}."; _am_failed=1; }
+        done
+        rule_ensure iptables mangle "${CHAIN_MARK}" -j MARK --set-xmark "${FWMARK}" ||
+          { log Warning "failed to add catch-all MARK rule."; _am_failed=1; }
       fi
-      # Exempted UIDs RETURN first, everything else gets marked.
-      # shellcheck disable=SC2086 # intentional: UID_LIST is space-separated
-      for _am_uid in ${UID_LIST}; do
-        rule_ensure iptables mangle "${CHAIN_MARK}" -m owner --uid-owner "${_am_uid}" -j RETURN ||
-          log Warning "failed to add bypass rule for UID ${_am_uid}."
-      done
-      rule_ensure iptables mangle "${CHAIN_MARK}" -j MARK --set-xmark "${FWMARK}" ||
-        log Warning "failed to add catch-all MARK rule."
       ;;
     *)
       log Warning "unknown ROUTE_SCOPE=${ROUTE_SCOPE}; skipping marking rules."
+      _am_failed=1
       ;;
   esac
+  [ -z "${_am_failed}" ] || return 1
+  return 0
 }
 
 apply_marking_v6() {
   [ "${IPV6}" = "on" ] || return 0
+  _am6_failed=""
   case "${ROUTE_SCOPE}" in
     all)
       rule_ensure ip6tables mangle "${CHAIN_MARK}" -j MARK --set-xmark "${FWMARK}" ||
-        log Warning "failed to add v6 catch-all MARK rule."
+        { log Warning "failed to add v6 catch-all MARK rule."; _am6_failed=1; }
       ;;
     selected)
       if ! owner_supported; then
         log Warning "xt_owner not supported by this kernel; falling back to ROUTE_SCOPE=all semantics (IPv6)."
         rule_ensure ip6tables mangle "${CHAIN_MARK}" -j MARK --set-xmark "${FWMARK}" ||
-          log Warning "failed to add v6 catch-all MARK rule."
-        return 0
+          { log Warning "failed to add v6 catch-all MARK rule."; _am6_failed=1; }
+      else
+        # shellcheck disable=SC2086 # intentional: UID_LIST is space-separated
+        for _am6_uid in ${UID_LIST}; do
+          rule_ensure ip6tables mangle "${CHAIN_MARK}" -m owner --uid-owner "${_am6_uid}" -j MARK --set-xmark "${FWMARK}" ||
+            { log Warning "failed to add v6 MARK rule for UID ${_am6_uid}."; _am6_failed=1; }
+        done
       fi
-      # shellcheck disable=SC2086 # intentional: UID_LIST is space-separated
-      for _am6_uid in ${UID_LIST}; do
-        rule_ensure ip6tables mangle "${CHAIN_MARK}" -m owner --uid-owner "${_am6_uid}" -j MARK --set-xmark "${FWMARK}" ||
-          log Warning "failed to add v6 MARK rule for UID ${_am6_uid}."
-      done
       ;;
     bypass)
       if ! owner_supported; then
         log Warning "xt_owner not supported by this kernel; falling back to ROUTE_SCOPE=all semantics (IPv6)."
         rule_ensure ip6tables mangle "${CHAIN_MARK}" -j MARK --set-xmark "${FWMARK}" ||
-          log Warning "failed to add v6 catch-all MARK rule."
-        return 0
+          { log Warning "failed to add v6 catch-all MARK rule."; _am6_failed=1; }
+      else
+        # Exempted UIDs RETURN first, everything else gets marked.
+        # shellcheck disable=SC2086 # intentional: UID_LIST is space-separated
+        for _am6_uid in ${UID_LIST}; do
+          rule_ensure ip6tables mangle "${CHAIN_MARK}" -m owner --uid-owner "${_am6_uid}" -j RETURN ||
+            { log Warning "failed to add v6 bypass rule for UID ${_am6_uid}."; _am6_failed=1; }
+        done
+        rule_ensure ip6tables mangle "${CHAIN_MARK}" -j MARK --set-xmark "${FWMARK}" ||
+          { log Warning "failed to add v6 catch-all MARK rule."; _am6_failed=1; }
       fi
-      # Exempted UIDs RETURN first, everything else gets marked.
-      # shellcheck disable=SC2086 # intentional: UID_LIST is space-separated
-      for _am6_uid in ${UID_LIST}; do
-        rule_ensure ip6tables mangle "${CHAIN_MARK}" -m owner --uid-owner "${_am6_uid}" -j RETURN ||
-          log Warning "failed to add v6 bypass rule for UID ${_am6_uid}."
-      done
-      rule_ensure ip6tables mangle "${CHAIN_MARK}" -j MARK --set-xmark "${FWMARK}" ||
-        log Warning "failed to add v6 catch-all MARK rule."
+      ;;
+    *)
+      log Warning "unknown ROUTE_SCOPE=${ROUTE_SCOPE}; skipping v6 marking rules."
+      _am6_failed=1
       ;;
   esac
+  [ -z "${_am6_failed}" ] || return 1
+  return 0
+}
+
+# True when the ip rule list piped in contains a rule for our fwmark. Exact
+# field match: "fwmark 0xf7" must not match "fwmark 0xf7f".
+fwmark_rule_present() {
+  awk -v fw="${FWMARK}" '
+    { for (i = 1; i < NF; i++) if ($i == "fwmark" && tolower($(i + 1)) == tolower(fw)) found = 1 }
+    END { exit !found }
+  '
 }
 
 ensure_ip_rule_v4() {
-  ip rule show 2>/dev/null | grep -qi "fwmark ${FWMARK}" && return 0
+  if ip rule show 2>/dev/null | fwmark_rule_present; then
+    return 0
+  fi
   ip rule add fwmark "${FWMARK}" table "${ROUTE_TABLE}" 2>/dev/null ||
-    log Warning "failed to add ip rule (fwmark ${FWMARK} -> table ${ROUTE_TABLE})."
+    { log Warning "failed to add ip rule (fwmark ${FWMARK} -> table ${ROUTE_TABLE})."; return 1; }
 }
 
 ensure_ip_rule_v6() {
   [ "${IPV6}" = "on" ] || return 0
-  ip -6 rule show 2>/dev/null | grep -qi "fwmark ${FWMARK}" && return 0
+  if ip -6 rule show 2>/dev/null | fwmark_rule_present; then
+    return 0
+  fi
   ip -6 rule add fwmark "${FWMARK}" table "${ROUTE_TABLE}" 2>/dev/null ||
-    log Warning "failed to add v6 ip rule (fwmark ${FWMARK} -> table ${ROUTE_TABLE})."
+    { log Warning "failed to add v6 ip rule (fwmark ${FWMARK} -> table ${ROUTE_TABLE})."; return 1; }
 }
 
 apply_routes() {
+  _ar_failed=""
   # shellcheck disable=SC2086 # intentional: ROUTE_SUBNETS is space-separated
   for _ar_subnet in ${ROUTE_SUBNETS}; do
     case "${_ar_subnet}" in
@@ -166,19 +192,23 @@ apply_routes() {
           log Debug "skipping IPv6 subnet ${_ar_subnet} (IPV6=off)."
           continue
         fi
-        if ! ip -6 route show table "${ROUTE_TABLE}" 2>/dev/null | grep -qF "${_ar_subnet}"; then
+        if ! ip -6 route show table "${ROUTE_TABLE}" 2>/dev/null |
+          awk -v net="${_ar_subnet}" '$1 == net { found = 1 } END { exit !found }'; then
           ip -6 route add "${_ar_subnet}" dev "${TUN_IFACE}" table "${ROUTE_TABLE}" 2>/dev/null ||
-            log Warning "failed to add v6 route ${_ar_subnet}."
+            { log Warning "failed to add v6 route ${_ar_subnet}."; _ar_failed=1; }
         fi
         ;;
       *)
-        if ! ip route show table "${ROUTE_TABLE}" 2>/dev/null | grep -qF "${_ar_subnet}"; then
+        if ! ip route show table "${ROUTE_TABLE}" 2>/dev/null |
+          awk -v net="${_ar_subnet}" '$1 == net { found = 1 } END { exit !found }'; then
           ip route add "${_ar_subnet}" dev "${TUN_IFACE}" table "${ROUTE_TABLE}" 2>/dev/null ||
-            log Warning "failed to add route ${_ar_subnet}."
+            { log Warning "failed to add route ${_ar_subnet}."; _ar_failed=1; }
         fi
         ;;
     esac
   done
+  [ -z "${_ar_failed}" ] || return 1
+  return 0
 }
 
 route_apply() {
@@ -191,53 +221,80 @@ route_apply() {
   fi
 
   # Fast idempotence: both the service companion layer and the tun.up hook
-  # call us on start; skip quietly when a previous apply is still in effect.
-  if iptables -t mangle -L "${CHAIN_MARK}" -n >/dev/null 2>&1 &&
-    ip rule 2>/dev/null | grep -qi "fwmark ${FWMARK}" &&
-    ip route show table "${ROUTE_TABLE}" 2>/dev/null | grep -q .; then
+  # call us on start; skip only when the v4 (and v6) chains, the fwmark ip
+  # rule, the table routes and the parameters recorded in route.state all
+  # still match the current configuration.
+  _ra_skip=true
+  iptables -t mangle -L "${CHAIN_MARK}" -n >/dev/null 2>&1 || _ra_skip=false
+  ip rule show 2>/dev/null | fwmark_rule_present || _ra_skip=false
+  ip route show table "${ROUTE_TABLE}" 2>/dev/null | grep -q . || _ra_skip=false
+  if [ "${IPV6}" = "on" ]; then
+    ip6tables -t mangle -L "${CHAIN_MARK}" -n >/dev/null 2>&1 || _ra_skip=false
+  fi
+  _ra_state_ipv6=$(sed -n 's/^IPV6=//p' "${ROUTE_STATE_FILE}" 2>/dev/null)
+  [ "${_ra_state_ipv6}" = "${IPV6}" ] || _ra_skip=false
+  if [ "${_ra_skip}" = true ]; then
     log Debug "policy routing already applied; skipping."
     return 0
   fi
 
   log Info "Applying policy routing (scope=${ROUTE_SCOPE}, table=${ROUTE_TABLE}, fwmark=${FWMARK})."
 
+  _ra_failed=""
+
   # Dedicated chains; built-in chains only get one jump each.
   chain_ensure iptables mangle "${CHAIN_MARK}"
   chain_ensure iptables filter "${CHAIN_STAT}"
   mount_ensure iptables mangle OUTPUT "${CHAIN_MARK}" ||
-    log Warning "failed to mount ${CHAIN_MARK} on mangle/OUTPUT."
+    { log Warning "failed to mount ${CHAIN_MARK} on mangle/OUTPUT."; _ra_failed=1; }
   mount_ensure iptables filter OUTPUT "${CHAIN_STAT}" ||
-    log Warning "failed to mount ${CHAIN_STAT} on filter/OUTPUT."
+    { log Warning "failed to mount ${CHAIN_STAT} on filter/OUTPUT."; _ra_failed=1; }
 
   if [ "${IPV6}" = "on" ]; then
     chain_ensure ip6tables mangle "${CHAIN_MARK}"
     chain_ensure ip6tables filter "${CHAIN_STAT}"
-    mount_ensure ip6tables mangle OUTPUT "${CHAIN_MARK}" 2>/dev/null
-    mount_ensure ip6tables filter OUTPUT "${CHAIN_STAT}" 2>/dev/null
+    mount_ensure ip6tables mangle OUTPUT "${CHAIN_MARK}" 2>/dev/null || _ra_failed=1
+    mount_ensure ip6tables filter OUTPUT "${CHAIN_STAT}" 2>/dev/null || _ra_failed=1
   fi
 
   # Pure counting chain for foxytail.stats: every packet traversing it is
   # counted by the lone RETURN rule (`iptables -nvxL FOXY_STAT`).
   rule_ensure iptables filter "${CHAIN_STAT}" -j RETURN ||
-    log Warning "failed to add ${CHAIN_STAT} counter rule."
-  [ "${IPV6}" = "on" ] && rule_ensure ip6tables filter "${CHAIN_STAT}" -j RETURN 2>/dev/null
+    { log Warning "failed to add ${CHAIN_STAT} counter rule."; _ra_failed=1; }
+  if [ "${IPV6}" = "on" ]; then
+    rule_ensure ip6tables filter "${CHAIN_STAT}" -j RETURN 2>/dev/null || _ra_failed=1
+  fi
 
   # Per-UID counting rules feed foxytail.stats' per-App breakdown; they are
   # pure counters (RETURN), independent of the marking rules above.
   if [ -n "${UID_LIST}" ] && owner_supported; then
     # shellcheck disable=SC2086 # intentional: UID_LIST is space-separated
     for _ra_uid in ${UID_LIST}; do
-      rule_ensure iptables filter "${CHAIN_STAT}" -m owner --uid-owner "${_ra_uid}" -j RETURN 2>/dev/null
-      [ "${IPV6}" = "on" ] &&
-        rule_ensure ip6tables filter "${CHAIN_STAT}" -m owner --uid-owner "${_ra_uid}" -j RETURN 2>/dev/null
+      rule_ensure iptables filter "${CHAIN_STAT}" -m owner --uid-owner "${_ra_uid}" -j RETURN 2>/dev/null || _ra_failed=1
+      if [ "${IPV6}" = "on" ]; then
+        rule_ensure ip6tables filter "${CHAIN_STAT}" -m owner --uid-owner "${_ra_uid}" -j RETURN 2>/dev/null || _ra_failed=1
+      fi
     done
   fi
 
-  apply_marking_v4
-  apply_marking_v6
-  ensure_ip_rule_v4
-  ensure_ip_rule_v6
-  apply_routes
+  apply_marking_v4 || _ra_failed=1
+  apply_marking_v6 || _ra_failed=1
+  ensure_ip_rule_v4 || _ra_failed=1
+  ensure_ip_rule_v6 || _ra_failed=1
+  apply_routes || _ra_failed=1
+
+  if [ -n "${_ra_failed}" ]; then
+    log Error "policy routing apply failed (table=${ROUTE_TABLE}, fwmark=${FWMARK})."
+    return 1
+  fi
+
+  # Record the parameters this apply used: teardown reads them back so a conf
+  # change between apply and teardown still cleans up the old rules.
+  {
+    echo "FWMARK=${FWMARK}"
+    echo "ROUTE_TABLE=${ROUTE_TABLE}"
+    echo "IPV6=${IPV6}"
+  } >"${ROUTE_STATE_FILE}"
 
   log Success "policy routing applied."
   return 0
@@ -260,26 +317,34 @@ route_teardown() {
   ensure_run_dirs
   load_conf
 
+  # Prefer the parameters recorded at apply time: conf changes between apply
+  # and teardown would otherwise leave the old rules behind.
+  if [ -f "${ROUTE_STATE_FILE}" ]; then
+    # shellcheck disable=SC1090 # route.state is a runtime file written by route_apply
+    . "${ROUTE_STATE_FILE}"
+  fi
+
   log Info "Tearing down policy routing (table=${ROUTE_TABLE}, fwmark=${FWMARK})."
 
   # Best effort on purpose: every step runs even if a previous one failed.
+  # v4 and v6 cleanup is unconditional so an IPV6=on apply is fully removed
+  # even after the config was switched to IPV6=off.
   unmount iptables mangle OUTPUT "${CHAIN_MARK}"
   chain_remove iptables mangle "${CHAIN_MARK}"
   unmount iptables filter OUTPUT "${CHAIN_STAT}"
   chain_remove iptables filter "${CHAIN_STAT}"
 
-  if [ "${IPV6}" = "on" ]; then
-    unmount ip6tables mangle OUTPUT "${CHAIN_MARK}"
-    chain_remove ip6tables mangle "${CHAIN_MARK}"
-    unmount ip6tables filter OUTPUT "${CHAIN_STAT}"
-    chain_remove ip6tables filter "${CHAIN_STAT}"
-    while ip -6 rule del fwmark "${FWMARK}" table "${ROUTE_TABLE}" 2>/dev/null; do :; done
-    ip -6 route flush table "${ROUTE_TABLE}" 2>/dev/null
-  fi
+  unmount ip6tables mangle OUTPUT "${CHAIN_MARK}"
+  chain_remove ip6tables mangle "${CHAIN_MARK}"
+  unmount ip6tables filter OUTPUT "${CHAIN_STAT}"
+  chain_remove ip6tables filter "${CHAIN_STAT}"
+  while ip -6 rule del fwmark "${FWMARK}" table "${ROUTE_TABLE}" 2>/dev/null; do :; done
+  ip -6 route flush table "${ROUTE_TABLE}" 2>/dev/null
 
   while ip rule del fwmark "${FWMARK}" table "${ROUTE_TABLE}" 2>/dev/null; do :; done
   ip route flush table "${ROUTE_TABLE}" 2>/dev/null
 
+  rm -f "${ROUTE_STATE_FILE}"
   log Info "policy routing torn down."
   return 0
 }

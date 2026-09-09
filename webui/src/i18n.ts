@@ -25,6 +25,7 @@ const zh = {
   dash_peers_online: '在线节点', dash_peers_offline: '离线节点',
   dash_key_expiring: '节点密钥即将到期：', dash_compat_warning: '共存告警',
   dash_action_done: '操作完成', dash_mode_switched: '模式已切换，服务重启中',
+  dash_status_stale: '数据可能过期',
 
   hero_login_title: '登录到 Tailscale', hero_login_desc: '设备尚未接入 tailnet，完成登录后即可使用全部功能',
   hero_stopped_title: '服务未运行', hero_stopped_desc: 'tailscaled 守护进程已停止，启动后可继续使用',
@@ -123,6 +124,7 @@ const en: Record<I18nKey, string> = {
   dash_peers_online: 'Online peers', dash_peers_offline: 'Offline peers',
   dash_key_expiring: 'Node key expires soon: ', dash_compat_warning: 'Coexistence warnings',
   dash_action_done: 'Done', dash_mode_switched: 'Mode switched, restarting service',
+  dash_status_stale: 'Data may be out of date',
 
   hero_login_title: 'Log in to Tailscale', hero_login_desc: 'This device is not connected to the tailnet yet; log in to unlock everything',
   hero_stopped_title: 'Service stopped', hero_stopped_desc: 'The tailscaled daemon is stopped; start it to continue',

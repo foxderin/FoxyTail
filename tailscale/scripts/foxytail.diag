@@ -12,6 +12,12 @@ ensure_run_dirs
 
 TS_SOCKET="${TS_RUN_DIR}/tailscaled.sock"
 
+# Strip Tailscale login URLs from daemon output: the diag bundle lands in
+# shared storage and an auth URL is a bearer secret for the node identity.
+_redact() {
+  sed 's|https://login\.tailscale\.com/[^ ]*|[redacted-login-url]|g'
+}
+
 collect() {
   _outdir="${1:-/sdcard/Download}"
 
@@ -38,9 +44,10 @@ collect() {
 
   log Info "diag: collecting into ${_stage}"
 
-  # Log tails.
+  # Log tails (auth URLs redacted).
   for _l in "$TS_RUN_LOG_FILE" "$TS_LOG_FILE"; do
-    [ -f "$_l" ] && tail -n 500 "$_l" >"${_stage}/$(basename "$_l").tail" 2>&1
+    [ -f "$_l" ] && tail -n 500 "$_l" 2>&1 | _redact \
+      >"${_stage}/$(basename "$_l").tail"
   done
 
   # Daemon state.
@@ -48,8 +55,8 @@ collect() {
     >"${_stage}/status.json" 2>"${_stage}/status.err"
   tmo 20 tailscale --socket="$TS_SOCKET" netcheck \
     >"${_stage}/netcheck.txt" 2>&1
-  tmo 20 tailscale --socket="$TS_SOCKET" bugreport \
-    >"${_stage}/bugreport.txt" 2>&1
+  tmo 20 tailscale --socket="$TS_SOCKET" bugreport 2>&1 |
+    _redact >"${_stage}/bugreport.txt"
 
   # Routing and firewall dumps.
   ip rule >"${_stage}/ip-rule.txt" 2>&1

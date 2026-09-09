@@ -6,10 +6,17 @@
  *  3. task adoption: start a mock long speedtest task on ExitNodes,
  *     navigate away and back -> still running, progress state adopted;
  *     completing the mock -> cached result shown without re-firing
+ *  4. cancel path settles the task as cancelled
+ *  5. no-root banner variant (separate jsdom without any bridge)
+ *  6. backend error propagation: errno != 0 with {ok:false,error} on stdout
+ *  7. task replacement: the replaced run's stale promise must not mark
+ *     the new run cancelled
+ *  8. tab buttons render non-empty labels
  *
- * Run after `vite build --config vite.smoke.config.ts`.
+ * Run after `vite build --config vite.smoke.config.ts` (enforced by the
+ * bundle freshness guard below).
  */
-import { readFileSync, existsSync } from 'node:fs';
+import { readFileSync, existsSync, statSync, readdirSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import { JSDOM, VirtualConsole } from 'jsdom';
@@ -18,6 +25,24 @@ const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 const bundlePath = join(root, '.smoke/app.js');
 if (!existsSync(bundlePath)) {
   console.error('smoke bundle missing; run: vite build --config vite.smoke.config.ts');
+  process.exit(1);
+}
+/* The harness evaluates a prebuilt bundle: fail fast when any source under
+ * webui/src/ is newer, so a run can never describe a stale build. */
+const bundleMtime = statSync(bundlePath).mtimeMs;
+const staleSources = [];
+const walkSources = (dir) => {
+  for (const entry of readdirSync(dir, { withFileTypes: true })) {
+    const p = join(dir, entry.name);
+    if (entry.isDirectory()) walkSources(p);
+    else if (statSync(p).mtimeMs > bundleMtime) staleSources.push(p);
+  }
+};
+walkSources(join(root, 'src'));
+if (staleSources.length) {
+  console.error('smoke bundle is stale; these sources are newer than .smoke/app.js:');
+  for (const p of staleSources.slice(0, 5)) console.error('  ' + p);
+  console.error('run: vite build --config vite.smoke.config.ts');
   process.exit(1);
 }
 const bundle = readFileSync(bundlePath, 'utf8');
@@ -112,6 +137,10 @@ const canned = {
   'files-inbox': { ok: true, files: [{ name: 'a.txt', size: 10, mtime: 1700000000 }] },
 };
 
+/* Per-command bridge overrides: webapi subcommand -> [errno, stdout, stderr].
+ * Drives the errno != 0 failure contract ({ok:false,error} on stdout). */
+const overrides = {};
+
 let execCount = 0;
 let speedtestExecCount = 0;
 window.ksu = {
@@ -122,6 +151,10 @@ window.ksu = {
       ? cmd.replace(/^.*foxytail\.webapi\.sh\s+(\S+).*$/, '$1')
       : null;
     if (cmd.startsWith('pkill')) return void cb(0, '', '');
+    if (sub && overrides[sub]) {
+      const [e, out, err] = overrides[sub];
+      return void queueMicrotask(() => cb(e, out, err));
+    }
     if (sub === 'speedtest-exitnodes') {
       speedtestExecCount++;
       /* held open until released by the test */
@@ -276,6 +309,42 @@ console.log('[5] no-root banner variant');
   if (failures2.length) failures.push(...failures2.map((f) => 'no-root env: ' + f));
   dom2.window.close();
 }
+
+console.log('[6] backend error propagation (errno != 0, {ok:false,error} on stdout)');
+overrides['routes-get'] = [1, '{"ok":false,"error":"boom-reason"}', ''];
+nav('routing');
+await flush();
+assert(
+  (window.document.querySelector('#toast-root')?.textContent || '').includes('boom-reason'),
+  'backend error reason surfaces in the UI (boom-reason)',
+);
+delete overrides['routes-get'];
+
+console.log('[7] task replacement: stale promise cannot poison the new run');
+window.__foxy.startTask('speedtest-exitnodes', 'speedtest-exitnodes');
+await flush();
+window.__foxy.startTask('speedtest-exitnodes', 'speedtest-exitnodes');
+await flush();
+assert(
+  window.__foxy.getTask('speedtest-exitnodes')?.status === 'running',
+  'new run stays running after the old promise settles cancelled',
+);
+releaseSpeedtest();
+await flush();
+assert(
+  window.__foxy.getTask('speedtest-exitnodes')?.status === 'done',
+  'new run completes done after release',
+);
+
+console.log('[8] tab buttons render non-empty labels');
+nav('peers');
+await flush();
+const tabButtons = [...window.document.querySelectorAll('[role="tab"]')];
+assert(tabButtons.length > 0, 'tabbed route renders tab buttons');
+assert(
+  tabButtons.every((el) => (el.textContent || '').trim() !== ''),
+  'every tab button label is non-empty',
+);
 
 if (failures.length) {
   console.error('\nSMOKE FAILURES:');

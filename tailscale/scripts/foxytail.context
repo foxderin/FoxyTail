@@ -132,6 +132,9 @@ do_start() {
     return 0
   fi
   daemon_claim_pidfile foxytail.context || return 0
+  # Force the first resident round to replay the rules: the persisted token
+  # would otherwise suppress actions that are still owed after a reboot.
+  rm -f "$STATE_FILE"
   _ctx_running=1
   trap '_context_stop' TERM INT
   log Info "foxytail.context started (pid $$, interval ${INTERVAL}s)"
@@ -150,8 +153,12 @@ do_stop() {
 
 do_status() {
   _ctx=$(current_context)
-  if daemon_pid_alive foxytail.context; then
-    jqr -n -c --argjson r true --argjson p "$(cat "$PID_FILE")" --arg c "$_ctx" \
+  # Read the pid once: the loop removes the file on exit, so a second read
+  # could feed jq an empty string and produce broken JSON.
+  _ctx_pid=$(cat "$PID_FILE" 2>/dev/null)
+  case "$_ctx_pid" in '' | *[!0-9]*) _ctx_pid="" ;; esac
+  if [ -n "$_ctx_pid" ] && kill -0 "$_ctx_pid" 2>/dev/null; then
+    jqr -n -c --argjson r true --argjson p "$_ctx_pid" --arg c "$_ctx" \
       '{running:$r,pid:$p,context:$c}'
   else
     jqr -n -c --argjson r false --arg c "$_ctx" \

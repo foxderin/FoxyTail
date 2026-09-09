@@ -10,6 +10,8 @@ import { Select, Switch, Tab, Tabs } from '../components/ui';
 
 type Src = 'daemon' | 'service';
 
+let seq = 0;
+
 export default function Logs(): JSX.Element {
   const scope = createApiScope();
   const [src, setSrc] = createSignal<Src>('daemon');
@@ -21,8 +23,9 @@ export default function Logs(): JSX.Element {
   let lastText: string | null = null;
 
   async function load() {
+    const my = ++seq;
     const res = await scope.api('logs', src(), lines());
-    if (res.cancelled) return;
+    if (res.cancelled || my !== seq) return;
     const next = !res.ok
       ? res.error || t('error')
       : !(res.lines as string[]).length
@@ -73,7 +76,7 @@ export default function Logs(): JSX.Element {
           }}
         >
           {['100', '200', '500'].map((n) => (
-            <option value={n} selected={n === '200'}>{n}</option>
+            <option value={n} selected={n === String(lines())}>{n}</option>
           ))}
         </Select>
         <label class="setting-row" style={{ border: '0', padding: '0', gap: '8px' }}>

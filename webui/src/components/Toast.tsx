@@ -14,7 +14,10 @@ let nextId = 0;
 
 export function showToast(msg: string, kind: ToastKind = 'info'): void {
   const id = nextId++;
-  setToasts((list) => [...list, { id, msg, kind }]);
+  setToasts((list) => {
+    const next = [...list, { id, msg, kind }];
+    return next.length > 4 ? next.slice(next.length - 4) : next;
+  });
   setTimeout(() => {
     setToasts((list) => list.filter((it) => it.id !== id));
   }, 3200);

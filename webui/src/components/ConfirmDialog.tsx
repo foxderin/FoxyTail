@@ -7,6 +7,7 @@ const [message, setMessage] = createSignal<string | null>(null);
 let resolver: ((ok: boolean) => void) | null = null;
 
 export function confirmDialog(msg: string): Promise<boolean> {
+  if (resolver) settle(false);
   setMessage(msg);
   return new Promise<boolean>((resolve) => {
     resolver = resolve;
@@ -31,7 +32,7 @@ export function ConfirmHost(): JSX.Element {
         {message()}
         <div class="md-dialog-actions">
           <Button variant="text" onClick={() => settle(false)}>{t('cancel')}</Button>
-          <Button variant="filled" onClick={() => settle(true)}>{t('confirm')}</Button>
+          <Button variant="filled" autofocus onClick={() => settle(true)}>{t('confirm')}</Button>
         </div>
       </Dialog>
     </Show>

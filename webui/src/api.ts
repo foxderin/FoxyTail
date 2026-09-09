@@ -8,9 +8,9 @@
  *
  * Every call is time-boxed (the old UI had no timeout and froze on any
  * hung exec) and cancellable: cancel() settles the front-end promise
- * immediately with an ApiCancelledError and fires a best-effort backend
- * cleanup (pkill scoped to the exact webapi subcommand) that never blocks
- * the UI. The backend JSON contract is frozen; shell files are untouched.
+ * immediately with a { cancelled: true } marker and fires a best-effort
+ * backend cleanup (pkill scoped to the exact webapi subcommand) that never
+ * blocks the UI. The backend JSON contract is frozen; shell files are untouched.
  */
 import { exec as ksuExec } from 'kernelsu';
 import { getOwner, onCleanup } from 'solid-js';
@@ -31,16 +31,20 @@ export interface ApiResult {
   [key: string]: unknown;
 }
 
-export class ApiCancelledError extends Error {
-  readonly cancelled = true;
-  constructor() {
-    super('cancelled');
-    this.name = 'ApiCancelledError';
+/* errno != 0: the webapi failure contract carries the reason in stdout as
+ * {"ok":false,"error":...} JSON (stderr is usually empty). Prefer that
+ * error, fall back to stderr, then the bare exit code. */
+function execFailure(errno: unknown, stdout: unknown, stderr: unknown): Error {
+  try {
+    const parsed = JSON.parse(typeof stdout === 'string' ? stdout : '') as ApiResult;
+    if (parsed && typeof parsed === 'object' && typeof parsed.error === 'string' && parsed.error) {
+      return new Error(parsed.error);
+    }
+  } catch {
+    /* fall through */
   }
-}
-
-export function isCancelled(err: unknown): boolean {
-  return err instanceof ApiCancelledError || (err as { cancelled?: boolean })?.cancelled === true;
+  if (typeof stderr === 'string' && stderr) return new Error(stderr);
+  return new Error('exit code ' + String(errno));
 }
 
 type RawExec = (cmd: string) => Promise<string>;
@@ -67,7 +71,7 @@ function wrapKsuExec(fn: KsuBridgeFn): RawExec {
       ) => {
         delete (window as unknown as Record<string, unknown>)[cbName];
         if (errno == null || errno === 0) resolve(String(stdout || ''));
-        else reject(new Error(String(stderr || 'exit code ' + errno)));
+        else reject(execFailure(errno, stdout, stderr));
       };
       try {
         fn(cmd, '{}', cbName);
@@ -91,7 +95,7 @@ function wrapGlobalExec(
         const [a, b, c] = args;
         if (args.length > 1) {
           if (a == null || a === 0) return resolve(String(b || ''));
-          return reject(new Error(String(c || 'exit code ' + a)));
+          return reject(execFailure(a, b, c));
         }
         if (a == null) return resolve('');
         if (typeof a === 'string') return resolve(a);
@@ -100,7 +104,7 @@ function wrapGlobalExec(
           if ('stdout' in r || 'stderr' in r) {
             const code = 'errno' in r ? (r.errno as number) : (r.code as number);
             if (code == null || code === 0) return resolve(String(r.stdout || ''));
-            return reject(new Error(String(r.stderr || 'exit code ' + code)));
+            return reject(execFailure(code, r.stdout, r.stderr));
           }
           return reject(new Error('unrecognized exec result: ' + Object.prototype.toString.call(a)));
         }
@@ -111,8 +115,6 @@ function wrapGlobalExec(
         if (typeof ret === 'string') once(ret);
         else if (ret && typeof (ret as Promise<unknown>).then === 'function') {
           (ret as Promise<unknown>).then(once, reject);
-        } else if (ret === undefined) {
-          setTimeout(() => once(''), 30000);
         }
       } catch (e) {
         reject(e);
@@ -127,7 +129,7 @@ function detectExec(): RawExec | null {
       return async (cmd) => {
         const res = await ksuExec(cmd);
         if (res.errno === 0) return res.stdout;
-        throw new Error(res.stderr || 'exit code ' + res.errno);
+        throw execFailure(res.errno, res.stdout, res.stderr);
       };
     }
     if (window.kernelsu && typeof window.kernelsu.exec === 'function') {
@@ -158,7 +160,9 @@ const COMMAND_TIMEOUTS: Record<string, number> = {
   'derp-speedtest': 60000,
   control: 30000,
   'mode-set': 30000,
-  login: 30000,
+  'exitnode-set': 25000,
+  'exitnode-clear': 25000,
+  login: 35000,
   'login-authkey': 70000,
   logout: 35000,
   accounts: 20000,
@@ -169,6 +173,10 @@ const COMMAND_TIMEOUTS: Record<string, number> = {
   'funnel-list': 20000,
   'funnel-set': 30000,
   'funnel-del': 30000,
+  apps: 90000,
+  compat: 35000,
+  'routes-set': 45000,
+  'context-set': 45000,
   'file-send': 320000,
   'file-receive': 70000,
   diag: 130000,
@@ -185,7 +193,7 @@ const KILL_PATTERNS: Record<string, string[]> = {
   'file-receive': ['foxytail.webapi.sh file-receive', 'tailscale.*file get'],
   'file-send': ['foxytail.webapi.sh file-send', 'tailscale.*file cp'],
   apps: ['foxytail.webapi.sh apps'],
-  login: ['foxytail.webapi.sh login ', 'tailscale.*login'],
+  login: ['foxytail.webapi.sh login( |$)', 'tailscale.*login'],
   'login-authkey': ['foxytail.webapi.sh login-authkey', 'tailscale.*login'],
 };
 
@@ -195,10 +203,10 @@ function cleanupBackend(cmd: string): void {
   const patterns = KILL_PATTERNS[cmd];
   if (!patterns || !execImpl) return;
   const line = patterns.map((p) => `pkill -f '${p}' 2>/dev/null`).join('; ');
-  const timer = setTimeout(() => undefined, CLEANUP_TIMEOUT_MS);
-  execImpl(line)
-    .catch(() => undefined)
-    .finally(() => clearTimeout(timer));
+  const timeout = new Promise<never>((_, reject) => {
+    setTimeout(() => reject(new Error('cleanup timed out')), CLEANUP_TIMEOUT_MS);
+  });
+  Promise.race([execImpl(line), timeout]).catch(() => undefined);
 }
 
 export function execRaw(cmd: string, timeoutMs: number = DEFAULT_TIMEOUT_MS): Promise<string> {
@@ -234,8 +242,8 @@ export interface ApiCall {
 
 /* Call the WebAPI backend; the result is always one parsed JSON document.
  * Timeouts and exec failures surface as { ok:false, error }; cancellation
- * rejects with ApiCancelledError so pages can tell "user aborted" apart
- * from real failures. */
+ * resolves with a { cancelled: true } marker so pages can treat a user
+ * abort as a quiet, neutral outcome. */
 export function apiCall(cmd: string, ...args: (string | number)[]): ApiCall {
   const timeoutMs = COMMAND_TIMEOUTS[cmd] ?? DEFAULT_TIMEOUT_MS;
   const line = WEBAPI + ' ' + cmd + (args.length ? ' ' + args.map(quote).join(' ') : '');
@@ -252,6 +260,7 @@ export function apiCall(cmd: string, ...args: (string | number)[]): ApiCall {
     };
     const timer = setTimeout(() => {
       finish({ ok: false, error: `${cmd}: timed out after ${Math.round(timeoutMs / 1000)}s` });
+      cleanupBackend(cmd);
     }, timeoutMs);
 
     cancelFn = () => {

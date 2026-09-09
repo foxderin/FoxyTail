@@ -101,7 +101,7 @@ export default function Files(): JSX.Element {
         <div class="btn-row">
           <Button
             variant="outlined"
-            disabled={recvTask()?.status === 'running' || !hasRoot || false}
+            disabled={recvTask()?.status === 'running' || !hasRoot}
             onClick={() => startTask(RECV_KEY, 'file-receive')}
           >
             <MdIcon name="download" size={18} /> {t('files_receive')}

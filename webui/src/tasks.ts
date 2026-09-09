@@ -26,12 +26,12 @@ export interface Task {
 
 const [taskMap, setTaskMap] = createSignal<ReadonlyMap<string, Task>>(new Map());
 
-export { taskMap };
-
-function patch(key: string, p: Partial<Task>): void {
+/* Patch only while the key still belongs to `call`: a replaced run's stale
+ * promise callback must not overwrite the new run's state. */
+function patch(key: string, call: ApiCall, p: Partial<Task>): void {
   setTaskMap((prev) => {
     const cur = prev.get(key);
-    if (!cur) return prev;
+    if (!cur || cur.call !== call) return prev;
     const next = new Map(prev);
     next.set(key, { ...cur, ...p });
     return next;
@@ -56,9 +56,9 @@ export function startTask(key: string, cmd: string, ...args: (string | number)[]
   });
 
   call.promise.then((res) => {
-    if (res.cancelled) patch(key, { status: 'cancelled', result: res });
-    else if (res.ok) patch(key, { status: 'done', result: res });
-    else patch(key, { status: 'error', result: res });
+    if (res.cancelled) patch(key, call, { status: 'cancelled', result: res });
+    else if (res.ok) patch(key, call, { status: 'done', result: res });
+    else patch(key, call, { status: 'error', result: res });
   });
   return call;
 }
@@ -66,13 +66,4 @@ export function startTask(key: string, cmd: string, ...args: (string | number)[]
 export function cancelTask(key: string): void {
   const t = taskMap().get(key);
   if (t && t.status === 'running') t.call.cancel();
-}
-
-export function clearTask(key: string): void {
-  setTaskMap((prev) => {
-    if (!prev.has(key)) return prev;
-    const next = new Map(prev);
-    next.delete(key);
-    return next;
-  });
 }

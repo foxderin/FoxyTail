@@ -106,6 +106,7 @@ bad_count_inc() {
 }
 
 check_once() {
+  _state=""
   # 0. A user-requested stop (WebUI/CLI) is not a crash: stay down.
   if [ -f "$MANUAL_STOP_FILE" ]; then
     log Debug "watchdog: manual-stop marker present, not recovering tailscaled"
@@ -113,7 +114,7 @@ check_once() {
   fi
 
   # 1. Process liveness.
-  if ! pidof tailscaled >/dev/null 2>&1; then
+  if [ -z "$(pids_of_path "${TS_BIN_DIR}/${TS_DAEMON_CMD}")" ]; then
     log Warning "watchdog: tailscaled process is dead"
     recover start "process-dead"
     return 0
@@ -130,6 +131,7 @@ check_once() {
     if [ "$_bad" -ge $BACKEND_BAD_LIMIT ]; then
       echo 0 >"$BAD_COUNT_FILE"
       recover restart "daemon-unreachable"
+      return 0
     fi
   else
     _state=$(printf '%s' "$_st" | jqr -r '.BackendState // "unknown"' 2>/dev/null)
@@ -187,8 +189,12 @@ do_stop() {
 }
 
 do_status() {
-  if daemon_pid_alive foxytail.watchdog; then
-    jqr -n -c --argjson r true --argjson p "$(cat "$PID_FILE")" \
+  # Read the pid once: the loop removes the file on exit, so a second read
+  # could feed jq an empty string and produce broken JSON.
+  _wds_pid=$(cat "$PID_FILE" 2>/dev/null)
+  case "$_wds_pid" in '' | *[!0-9]*) _wds_pid="" ;; esac
+  if [ -n "$_wds_pid" ] && kill -0 "$_wds_pid" 2>/dev/null; then
+    jqr -n -c --argjson r true --argjson p "$_wds_pid" \
       --argjson i "$WATCHDOG_INTERVAL" --argjson n "$(restarts_count_ro)" \
       '{running:$r,pid:$p,interval:$i,restartsRecent:$n}'
   else

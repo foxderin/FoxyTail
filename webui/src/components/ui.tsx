@@ -9,6 +9,7 @@ export function Button(props: ParentProps<{
   variant?: 'filled' | 'tonal' | 'outlined' | 'text';
   type?: 'button' | 'submit' | 'reset';
   disabled?: boolean;
+  autofocus?: boolean;
   class?: string;
   style?: JSX.CSSProperties;
   onClick?: (e: MouseEvent) => void;
@@ -21,6 +22,7 @@ export function Button(props: ParentProps<{
       class={cls()}
       style={props.style}
       disabled={props.disabled || false}
+      autofocus={props.autofocus || undefined}
       onClick={props.onClick}
     >
       {props.children}
@@ -188,23 +190,34 @@ export function Tabs(props: ParentProps<{
   const slots = () => {
     const out: { icon?: IconName; label: string }[] = [];
     (props.children as unknown as JSX.Element[] | undefined)?.forEach?.((child: unknown) => {
-      const el = child as { props?: { children?: unknown; icon?: IconName; label?: string } } | null;
-      if (!el || typeof el !== 'object') return;
-      const raw = el.props?.children;
+      if (!child || typeof child !== 'object') return;
+      const el = child as {
+        props?: { children?: unknown; icon?: IconName; label?: string; name?: IconName };
+        children?: unknown;
+        icon?: IconName;
+        label?: string;
+      };
+      const p = 'props' in el && el.props ? el.props : el;
+      const raw = p.children;
       let label = '';
       let icon: IconName | undefined;
       if (Array.isArray(raw)) {
         label = raw.filter((x) => typeof x === 'string').join('').trim();
         const iconEl = raw.find(
           (x: unknown) =>
-            x && typeof x === 'object' && 'props' in x && (x as { props?: { name?: string } }).props?.name,
+            x && typeof x === 'object' &&
+            ((x as { name?: IconName }).name || (x as { props?: { name?: IconName } }).props?.name),
         );
-        if (iconEl) icon = (iconEl as { props: { name: IconName } }).props.name;
+        if (iconEl) {
+          icon =
+            (iconEl as { name?: IconName }).name ||
+            (iconEl as { props?: { name?: IconName } }).props?.name;
+        }
       } else if (typeof raw === 'string') {
         label = raw.trim();
       }
-      if (el.props?.label) label = el.props.label;
-      if (el.props?.icon) icon = el.props.icon;
+      if (p.label) label = p.label;
+      if (p.icon) icon = p.icon;
       out.push({ label, icon });
     });
     return out;
@@ -261,18 +274,6 @@ export function CircularProgress(props: { size?: number; class?: string }): JSX.
       <circle cx="12" cy="12" r="10" stroke="currentColor" stroke-width="2.5" fill="none" stroke-linecap="round" />
     </svg>
   );
-}
-
-export function List(props: ParentProps<{ class?: string }>): JSX.Element {
-  return <div class={'md-list' + (props.class ? ' ' + props.class : '')}>{props.children}</div>;
-}
-
-export function ListItem(props: ParentProps<{ class?: string }>): JSX.Element {
-  return <div class={'md-list-item' + (props.class ? ' ' + props.class : '')}>{props.children}</div>;
-}
-
-export function Divider(): JSX.Element {
-  return <hr class="md-divider" />;
 }
 
 export function Dialog(props: {

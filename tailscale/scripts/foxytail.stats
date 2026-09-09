@@ -7,6 +7,7 @@
 #   status       JSON: {"running":bool,...}
 #   collect-once append one JSON sample to $TS_STATS_DIR/YYYY-MM-DD.jsonl
 #   query hourly <YYYY-MM-DD> | daily | topn <n>
+#   recent-files print stats files inside the retention window, oldest first
 
 DIR=$(dirname "$(realpath "$0")")
 # shellcheck source=../settings.sh
@@ -154,8 +155,10 @@ do_stop() {
 }
 
 do_status() {
-  if daemon_pid_alive foxytail.stats; then
-    jqr -n -c --argjson r true --argjson p "$(cat "$PID_FILE")" \
+  _st_pid=$(cat "$PID_FILE" 2>/dev/null)
+  case "${_st_pid}" in '' | *[!0-9]*) _st_pid="" ;; esac
+  if [ -n "${_st_pid}" ] && kill -0 "${_st_pid}" 2>/dev/null; then
+    jqr -n -c --argjson r true --argjson p "${_st_pid}" \
       --argjson i "${STATS_INTERVAL}" --arg d "$TS_STATS_DIR" \
       '{running:$r,pid:$p,interval:$i,dir:$d}'
   else
@@ -175,8 +178,10 @@ query() {
         jqr -n -c --arg d "$_d" '{date:$d,hours:[]}'
         return 0
       fi
-      jqr -s -c --arg d "$_d" '
-        [ .[] | select(.error == null) ] as $s
+      jqr -R -s -c --arg d "$_d" '
+        (split("\n")
+          | map(select(length > 0) | fromjson? | select(type == "object")
+              | select(.error == null))) as $s
         | { date: $d,
             hours: [ range(0; 24) | . as $h
               | [ $s[] | select((.ts | strflocaltime("%H") | tonumber) == $h) ] as $b
@@ -197,8 +202,10 @@ query() {
       _lines=""
       for _f in $(stats_recent_files); do
         _d=$(basename "$_f" .jsonl)
-        _lines="${_lines}$(jqr -s -c --arg d "$_d" '
-          [ .[] | select(.error == null and .iface != null) ] as $s
+        _lines="${_lines}$(jqr -R -s -c --arg d "$_d" '
+          (split("\n")
+            | map(select(length > 0) | fromjson? | select(type == "object")
+                | select(.error == null and .iface != null))) as $s
           | { date: $d, samples: ($s | length),
               rx: (if ($s | length) > 1 then
                      [($s[-1].iface.rx - $s[0].iface.rx), 0] | max
@@ -215,8 +222,9 @@ query() {
       case "$_n" in '' | *[!0-9]*) _n=10 ;; esac
       _lines=""
       for _f in $(stats_recent_files); do
-        _lines="${_lines}$(jqr -s -c '
-          [ .[] | select(.error == null) | .peers[]? ]
+        _lines="${_lines}$(jqr -R -s -c '
+          split("\n") | map(select(length > 0) | fromjson? | select(type == "object"))
+          | [ .[] | select(.error == null) | .peers[]? ]
           | group_by(.id) | .[]
           | { id: .[0].id,
               rx: ([(map(.rx) | max) - (map(.rx) | min), 0] | max),
@@ -243,6 +251,7 @@ case "$1" in
   status) do_status ;;
   collect-once) collect_once ;;
   query) shift; query "$@" ;;
+  recent-files) stats_recent_files ;;
   *)
     echo "usage: $0 {start|stop|status|collect-once|query ...}" >&2
     exit 1

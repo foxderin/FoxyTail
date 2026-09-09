@@ -34,6 +34,8 @@ interface UidEntry {
   rx: number;
 }
 
+let seq = 0;
+
 export default function Traffic(): JSX.Element {
   const scope = createApiScope();
   const [mode, setMode] = createSignal<'hourly' | 'daily'>('hourly');
@@ -44,11 +46,13 @@ export default function Traffic(): JSX.Element {
   const [uidRows, setUidRows] = createSignal<{ label: string; uid: number; rx: number }[] | null>(null);
 
   async function loadChart() {
+    const m = mode();
+    const my = ++seq;
     setChart(null);
     setChartError(null);
     setChartEmpty(false);
-    const res = await scope.api('traffic', mode());
-    if (res.cancelled) return;
+    const res = await scope.api('traffic', m);
+    if (res.cancelled || my !== seq) return;
     if (!res.ok) {
       setChartError(res.error || t('error'));
       return;
@@ -56,7 +60,7 @@ export default function Traffic(): JSX.Element {
     const labels: string[] = [];
     const rx: number[] = [];
     const tx: number[] = [];
-    if (mode() === 'hourly') {
+    if (m === 'hourly') {
       ((res.hours as HourSample[]) || []).forEach((hh) => {
         labels.push(hh.hour + ':00');
         rx.push(hh.iface ? hh.iface.rx : 0);

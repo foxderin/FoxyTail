@@ -136,7 +136,7 @@ export default function ExitNodes(): JSX.Element {
                     <Button
                       variant="tonal"
                       disabled={
-                        p.id === currentId() || switching() !== null || !hasRoot || false
+                        p.id === currentId() || switching() !== null || !hasRoot
                       }
                       onClick={() => void useNode(p)}
                     >
@@ -167,7 +167,7 @@ export default function ExitNodes(): JSX.Element {
         />
         <Button
           variant="outlined"
-          disabled={!currentId() || clearing() || !hasRoot || false}
+          disabled={!currentId() || clearing() || !hasRoot}
           onClick={() => void clearNode()}
         >
           <MdIcon name="close" size={18} /> {t('exit_clear')}

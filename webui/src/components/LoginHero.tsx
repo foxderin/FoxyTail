@@ -144,7 +144,7 @@ export function LoginHero(): JSX.Element {
                 <div class="hero-actions">
                   <Button
                     variant="filled"
-                    disabled={startBusy() || !hasRoot || false}
+                    disabled={startBusy() || !hasRoot}
                     onClick={startService}
                   >
                     <MdIcon name="play_arrow" size={18} /> {t('hero_start_service')}
@@ -159,7 +159,7 @@ export function LoginHero(): JSX.Element {
                 <div class="hero-actions">
                   <Button
                     variant="filled"
-                    disabled={waiting() || !hasRoot || false}
+                    disabled={waiting() || !hasRoot}
                     onClick={getLoginLink}
                   >
                     <MdIcon name="login" size={18} /> {t('hero_get_link')}
@@ -209,7 +209,7 @@ export function LoginHero(): JSX.Element {
                     />
                     <Button
                       variant="tonal"
-                      disabled={!authkey().trim() || authkeyBusy() || !hasRoot || false}
+                      disabled={!authkey().trim() || authkeyBusy() || !hasRoot}
                       onClick={loginWithAuthkey}
                     >
                       <MdIcon name="vpn_key" size={18} /> {t('acc_login_authkey')}

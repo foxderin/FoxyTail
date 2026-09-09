@@ -16,7 +16,7 @@ tunnel:
   mtu: 1280
   multi-queue: false
   ipv4:
-    address: 100.100.100.100
+    address: 100.100.100.101
     gateway: 100.100.100.100
     prefix: 30
   # @IPV6_BEGIN@

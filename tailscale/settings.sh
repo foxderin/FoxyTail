@@ -132,7 +132,7 @@ is_screen_on() {
   if [ -z "${_ft_power}" ]; then
     return 0
   fi
-  echo "${_ft_power}" | grep -qi 'mScreenOn=true\|Display Power: state=ON'
+  echo "${_ft_power}" | grep -qi -e 'mScreenOn=true' -e 'Display Power: state=ON'
 }
 
 # --- Process lookup ------------------------------------------------------------

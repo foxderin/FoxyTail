@@ -43,7 +43,7 @@ export function TaskButton(props: {
   return (
     <Button
       variant="filled"
-      disabled={running() || props.disabled || !hasRoot || false}
+      disabled={running() || props.disabled || !hasRoot}
       onClick={() => {
         if (running()) return;
         startTask(props.taskKey, props.cmd, ...(props.args ?? []));

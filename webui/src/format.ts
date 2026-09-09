@@ -1,11 +1,12 @@
 /* Formatting helpers ported from webroot/js/dom.js. */
 
 export function fmtBytes(n: number | null | undefined): string {
-  const v = Number(n) || 0;
+  let v = Number(n) || 0;
+  if (!isFinite(v)) v = 0;
   if (v < 1024) return v + ' B';
-  if (v < 1048576) return (v / 1024).toFixed(1) + ' KB';
-  if (v < 1073741824) return (v / 1048576).toFixed(1) + ' MB';
-  return (v / 1073741824).toFixed(2) + ' GB';
+  if (v < 1048576) return (v / 1024).toFixed(1) + ' KiB';
+  if (v < 1073741824) return (v / 1048576).toFixed(1) + ' MiB';
+  return (v / 1073741824).toFixed(2) + ' GiB';
 }
 
 export function fmtUptime(sec: number | null | undefined): string {

@@ -139,6 +139,15 @@ start_service() {
     log Warning "socket ${TS_SOCKET} not ready after 10s; continuing anyway."
   fi
 
+  # Re-resolve the real daemon PID: a concurrent (double) start may have made
+  # $! point at a losing process; the pid file must name the surviving one.
+  _ss_real=$(daemon_pids)
+  if [ -n "${_ss_real}" ]; then
+    # shellcheck disable=SC2086 # intentional: one PID per word
+    set -- ${_ss_real}
+    echo "$1" >"${PID_FILE}"
+  fi
+
   update_mod_desc running
   log Success "tailscaled started (PID: $(cat "${PID_FILE}" 2>/dev/null))."
 
@@ -509,7 +518,16 @@ restart_service() {
     log Error "restart aborted: stop failed; not starting again."
     return 1
   fi
+  # The stop half above wrote the manual-stop marker; a Stop requested during
+  # the sleep window overwrites it with a newer timestamp. Only start when the
+  # marker is unchanged (or already cleared), so a user Stop wins the race.
+  _rst_stop=$(cat "${TS_RUN_DIR}/manual-stop" 2>/dev/null)
   sleep 1
+  _rst_now=$(cat "${TS_RUN_DIR}/manual-stop" 2>/dev/null)
+  if [ -n "${_rst_now}" ] && [ "${_rst_now}" != "${_rst_stop}" ]; then
+    log Warning "restart aborted: service was stopped manually during restart; staying stopped."
+    return 0
+  fi
   start_service
 }
 

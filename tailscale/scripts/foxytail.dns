@@ -41,9 +41,14 @@ get_state() {
   cat "${DNS_STATE_FILE}" 2>/dev/null || echo "stopped"
 }
 
-# PIDs of OUR dnsmasq instance only: match the config path in the cmdline.
+# PIDs of OUR dnsmasq instance only: argv[0] must be the binary under
+# $TS_BIN_DIR (or its bare name) and the cmdline must reference our config.
 dns_pids() {
-  pids_of "${DNS_CONF}"
+  for _dp_pid in $(pids_of_path "${DNS_BIN}"); do
+    if tr '\0' ' ' <"/proc/${_dp_pid}/cmdline" 2>/dev/null | grep -qF "${DNS_CONF}"; then
+      echo "${_dp_pid}"
+    fi
+  done
 }
 
 # True when another module already hijacks port 53 globally; the compat
@@ -55,9 +60,15 @@ dns_hijack_conflict() {
   ! foxytail.compat check-dns-hijack >/dev/null 2>&1
 }
 
-# Mount FOXY_DNS (nat) on OUTPUT and redirect UDP/53 into dnsmasq.
+# Mount FOXY_DNS (nat) on OUTPUT and redirect UDP/53 into dnsmasq. The first
+# rule exempts dnsmasq's own upstream queries (it runs as AID_NOBODY=9999, see
+# --user=nobody below) so they are not redirected back into dnsmasq itself.
 redirect_apply() {
   iptables -t nat -N "${CHAIN_DNS}" 2>/dev/null
+  if ! iptables -t nat -C "${CHAIN_DNS}" -m owner --uid-owner 9999 -j RETURN 2>/dev/null; then
+    iptables -t nat -I "${CHAIN_DNS}" 1 -m owner --uid-owner 9999 -j RETURN ||
+      { log Warning "failed to add dnsmasq owner exemption to ${CHAIN_DNS}."; return 1; }
+  fi
   if ! iptables -t nat -C "${CHAIN_DNS}" -p udp --dport 53 -j REDIRECT --to-ports "${DNS_PORT}" 2>/dev/null; then
     iptables -t nat -A "${CHAIN_DNS}" -p udp --dport 53 -j REDIRECT --to-ports "${DNS_PORT}" ||
       { log Warning "failed to add DNS REDIRECT rule."; return 1; }
@@ -73,6 +84,30 @@ redirect_teardown() {
   while iptables -t nat -D OUTPUT -j "${CHAIN_DNS}" 2>/dev/null; do :; done
   iptables -t nat -F "${CHAIN_DNS}" 2>/dev/null
   iptables -t nat -X "${CHAIN_DNS}" 2>/dev/null
+  return 0
+}
+
+redirect6_apply() {
+  ip6tables -t nat -N "${CHAIN_DNS}" 2>/dev/null
+  if ! ip6tables -t nat -C "${CHAIN_DNS}" -m owner --uid-owner 9999 -j RETURN 2>/dev/null; then
+    ip6tables -t nat -I "${CHAIN_DNS}" 1 -m owner --uid-owner 9999 -j RETURN ||
+      { log Warning "failed to add v6 dnsmasq owner exemption to ${CHAIN_DNS}."; return 1; }
+  fi
+  if ! ip6tables -t nat -C "${CHAIN_DNS}" -p udp --dport 53 -j REDIRECT --to-ports "${DNS_PORT}" 2>/dev/null; then
+    ip6tables -t nat -A "${CHAIN_DNS}" -p udp --dport 53 -j REDIRECT --to-ports "${DNS_PORT}" ||
+      { log Warning "failed to add v6 DNS REDIRECT rule."; return 1; }
+  fi
+  if ! ip6tables -t nat -C OUTPUT -j "${CHAIN_DNS}" 2>/dev/null; then
+    ip6tables -t nat -A OUTPUT -j "${CHAIN_DNS}" ||
+      { log Warning "failed to mount ${CHAIN_DNS} on ip6tables nat/OUTPUT."; return 1; }
+  fi
+  return 0
+}
+
+redirect6_teardown() {
+  while ip6tables -t nat -D OUTPUT -j "${CHAIN_DNS}" 2>/dev/null; do :; done
+  ip6tables -t nat -F "${CHAIN_DNS}" 2>/dev/null
+  ip6tables -t nat -X "${CHAIN_DNS}" 2>/dev/null
   return 0
 }
 
@@ -113,17 +148,19 @@ dns_start() {
   {
     echo "port=${DNS_PORT}"
     echo "listen-address=127.0.0.1"
+    [ "${IPV6}" = "on" ] && echo "listen-address=::1"
     echo "bind-interfaces"
     echo "no-resolv"
     echo "cache-size=512"
     echo "server=/${_ds_suffix}/100.100.100.100"
     echo "server=${_ds_default_dns}"
   } >"${DNS_CONF}"
+  chmod 0644 "${DNS_CONF}"
 
   rotate_log "${DNS_LOG}"
   log Info "Starting dnsmasq on 127.0.0.1:${DNS_PORT} (suffix: ${_ds_suffix}, upstream: ${_ds_default_dns})."
   nohup "${DNS_BIN}" --keep-in-foreground --conf-file="${DNS_CONF}" \
-    --pid-file="${PID_FILE}" >>"${DNS_LOG}" 2>&1 &
+    --pid-file="${PID_FILE}" --user=nobody >>"${DNS_LOG}" 2>&1 &
 
   sleep 1
   if [ -z "$(dns_pids)" ]; then
@@ -135,7 +172,16 @@ dns_start() {
   if dns_hijack_conflict; then
     log Warning "another module already hijacks UDP/53; skipping REDIRECT (dnsmasq still running on ${DNS_PORT})."
   else
-    redirect_apply
+    _ds_redir=1
+    redirect_apply || _ds_redir=0
+    if [ "${IPV6}" = "on" ]; then
+      redirect6_apply || _ds_redir=0
+    fi
+    if [ "${_ds_redir}" != 1 ]; then
+      log Error "DNS REDIRECT installation failed; MagicDNS degraded."
+      set_state degraded
+      return 1
+    fi
   fi
 
   set_state running
@@ -148,6 +194,7 @@ dns_stop() {
   load_conf
 
   redirect_teardown
+  redirect6_teardown
 
   _dt_rc=0
   _dt_pids=$(dns_pids)
