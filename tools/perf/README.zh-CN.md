@@ -1,6 +1,6 @@
 # Android 工作量采集
 
-此目录提供手动诊断工具，不进入模块安装包，也不由服务启动。当前只完成主机 fixture 验证，**尚无这一轮的 Android 实机或功耗结果**。
+此目录提供手动诊断工具，不进入模块安装包，也不由服务启动。已在 OnePlus PLR110 / Android 16 上完成有界采集和离线摘要的 [功能验证](../../docs/reviews/2026-09-10-quality-power-device.zh-CN.md)，**尚无实际能耗 A/B 结果**。
 
 `collect-android.sh` 在指定时间内读取 `/proc`，输出私有 TSV；`summarize.py` 在电脑离线汇总。采集器不导入生产 settings，不读取账户状态、VPN 配置、DNS 查询或日志，不修改路由、VPN、root 权限、休眠和充电参数。命令参数只在内存管道中用于识别进程，不保存完整 cmdline、节点名或密钥。
 
