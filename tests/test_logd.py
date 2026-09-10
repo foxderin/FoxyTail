@@ -215,10 +215,13 @@ logd_read_event() {
       _lde_events=y _lde_dir=$TS_RUN_DIR _lde_name=foxydns.health.json
       [ "$_TEST_NOW" -lt "$TEST_HORIZON" ] || _LD_RUNNING=0
       return 0;;
-    overflow|removed)
+    overflow|removed|fragment)
       if [ "$_TEST_NOW" = 0 ]; then
         _TEST_NOW=1; _lde_events=o _lde_dir=$TS_RUN_DIR _lde_name=
-        [ "$TEST_MODE" != removed ] || _lde_events=x
+        case "$TEST_MODE" in
+          removed) _lde_events=x ;;
+          fragment) _lde_events=/data/adb/foxytail/run; _lde_dir=foxydns.state.json ;;
+        esac
         return 0
       fi;;
   esac
@@ -251,6 +254,76 @@ logd_run
         self.simulate('removed')
         self.assertEqual(self.metrics().count('scan'), 30)
         self.assertEqual(self.metrics().count('load'), 1)
+
+    def test_partial_event_record_keeps_watcher_and_bounded_audits(self):
+        self.env.update(TEST_MODE='fragment', TEST_HORIZON='61')
+        self.simulate('fragment')
+        # Initial scan, malformed-record recovery, then the 30s/60s audits.
+        # Mistaking the path's x for IN_IGNORED would switch to 2s polling.
+        self.assertEqual(self.metrics().count('scan'), 4)
+        self.assertEqual(self.metrics().count('load'), 1)
+
+    def test_malformed_event_fields_cannot_report_watch_loss(self):
+        cases = [
+            ('/data/adb/foxytail/run', 'foxydns.state.json', ''),
+            ('x', str(self.run / 'pids'), ''),
+            ('M', str(self.directory / 'other'), ''),
+            ('', str(self.run), 'daemon.log'),
+            ('c/foxytail', str(self.run), 'daemon.log'),
+        ]
+        for events, directory, name in cases:
+            with self.subTest(events=events, directory=directory):
+                self.env.update(TEST_EVENTS=events, TEST_EVENT_DIR=directory, TEST_EVENT_NAME=name)
+                self.shell('''
+_LD_RELOAD=0 _LD_SCAN=0 _LD_EVENT_FAULT=0
+logd_note_event "$TEST_EVENTS" "$TEST_EVENT_DIR" "$TEST_EVENT_NAME"
+[ "$_LD_RELOAD:$_LD_SCAN:$_LD_EVENT_FAULT" = 1:1:0 ]
+''')
+
+    def test_timed_read_partial_line_is_not_a_watch_loss(self):
+        # Integer timeout also works on macOS's older Bash. The device uses
+        # mksh's fractional drain timeout; both can consume a partial line.
+        script = '''
+. "$TEST_ROOT/tailscale/scripts/foxytail.log-lib.sh"
+TS_RUN_DIR=/data/adb/foxytail/run
+TS_CONF_DIR=/data/adb/foxytail/conf
+exec 3<&0
+logd_read_event 1
+_test_rc=$?
+[ "$_test_rc" -ne 0 ] || exit 1
+printf '%s\\n' "$_test_rc" >"$TEST_DIR/read-timed-out"
+logd_read_event 5 || exit 1
+_LD_RELOAD=0 _LD_SCAN=0 _LD_EVENT_FAULT=0
+logd_note_event "$_lde_events" "$_lde_dir" "$_lde_name"
+printf '%s\\n' "$_lde_events" "$_lde_dir" "$_LD_RELOAD:$_LD_SCAN:$_LD_EVENT_FAULT"
+'''
+        process = subprocess.Popen(['bash', '-c', script], env=self.env, text=True,
+                                   stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                                   stderr=subprocess.PIPE, start_new_session=True)
+        self.addCleanup(self.cleanup_process, process)
+        process.stdin.write('c\t')
+        process.stdin.flush()
+        self.wait_for(lambda: (self.directory / 'read-timed-out').exists())
+        process.stdin.write('/data/adb/foxytail/run\tfoxydns.state.json\n')
+        process.stdin.flush()
+        stdout, stderr = process.communicate(timeout=7)
+        self.assertEqual(process.returncode, 0, stdout + stderr)
+        self.assertEqual(stdout.splitlines(),
+                         ['/data/adb/foxytail/run', 'foxydns.state.json', '1:1:0'])
+
+    def test_real_watch_loss_and_overflow_records_remain_actionable(self):
+        self.shell('''
+for _test_dir in "$TS_RUN_DIR" "$TS_CONF_DIR"; do
+  for _test_event in x D M u; do
+    _LD_RELOAD=0 _LD_SCAN=0 _LD_EVENT_FAULT=0
+    logd_note_event "$_test_event" "$_test_dir" ''
+    [ "$_LD_RELOAD:$_LD_SCAN:$_LD_EVENT_FAULT" = 1:1:1 ] || exit 1
+  done
+  _LD_RELOAD=0 _LD_SCAN=0 _LD_EVENT_FAULT=0
+  logd_note_event o "$_test_dir" ''
+  [ "$_LD_RELOAD:$_LD_SCAN:$_LD_EVENT_FAULT" = 1:1:0 ] || exit 1
+done
+''')
 
     def test_measured_idle_workload_matches_saved_v130_fixture(self):
         scripts = self.directory / 'scripts'

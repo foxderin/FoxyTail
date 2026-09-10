@@ -118,6 +118,16 @@ logd_start_events() {
 }
 
 logd_note_event() {
+  # A timed read can consume a line prefix before failing. The next read then
+  # starts inside a path: its "x" must not masquerade as a removed watch.
+  # Treat malformed records as lost events and audit, keeping a live watcher.
+  case "$1" in
+    '' | *[!cndmyDMoxu]*) _LD_RELOAD=1; _LD_SCAN=1; return 0 ;;
+  esac
+  case "$2" in
+    "${TS_RUN_DIR}" | "${TS_CONF_DIR}") ;;
+    *) _LD_RELOAD=1; _LD_SCAN=1; return 0 ;;
+  esac
   case "$1" in
     *x* | *D* | *M* | *u*) _LD_RELOAD=1; _LD_SCAN=1; _LD_EVENT_FAULT=1 ;;
     *o*) _LD_RELOAD=1; _LD_SCAN=1 ;;
