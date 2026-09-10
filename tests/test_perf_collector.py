@@ -74,6 +74,22 @@ class CollectorTests(unittest.TestCase):
         rows, _ = self.snapshot()
         self.assertEqual(rows[0]["component"], "tailscale")
 
+    def test_truncated_hev_comm_requires_owned_executable_mapping(self):
+        owned = "/data/adb/foxytail/bin/hev-socks5-tunnel"
+        other = "/data/adb/other/bin/hev-socks5-tunnel"
+        process = self.process(10, [owned], mapped=owned)
+        self.assertEqual((process / "comm").read_text(), "hev-socks5-tunn\n")
+        self.process(11, [other], mapped=other)
+        self.process(12, [owned], mapped=other)
+        self.process(13, [owned])
+        self.process(14, ["hev-socks5-tunnel"], mapped=owned)
+        rows, _ = self.snapshot()
+        found = {row["pid"]: row for row in rows}
+        self.assertEqual(set(found), {"10", "14"})
+        for row in found.values():
+            self.assertEqual(row["component"], "hev-socks5-tunnel")
+            self.assertEqual(row["attribution"], "direct")
+
     def test_android_mksh_script_arguments_are_recognized(self):
         self.process(10, ["/system/bin/mksh", "/data/adb/foxytail/scripts/foxytail.logd", "start"])
         rows, _ = self.snapshot()

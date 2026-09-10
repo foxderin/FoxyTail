@@ -32,7 +32,8 @@ function quote(value) {
 }
 function component(path,    cmd, args, count, i, token, name, map, fields, comm) {
   comm = line(path "/comm")
-  if (!(native(comm) || comm == "hev-socks5-tunne" || comm == "start.sh" || comm ~ /^(sh|ash|bash|mksh|busybox)$/ || comm ~ /^foxytail\.[a-z.-]+$/)) return ""
+  # Linux comm keeps at most 15 bytes; this admits candidates, not ownership.
+  if (!(native(comm) || comm == substr("hev-socks5-tunnel", 1, 15) || comm == "start.sh" || comm ~ /^(sh|ash|bash|mksh|busybox)$/ || comm ~ /^foxytail\.[a-z.-]+$/)) return ""
   # POSIX/BusyBox awk cannot reliably preserve NULs. Decode only candidates
   # through a pipe; raw arguments never touch a capture file. This subprocess
   # cost is diagnostic overhead, explicitly excluded from power claims.
