@@ -140,7 +140,7 @@ export function TopologyChart(props: {
               }}
             >
               <title>
-                {peer.hostname} · {peer.ip} ·{' '}
+                {peer.hostname} · {peer.ips?.join(' · ') || peer.ip} ·{' '}
                 {peer.online ? t('net_filter_online') : t('net_filter_offline')}
               </title>
               <rect

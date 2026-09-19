@@ -85,7 +85,7 @@ update_mod_desc() {
 
 # Wait up to 10s for the tailscaled socket to appear.
 wait_socket() {
-  wait_for "tailscaled socket" test -S "${TS_SOCKET}"
+  wait_for "tailscaled socket" 20 0.5 test -S "${TS_SOCKET}"
 }
 
 build_daemon_cmd() {

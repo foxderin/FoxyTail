@@ -1,10 +1,11 @@
 """Run the context script on the host with private paths and network command stubs."""
 import os
 from pathlib import Path
-import shlex
 import subprocess
 import tempfile
 import unittest
+
+from runtime_fixture import install_settings
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -23,11 +24,7 @@ class ContextTests(unittest.TestCase):
         self.source = self.source.replace('"$SERVICE" start --applied', 'sh "$SERVICE" start --applied')
         self.source = self.source.replace('"$SERVICE" stop', 'sh "$SERVICE" stop')
         self.script.write_text(self.source)
-        settings = (ROOT / 'tailscale/settings.sh').read_text()
-        settings = settings.replace('TS_DIR="/data/adb/foxytail"',
-                                    'TS_DIR=' + shlex.quote(str(self.base)))
-        self.settings = self.base / 'settings.sh'
-        self.settings.write_text(settings)
+        self.settings = install_settings(self.base)
         self.env = {**os.environ, 'TS_TEST_DIR': str(self.base),
                     'MODPATH': str(self.base / 'module')}
         self.rules = self.base / 'conf/context.conf'

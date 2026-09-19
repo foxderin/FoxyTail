@@ -11,9 +11,6 @@ importers:
       '@material-symbols/svg-400':
         specifier: ^0.47.1
         version: 0.47.1
-      '@material/material-color-utilities':
-        specifier: ^0.4.0
-        version: 0.4.0
       kernelsu:
         specifier: ^3.0.2
         version: 3.0.2
@@ -322,9 +319,6 @@ packages:
 
   '@material-symbols/svg-400@0.47.1':
     resolution: {integrity: sha512-kpK/2tlHqNvEq6hcqkpJqxfYhZjd/eQGDOsIGA4Q6YrahV8XmAuJwUEFcQGX0+TaZwWuoFmtpKEihTcw9waOJg==}
-
-  '@material/material-color-utilities@0.4.0':
-    resolution: {integrity: sha512-dlq6VExJReb8dhjj3a/yTigr3ncNwoFmL5Iy2ENtbDX03EmNeOEdZ+vsaGrj7RTuO+mB7L58II4LCsl4NpM8uw==}
 
   '@napi-rs/lzma-linux-x64-gnu@1.5.1':
     resolution: {integrity: sha512-oTXEIha4SsuXdTA4Iyskj0kpdx2yVXdhd75c2v3xGrHFfVMsbhTPZU/nMPL4sWKo4pBHm3aucLaqGlF696dTyQ==}
@@ -1166,8 +1160,6 @@ snapshots:
       '@jridgewell/sourcemap-codec': 1.6.0
 
   '@material-symbols/svg-400@0.47.1': {}
-
-  '@material/material-color-utilities@0.4.0': {}
 
   '@napi-rs/lzma-linux-x64-gnu@1.5.1':
     optional: true

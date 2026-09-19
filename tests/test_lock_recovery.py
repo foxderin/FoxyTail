@@ -18,9 +18,8 @@ class LockRecoveryTests(unittest.TestCase):
         self.directory = Path(temporary.name)
         self.lock = self.directory / '.lock'
         self.waiters = self.directory / '.lock.waiters'
-        source = (ROOT / 'tailscale/settings.sh').read_text()
-        self.functions = source[source.index('_proc_starttime() {'):
-                                source.index('# Must be called under conf_lock_acquire')]
+        source = (ROOT / 'tailscale/scripts/foxytail.lock.sh').read_text()
+        self.functions = source
         self.preamble = '''
 TS_RUN_DIR="$1"
 lock="$TS_RUN_DIR/.lock"
@@ -306,7 +305,7 @@ _owner_lock_release "$lock" "$_LOCK_TOKEN"
         self.finish(live, input='release\n')
         self.assert_released()
 
-    def test_service_and_dns_wrappers_release_their_own_lock_domains(self):
+    def test_controllers_release_their_own_lock_domains(self):
         service = (ROOT / 'tailscale/scripts/foxytail.service').read_text()
         service = service[service.index('service_unlock() {'):service.index('\ncase "$1" in', service.index('service_unlock() {'))]
         dns = (ROOT / 'tailscale/scripts/foxytail.dns-modern.sh').read_text()
@@ -325,6 +324,12 @@ test -L "$TS_RUN_DIR/.service-lock" || exit 17
         for name in ('.service-lock', '.dns-lock', '.conf-write-lock'):
             self.assertFalse((self.directory / name).is_symlink())
             self.assertEqual(list((self.directory / (name + '.waiters')).iterdir()), [])
+        route = (ROOT / 'tailscale/scripts/foxytail.route').read_text()
+        route = route[route.index('route_lock() {'):route.index('\niface_exists()')]
+        self.finish(self.start('''route_lock || exit 1
+test "$(readlink "$TS_RUN_DIR/.conf-write-lock")" = "$_CONF_LOCK_TOKEN" || exit 2
+''', functions=self.functions + route))
+        self.assertFalse((self.directory / '.conf-write-lock').is_symlink())
 
 
 if __name__ == '__main__':

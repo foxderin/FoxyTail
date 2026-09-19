@@ -33,10 +33,11 @@ done
 ''')
         shutil.copy(ROOT / 'tailscale/VERSIONS', self.root / 'tailscale/VERSIONS')
         for relative in ['customize.sh', 'service.sh', 'uninstall.sh', 'update.json', 'LICENSE',
-                         'tailscale/settings.sh', 'tailscale/scripts/start.sh', 'webroot/index.html',
+                         'tailscale/settings.sh', 'webroot/index.html',
                          'native/foxydns/THIRD_PARTY_NOTICES.txt',
                          'unwanted/private-data']:
             (self.root / relative).write_text('fixture\n')
+        shutil.copytree(ROOT / 'tailscale/scripts', self.root / 'tailscale/scripts', dirs_exist_ok=True)
         (self.root / 'module.prop').write_text('version=v1.0.3\n')
         (self.root / 'binary-source').mkdir()
         (self.root / 'binary-source/tailscaled').write_bytes(b'local-test-binary\n')
@@ -78,7 +79,8 @@ bash .github/tools/build.sh "$@"
         import zipfile
         with zipfile.ZipFile(self.root / 'dist/FoxyTail-v1.0.3.zip') as archive:
             names = archive.namelist()
-            self.assertIn('tailscale/scripts/start.sh', names)
+            for path in (ROOT / 'tailscale/scripts').iterdir():
+                self.assertIn('tailscale/scripts/' + path.name, names)
             self.assertEqual(archive.read('THIRD_PARTY_NOTICES.txt'), b'fixture\n')
             self.assertFalse(any('unwanted' in x or '.github' in x or 'native/foxydns' in x for x in names))
             self.assertEqual(sorted(x for x in names if '/bin/' in x),

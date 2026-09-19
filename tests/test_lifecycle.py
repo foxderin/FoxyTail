@@ -127,30 +127,6 @@ _conf_runtime_dir() { _RUNTIME_CONF_DIR="$PWD/run/.applied.test"; }
         self.assertNotEqual(result.returncode, 0)
         self.assertTrue((runtime / 'settings.pending').exists())
 
-    def test_service_lock_serializes_competing_stale_owner_recovery(self):
-        source = (ROOT / 'tailscale/scripts/foxytail.service').read_text()
-        settings = (ROOT / 'tailscale/settings.sh').read_text()
-        helpers = settings[settings.index('_conf_pid_stamp() {'):settings.index('conf_lock_acquire() {')]
-        a = source.index('service_unlock() {')
-        functions = source[a:source.index('\ncase "$1" in', a)]
-        (self.dir / '.service-lock').symlink_to('99999999:-')
-        runner = helpers + functions + '''
-TS_RUN_DIR="$1"
-ensure_run_dirs() { :; }
-log() { :; }
-service_lock || exit 1
-echo enter >>"$TS_RUN_DIR/events"
-sleep 0.03
-echo leave >>"$TS_RUN_DIR/events"
-'''
-        procs = [subprocess.Popen(['sh', '-c', runner, 'fixture', str(self.dir)],
-                                 stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True) for _ in range(6)]
-        for proc in procs:
-            stdout, stderr = proc.communicate(timeout=15)
-            self.assertEqual(proc.returncode, 0, stdout + stderr)
-        self.assertEqual((self.dir / 'events').read_text().splitlines(), ['enter', 'leave'] * 6)
-        self.assertFalse((self.dir / '.service-lock').is_symlink())
-
     def test_upgrade_switch_rolls_back_after_second_directory_failure(self):
         source = (ROOT / 'customize.sh').read_text()
         functions = source[source.index('rollback_install() {'):source.index('# Recover an interrupted earlier switch')]
@@ -277,7 +253,7 @@ test -f "$TS_DIR/.installing"
     def test_copytruncate_keeps_existing_writer_on_active_inode(self):
         settings = (ROOT / 'tailscale/settings.sh').read_text()
         function = settings[settings.index('rotate_log()'):settings.index('# Log with a per-call')]
-        function += settings[settings.index('_conf_pid_stamp() {'):settings.index('# Must be called under conf_lock_acquire')]
+        function += (ROOT / 'tailscale/scripts/foxytail.lock.sh').read_text()
         run_sh(function + '''
 LOG_MAX_KB=1
 TS_RUN_DIR="$PWD"
@@ -294,6 +270,20 @@ test "$(cat "$logfile")" = after-rotation
 test -f "$logfile.bak"
 test "$(wc -c <"$logfile.bak")" -le 1024
 ''', self.dir)
+
+    def test_installer_exposes_commands_without_sourced_libraries(self):
+        source = (ROOT / 'customize.sh').read_text()
+        links = source[source.index('# --- Symlinks'):source.index('# Only now')]
+        scripts = self.dir / 'scripts'
+        scripts.mkdir()
+        commands = ('foxytail.webapi.sh', 'foxytail.service', 'foxytail.tun.up')
+        libraries = ('foxytail.config.sh', 'foxytail.lock.sh', 'foxytail.webapi-common.sh',
+                     'foxytail.webapi-network.sh', 'foxytail.webapi-config.sh', 'foxytail.webapi-tools.sh')
+        for name in commands + libraries:
+            (scripts / name).touch()
+        run_sh('MODPATH="$PWD/module"; TS_BIN_DIR="$PWD/bin"; TS_SCRIPTS_DIR="$PWD/scripts"\n' + links, self.dir)
+        self.assertEqual(sorted(path.name for path in (self.dir / 'module/system/bin').iterdir()),
+                         sorted(('tailscale', 'tailscaled') + commands))
 
 
 if __name__ == '__main__':

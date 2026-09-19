@@ -3,14 +3,13 @@
  * <button>/<input>/<select>/<dialog> styled with the existing MD3 tokens.
  */
 import { createEffect, createSignal, createUniqueId, For, onCleanup, onMount, Show, type JSX, type ParentProps } from 'solid-js';
-import { MdIcon, type IconName } from '../icons';
+import { MdIcon } from '../icons';
 
 export function Button(props: ParentProps<{
   variant?: 'filled' | 'tonal' | 'outlined' | 'text';
   type?: 'button' | 'submit' | 'reset';
   disabled?: boolean;
   busy?: boolean;
-  loading?: boolean;
   'aria-label'?: string;
   'aria-expanded'?: boolean;
   'aria-controls'?: string;
@@ -27,8 +26,8 @@ export function Button(props: ParentProps<{
       type={props.type ?? 'button'}
       class={cls()}
       style={props.style}
-      disabled={props.disabled || props.busy || props.loading || false}
-      aria-busy={props.busy || props.loading || undefined}
+      disabled={props.disabled || props.busy || false}
+      aria-busy={props.busy || undefined}
       aria-label={props['aria-label']}
       aria-expanded={props['aria-expanded']}
       aria-controls={props['aria-controls']}
@@ -36,7 +35,7 @@ export function Button(props: ParentProps<{
       autofocus={props.autofocus || undefined}
       onClick={props.onClick}
     >
-      <Show when={props.busy || props.loading}><CircularProgress size={16} /></Show>{props.children}
+      <Show when={props.busy}><CircularProgress size={16} /></Show>{props.children}
     </button>
   );
 }
@@ -185,7 +184,6 @@ export function Select(props: ParentProps<{
 }
 
 export function Switch(props: {
-  selected?: boolean;
   checked?: boolean;
   indeterminate?: boolean;
   disabled?: boolean;
@@ -194,11 +192,6 @@ export function Switch(props: {
   'aria-describedby'?: string;
   onChange?: (e: Event) => void;
 }): JSX.Element {
-  const onInput = (e: Event) => {
-    const cb = e.currentTarget as HTMLInputElement;
-    (cb as unknown as Record<string, boolean>).selected = cb.checked;
-    props.onChange?.(e);
-  };
   return (
     <label class={'switch' + (props.class ? ' ' + props.class : '')}>
       <input
@@ -208,9 +201,9 @@ export function Switch(props: {
         aria-label={props['aria-label']}
         aria-describedby={props['aria-describedby']}
         class="switch-input"
-        checked={(props.selected ?? props.checked) || false}
+        checked={props.checked || false}
         disabled={props.disabled || false}
-        onChange={onInput}
+        onChange={props.onChange}
       />
       <span class="switch-track">
         <span class="switch-thumb" />
@@ -247,59 +240,21 @@ export function Checkbox(props: {
   );
 }
 
-export function Tabs(props: ParentProps<{
-  activeTabIndex?: number;
-  class?: string;
-  'aria-label'?: string;
-  onChange?: (e: Event) => void;
-}>): JSX.Element {
-  const [idx, setIdx] = createSignal(props.activeTabIndex ?? 0);
-  createEffect(() => setIdx(props.activeTabIndex ?? 0));
-  const slots = () => {
-    const out: { icon?: IconName; label: string }[] = [];
-    (props.children as unknown as JSX.Element[] | undefined)?.forEach?.((child: unknown) => {
-      if (!child || typeof child !== 'object') return;
-      const el = child as {
-        props?: { children?: unknown; icon?: IconName; label?: string; name?: IconName };
-        children?: unknown;
-        icon?: IconName;
-        label?: string;
-      };
-      const p = 'props' in el && el.props ? el.props : el;
-      const raw = p.children;
-      let label = '';
-      let icon: IconName | undefined;
-      if (Array.isArray(raw)) {
-        label = raw.filter((x) => typeof x === 'string').join('').trim();
-        const iconEl = raw.find(
-          (x: unknown) =>
-            x && typeof x === 'object' &&
-            ((x as { name?: IconName }).name || (x as { props?: { name?: IconName } }).props?.name),
-        );
-        if (iconEl) {
-          icon =
-            (iconEl as { name?: IconName }).name ||
-            (iconEl as { props?: { name?: IconName } }).props?.name;
-        }
-      } else if (typeof raw === 'string') {
-        label = raw.trim();
-      }
-      if (p.label) label = p.label;
-      if (p.icon) icon = p.icon;
-      out.push({ label, icon });
-    });
-    return out;
-  };
+export function Tabs(props: {
+  labels: string[];
+  active: number;
+  onChange: (index: number) => void;
+}): JSX.Element {
   return (
-    <div class={'tabs' + (props.class ? ' ' + props.class : '')} role="tablist" aria-label={props['aria-label']}>
-      <For each={slots()}>
-        {(slot, i) => (
+    <div class="tabs" role="tablist">
+      <For each={props.labels}>
+        {(label, i) => (
           <button
             type="button"
-            class={'tab' + (i() === idx() ? ' active' : '')}
+            class={'tab' + (i() === props.active ? ' active' : '')}
             role="tab"
-            aria-selected={i() === idx()}
-            tabIndex={i() === idx() ? 0 : -1}
+            aria-selected={i() === props.active}
+            tabIndex={i() === props.active ? 0 : -1}
             onKeyDown={(event) => {
               const buttons = Array.from(event.currentTarget.parentElement?.querySelectorAll<HTMLButtonElement>('[role="tab"]') ?? []);
               let next = i();
@@ -310,26 +265,16 @@ export function Tabs(props: ParentProps<{
               else return;
               event.preventDefault();
               buttons[next]?.focus();
-              buttons[next]?.click();
+              props.onChange(next);
             }}
-            onClick={(e) => {
-              setIdx(i());
-              const el = e.currentTarget as unknown as { activeTabIndex: number };
-              el.activeTabIndex = i();
-              props.onChange?.({ target: el } as unknown as Event);
-            }}
+            onClick={() => props.onChange(i())}
           >
-            {slot.icon ? <MdIcon name={slot.icon} size={18} /> : null}
-            <span>{slot.label}</span>
+            {label}
           </button>
         )}
       </For>
     </div>
   );
-}
-
-export function Tab(props: { children?: JSX.Element; icon?: IconName; label?: string }): JSX.Element {
-  return props as unknown as JSX.Element;
 }
 
 export function LinearProgress(props: { indeterminate?: boolean; value?: number; class?: string; 'aria-label'?: string }): JSX.Element {

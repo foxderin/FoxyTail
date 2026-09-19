@@ -13,7 +13,6 @@ import { t } from '../i18n';
 import { status } from '../state';
 import { fmtBytes } from '../format';
 import {
-  Card,
   KvRow,
   StatusDot,
   SkeletonRows,
@@ -50,7 +49,7 @@ export default function Peers(): JSX.Element {
         (peer) =>
           (filter() === 'all' || peer.online === (filter() === 'online')) &&
           (!text ||
-            [peer.hostname, peer.ip, peer.os].some((value) =>
+            [peer.hostname, ...(peer.ips || []), peer.os].some((value) =>
               value?.toLocaleLowerCase().includes(text),
             )),
       )
@@ -69,7 +68,11 @@ export default function Peers(): JSX.Element {
     setLoading(false);
     if (res.cancelled || my !== seq) return;
     if (res.ok) {
-      setPeers((res.peers as Peer[]) || []);
+      setPeers(((res.peers as Peer[]) || []).map(peer => ({
+        ...peer,
+        ips: (Array.isArray(peer.ips) ? peer.ips : [peer.ip])
+          .filter(ip => typeof ip === 'string' && ip !== '' && ip !== '-'),
+      })));
       setLoadError(null);
     } else setLoadError(res.error || t('error'));
   }
@@ -280,15 +283,21 @@ export default function Peers(): JSX.Element {
                           </span>
                         </button>
                         <div class="network-peer-bottom">
-                          <button
-                            type="button"
-                            class="network-copy-inline"
-                            onClick={() => copyAddress(peer.ip)}
-                            aria-label={t('net_copy_address') + ': ' + peer.ip}
-                          >
-                            <code>{peer.ip || '—'}</code>
-                            <MdIcon name="content_copy" size={15} />
-                          </button>
+                          <div class="network-peer-addresses">
+                            <For each={peer.ips} fallback={<span>{t('net_address_pending')}</span>}>
+                              {ip => (
+                                <button
+                                  type="button"
+                                  class="network-copy-inline"
+                                  onClick={() => copyAddress(ip)}
+                                  aria-label={t('net_copy_address') + ': ' + ip}
+                                >
+                                  <code>{ip}</code>
+                                  <MdIcon name="content_copy" size={15} />
+                                </button>
+                              )}
+                            </For>
+                          </div>
                           <span class="network-peer-traffic">
                             <span>↓ {fmtBytes(peer.rxBytes)}</span>
                             <span>↑ {fmtBytes(peer.txBytes)}</span>
@@ -331,14 +340,20 @@ export default function Peers(): JSX.Element {
                 </span>
               </div>
             </div>
-            <div class="network-address">
-              <code>{peer().ip}</code>
-              <IconButton
-                aria-label={t('net_copy_address')}
-                onClick={() => copyAddress(peer().ip)}
-              >
-                <MdIcon name="content_copy" size={18} />
-              </IconButton>
+            <div class="network-addresses">
+              <For each={peer().ips} fallback={<span>{t('net_address_pending')}</span>}>
+                {ip => (
+                  <div class="network-address">
+                    <code>{ip}</code>
+                    <IconButton
+                      aria-label={t('net_copy_address') + ': ' + ip}
+                      onClick={() => copyAddress(ip)}
+                    >
+                      <MdIcon name="content_copy" size={18} />
+                    </IconButton>
+                  </div>
+                )}
+              </For>
             </div>
             <KvRow k={t('net_os')} v={peer().os || '—'} />
             <KvRow k={t('net_relay_region')} v={peer().relay || '—'} />

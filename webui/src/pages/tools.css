@@ -267,24 +267,20 @@
   background: var(--md-sys-color-surface);
   cursor: pointer;
 }
-.tool-policy[aria-checked='true'] {
+.tool-policy:has(input:checked) {
   border-color: var(--md-sys-color-primary);
   background: var(--md-sys-color-primary-container);
 }
-.tool-policy:disabled {
+.tool-policy:has(input:disabled) {
   opacity: 0.5;
   cursor: not-allowed;
 }
-.tool-policy-dot {
+.tool-policy input {
   width: 18px;
   height: 18px;
-  border: 1.5px solid var(--md-sys-color-outline);
-  border-radius: 50%;
-  margin-top: 2px;
+  margin: 2px 0 0;
   flex: none;
-}
-.tool-policy[aria-checked='true'] .tool-policy-dot {
-  border: 5px solid var(--md-sys-color-primary);
+  accent-color: var(--md-sys-color-primary);
 }
 .tool-policy-copy {
   display: grid;

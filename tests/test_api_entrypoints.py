@@ -2,23 +2,16 @@
 import json
 import os
 from pathlib import Path
-import shlex
 import signal
 import subprocess
 import sys
 import time
 import unittest
 
-import test_config_api
+from api_fixture import ApiTestCase, ROOT
 
 
-class ApiEntrypointTests(unittest.TestCase):
-    setUp = test_config_api.ConfigApiTests.setUp
-    tearDown = test_config_api.ConfigApiTests.tearDown
-    shell = test_config_api.ConfigApiTests.shell
-    archive = test_config_api.ConfigApiTests.archive
-    snapshot = test_config_api.ConfigApiTests.snapshot
-
+class ApiEntrypointTests(ApiTestCase):
     def script(self, name, body):
         path = self.base / name
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -27,7 +20,7 @@ class ApiEntrypointTests(unittest.TestCase):
         return path
 
     def entry_fixture(self):
-        source = (test_config_api.ROOT / 'tailscale/scripts/foxytail.webapi.sh').read_text()
+        source = (ROOT / 'tailscale/scripts/foxytail.webapi.sh').read_text()
         if not Path('/proc/self/stat').exists():
             # macOS has no procfs. Substitute only the platform readers: actual
             # registration, descendant capture, signals, timeout and dispatch run.
@@ -51,10 +44,11 @@ _proc_starttime() {
 }
 ''')
         self.api = self.script('scripts/foxytail.webapi.sh', source.replace(
-            '/sdcard/', str(self.sdcard) + '/').replace('#!/system/bin/sh\n', '', 1)
-            # Execute inert service boundaries explicitly with the host shell.
-            .replace('then "${TS_SCRIPTS_DIR}/start.sh"', 'then sh "${TS_SCRIPTS_DIR}/start.sh"')
-            .replace('else "${TS_SCRIPTS_DIR}/foxytail.service"', 'else sh "${TS_SCRIPTS_DIR}/foxytail.service"'))
+            '/sdcard/', str(self.sdcard) + '/').replace('#!/system/bin/sh\n', '', 1))
+        for path in self.scripts.glob('foxytail.webapi-*.sh'):
+            path.write_text(path.read_text()
+                .replace('then "${TS_SCRIPTS_DIR}/start.sh"', 'then sh "${TS_SCRIPTS_DIR}/start.sh"')
+                .replace('else "${TS_SCRIPTS_DIR}/foxytail.service"', 'else sh "${TS_SCRIPTS_DIR}/foxytail.service"'))
         # These host fixtures must never move a real cgroup or touch devices.
         with (self.base / 'settings.sh').open('a') as settings:
             settings.write('\ndetach_from_app_cgroup() { :; }\n')
@@ -98,7 +92,7 @@ _proc_starttime() {
     def slow_fixture(self):
         self.entry_fixture()
         for name in ('foxytail.diag', 'foxytail.compat'):
-            source = (test_config_api.ROOT / 'tailscale/scripts' / name).read_text()
+            source = (ROOT / 'tailscale/scripts' / name).read_text()
             self.script('scripts/' + name, source.replace('#!/system/bin/sh\n', '', 1)
                         .replace('/sdcard/', str(self.sdcard) + '/')
                         .replace('/data/adb/modules', str(self.base / 'modules')))
@@ -171,7 +165,8 @@ printf '{"state":"stopped","suffix":"","port":%s,"mode":"%s"}' "$DNS_PORT" "$DNS
 
     def test_real_diagnostic_timeout_cleans_descendants_and_partial_output(self):
         self.slow_fixture()
-        self.api.write_text(self.api.read_text().replace('_op_exec 120 ', '_op_exec 1 '))
+        tools = self.scripts / 'foxytail.webapi-tools.sh'
+        tools.write_text(tools.read_text().replace('_op_exec 120 ', '_op_exec 1 '))
         self.env['SLOW_PHASE'] = 'status'
         request = str(int(time.time())) + '_timeout'
         runner = subprocess.Popen(['sh', str(self.api), '--request-id', request, 'diag'],

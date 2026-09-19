@@ -6,7 +6,7 @@ import { Card, EmptyState, ErrorState, SkeletonRows, StatusBadge } from '../comp
 import { copyText } from '../components/LoginHero';
 import { showToast } from '../components/Toast';
 import { MdIcon } from '../icons';
-import { Button, Select, Switch, Tab, Tabs, TextField } from '../components/ui';
+import { Button, Select, Switch, Tabs, TextField } from '../components/ui';
 import './tools.css';
 
 type Src = 'daemon' | 'service';
@@ -85,12 +85,10 @@ export default function Logs(): JSX.Element {
         <p class="tool-hint">{t('tools_logs_scope')}</p>
         <div class="tool-form">
           <Tabs
-            activeTabIndex={src() === 'daemon' ? 0 : 1}
-            onChange={(e: Event) => {
-              const next =
-                (e.target as unknown as { activeTabIndex: number }).activeTabIndex === 0
-                  ? 'daemon'
-                  : 'service';
+            labels={[t('logs_daemon'), t('logs_service')]}
+            active={src() === 'daemon' ? 0 : 1}
+            onChange={(index) => {
+              const next = index === 0 ? 'daemon' : 'service';
               if (next !== src()) {
                 setSrc(next);
                 setLines(null);
@@ -98,10 +96,7 @@ export default function Logs(): JSX.Element {
                 void load();
               }
             }}
-          >
-            <Tab label={t('logs_daemon')} />
-            <Tab label={t('logs_service')} />
-          </Tabs>
+          />
           <div class="tool-log-controls">
             <TextField
               label={t('tools_logs_find')}
@@ -125,7 +120,7 @@ export default function Logs(): JSX.Element {
             <div class="tool-toggle">
               <Switch
                 aria-label={t('tools_logs_live')}
-                selected={live()}
+                checked={live()}
                 onChange={(e) => setLive((e.target as HTMLInputElement).checked)}
               />
               <span>{t('tools_logs_live')}</span>
@@ -133,7 +128,7 @@ export default function Logs(): JSX.Element {
             <div class="tool-toggle">
               <Switch
                 aria-label={t('logs_follow')}
-                selected={follow()}
+                checked={follow()}
                 onChange={(e) => setFollow((e.target as HTMLInputElement).checked)}
               />
               <span>{t('logs_follow')}</span>
@@ -141,7 +136,7 @@ export default function Logs(): JSX.Element {
             <div class="tool-toggle">
               <Switch
                 aria-label={t('tools_logs_wrap')}
-                selected={wrap()}
+                checked={wrap()}
                 onChange={(e) => setWrap((e.target as HTMLInputElement).checked)}
               />
               <span>{t('tools_logs_wrap')}</span>
@@ -149,7 +144,7 @@ export default function Logs(): JSX.Element {
             <div class="tool-toggle">
               <Switch
                 aria-label={t('tools_logs_match_case')}
-                selected={matchCase()}
+                checked={matchCase()}
                 onChange={(e) => setMatchCase((e.target as HTMLInputElement).checked)}
               />
               <span>{t('tools_logs_match_case')}</span>

@@ -231,7 +231,7 @@ export function ServiceControls(): JSX.Element {
           <Switch
             aria-label={t('net_controls_service') + (!known() ? ` (${t('net_unknown')})` : '')}
             aria-describedby={message() ? feedbackId : undefined}
-            selected={running()}
+            checked={running()}
             indeterminate={!known()}
             disabled={locked()}
             onChange={(event) => {

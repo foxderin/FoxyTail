@@ -114,8 +114,8 @@ pids_of_path() { echo 100; }
 jqr() { jq "$@"; }
 have_jq() { return 0; }
 ''')
-  settings=(ROOT/'tailscale/settings.sh').read_text()
-  with (self.dir/'settings.sh').open('a') as f:f.write(settings[settings.index('_conf_pid_stamp() {'):settings.index('# Read both files under the writer lock')])
+  settings=(ROOT/'tailscale/scripts/foxytail.lock.sh').read_text()
+  with (self.dir/'settings.sh').open('a') as f:f.write(settings[settings.index('_conf_pid_stamp() {'):])
   (self.dir/'bin/mock').write_text(MOCK);(self.dir/'bin/mock').chmod(0o755)
   for name in ('ip','iptables','ip6tables'):(self.dir/'bin'/name).symlink_to('mock')
   self.state=self.dir/'state.json';self.state.write_text(json.dumps({'calls':[],'chains':{},'routes':{},'rules':{}}))
@@ -396,17 +396,5 @@ CHAIN_DNS=FOXY_DNS
   self.env.pop('FAIL_STOP');run('dns_stop');self.assertEqual(json.loads(run('dns_status','--json'))['state'],'stopped')
   self.assertEqual(json.loads(run('dns_status','--json'))['reason'],'apply-pending')
   self.config(MAGIC_DNS='off');self.assertEqual(json.loads(run('dns_status','--json'))['reason'],'disabled')
-
- def test_route_lock_reclaims_stale_owner_without_parallel_entry(self):
-  route=(ROOT/'tailscale/scripts/foxytail.route').read_text()
-  runner=self.dir/'lock-runner.sh'
-  runner.write_text('. "$TEST_DIR/settings.sh"\n'+route[route.index('route_lock() {'):route.index('\niface_exists()')]+ '\nroute_lock || exit 1\necho enter >>"$TEST_DIR/events"\nsleep 0.03\necho leave >>"$TEST_DIR/events"\n')
-  (self.dir/'run/.conf-write-lock').symlink_to('99999999:-')
-  procs=[subprocess.Popen(['sh',str(runner)],env=self.env,stdout=subprocess.PIPE,stderr=subprocess.PIPE,text=True) for _ in range(12)]
-  for proc in procs:
-   out,err=proc.communicate(timeout=20);self.assertEqual(proc.returncode,0,out+err)
-  events=(self.dir/'events').read_text().splitlines()
-  self.assertEqual(events,['enter','leave']*12)
-  self.assertFalse((self.dir/'run/.conf-write-lock').is_symlink())
 
 if __name__=='__main__':unittest.main()

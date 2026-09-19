@@ -5,6 +5,9 @@ import shlex
 import subprocess
 import tempfile
 import unittest
+import shutil
+
+from runtime_fixture import install_settings
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -23,10 +26,7 @@ class RuntimeConfigTests(unittest.TestCase):
         self.main.write_text('TS_MODE=bridge\nMAGIC_DNS=off\nDNS_MODE=legacy\nWATCHDOG=on\nDNS_PORT=1053\n')
         (self.conf / 'routes.conf').write_text('ROUTE_SCOPE=all\nROUTE_SUBNETS="100.64.0.0/10"\n')
         (self.conf / 'context.conf').write_text('cellular:-:no-exit-node\n')
-        settings = (ROOT / 'tailscale/settings.sh').read_text().replace(
-            'TS_DIR="/data/adb/foxytail"', 'TS_DIR=' + shlex.quote(str(self.base)))
-        self.settings = self.base / 'settings.sh'
-        self.settings.write_text(settings)
+        self.settings = install_settings(self.base)
         for name in ('foxytail.context', 'foxytail.watchdog', 'foxytail.stats', 'foxytail.logd', 'start.sh'):
             path = self.scripts / name
             path.write_text((ROOT / 'tailscale/scripts' / name).read_text().replace('#!/system/bin/sh', '#!/bin/sh', 1))
@@ -37,6 +37,19 @@ class RuntimeConfigTests(unittest.TestCase):
                                 cwd=self.base, text=True, capture_output=True, timeout=20)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         return result.stdout
+
+    def test_staged_settings_load_staged_libraries_and_validate_live_config(self):
+        stage = self.base / 'stage'
+        (stage / 'scripts').mkdir(parents=True)
+        shutil.copyfile(self.settings, stage / 'settings.sh')
+        for path in self.scripts.glob('foxytail.*.sh'):
+            shutil.move(path, stage / 'scripts' / path.name)
+        for valid in (True, False):
+            self.main.write_text('TS_MODE=' + ('bridge' if valid else 'invalid') + '\n')
+            result = subprocess.run(['sh', '-c', 'DIR=$2; . "$1"; load_conf', 'test',
+                                     str(stage / 'settings.sh'), str(stage / 'scripts')],
+                                    text=True, capture_output=True, timeout=10)
+            self.assertEqual(result.returncode == 0, valid, result.stdout + result.stderr)
 
     def test_pending_settings_never_replace_recovery_snapshot(self):
         self.shell('''
@@ -145,19 +158,6 @@ test ! -e "$TS_RUN_DIR/stopped"
                                 cwd=self.base, text=True, capture_output=True, timeout=10)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertTrue((self.run / 'service-stopped').exists())
-
-    def test_hot_routes_and_context_do_not_promote_unrelated_main_settings(self):
-        self.shell('conf_activate_runtime; conf_write_key foxytail.conf WATCHDOG off')
-        (self.conf / 'routes.conf').write_text('ROUTE_SCOPE=all\nROUTE_SUBNETS="192.168.44.0/24"\n')
-        (self.conf / 'context.conf').write_text('cellular:-:up')
-        self.shell('''
-load_runtime_conf || exit 1
-test "$(cat "${_RUNTIME_CONF_DIR}/context.conf")" = cellular:-:no-exit-node || exit 2
-conf_apply_runtime routes.conf && conf_apply_runtime context.conf || exit 3
-load_runtime_conf || exit 4
-test "$WATCHDOG" = on && test "$ROUTE_SUBNETS" = 192.168.44.0/24 || exit 5
-test "$(cat "${_RUNTIME_CONF_DIR}/context.conf")" = cellular:-:up
-''')
 
     def test_incompatible_native_hot_routes_are_not_promoted(self):
         self.main.write_text('TS_MODE=tun\n')

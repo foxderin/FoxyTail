@@ -1,3 +1,4 @@
+import { DATA_DIR } from '../config';
 /* Taildrop operations stay in the session task registry across navigation. */
 import { createEffect, createMemo, createSignal, For, on, onMount, Show, type JSX } from 'solid-js';
 import { createApiScope, hasRoot } from '../api';
@@ -141,7 +142,7 @@ export default function Files(): JSX.Element {
                       aria-label={t('tools_copy_path') + ' ' + file.name}
                       onClick={() =>
                         showToast(
-                          t(copyText('/data/adb/foxytail/files/' + file.name) ? 'copied' : 'op_failed'),
+                          t(copyText(DATA_DIR + '/files/' + file.name) ? 'copied' : 'op_failed'),
                           'info',
                         )
                       }

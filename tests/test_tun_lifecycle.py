@@ -74,7 +74,7 @@ wait_for() {
   # assertions do not depend on background scheduling or arbitrary sleeps.
   wait
   [ ! -f "$TEST_DIR/wait-failed" ] || return 1
-  shift
+  shift 3
   "$@"
 }
 sleep() { echo sleep >>"$TEST_DIR/events"; }

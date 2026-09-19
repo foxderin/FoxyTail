@@ -70,7 +70,7 @@ esac
         (self.base / 'context.json').write_text(json.dumps({'suffix': 'example.ts.net', 'self': 'node-a', 'hosts': []}, separators=(',', ':')))
         self.config()
         self.runner = self.base / 'runner.sh'
-        settings = (ROOT / 'tailscale/settings.sh').read_text()
+        settings = (ROOT / 'tailscale/scripts/foxytail.lock.sh').read_text()
         locks = settings[settings.index('_lock_identity() {'):settings.index('conf_lock_acquire() {')]
         self.runner.write_text('''
 TS_DIR="$TEST_DIR"

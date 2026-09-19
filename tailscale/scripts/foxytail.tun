@@ -44,7 +44,7 @@ iface_exists() {
 
 # Wait up to 10s for the tunnel interface to appear.
 wait_iface() {
-  wait_for "interface ${TUN_IFACE}" iface_exists
+  wait_for "interface ${TUN_IFACE}" 20 0.5 iface_exists
 }
 
 # Render the runtime config from the template: substitute @SOCKS_PORT@ and

@@ -17,6 +17,8 @@ let requestedTarget: boolean | null = null;
 
 export { subnetRoutes, subnetRoutesError, acceptRoutesBusy, acceptRoutesPhase, acceptRoutesFeedback };
 export const subnetRoutesRevision = (): number => revision;
+export const ipv6Unavailable = () => subnetRoutes()?.ipv6Enabled !== true;
+export const ipv6Notice = () => t(subnetRoutes()?.ipv6Enabled === false ? 'tools_subnet_ipv6_disabled' : 'tools_subnet_ipv6_unknown');
 
 function publish(result: ApiResult): void {
   const previous = subnetRoutes();

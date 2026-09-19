@@ -400,7 +400,7 @@ quiesce_installed() {
 # earlier backup on a reinstall of the same version.
 # Old releases sourced configuration. Validate it with the newly shipped data
 # parser before invoking any old controller, including its destructive stop.
-if ! sh -c '. "$1"; load_conf' sh "${STAGE}/root/settings.sh"; then
+if ! sh -c 'DIR=$2; . "$1"; load_conf' sh "${STAGE}/root/settings.sh" "${STAGE}/scripts"; then
   abort "! Existing configuration is invalid; refusing to execute the old controller"
 fi
 ui_print "- Stopping and verifying the previous installation"
@@ -461,10 +461,11 @@ ln -sf "${TS_BIN_DIR}/tailscaled" "$MODPATH/system/bin/tailscaled"
 ln -sf "${TS_BIN_DIR}/tailscaled" "$MODPATH/system/bin/tailscale"
 for s in "${TS_SCRIPTS_DIR}"/foxytail.*; do
   [ -f "$s" ] || continue
-  case "$(basename "$s")" in
-    *.yaml | *.new) continue ;;
+  case "${s##*/}" in
+    foxytail.webapi.sh) ;;
+    *.sh | *.yaml | *.new) continue ;;
   esac
-  ln -sf "$s" "$MODPATH/system/bin/$(basename "$s")"
+  ln -sf "$s" "$MODPATH/system/bin/${s##*/}"
 done
 
 # Only now does system/bin exist with its symlinks: set perms/labels last.

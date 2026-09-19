@@ -4,6 +4,7 @@ export interface Peer {
   id: string;
   hostname: string;
   ip: string;
+  ips?: string[]; // Full address list; older backends only return ip.
   os: string;
   relay: string;
   online: boolean;

@@ -21,7 +21,9 @@ smoke 覆盖页面切换、无 root 桥、首屏加载失败与重试、请求�
 
 开发时运行 `pnpm dev --host 127.0.0.1`，打开 `/dev/index.html?lang=zh&theme=light` 即可使用带模拟数据的设计预览。可选参数为 `lang=zh|en`、`theme=auto|light|dark`、`state=ready|empty|error|slow|login|no-root`。预览带有明确标记，模拟桥仅存在于 `dev/preview.ts`，生产构建只使用根 `index.html`，不会包含模拟数据或命令替身。
 
-页面结构由 `navigation.ts` 和 `AppShell` 统一组织，页面各自负责业务交互；`components/Basics.tsx` 提供状态卡、指标卡、骨架与错误重试，`components/ui.tsx` 提供原生按钮、输入与弹窗。`style.css` 管理通用 token、布局和控件，`pages/network.css`、`pages/tools.css` 负责对应页面布局。新增文案按领域存放在 `i18n-*.ts`，中心词典统一导入；词条检查会递归验证对象展开、重复键、空值及中英文对应关系。
+`src/config.ts` 集中数据目录和 API 超时，`src/settings.ts` 定义设置字段与范围；`SettingsMaintenance`、`SubnetRoutes`、`RoutingApps` 分别负责维护、子网发现和应用选择。
+
+页面结构由 `navigation.ts` 和 `AppShell` 统一组织，页面各自负责业务交互；`components/Basics.tsx` 提供状态卡、指标卡、骨架与错误重试，`components/ui.tsx` 提供原生按钮、输入与弹窗。`style.css` 管理通用 token、布局和控件，`pages/network.css` 汇总公共网络、设备、流量样式及响应式覆盖，`pages/tools.css` 负责工具页布局。新增文案按领域存放在 `i18n-*.ts`，中心词典统一导入；词条检查会递归验证对象展开、重复键、空值及中英文对应关系。
 
 视觉验收覆盖手机与桌面、深浅色、首次加载／空数据／失败重试以及减少运动偏好。交互测试检查单一页面标题、当前导航、搜索不调用 root、出口先选择后应用、后台任务恢复、日志本地筛选与暂停、确认框默认取消。原生 TUN 的应用范围限制、Serve/Funnel 协议和路径、配置修订号与任务取消协议仍是必须保留的回归项。
 

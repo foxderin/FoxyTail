@@ -101,6 +101,8 @@ The WebUI source lives in `webui/` (Vite + SolidJS, native controls with Materia
 
 Contract: `webui/src/api.ts` is the only consumer of `tailscale/scripts/foxytail.webapi.sh`; its JSON contract is frozen.
 
+Runtime layout: `settings.sh` initializes shared helpers; `scripts/foxytail.config.sh` owns configuration defaults, validation and applied snapshots; `scripts/foxytail.lock.sh` owns process locks. `foxytail.webapi.sh` dispatches commands to four sibling modules for request handling, networking, configuration/backup and tools. These sourced files are shipped with the scripts directory.
+
 ## Verification and release
 
 Use Node 22.14.0, pnpm 10.30.3 and Go 1.27.1; the WebUI requires Android WebView 109+. After installing dependencies, run `bash .github/tools/verify.sh` for ShellCheck, isolated backend regression tests, types, i18n, smoke, release metadata and committed build consistency. Run `pnpm --dir webui build` after frontend changes to update `webroot/`.

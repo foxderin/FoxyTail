@@ -1,7 +1,7 @@
 /* Development-only fixture. Vite builds index.html exclusively, so neither
  * this bridge nor its simulated data can enter the shipped WebUI. */
 const peers = [
-  { id: 'studio', hostname: 'studio-mac', ip: '100.74.12.8', os: 'macOS', relay: '', online: true, rxBytes: 1468203023, txBytes: 346820302, exitNodeOption: false },
+  { id: 'studio', hostname: 'studio-mac', ip: '100.74.12.8', ips: ['100.74.12.8', 'fd7a:115c:a1e0::8'], os: 'macOS', relay: '', online: true, rxBytes: 1468203023, txBytes: 346820302, exitNodeOption: false },
   { id: 'nas', hostname: 'home-server', ip: '100.80.42.16', os: 'linux', relay: '', online: true, rxBytes: 3496221452, txBytes: 2102323420, exitNodeOption: true },
   { id: 'gateway', hostname: 'tokyo-gateway', ip: '100.92.18.24', os: 'linux', relay: 'tok', online: true, rxBytes: 882468333, txBytes: 243082322, exitNodeOption: true },
   { id: 'work', hostname: 'office-laptop', ip: '100.76.40.10', os: 'windows', relay: 'sin', online: true, rxBytes: 784083302, txBytes: 134082312, exitNodeOption: false },
