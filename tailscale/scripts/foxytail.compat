@@ -17,6 +17,7 @@ load_conf || exit 1
 ensure_run_dirs
 
 ALERT_FILE="${TS_RUN_DIR}/compat-alert"
+trap 'exit 130' HUP INT TERM
 
 # Map a lower-case name to a category: proxy | firewall | vpn (empty = ignore).
 classify() {

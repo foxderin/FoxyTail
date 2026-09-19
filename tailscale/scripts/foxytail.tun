@@ -9,7 +9,8 @@
 #            Renders foxytail.tun.config.yaml (@SOCKS_PORT@, optional IPv6
 #            block) to ${TS_RUN_DIR}/hev.yaml, starts the daemon, waits up to
 #            10s for the tailscale0 interface, then runs the user hook
-#            foxytail.tun.up if it is executable.
+#            foxytail.tun.up if it is executable. A failed up hook rolls
+#            back through stop; incomplete cleanup is retried before start.
 #   stop     TERM, then KILL every remaining PID, then run foxytail.tun.down
 #            hook.
 #   restart  Restart hev-socks5-tunnel.
@@ -28,6 +29,7 @@ HEV_TEMPLATE="${TS_SCRIPTS_DIR}/foxytail.tun.config.yaml"
 HEV_CONF="${TS_RUN_DIR}/hev.yaml"
 HEV_LOG="${TS_RUN_DIR}/hev-socks5-tunnel.log"
 PID_FILE="${TS_PID_DIR}/hev-socks5-tunnel.pid"
+TUN_PENDING="${TS_RUN_DIR}/hev.pending"
 TUN_IFACE="tailscale0"
 
 # PIDs of OUR hev-socks5-tunnel instance: argv[0] must be the binary under
@@ -73,11 +75,16 @@ run_hook() {
 
 tun_start() {
   ensure_run_dirs
-  load_conf || return 1
+  load_runtime_conf || return 1
 
   if [ "${TS_MODE}" != "bridge" ]; then
     log Debug "TS_MODE=${TS_MODE}: hev tunnel is only used in bridge mode; skipping."
     return 0
+  fi
+
+  if [ -e "${TUN_PENDING}" ]; then
+    log Warning "previous tunnel operation incomplete; retrying cleanup before start."
+    tun_stop || return 1
   fi
 
   if [ -n "$(hev_pids)" ]; then
@@ -86,7 +93,7 @@ tun_start() {
       return 0
     fi
     log Warning "${HEV_NAME} is alive without its interface; restarting it."
-    stop_by_pids "${HEV_NAME}" "$(hev_pids)" || return 1
+    tun_stop || return 1
   fi
 
   if [ ! -x "${HEV_BIN}" ]; then
@@ -97,6 +104,9 @@ tun_start() {
   render_conf || return 1
   rotate_log "${HEV_LOG}"
 
+  # Keep incomplete startup/cleanup visible across invocations. Custom up
+  # hooks may append rules, so clean up with down before attempting up again.
+  : >"${TUN_PENDING}" || return 1
   log Info "Starting ${HEV_NAME} (socks5 127.0.0.1:${SOCKS_PORT} -> ${TUN_IFACE})."
   nohup "${HEV_BIN}" "${HEV_CONF}" >>"${HEV_LOG}" 2>&1 &
   echo "$!" >"${PID_FILE}"
@@ -113,34 +123,39 @@ tun_start() {
   fi
 
   if ! run_hook up; then
-    log Error "foxytail.tun.up hook failed; ${TUN_IFACE} is up but post-up setup incomplete."
+    log Error "foxytail.tun.up hook failed; rolling back tunnel startup."
+    tun_stop || log Error "tunnel rollback incomplete; cleanup must succeed before starting again."
     return 1
   fi
-  return 0
+  rm -f "${TUN_PENDING}"
 }
 
 tun_stop() {
   ensure_run_dirs
   # Cleanup only uses owned process paths and the fixed hook; bad desired
   # configuration must not strand a running helper.
-  load_conf || :
+  load_runtime_conf || :
 
-  _ts_rc=0
+  : >"${TUN_PENDING}" || return 1
   _ts_pids=$(hev_pids)
   if [ -n "${_ts_pids}" ]; then
-    stop_by_pids "${HEV_NAME}" "${_ts_pids}" || _ts_rc=1
+    # The down hook is promised a stopped tunnel; retain ownership and
+    # pending cleanup if termination cannot be confirmed.
+    stop_by_pids "${HEV_NAME}" "${_ts_pids}" || return 1
   else
     log Debug "${HEV_NAME} is not running."
   fi
 
-  rm -f "${PID_FILE}"
-  run_hook down
-  return "${_ts_rc}"
+  if ! run_hook down; then
+    log Error "foxytail.tun.down hook failed; cleanup remains pending."
+    return 1
+  fi
+  rm -f "${PID_FILE}" "${TUN_PENDING}"
 }
 
 tun_status() {
   ensure_run_dirs
-  load_conf || return 1
+  load_runtime_conf || return 1
 
   if iface_exists; then
     printf '%s\n' "${blue}Interface:${normal} ${green}${TUN_IFACE} up${normal}"
@@ -183,7 +198,7 @@ case "$1" in
     tun_stop
     ;;
   restart)
-    tun_stop
+    tun_stop || exit 1
     sleep 1
     tun_start
     ;;

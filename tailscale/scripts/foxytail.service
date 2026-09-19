@@ -101,26 +101,17 @@ build_daemon_cmd() {
   echo "${TS_DAEMON_CMD} ${_bdc_args}"
 }
 
-start_service() {
-  ensure_run_dirs
-  load_conf || return 1
-  if [ -f "${TS_DIR}/.installing" ]; then
-    log Error "installation in progress; start deferred"
-    return 1
+# Select once before any teardown. Restart passes the same candidate to start.
+prepare_service_config() {
+  if [ "${_SERVICE_RECOVERY:-0}" = 1 ]; then load_runtime_conf || return 1
+  else
+    [ -n "${_SERVICE_CANDIDATE:-}" ] || _SERVICE_CANDIDATE=$(conf_prepare_runtime) || return 1
+    load_conf "${_SERVICE_CANDIDATE}" || return 1
   fi
   if [ "$TS_MODE" = tun ] && [ "$ROUTE_SCOPE" != all ]; then
     log Error "native tun supports ROUTE_SCOPE=all only; use bridge for per-app routing"
     return 1
   fi
-  log Info "Starting tailscaled service (mode: ${TS_MODE})."
-  rm -f "${TS_RUN_DIR}/manual-stop"
-
-  if is_running; then
-    log Info "tailscaled is already running; reconciling companion layers."
-    reconcile_companions
-    return $?
-  fi
-
   if ! command -v "${TS_DAEMON_CMD}" >/dev/null 2>&1; then
     log Error "program not found: ${TS_DAEMON_CMD} (expected in ${TS_BIN_DIR})"
     return 1
@@ -130,6 +121,33 @@ start_service() {
     log Error "TS_MODE=tun but /dev/net/tun does not exist; cannot start."
     return 1
   fi
+}
+
+start_service() {
+  ensure_run_dirs
+  if [ -f "${TS_DIR}/.installing" ]; then
+    log Error "installation in progress; start deferred"
+    return 1
+  fi
+  if is_running; then
+    log Info "tailscaled is already running; reconciling companion layers."
+    load_runtime_conf || return 1
+    rm -f "${TS_RUN_DIR}/manual-stop"
+    reconcile_companions
+    return $?
+  fi
+
+  prepare_service_config || return 1
+
+  if [ "${_SERVICE_RECOVERY:-0}" != 1 ]; then
+    # tailscaled may have died while HEV/DNS retained the old ports and mode.
+    if [ "${_SERVICE_STOPPED:-0}" != 1 ]; then stop_service || return 1; fi
+    conf_activate_runtime "${_SERVICE_CANDIDATE}" || return 1
+    _SERVICE_CANDIDATE=
+    load_runtime_conf || return 1
+  fi
+  log Info "Starting tailscaled service (mode: ${TS_MODE})."
+  rm -f "${TS_RUN_DIR}/manual-stop"
 
   mkdir -p "${TS_DIR}/state"
   rotate_log "${TS_LOG_FILE}"
@@ -203,7 +221,7 @@ reconcile_companions() {
 
 stop_service() {
   ensure_run_dirs
-  load_conf
+  load_runtime_conf || :
   log Info "Stopping tailscaled service."
   # Remember that this stop was requested (WebUI / CLI / restart). The
   # watchdog must not resurrect a daemon the user deliberately stopped;
@@ -533,10 +551,12 @@ EOF
 }
 
 restart_service() {
+  prepare_service_config || return 1
   if ! stop_service; then
     log Error "restart aborted: stop failed; not starting again."
     return 1
   fi
+  _SERVICE_STOPPED=1
   # The stop half above wrote the manual-stop marker; a Stop requested during
   # the sleep window overwrites it with a newer timestamp. Only start when the
   # marker is unchanged (or already cleared), so a user Stop wins the race.
@@ -554,50 +574,50 @@ restart_service() {
 # PID ownership makes an interrupted controller recoverable without expiring a
 # lock still held by a slow, live operation.
 service_unlock() {
-  if [ "$(readlink "${TS_RUN_DIR}/.service-lock" 2>/dev/null)" = "${_SERVICE_LOCK_TOKEN}" ]; then
-    rm -f "${TS_RUN_DIR}/.service-lock"
-  fi
+  case "${_SERVICE_CANDIDATE:-}" in
+    "${TS_RUN_DIR}"/.applied.*)
+      [ "${_SERVICE_CANDIDATE##*/}" = "$(cat "${TS_RUN_DIR}/applied-config" 2>/dev/null)" ] || rm -rf "${_SERVICE_CANDIDATE}"
+      ;;
+  esac
+  _owner_lock_release "${TS_RUN_DIR}/.service-lock" "${_SERVICE_LOCK_TOKEN}"
 }
 
 service_lock() {
   ensure_run_dirs
-  _sl_i=0
-  _SERVICE_LOCK_TOKEN="$$:$(_conf_pid_stamp "$$")"
-  while ! ln -s "${_SERVICE_LOCK_TOKEN}" "${TS_RUN_DIR}/.service-lock" 2>/dev/null; do
-    # Publish the PID as the symlink itself: there is no empty owner-file
-    # window between claiming the lock and publishing its identity.
-    _sl_pid=$(readlink "${TS_RUN_DIR}/.service-lock" 2>/dev/null)
-    case "$_sl_pid" in
-      '') ;;
-      *)
-        if ! _conf_owner_alive "$_sl_pid" && mkdir "${TS_RUN_DIR}/.service-reap" 2>/dev/null; then
-          _sl_pid=$(readlink "${TS_RUN_DIR}/.service-lock" 2>/dev/null)
-          case "$_sl_pid" in
-            '') ;;
-            *) if ! _conf_owner_alive "$_sl_pid"; then rm -f "${TS_RUN_DIR}/.service-lock"; fi ;;
-          esac
-          rmdir "${TS_RUN_DIR}/.service-reap" 2>/dev/null
-        fi
-        ;;
-    esac
-    _sl_i=$((_sl_i + 1))
-    [ "$_sl_i" -lt 120 ] || { log Error "service controller busy"; return 1; }
-    sleep 0.5
-  done
+  _lock_identity
+  _SERVICE_LOCK_TOKEN=${_LOCK_TOKEN}
+  _owner_lock_acquire "${TS_RUN_DIR}/.service-lock" "${_SERVICE_LOCK_TOKEN}" 120 0.5 || {
+    log Error "service controller busy"; return 1;
+  }
   trap 'service_unlock' 0
   trap 'exit 1' INT TERM HUP
 }
 
 case "$1" in
-  start|stop|restart|mode|reconcile) service_lock || exit 1 ;;
+  start|stop|restart|mode|reconcile|recover) service_lock || exit 1 ;;
 esac
 
 case "$1" in
   reconcile)
     [ -f "${TS_RUN_DIR}/manual-stop" ] && exit 0
+    _SERVICE_RECOVERY=1
     start_service
     ;;
+  recover)
+    [ -f "${TS_RUN_DIR}/manual-stop" ] && exit 0
+    _SERVICE_RECOVERY=1
+    case "$2" in
+      start|reconcile) start_service ;;
+      restart) restart_service ;;
+      *) exit 1 ;;
+    esac
+    ;;
   start)
+    case "${2:-}" in
+      '') ;;
+      --applied) _SERVICE_RECOVERY=1 ;;
+      *) exit 1 ;;
+    esac
     start_service
     ;;
   stop)
@@ -607,6 +627,7 @@ case "$1" in
     restart_service
     ;;
   status)
+    load_runtime_conf || exit 1
     status_service "$2"
     ;;
   log)

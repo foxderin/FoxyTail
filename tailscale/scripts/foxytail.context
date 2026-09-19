@@ -6,12 +6,11 @@
 #   stop        stop the resident loop
 #   status      JSON: {"running":bool,"context":...}
 #   check-once  detect the current context, apply actions on change, exit
+#   validate    validate a rules file without loading the main configuration
 
 DIR=$(dirname "$(realpath "$0")")
 # shellcheck source=../settings.sh
 . "$DIR"/../settings.sh
-load_conf || exit 1
-ensure_run_dirs
 
 PID_FILE="${TS_PID_DIR}/foxytail.context.pid"
 TS_SOCKET="${TS_RUN_DIR}/tailscaled.sock"
@@ -35,8 +34,8 @@ get_ssid() {
     _s=$(printf '%s\n' "$_w" | grep -o 'SSID: [^,"]*' | head -n 1 | sed 's/^SSID: //')
   fi
   case "$_s" in
-    "" | *unknown* | "<none>") echo "unknown" ;;
-    *) echo "$_s" ;;
+    "" | "unknown" | "<unknown ssid>" | "<none>") echo "unknown" ;;
+    *) printf '%s\n' "$_s" ;;
   esac
 }
 
@@ -49,16 +48,59 @@ current_context() {
     return
   fi
   if printf '%s\n' "$_def" | grep -q 'dev wlan'; then
-    echo "ssid:$(get_ssid)"
+    printf 'ssid:%s\n' "$(get_ssid)"
     return
   fi
   echo "cellular:-"
 }
 
-# True when the rules file exists and has at least one effective rule.
-have_rules() {
-  [ -f "$RULES_FILE" ] || return 1
-  sed 's/#.*//' "$RULES_FILE" | grep -q '[0-9A-Za-z]'
+# Emit normalized rules; callers discard all output if any line is invalid.
+# awk reads the final record even when the file has no trailing newline.
+parse_rules() {
+  [ -f "$1" ] && [ ! -L "$1" ] && [ -r "$1" ] || {
+    printf '%s: expected readable regular rules file\n' "$1" >&2
+    return 1
+  }
+  _pr_file=$1
+  case "$_pr_file" in /*) ;; *) _pr_file=./$_pr_file ;; esac
+  LC_ALL=C awk '
+    function error(message) {
+      printf "%s:%d: %s\n", FILENAME, FNR, message > "/dev/stderr"
+      failed=1
+    }
+    {
+      sub(/\r$/, "")
+      sub(/^[ \t]+/, ""); sub(/[ \t]+$/, "")
+      if ($0 == "" || substr($0,1,1) == "#") next
+      if ($0 ~ /[[:cntrl:]]/) {error("control characters are unsupported"); next}
+      if (index($0,"#")) {error("# is only allowed in whole-line comments, not SSIDs or arguments"); next}
+      n=split($0,f,":")
+      if (n<3) {error("expected trigger:value:action[:arg]"); next}
+      if (f[1] != "ssid" && f[1] != "cellular") {error("unknown trigger; use ssid or cellular"); next}
+      if (f[1] == "cellular" && f[2] != "-") {error("cellular value must be -"); next}
+      if (f[1] == "ssid" && (f[2] ~ /^ *$/ || index(f[2],"\"") ||
+          f[2] == "unknown" || f[2] == "<unknown ssid>" || f[2] == "<none>")) {
+        error("SSID must be nonempty, unquoted, and not an unknown-network placeholder"); next
+      }
+      arg=""
+      if (f[3] == "exit-node") {
+        arg=substr($0,length(f[1])+length(f[2])+length(f[3])+4)
+        if (arg !~ /^[A-Za-z0-9:][A-Za-z0-9_.:%-]*$/) {
+          error("exit-node requires a node name or IP address argument"); next
+        }
+      } else if (f[3] == "up" || f[3] == "down" || f[3] == "no-exit-node") {
+        if (n != 3) {error("action takes no argument; : is unsupported in SSIDs"); next}
+      } else {error("unknown action; : is unsupported in SSIDs"); next}
+      print f[1] ":" f[2] ":" f[3] ":" arg
+    }
+    END {exit failed ? 1 : 0}
+  ' "$_pr_file"
+}
+
+# An absent optional file means no rules. An existing malformed file is an error.
+read_rules() {
+  [ -e "$RULES_FILE" ] || [ -L "$RULES_FILE" ] || return 0
+  parse_rules "$RULES_FILE"
 }
 
 run_action() {
@@ -66,8 +108,8 @@ run_action() {
   _arg="$2"
   case "$_act" in
     up)
-      log Info "context: action up (foxytail.service start)"
-      [ -x "$SERVICE" ] && "$SERVICE" start >>"${TS_RUN_LOG_FILE}" 2>&1
+      log Info "context: action up (foxytail.service start --applied)"
+      [ -x "$SERVICE" ] && "$SERVICE" start --applied >>"${TS_RUN_LOG_FILE}" 2>&1
       ;;
     down)
       log Info "context: action down (foxytail.service stop)"
@@ -82,43 +124,54 @@ run_action() {
       tmo 10 tailscale --socket="$TS_SOCKET" set --exit-node= >/dev/null 2>&1
       ;;
     *)
-      log Warning "context: unknown action '${_act}', skipped"
+      log Error "context: unknown action '${_act}'"
+      return 1
       ;;
   esac
 }
 
-# Apply every rule whose trigger matches the given context token.
+# Replay the whole ordered group on failure: a later down can undo an earlier
+# up. Service start/stop and tailscale set are idempotent desired-state actions.
 apply_context() {
-  _ctx="$1"
-  _kind=${_ctx%%:*}
-  _val=${_ctx#*:}
-  while IFS= read -r _line; do
-    _line=$(printf '%s' "$_line" | sed 's/#.*//;s/^ *//;s/ *$//')
-    case "$_line" in '') continue ;; esac
-    _trig=${_line%%:*}
-    _rest=${_line#*:}
-    _tval=${_rest%%:*}
-    _rest2=${_rest#*:}
-    _act=${_rest2%%:*}
-    _arg=""
-    case "$_rest2" in *:*) _arg=${_rest2#*:} ;; esac
-    [ "$_trig" = "$_kind" ] || continue
-    if [ "$_kind" = "ssid" ] && [ "$_tval" != "$_val" ]; then
+  _ac_kind=${1%%:*}
+  _ac_val=${1#*:}
+  _ac_failed=0
+  while IFS=: read -r _trig _tval _act _arg; do
+    [ "$_trig" = "$_ac_kind" ] || continue
+    if [ "$_ac_kind" = "ssid" ] && [ "$_tval" != "$_ac_val" ]; then
       continue
     fi
-    run_action "$_act" "$_arg"
-  done <"$RULES_FILE"
+    if ! run_action "$_act" "$_arg"; then
+      _ac_failed=1
+      log Warning "context: action '${_act}' failed; retrying next round"
+    fi
+  done <<EOF_RULES
+$2
+EOF_RULES
+  return "$_ac_failed"
 }
 
-# Detect context; run actions only when the token changed since last round.
+# Retry unconfirmed contexts; replay when the rules or applied snapshot change.
 check_once() {
+  load_runtime_conf || return 1
+  RULES_FILE="${_RUNTIME_CONF_DIR}/context.conf"
+  _rules=$(read_rules) || return 1
+  if [ -z "$_rules" ]; then
+    rm -f "$STATE_FILE"
+    return $?
+  fi
   _ctx=$(current_context)
   _old=$(cat "$STATE_FILE" 2>/dev/null)
-  if [ "$_ctx" != "$_old" ]; then
+  if [ "$_ctx" != "$_old" ] || [ "${_applied_rules-$_rules}" != "$_rules" ] ||
+    [ "${_applied_rules_file-$RULES_FILE}" != "$RULES_FILE" ]; then
     log Info "context: '${_old:-none}' -> '${_ctx}', applying matching rules"
-    echo "$_ctx" >"$STATE_FILE"
-    apply_context "$_ctx"
+    # Partial actions invalidate the previous context too, even if we return
+    # to that network before the next retry.
+    rm -f "$STATE_FILE" || return 1
+    apply_context "$_ctx" "$_rules" || return 1
+    printf '%s\n' "$_ctx" >"$STATE_FILE" || return 1
   fi
+  _applied_rules=$_rules _applied_rules_file=$RULES_FILE
   return 0
 }
 
@@ -127,14 +180,17 @@ _context_stop() {
 }
 
 do_start() {
-  if ! have_rules; then
+  load_runtime_conf || return 1
+  RULES_FILE="${_RUNTIME_CONF_DIR}/context.conf"
+  _rules=$(read_rules) || return 1
+  if [ -z "$_rules" ]; then
     log Info "context: no rules in context.conf, not starting"
     return 0
   fi
   daemon_claim_pidfile foxytail.context || return 0
   # Force the first resident round to replay the rules: the persisted token
   # would otherwise suppress actions that are still owed after a reboot.
-  rm -f "$STATE_FILE"
+  rm -f "$STATE_FILE" || return 1
   _ctx_running=1
   trap '_context_stop' TERM INT
   log Info "foxytail.context started (pid $$, interval ${INTERVAL}s)"
@@ -167,12 +223,18 @@ do_status() {
 }
 
 case "$1" in
-  start) do_start ;;
+  start | check-once)
+    ensure_run_dirs || exit 1
+    if [ "$1" = start ]; then do_start; else check_once; fi
+    ;;
   stop) do_stop ;;
   status) do_status ;;
-  check-once) check_once ;;
+  validate)
+    [ "$#" = 2 ] && [ -n "$2" ] || { echo "usage: $0 validate <file>" >&2; exit 1; }
+    parse_rules "$2" >/dev/null
+    ;;
   *)
-    echo "usage: $0 {start|stop|status|check-once}" >&2
+    echo "usage: $0 {start|stop|status|check-once|validate <file>}" >&2
     exit 1
     ;;
 esac

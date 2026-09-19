@@ -10,7 +10,7 @@
 DIR=$(dirname "$(realpath "$0")")
 # shellcheck source=../settings.sh
 . "$DIR"/../settings.sh
-load_conf || exit 1
+if [ "${1:-}" != stop ]; then load_runtime_conf || exit 1; fi
 ensure_run_dirs
 
 PID_FILE="${TS_PID_DIR}/foxytail.watchdog.pid"
@@ -89,7 +89,7 @@ recover() {
   date +%s >>"$RESTARTS_FILE"
   log Warning "watchdog: tailscaled recovery (${_why})"
   if [ -x "$SERVICE" ]; then
-    "$SERVICE" "$_how" >>"${TS_RUN_LOG_FILE}" 2>&1
+    "$SERVICE" recover "$_how" >>"${TS_RUN_LOG_FILE}" 2>&1
   else
     log Error "watchdog: foxytail.service not found, cannot recover"
   fi
@@ -198,7 +198,7 @@ do_start() {
   trap '_watchdog_stop' TERM INT
   log Info "foxytail.watchdog started (pid $$, interval ${WATCHDOG_INTERVAL}s)"
   while [ "$_wd_running" = "1" ]; do
-    if load_conf; then
+    if load_runtime_conf; then
       [ "$WATCHDOG" = on ] || break
       check_once
     fi

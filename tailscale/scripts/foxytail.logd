@@ -9,7 +9,7 @@ ensure_run_dirs
 rotate_all() {
   # Invalid configuration still leaves safe default limits; keep protecting
   # storage while its parse diagnostics are being written.
-  load_conf || :
+  load_runtime_conf || :
   for _la_file in "${TS_RUN_DIR}"/*.log; do
     [ -f "$_la_file" ] && [ ! -L "$_la_file" ] || continue
     rotate_log "$_la_file"

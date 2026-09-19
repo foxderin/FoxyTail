@@ -107,6 +107,8 @@ TS_BIN_DIR="$TEST_DIR/bin"
 TS_PID_DIR="$TS_RUN_DIR/pids"
 ensure_run_dirs() { mkdir -p "$TS_RUN_DIR" "$TS_PID_DIR"; }
 load_conf() { . "$TEST_DIR/config"; }
+load_runtime_conf() { load_conf; }
+conf_apply_runtime() { :; }
 log() { :; }
 pids_of_path() { echo 100; }
 jqr() { jq "$@"; }

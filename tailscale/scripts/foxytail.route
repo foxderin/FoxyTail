@@ -278,11 +278,16 @@ ensure_run_dirs
 # Teardown needs only validated applied ownership, even if desired config is
 # damaged. Never let a bad newly edited config strand the previous rules.
 case "$1" in
-  check) load_conf || exit 1; route_check ;;
-  apply|reload) route_lock || exit 1; load_conf || exit 1; route_apply ;;
+  check) load_runtime_conf || exit 1; route_check ;;
+  apply|reload)
+    route_lock || exit 1
+    if [ "$1" = reload ]; then conf_apply_runtime routes.conf || exit 1; fi
+    load_runtime_conf || exit 1
+    route_apply
+    ;;
   teardown) route_lock || exit 1; route_cleanup ;;
   status)
-    load_conf || exit 1
+    load_runtime_conf || exit 1
     if route_check; then echo 'Policy routing: applied'; else echo 'Policy routing: incomplete'; fi
     ip -4 rule show
     ip -4 route show table "${ROUTE_TABLE}"

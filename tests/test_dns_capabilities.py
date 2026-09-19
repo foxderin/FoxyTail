@@ -169,6 +169,7 @@ date() {
         stubs = '''
 ensure_run_dirs() { :; }
 load_conf() { :; }
+load_runtime_conf() { :; }
 select_dns_binary() { DNS_BIN=/fixture/dnsmasq; }
 get_state() { echo running; }
 dns_pids() { echo 123; }

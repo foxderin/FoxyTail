@@ -14,6 +14,7 @@
  *  8. tab buttons render non-empty labels
  *
  * Run `pnpm smoke`; the package script builds this bundle first.
+ * Or pass a smoke bundle path to test a build outside the checkout.
  */
 import { readFileSync, existsSync, statSync, readdirSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
@@ -21,7 +22,7 @@ import { dirname, join } from 'node:path';
 import { JSDOM, VirtualConsole } from 'jsdom';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
-const bundlePath = join(root, '.smoke/app.js');
+const bundlePath = process.argv[2] || join(root, '.smoke/app.js');
 if (!existsSync(bundlePath)) {
   console.error('smoke bundle missing; run: vite build --config vite.smoke.config.ts');
   process.exit(1);
@@ -825,6 +826,71 @@ await window.__foxy.refreshStatus();
 assert(!window.document.querySelector('.network-current-exit .network-small-badge'), 'an unavailable status is not mislabeled as a confirmed current exit');
 delete overrides.status;
 await window.__foxy.refreshStatus();
+
+console.log('[18b] exit preferences require a readable backend, including clear confirmation');
+{
+  const savedStatus = canned.status;
+  const localExit = () => window.document.querySelector('input[name="exit-node"][value=""]');
+  const exitApply = () => window.document.querySelector('.network-apply-bar .btn-filled');
+  const confirmingExit = () => /Change sent; waiting for gateway confirmation|变更已发送，等待当前出口确认/.test(window.document.querySelector('.network-apply-bar')?.textContent || '');
+  const currentExitBadges = () => window.document.querySelectorAll('#view .network-small-badge');
+  for (const [daemon, backend, known] of [
+    ['running', 'Running', true],
+    ['running', 'NeedsLogin', true],
+    ['stopped', '-', false],
+    ['running', 'unreachable', false],
+  ]) {
+    canned.status = { ...savedStatus, daemon, backend, exitNode: null };
+    await window.__foxy.refreshStatus();
+    assert(localExit()?.checked === known && localExit()?.disabled === !known && currentExitBadges().length === Number(known), daemon + '/' + backend + ': only readable exit preferences select and mark the local exit current');
+    assert(Boolean(window.document.querySelector('.network-current-exit')) === !known && exitApply()?.disabled, daemon + '/' + backend + ': unknown preferences expose recovery without enabling Apply');
+  }
+  const liveDaemon = window.document.querySelector('#app-header [role="switch"]');
+  assert(liveDaemon?.checked && !liveDaemon.indeterminate && !liveDaemon.disabled, 'unreadable exit preferences do not prevent stopping the confirmed live daemon');
+  canned.status = savedStatus;
+  await window.__foxy.refreshStatus();
+  overrides.status = [1, JSON.stringify({ ok: false, error: 'exit-status-read-failed' }), ''];
+  await window.__foxy.refreshStatus();
+  assert(!window.document.querySelector('input[name="exit-node"]:checked') && currentExitBadges().length === 0 && localExit()?.disabled && exitApply()?.disabled, 'a failed status read invalidates the cached current exit and disables preference changes');
+  delete overrides.status;
+  window.document.querySelector('.network-current-exit button')?.click();
+  await flush();
+  assert(window.document.querySelector('input[name="exit-node"]:checked')?.value === 'p1' && currentExitBadges().length === 1 && !localExit()?.disabled, 'retrying a failed status read restores the confirmed exit preference');
+
+  localExit()?.click();
+  overrides['exitnode-clear'] = [1, JSON.stringify({ ok: false, error: 'exit-clear-rejected' }), ''];
+  const beforeClear = commandLog.length;
+  const earlierToasts = new Set(window.document.querySelectorAll('#toast-root .toast'));
+  const newClearSuccess = () => [...window.document.querySelectorAll('#toast-root .toast.ok')].some(toast => !earlierToasts.has(toast) && /Exit node cleared|已取消出口节点/.test(toast.textContent));
+  exitApply()?.click();
+  await flush();
+  assert([...window.document.querySelectorAll('#toast-root .toast.err')].some(toast => toast.textContent.includes('exit-clear-rejected')) && !confirmingExit() && !exitApply()?.disabled, 'a rejected exit clear exposes its error and allows retry');
+  assert(!localExit()?.closest('label').querySelector('.network-small-badge') && !newClearSuccess(), 'a rejected clear never marks the local exit current or reports success');
+  delete overrides['exitnode-clear'];
+  canned['exitnode-clear'] = { ok: true };
+  canned.status = { ...savedStatus, backend: 'unreachable', exitNode: null };
+  exitApply()?.click();
+  await flush();
+  assert(confirmingExit() && currentExitBadges().length === 0 && localExit()?.disabled && exitApply()?.disabled && !newClearSuccess(), 'an acknowledged clear followed by unreachable status stays pending without a current badge or success toast');
+
+  overrides.status = [1, JSON.stringify({ ok: false, error: 'exit-clear-confirmation-failed' }), ''];
+  window.document.querySelector('.network-apply-bar .btn-text')?.click();
+  await flush();
+  assert(confirmingExit() && currentExitBadges().length === 0 && !newClearSuccess(), 'a failed confirmation read preserves the pending clear without claiming success');
+  delete overrides.status;
+  canned.status = savedStatus;
+  window.document.querySelector('.network-apply-bar .btn-text')?.click();
+  await flush();
+  assert(confirmingExit() && !localExit()?.closest('label').querySelector('.network-small-badge') && !newClearSuccess(), 'a recovered snapshot with the old exit still cannot confirm the pending clear');
+  canned.status = { ...savedStatus, exitNode: null };
+  window.document.querySelector('.network-apply-bar .btn-text')?.click();
+  await flush();
+  assert(!confirmingExit() && localExit()?.checked && !localExit()?.disabled && localExit()?.closest('label').querySelector('.network-small-badge') && newClearSuccess(), 'a fresh readable snapshot with no exit confirms the clear and restores controls');
+  assert(commandLog.slice(beforeClear).filter(entry => entry.sub === 'exitnode-clear').length === 2, 'confirmation retries only read status and never repeat the clear mutation');
+  canned.status = savedStatus;
+  delete canned['exitnode-clear'];
+  await window.__foxy.refreshStatus();
+}
 
 console.log('[19] absent interface samples and recorded zero traffic are distinct');
 canned.traffic = { ok: true, hours: [{ hour: 0, samples: 0, iface: { rx: 0, tx: 0 } }], days: [], topn: [] };

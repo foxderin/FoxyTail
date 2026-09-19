@@ -1,11 +1,13 @@
 """Host-only regressions: no Android paths, iptables, or live services are used."""
 import io
+import base64
 import ipaddress
 import json
 import os
 from pathlib import Path
 import random
 import shlex
+import signal
 import socket
 import subprocess
 import tarfile
@@ -28,10 +30,24 @@ class ConfigApiTests(unittest.TestCase):
             directory.mkdir(parents=True, exist_ok=True)
         for name in ['foxytail.conf', 'routes.conf', 'context.conf']:
             (self.conf / name).write_bytes((ROOT / 'tailscale/conf' / name).read_bytes())
+        settings = (ROOT / 'tailscale/settings.sh').read_text().replace(
+            'TS_DIR="/data/adb/foxytail"', 'TS_DIR=' + shlex.quote(str(self.base)))
+        (self.base / 'settings.sh').write_text(settings)
+        context = (ROOT / 'tailscale/scripts/foxytail.context').read_text()
+        # Keep the actual validator; watcher lifecycle is outside this fixture.
+        context = context.replace('#!/system/bin/sh', '#!/bin/sh\n'
+            'case "$1" in start|stop) exit 0 ;; esac', 1)
+        (self.scripts / 'foxytail.context').write_text(context)
+        (self.scripts / 'foxytail.context').chmod(0o755)
+        (self.scripts / 'start.sh').write_text('#!/bin/sh\n[ "$1" = reload-residents ]\n')
+        (self.scripts / 'start.sh').chmod(0o755)
         source = (ROOT / 'tailscale/scripts/foxytail.webapi.sh').read_text()
         helpers = source[source.index('# --- Helpers'):source.index('# --- dispatch')]
         # Relocate the API's shared-storage allowlist to our private fixture.
         helpers = helpers.replace('/sdcard/', str(self.sdcard) + '/')
+        # Use the host interpreter at the lifecycle fixture boundary.
+        helpers = helpers.replace('"${TS_SCRIPTS_DIR}/start.sh" reload-residents',
+                                  'sh "${TS_SCRIPTS_DIR}/start.sh" reload-residents')
         self.lib = self.base / 'helpers.sh'
         self.lib.write_text(
             '. ' + shlex.quote(str(ROOT / 'tailscale/settings.sh')) + '\n' +
@@ -372,6 +388,7 @@ ts_cli() {
         self.assertEqual((self.run / 'cli-calls').read_text(), before)
 
     def test_routes_set_normalizes_cidrs_and_reports_unapplied_ipv6(self):
+        self.shell('conf_activate_runtime')
         route = self.scripts / 'foxytail.route'
         route.write_text('#!/bin/sh\nexit 0\n'); route.chmod(0o755)
         result = json.loads(self.shell('''load_conf
@@ -384,8 +401,8 @@ cmd_routes_set all - '192.168.1.7/24,192.168.1.0/24,FD12::55/64,fd12::/64,192.16
         self.assertIsNone(result['applyError'])
         self.assertIn('ROUTE_SUBNETS="192.168.1.0/24 fd12::/64 192.168.1.10/32"',
                       (self.conf / 'routes.conf').read_text())
-        # Enabling IPv6 after saving the destination remains a valid workflow.
-        self.shell('conf_write_key foxytail.conf IPV6 on')
+        # Explicit activation applies IPv6 after saving the destination.
+        self.shell('conf_write_key foxytail.conf IPV6 on; conf_activate_runtime')
         result = json.loads(self.shell('''load_conf
 ip() { return 0; }
 cmd_routes_set all - '192.168.1.7/24,FD12::55/64' ''').stdout)
@@ -394,6 +411,7 @@ cmd_routes_set all - '192.168.1.7/24,FD12::55/64' ''').stdout)
         self.assertIsNone(result['applyError'])
 
     def test_routes_reload_failure_is_distinct_from_unapplied_ipv6(self):
+        self.shell('conf_activate_runtime')
         route = self.scripts / 'foxytail.route'
         route.write_text('#!/bin/sh\nexit 1\n'); route.chmod(0o755)
         result = json.loads(self.shell('''load_conf
@@ -421,6 +439,79 @@ cmd_routes_set all - '192.168.1.7/24,FD12::55/64' ''').stdout)
         self.assertFalse(json.loads(result.stdout)['ok'])
         self.assertEqual(self.snapshot(), before)
         self.assertFalse((self.run / 'settings.pending').exists())
+
+    def test_routes_report_applied_ipv6_while_desired_setting_is_pending(self):
+        route = self.scripts / 'foxytail.route'
+        route.write_text('#!/bin/sh\nexit 0\n'); route.chmod(0o755)
+        for applied, desired, skipped in [('off', 'on', ['fd12::/64']), ('on', 'off', [])]:
+            with self.subTest(applied=applied, desired=desired):
+                self.shell(f'conf_write_key foxytail.conf IPV6 {applied}; conf_activate_runtime')
+                self.shell(f'conf_write_key foxytail.conf IPV6 {desired}')
+                result = json.loads(self.shell('''load_conf
+ip() { return 0; }
+cmd_routes_set all - '192.168.1.7/24,fd12::55/64'
+''').stdout)
+                self.assertEqual(result['ipv6Skipped'], skipped)
+                self.assertEqual(result['applied'], not skipped)
+                self.assertEqual(result['requiresIpv6'], bool(skipped))
+                self.assertEqual(result['restartRequired'], bool(skipped))
+                self.assertIsNone(result['applyError'])
+                self.assertTrue((self.run / 'settings.pending').exists())
+                saved = json.loads(self.shell('load_conf; cmd_settings_get').stdout)
+                self.assertEqual(saved['settings']['IPV6'], desired)
+
+    def test_hot_saves_promote_only_the_requested_file_under_the_config_lock(self):
+        self.shell('conf_activate_runtime')
+        runtime = self.run / (self.run / 'applied-config').read_text().strip()
+        main = (runtime / 'foxytail.conf').read_bytes()
+        self.shell('cmd_settings_set SOCKS_PORT 1200')
+        self.shell('''load_conf
+ip() { return 1; }
+cmd_routes_set all - '192.168.1.7/24'
+''')
+        self.assertEqual((runtime / 'routes.conf').read_bytes(), (self.conf / 'routes.conf').read_bytes())
+        self.assertEqual((runtime / 'foxytail.conf').read_bytes(), main)
+        rules = 'cellular:-:no-exit-node'
+        self.shell('cmd_context_set ' + shlex.quote(base64.b64encode(rules.encode()).decode()))
+        self.assertEqual((runtime / 'context.conf').read_text(), rules)
+        self.assertEqual((runtime / 'foxytail.conf').read_bytes(), main)
+        before = {file.name: file.read_bytes() for file in runtime.iterdir()}
+        self.shell('cmd_restore ' + shlex.quote(str(self.archive({'conf/context.conf': '# pending restore'}))))
+        self.assertEqual({file.name: file.read_bytes() for file in runtime.iterdir()}, before)
+        self.assertTrue((self.run / 'settings.pending').exists())
+
+    def test_failed_runtime_promotion_reports_saved_without_applying(self):
+        prefix = '''load_conf
+conf_apply_runtime() {
+  [ "${_CONF_LOCK_HELD}" = 1 ] || echo 'promotion was outside lock' >&2
+  return 1
+}
+ip() { touch "$TS_RUN_DIR/unexpected-apply"; return 0; }
+'''
+        result = self.shell(prefix + "cmd_routes_set all - '192.168.1.7/24'", ok=False)
+        self.assertFalse(json.loads(result.stdout)['ok'])
+        self.assertIn('saved, but runtime configuration promotion failed', json.loads(result.stdout)['error'])
+        self.assertIn('192.168.1.0/24', (self.conf / 'routes.conf').read_text())
+        self.assertNotIn('outside lock', result.stderr)
+        self.assertFalse((self.run / 'unexpected-apply').exists())
+        result = self.shell(prefix + "cmd_context_set ''", ok=False)
+        self.assertFalse(json.loads(result.stdout)['ok'])
+        self.assertIn('saved, but runtime configuration promotion failed', json.loads(result.stdout)['error'])
+        self.assertNotIn('outside lock', result.stderr)
+        self.assertEqual((self.conf / 'context.conf').read_text(), '')
+        self.assertFalse((self.run / '.conf-write-lock').is_symlink())
+
+    def test_hot_saves_fail_closed_without_a_known_runtime(self):
+        for command in ("cmd_routes_set all - 'fd12::55/64'", "cmd_context_set ''"):
+            result = self.shell('''load_conf
+ip() { touch "$TS_RUN_DIR/unexpected-apply"; return 0; }
+''' + command, ok=False)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn('saved, but runtime configuration promotion failed', json.loads(result.stdout)['error'])
+            self.assertFalse((self.run / 'unexpected-apply').exists())
+            self.assertFalse((self.run / 'applied-config').exists())
+            self.assertTrue((self.run / 'settings.pending').exists())
+            self.assertFalse((self.run / '.conf-write-lock').is_symlink())
 
     def test_concurrent_writers_preserve_unrelated_changes(self):
         workers = []
@@ -506,6 +597,97 @@ cmd_apps''')
         archive = self.archive({'conf/foxytail.conf': 'SOCKS_PORT=1200\n', 'conf/routes.conf': 'PATH=/sdcard/evil\n'})
         self.assertNotEqual(self.shell('cmd_restore ' + shlex.quote(str(archive)), ok=False).returncode, 0)
         self.assertEqual(self.snapshot(), previous)
+
+    def test_context_save_and_restore_share_validation(self):
+        self.shell('conf_activate_runtime')
+        valid = ['', '# comments only', 'cellular:-:no-exit-node',
+                 'ssid:Office WiFi:up\ncellular:-:down\ncellular:-:exit-node:100.64.0.1']
+        invalid = ['cellular:-:typo', 'ssid::up', 'cellular:home:down',
+                   'cellular:-:exit-node', 'ssid:Office:Guest:up', 'ssid:Office#Guest:up',
+                   'none:-:down',
+                   '# first line\ncellular:-:no-exit-node:unexpected']
+        for rules in valid + invalid:
+            with self.subTest(rules=rules):
+                before = self.snapshot()
+                pending = self.run / 'settings.pending'
+                old_pending = pending.read_bytes() if pending.exists() else None
+                payload = base64.b64encode(rules.encode()).decode()
+                saved = self.shell('cmd_context_set ' + shlex.quote(payload), ok=rules in valid)
+                restored = self.shell('cmd_restore ' + shlex.quote(str(self.archive(
+                    {'conf/context.conf': rules}))), ok=rules in valid)
+                for result in (saved, restored):
+                    data = json.loads(result.stdout)
+                    self.assertEqual(data['ok'], rules in valid, result.stdout)
+                    if rules in invalid:
+                        self.assertNotEqual(result.returncode, 0)
+                        self.assertRegex(data['error'], r'(?:line |:)[12](?:\D|$)')
+                if rules in valid:
+                    self.assertEqual((self.conf / 'context.conf').read_text(), rules)
+                else:
+                    self.assertEqual(self.snapshot(), before)
+                    self.assertEqual(pending.read_bytes() if pending.exists() else None, old_pending)
+                self.assertFalse((self.run / '.conf-write-lock').is_symlink())
+                self.assertEqual(list(self.conf.glob('.context.conf.*')), [])
+
+    def test_context_save_waits_for_real_resident_reload_and_reports_start_failure(self):
+        self.shell('conf_activate_runtime')
+        start = (ROOT / 'tailscale/scripts/start.sh').read_text()
+        # Keep the actual bounded readiness loop; only change host exec boundaries.
+        start = start.replace('nohup "${TS_SCRIPTS_DIR}/${_sr_name}"',
+                              'nohup sh "${TS_SCRIPTS_DIR}/${_sr_name}"')
+        start = start.replace('"${TS_SCRIPTS_DIR}/${_sr_name}" stop',
+                              'sh "${TS_SCRIPTS_DIR}/${_sr_name}" stop')
+        (self.scripts / 'start.sh').write_text(start)
+        context = (ROOT / 'tailscale/scripts/foxytail.context').read_text().replace(
+            '#!/system/bin/sh', '#!/bin/sh', 1)
+        pidfile = self.run / 'slow-context-pid'
+        stampfile = self.run / 'slow-context-start'
+        for mode in ('failed', 'unready', 'empty'):
+            with self.subTest(mode=mode):
+                if mode == 'empty':
+                    helper = context  # Real no-rules startup must remain a success.
+                else:
+                    action = 'sleep 0.1; exit 9' if mode == 'failed' else (
+                        'echo $$ >' + shlex.quote(str(pidfile)) +
+                        '; ps -p $$ -o lstart= >' + shlex.quote(str(stampfile)) + '; exec sleep 30')
+                    helper = context.replace('#!/bin/sh', '#!/bin/sh\n'
+                        f'case "$1" in start) {action} ;; stop) exit 0 ;; esac', 1)
+                (self.scripts / 'foxytail.context').write_text(helper)
+                rules = '' if mode == 'empty' else 'cellular:-:no-exit-node'
+                try:
+                    started = time.monotonic()
+                    result = self.shell('cmd_context_set ' + shlex.quote(
+                        base64.b64encode(rules.encode()).decode()), ok=mode == 'empty')
+                    self.assertLess(time.monotonic() - started, 6, 'startup wait was not bounded')
+                    data = json.loads(result.stdout)
+                    self.assertEqual(data['ok'], mode == 'empty')
+                    if mode != 'empty':
+                        self.assertNotEqual(result.returncode, 0)
+                        self.assertIn('saved, but resident startup failed', data['error'])
+                    self.assertEqual((self.conf / 'context.conf').read_text(), rules)
+                    self.assertTrue((self.run / 'settings.pending').exists())
+                    self.assertFalse((self.run / '.conf-write-lock').is_symlink())
+                finally:
+                    if pidfile.exists():
+                        # This fixture execs sleep in place: one owned PID, no descendants.
+                        pid = int(pidfile.read_text())
+                        actual = subprocess.run(['ps', '-p', str(pid), '-o', 'lstart='],
+                                                text=True, capture_output=True)
+                        if stampfile.exists() and actual.stdout.strip() and actual.stdout == stampfile.read_text():
+                            try:
+                                os.kill(pid, signal.SIGKILL)
+                            except ProcessLookupError:
+                                pass
+                        pidfile.unlink()
+
+    def test_restore_validates_retained_context_before_replacing_any_config(self):
+        (self.conf / 'context.conf').write_text('cellular:-:typo')
+        before = self.snapshot()
+        archive = self.archive({'conf/foxytail.conf': 'SOCKS_PORT=1200\n'})
+        result = self.shell('cmd_restore ' + shlex.quote(str(archive)), ok=False)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('restore:', json.loads(result.stdout)['error'])
+        self.assertEqual(self.snapshot(), before)
 
     def test_restore_rejects_links_before_extraction(self):
         previous = self.snapshot()
@@ -624,6 +806,26 @@ cmd_cancel 1_old''')
         self.assertNotIn('unexpected kill', result.stderr)
         self.assertTrue(json.loads(result.stdout)['cancelled'])
 
+    def test_child_discovery_reads_parent_and_starttime_from_one_proc_record(self):
+        proc = self.base / 'proc'
+        for pid, parent, stamp, comm in [(101, 42, 123, 'child (name)'), (102, 99, 456, 'unrelated')]:
+            (proc / str(pid)).mkdir(parents=True)
+            fields = ['S', str(parent)] + ['0'] * 17 + [str(stamp)]
+            (proc / str(pid) / 'stat').write_text(f'{pid} ({comm}) ' + ' '.join(fields) + '\n')
+        source = (ROOT / 'tailscale/scripts/foxytail.webapi.sh').read_text()
+        function = source[source.index('_op_children() {'):source.index('# Pause each verified parent')]
+        function = function.replace('/proc/', str(proc) + '/')
+        self.assertEqual(self.shell(function + '\n_op_children 42').stdout.strip(), '101:123')
+
+    def test_cancellation_never_signals_a_reused_descendant_pid(self):
+        result = self.shell('''mkdir -p "$TS_RUN_DIR/operations/1_reused"
+printf '99998 123\\n' >"$TS_RUN_DIR/operations/1_reused/child.99999.child.99998"
+_op_starttime() { printf 456; }
+kill() { echo "unexpected kill" >&2; return 99; }
+cmd_cancel 1_reused''')
+        self.assertNotIn('unexpected kill', result.stderr)
+        self.assertTrue(json.loads(result.stdout)['cancelled'])
+
     def test_fast_cli_does_not_wait_for_timeout_monitor(self):
         start = time.monotonic()
         result = self.shell('''_op_starttime() { kill -0 "$1" 2>/dev/null && printf 100; }
@@ -703,6 +905,36 @@ ts_status_json() { touch "$TS_RUN_DIR/unexpected-cli"; }
 cmd_status''').stdout)
         self.assertEqual((result['daemon'], result['backend']), ('running', 'unreachable'))
         self.assertFalse((self.run / 'unexpected-cli').exists())
+
+    def test_peer_lists_distinguish_unknown_from_a_confirmed_empty_snapshot(self):
+        for command in ('cmd_peers', 'cmd_exitnodes'):
+            for prefix in ('daemon_up() { return 1; };',
+                           'daemon_up() { return 0; }; ts_cli() { return 1; };'):
+                result = self.shell(prefix + command, ok=False)
+                self.assertNotEqual(result.returncode, 0)
+                data = json.loads(result.stdout)
+                self.assertFalse(data['ok']); self.assertNotIn('peers', data)
+            for snapshot in ('', 'not json', '{}', '[]', 'null',
+                             '{"BackendState":"NeedsLogin"}',
+                             '{"BackendState":"Running","Peer":[]}',
+                             '{"BackendState":"Running","Peer":{"x":"invalid"}}',
+                             '{"BackendState":"Running","Peer":{}}'):
+                for rc in (0, 1):
+                    known = snapshot == '{"BackendState":"Running","Peer":{}}' and rc == 0
+                    prefix = 'daemon_up() { return 0; }; ts_cli() { printf %s ' + shlex.quote(snapshot) + f'; return {rc}; }}; '
+                    result = self.shell(prefix + command, ok=known)
+                    data = json.loads(result.stdout)
+                    self.assertEqual(data['ok'], known, (snapshot, rc, result.stdout))
+                    if known:
+                        self.assertEqual(data['peers'], [])
+                    else:
+                        self.assertNotEqual(result.returncode, 0)
+                        self.assertNotIn('peers', data)
+        snapshot = {'BackendState': 'Running', 'Peer': {
+            'a': {'ID': 'a', 'ExitNodeOption': True}, 'b': {'ID': 'b'}}}
+        prefix = 'daemon_up() { return 0; }; ts_cli() { printf %s ' + shlex.quote(json.dumps(snapshot)) + '; }; '
+        self.assertEqual(len(json.loads(self.shell(prefix + 'cmd_peers').stdout)['peers']), 2)
+        self.assertEqual([peer['id'] for peer in json.loads(self.shell(prefix + 'cmd_exitnodes').stdout)['peers']], ['a'])
 
     def test_status_rechecks_process_after_localapi_failure(self):
         sock = socket.socket(socket.AF_UNIX)

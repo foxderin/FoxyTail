@@ -12,7 +12,7 @@
 DIR=$(dirname "$(realpath "$0")")
 # shellcheck source=../settings.sh
 . "$DIR"/../settings.sh
-load_conf || exit 1
+if [ "${1:-}" != stop ]; then load_runtime_conf || exit 1; fi
 ensure_run_dirs
 # KSU service context runs with umask 000; keep samples root-only readable.
 umask 027
@@ -149,7 +149,7 @@ do_start() {
   trap '_stats_stop' TERM INT
   log Info "foxytail.stats started (pid $$, interval ${STATS_INTERVAL}s)"
   while [ "$_stats_running" = "1" ]; do
-    load_conf || { log Error "stats: invalid configuration"; break; }
+    load_runtime_conf || { log Error "stats: invalid runtime configuration"; break; }
     collect_once
     _int="${STATS_INTERVAL}"
     is_screen_on || _int=$((_int * 5))

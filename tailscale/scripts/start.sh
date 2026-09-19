@@ -3,7 +3,6 @@
 DIR=$(dirname "$(realpath "$0")")
 # shellcheck source=../settings.sh
 . "$DIR"/../settings.sh
-if [ "${1:-}" != stop ]; then load_conf || exit 1; fi
 ensure_run_dirs
 
 stop_inotifyd() {
@@ -34,11 +33,29 @@ stop_residents() {
 }
 
 start_residents() {
+  load_runtime_conf || return 1
+  _sr_failed=0
   for _sr_name in foxytail.stats foxytail.watchdog foxytail.context foxytail.logd; do
     [ -x "${TS_SCRIPTS_DIR}/${_sr_name}" ] || continue
     nohup "${TS_SCRIPTS_DIR}/${_sr_name}" start \
       >>"${TS_RUN_DIR}/${_sr_name}.log" 2>&1 &
+    _sr_child=$!
+    _sr_i=0
+    while kill -0 "${_sr_child}" 2>/dev/null && ! daemon_pid_alive "${_sr_name}" && [ "${_sr_i}" -lt 20 ]; do
+      sleep 0.1
+      _sr_i=$((_sr_i + 1))
+    done
+    if ! daemon_pid_alive "${_sr_name}"; then
+      if kill -0 "${_sr_child}" 2>/dev/null; then
+        log Error "${_sr_name} did not confirm startup"
+        _sr_failed=1
+      else
+        # Disabled watchdog / empty context rules are successful no-ops.
+        wait "${_sr_child}" || _sr_failed=1
+      fi
+    fi
   done
+  return "${_sr_failed}"
 }
 
 case "${1:-start}" in
@@ -50,12 +67,12 @@ case "${1:-start}" in
     exit $?
     ;;
   reload-residents)
+    load_runtime_conf || exit 1
     stop_residents || exit 1
-    [ -f "${TS_MOD_DIR}/disable" ] || start_residents
+    [ -f "${TS_MOD_DIR}/disable" ] || start_residents || exit 1
     exit 0
     ;;
   reload)
-    _reload_revision=$(cat "${TS_RUN_DIR}/settings.pending" 2>/dev/null)
     stop_residents || exit 1
     _start_action=restart
     ;;
@@ -77,14 +94,16 @@ fi
 # Even a partially ready tunnel needs the watchdog for eventual recovery.
 _start_rc=0
 "${TS_SCRIPTS_DIR}/foxytail.service" "$_start_action" || _start_rc=1
-start_residents
+start_residents || _start_rc=1
 if [ -x "${TS_SCRIPTS_DIR}/foxytail.compat" ]; then
   "${TS_SCRIPTS_DIR}/foxytail.compat" probe >"${TS_RUN_DIR}/compat.json" 2>/dev/null
 fi
 [ "${1:-}" = enable ] || start_inotifyd || _start_rc=1
 if [ "${1:-}" = reload ] && [ "$_start_rc" = 0 ]; then
   if conf_lock_acquire; then
-    if [ "$(cat "${TS_RUN_DIR}/settings.pending" 2>/dev/null)" = "${_reload_revision}" ]; then
+    if _conf_runtime_dir && [ "${_RUNTIME_CONF_DIR}" != "${TS_CONF_DIR}" ] &&
+       [ -f "${_RUNTIME_CONF_DIR}/revision" ] &&
+       [ "$(cat "${TS_RUN_DIR}/settings.pending" 2>/dev/null)" = "$(cat "${_RUNTIME_CONF_DIR}/revision")" ]; then
       rm -f "${TS_RUN_DIR}/settings.pending"
     fi
     conf_lock_release

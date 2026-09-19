@@ -10,7 +10,7 @@ import {
 } from 'solid-js';
 import { createApiScope, hasRoot } from '../api';
 import { t } from '../i18n';
-import { status, statusError, statusLoading, refreshStatus } from '../state';
+import { status, statusError, statusLoading, refreshStatus, connState } from '../state';
 import { getTask } from '../tasks';
 import { latClass } from '../format';
 import {
@@ -40,8 +40,9 @@ export default function ExitNodes(): JSX.Element {
   const [draftId, setDraftId] = createSignal<string | null>(null);
   const [pendingId, setPendingId] = createSignal<string | null>(null);
   const task = () => getTask(TASK_KEY);
+  // A live daemon can be stopped even when its exit preferences are unreadable.
   const statusKnown = () =>
-    !!status() && !statusError() && status()?.daemon === 'running';
+    !statusError() && !['unknown', 'stopped'].includes(connState(status()));
   const currentId = () =>
     statusKnown() ? (status()?.exitNode?.id ?? '') : null;
   const selectedId = () => draftId() ?? currentId();

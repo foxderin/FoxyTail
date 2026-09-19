@@ -26,25 +26,13 @@ modern_pids() {
 
 modern_lock() {
   _md_lock="${TS_RUN_DIR}/.dns-lock"
-  _md_token="$$:$(_conf_pid_stamp "$$")"
-  _md_attempt=0
-  while ! ln -s "${_md_token}" "${_md_lock}" 2>/dev/null; do
-    _md_owner=$(readlink "${_md_lock}" 2>/dev/null)
-    if [ -n "${_md_owner}" ] && ! _conf_owner_alive "${_md_owner}"; then
-      if ln -s "${_md_token}" "${_md_lock}.reap" 2>/dev/null; then
-        _md_owner=$(readlink "${_md_lock}" 2>/dev/null)
-        [ -z "${_md_owner}" ] || _conf_owner_alive "${_md_owner}" || rm -f "${_md_lock}"
-        rm -f "${_md_lock}.reap"
-      fi
-    fi
-    _md_attempt=$((_md_attempt + 1))
-    [ "${_md_attempt}" -lt 100 ] || return 1
-    sleep 0.1
-  done
+  _lock_identity
+  _md_token=${_LOCK_TOKEN}
+  _owner_lock_acquire "${_md_lock}" "${_md_token}" 100 0.1
 }
 
 modern_unlock() {
-  [ "$(readlink "${_md_lock}" 2>/dev/null)" != "${_md_token}" ] || rm -f "${_md_lock}"
+  _owner_lock_release "${_md_lock}" "${_md_token}"
 }
 
 modern_reason() {
@@ -447,7 +435,7 @@ modern_dns_stop() (
 
 modern_dns_start() (
   ensure_run_dirs
-  load_conf || return 1
+  load_runtime_conf || return 1
   modern_lock || return 1
   trap 'modern_unlock' 0
   trap 'exit 1' HUP INT TERM

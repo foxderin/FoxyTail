@@ -24,7 +24,8 @@ class LifecycleTests(unittest.TestCase):
 
     def service_functions(self):
         source = (ROOT / 'tailscale/scripts/foxytail.service').read_text()
-        return source[source.index('daemon_pids() {'):source.index('# Serialize all controllers')]
+        return ('load_runtime_conf() { load_conf; }\n' +
+                source[source.index('daemon_pids() {'):source.index('# Serialize all controllers')])
 
     def test_repeat_start_reconciles_companions(self):
         script = self.service_functions() + '''
@@ -46,7 +47,9 @@ TS_RUN_DIR=.; TS_DIR=.; TS_MODE=tun; ROUTE_SCOPE=selected
 ensure_run_dirs() { :; }
 load_conf() { :; }
 log() { :; }
-is_running() { echo unsafe >called; return 0; }
+_SERVICE_RECOVERY=1
+is_running() { return 1; }
+nohup() { echo unsafe >called; }
 start_service && exit 5
 test ! -e called
 '''
@@ -61,6 +64,8 @@ test ! -e called
         (self.dir / 'settings.sh').write_text('''
 TS_DIR="$PWD"; TS_SCRIPTS_DIR="$PWD/scripts"; TS_RUN_DIR="$PWD/run"; TS_MOD_DIR="$PWD"
 load_conf() { :; }
+load_runtime_conf() { :; }
+daemon_pid_alive() { return 1; }
 ensure_run_dirs() { :; }
 log() { :; }
 stop_by_pids() { :; }
@@ -91,12 +96,17 @@ stop_by_pids() { :; }
         (self.dir / 'settings.sh').write_text('''
 TS_DIR="$PWD"; TS_SCRIPTS_DIR="$PWD/scripts"; TS_RUN_DIR="$PWD/run"; TS_MOD_DIR="$PWD"
 load_conf() { :; }
+load_runtime_conf() { :; }
+daemon_pid_alive() { return 1; }
 ensure_run_dirs() { :; }
 log() { :; }
 stop_by_pids() { :; }
 conf_lock_acquire() { :; }
 conf_lock_release() { :; }
+_conf_runtime_dir() { _RUNTIME_CONF_DIR="$PWD/run/.applied.test"; }
 ''')
+        snapshot = runtime / '.applied.test'; snapshot.mkdir()
+        (snapshot / 'revision').write_text('old-revision\n')
         service = scripts / 'foxytail.service'
         service.write_text('#!/bin/sh\n[ "$WRITE_NEW" != 1 ] || echo new-revision >"$PWD/run/settings.pending"\nexit 0\n')
         service.chmod(0o755)

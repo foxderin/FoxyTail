@@ -75,7 +75,6 @@ DIR=$(dirname "$(realpath "$0")")
 # shellcheck source=../settings.sh
 . "${DIR}/../settings.sh"
 detach_from_app_cgroup || { echo '{"ok":false,"error":"cannot detach backend from the manager app freezer; no configuration lock was acquired"}'; exit 1; }
-load_conf || { printf '%s\n' '{"ok":false,"error":"invalid configuration; inspect the service log"}'; exit 1; }
 ensure_run_dirs
 
 TS_SOCKET="${TS_RUN_DIR}/tailscaled.sock"
@@ -145,9 +144,44 @@ _op_pid_alive() {
   [ -n "${_opa_now}" ] && [ "${_opa_now}" = "${_opa_start}" ] && kill -0 "${_opa_pid}" 2>/dev/null
 }
 
-_op_signal() {
-  if _op_pid_alive "$1"; then kill "-$2" "${_opa_pid}" 2>/dev/null; fi
+# Direct descendants from procfs, never process-name or process-group matches.
+# ponytail: scan procfs only on termination; use task/children if helper trees grow large.
+_op_children() {
+  _opc_parent=$1
+  for _opc_stat in /proc/[0-9]*/stat; do
+    IFS= read -r _opc_line 2>/dev/null <"${_opc_stat}" || continue
+    _opc_fields=${_opc_line##*) }
+    # shellcheck disable=SC2086 # proc fields after comm contain no glob chars
+    set -- ${_opc_fields}
+    [ "$#" -ge 20 ] && [ "$2" = "${_opc_parent}" ] || continue
+    shift 19
+    # Parent and starttime must come from the same read: a second lookup could
+    # observe a reused PID belonging to an unrelated process.
+    case "$1" in '' | *[!0-9]*) continue ;; esac
+    printf '%s:%s\n' "${_opc_line%% *}" "$1"
+  done
 }
+
+# Pause each verified parent while recording its children, so a helper cannot
+# fork between discovery and its termination. Persist descendants until the
+# executor has confirmed their exit; cancellation also covers orphaned children.
+_op_signal() (
+  if _op_pid_alive "$1"; then
+    _ops_pid=${_opa_pid}
+    kill -STOP "${_ops_pid}" 2>/dev/null || exit 0
+    for _ops_child in $(_op_children "${_ops_pid}"); do
+      _op_pid_alive "$1" || continue
+      printf '%s %s\n' "${_ops_child%%:*}" "${_ops_child#*:}" >"$1.child.${_ops_child%%:*}"
+    done
+  fi
+  for _ops_record in "$1".child.*; do
+    [ -f "${_ops_record}" ] && _op_signal "${_ops_record}" "$2"
+  done
+  if _op_pid_alive "$1"; then
+    kill "-$2" "${_opa_pid}" 2>/dev/null
+    [ "$2" = KILL ] || kill -CONT "${_opa_pid}" 2>/dev/null
+  fi
+)
 
 _op_cancelled() {
   [ -n "${_OP_DIR:-}" ] && [ -f "${_OP_DIR}/cancelled" ]
@@ -243,6 +277,18 @@ _op_exec() {
   kill "${_oe_timer}" 2>/dev/null
   wait "${_oe_timer}" 2>/dev/null
   [ ! -f "${_oe_timeout}" ] || _oe_rc=124
+  # A terminated helper may have left a child ignoring TERM. Its recorded
+  # identity remains ours even after reparenting; finish cleanup before return.
+  _op_signal "${_oe_record}" KILL
+  for _oe_child in "${_oe_record}".child.*; do
+    _oe_i=0
+    while _op_pid_alive "${_oe_child}" && [ "${_oe_i}" -lt 10 ]; do
+      sleep 0.1
+      _oe_i=$((_oe_i + 1))
+    done
+    if _op_pid_alive "${_oe_child}"; then _oe_rc=1
+    else rm -f "${_oe_child}"; fi
+  done
   rm -f "${_oe_record}" "${_oe_timeout}"
   _op_cancelled && return 130
   return "${_oe_rc}"
@@ -257,7 +303,7 @@ ts_cli() {
 
 # status --json, empty string on any failure.
 ts_status_json() {
-  _sj=$(ts_cli 10 status --json)
+  _sj=$(ts_cli 10 status --json) || return 1
   if [ -n "${_sj}" ] && printf '%s' "${_sj}" | jqr -e . >/dev/null 2>&1; then
     printf '%s' "${_sj}"
   fi
@@ -372,18 +418,19 @@ _peers_jq='
      }]'
 
 cmd_peers() {
-  daemon_up || { echo '{"ok":true,"peers":[]}'; return 0; }
+  daemon_up || jerr 'tailscaled is unavailable; peers are unknown'
   _cp_st=$(ts_status_json)
-  [ -n "${_cp_st}" ] || { echo '{"ok":true,"peers":[]}'; return 0; }
-  printf '%s' "${_cp_st}" | jqr -c "${_peers_jq} | {ok:true, peers:.}"
+  [ -n "${_cp_st}" ] || jerr 'cannot reach tailscaled status; peers are unknown'
+  _cp_result=$(printf '%s' "${_cp_st}" | jqr -c --argjson exits "${1:-false}" '
+    if type!="object" or .BackendState!="Running" or
+      (.Peer!=null and (.Peer|type)!="object") then error("peers are unknown") else . end
+    | '"${_peers_jq}"' | map(select($exits==false or .exitNodeOption==true))
+    | {ok:true,peers:.}' 2>/dev/null) || jerr 'invalid or unavailable peer status; peers are unknown'
+  printf '%s\n' "${_cp_result}"
 }
 
 cmd_exitnodes() {
-  daemon_up || { echo '{"ok":true,"peers":[]}'; return 0; }
-  _ce_st=$(ts_status_json)
-  [ -n "${_ce_st}" ] || { echo '{"ok":true,"peers":[]}'; return 0; }
-  printf '%s' "${_ce_st}" | jqr -c \
-    "${_peers_jq} | map(select(.exitNodeOption == true)) | {ok:true, peers:.}"
+  cmd_peers true
 }
 
 cmd_speedtest_exitnodes() {
@@ -801,7 +848,8 @@ cmd_apps() {
   # Fast path: `pm list packages -3 -U` prints "package:<name> uid:<uid>" for
   # every app in a single binder call (Android 10+). The old per-package
   # dumpsys loop took minutes on devices with many apps.
-  _ap_list=$(timeout 30 pm list packages -3 -U 2>/dev/null | tr -d '\r')
+  _ap_list=$(_op_exec 30 pm list packages -3 -U 2>/dev/null | tr -d '\r')
+  _op_cancelled && jerr 'app scan cancelled'
   if printf '%s' "${_ap_list}" | grep -q ' uid:[0-9]'; then
     # One jq process for the complete package list. Spawning jq for every app
     # made an otherwise single-binder-call path take seconds on Android.
@@ -812,25 +860,29 @@ cmd_apps() {
     return 0
   fi
   # Fallback for ancient pm without -U: per-package dumpsys loop.
-  _ap_pkgs=$(timeout 30 pm list packages -3 2>/dev/null | sed 's/^package://' | tr -d '\r' | sort)
+  _ap_pkgs=$(_op_exec 30 pm list packages -3 2>/dev/null | sed 's/^package://' | tr -d '\r' | sort)
+  _op_cancelled && jerr 'app scan cancelled'
   if [ -z "${_ap_pkgs}" ]; then
     echo '{"ok":true,"apps":[]}'
     return 0
   fi
-  printf '%s\n' "${_ap_pkgs}" | while IFS= read -r _ap_pkg; do
+  _ap_result=$(printf '%s\n' "${_ap_pkgs}" | while IFS= read -r _ap_pkg; do
+    _op_cancelled && break
     [ -n "${_ap_pkg}" ] || continue
     _ap_uid=""
-    _ap_dump=$(timeout 5 dumpsys package "${_ap_pkg}" </dev/null 2>/dev/null)
+    _ap_dump=$(_op_exec 5 dumpsys package "${_ap_pkg}" </dev/null 2>/dev/null)
     if [ -n "${_ap_dump}" ]; then
       _ap_uid=$(printf '%s\n' "${_ap_dump}" | grep -o -m1 'userId=[0-9]*' | head -n 1 | cut -d= -f2)
       [ -n "${_ap_uid}" ] || _ap_uid=$(printf '%s\n' "${_ap_dump}" | grep -o -m1 'appId=[0-9]*' | head -n 1 | cut -d= -f2)
     fi
-    case "${_ap_uid}" in '' | *[!0-9]*) _ap_uid=0 ;; esac
+    case "${_ap_uid}" in ('' | *[!0-9]*) _ap_uid=0 ;; esac
     # dumpsys exposes only labelRes (a resource id), never the resolved label
     # string; without aapt the package name is the best available label.
     jqr -n -c --arg l "${_ap_pkg}" --arg p "${_ap_pkg}" --argjson u "${_ap_uid}" \
       '{label:$l,package:$p,uid:$u}'
-  done | jqr -s -c '{ok:true,apps:.}'
+  done | jqr -s -c '{ok:true,apps:.}')
+  _op_cancelled && jerr 'app scan cancelled'
+  printf '%s\n' "${_ap_result}"
 }
 
 # --- routes.conf --------------------------------------------------------------
@@ -945,6 +997,8 @@ cmd_routes_set() {
     rm -f "${_rs_tmp}"; conf_lock_release; jerr 'routes-set: cannot replace routes.conf'
   fi
   conf_mark_pending || { conf_lock_release; jerr "could not record pending configuration"; }
+  conf_apply_runtime routes.conf || { conf_lock_release; jerr 'routes saved, but runtime configuration promotion failed; routing was not applied'; }
+  load_runtime_conf || { conf_lock_release; jerr 'routes saved, but runtime configuration is unavailable; routing was not applied'; }
   conf_lock_release
   _rs_applied=false
   _rs_apply_error=''
@@ -1006,7 +1060,7 @@ cmd_context_get() {
 }
 
 cmd_context_set() {
-  [ -n "$1" ] || jerr "context-set: missing base64 payload"
+  [ "$#" -gt 0 ] || jerr "context-set: missing base64 payload"
   conf_lock_acquire || jerr "context-set: configuration is busy"
   _cx_tmp="${TS_CONF_DIR}/.context.conf.$$"
   mkdir -p "${TS_CONF_DIR}"
@@ -1015,14 +1069,18 @@ cmd_context_set() {
     conf_lock_release
     jerr "context-set: invalid base64"
   fi
+  if ! _cx_why=$("${TS_SCRIPTS_DIR}/foxytail.context" validate "${_cx_tmp}" 2>&1); then
+    rm -f "${_cx_tmp}"
+    conf_lock_release
+    jerr "context-set: ${_cx_why}"
+  fi
   mv "${_cx_tmp}" "${TS_CONF_DIR}/context.conf" || { rm -f "${_cx_tmp}"; conf_lock_release; jerr "context-set: replace failed"; }
   conf_mark_pending || { conf_lock_release; jerr "context-set: cannot record pending configuration"; }
+  conf_apply_runtime context.conf || { conf_lock_release; jerr 'context rules saved, but runtime configuration promotion failed; watcher was not restarted'; }
   conf_lock_release
-  # Restart the context watcher so the new rules take effect.
-  if [ -x "${TS_SCRIPTS_DIR}/foxytail.context" ]; then
-    "${TS_SCRIPTS_DIR}/foxytail.context" stop >>"${TS_RUN_LOG_FILE}" 2>&1
-    "${TS_SCRIPTS_DIR}/foxytail.context" start >>"${TS_RUN_LOG_FILE}" 2>&1 &
-  fi
+  # The shared lifecycle confirms startup (or an empty-rules no-op) before success.
+  "${TS_SCRIPTS_DIR}/start.sh" reload-residents >>"${TS_RUN_LOG_FILE}" 2>&1 ||
+    jerr 'context rules saved, but resident startup failed; inspect the service log'
   echo '{"ok":true}'
 }
 
@@ -1052,8 +1110,9 @@ cmd_compat() {
   if [ -f "${COMPAT_JSON}" ] && jqr -e . "${COMPAT_JSON}" >/dev/null 2>&1; then
     _cm_json=$(cat "${COMPAT_JSON}")
   elif [ -x "${TS_SCRIPTS_DIR}/foxytail.compat" ]; then
-    _cm_json=$(timeout 30 "${TS_SCRIPTS_DIR}/foxytail.compat" probe 2>/dev/null)
+    _cm_json=$(_op_exec 30 "${TS_SCRIPTS_DIR}/foxytail.compat" probe 2>/dev/null) || jerr 'compatibility probe failed or cancelled'
   fi
+  _op_cancelled && jerr 'compatibility probe cancelled'
   if [ -z "${_cm_json}" ] || ! printf '%s' "${_cm_json}" | jqr -e . >/dev/null 2>&1; then
     _cm_json='{"modules":[],"apps":[],"warnings":[]}'
   fi
@@ -1065,7 +1124,7 @@ cmd_compat() {
 
 cmd_diag() {
   [ -x "${TS_SCRIPTS_DIR}/foxytail.diag" ] || jerr "foxytail.diag not found"
-  _dg_out=$(timeout 120 "${TS_SCRIPTS_DIR}/foxytail.diag" collect 2>/dev/null)
+  _dg_out=$(_op_exec 120 "${TS_SCRIPTS_DIR}/foxytail.diag" collect 2>/dev/null) || jerr 'diag collection failed or cancelled'
   _dg_path=$(printf '%s\n' "${_dg_out}" | tail -n 1 | tr -d ' ')
   if [ -n "${_dg_path}" ] && [ -f "${_dg_path}" ]; then
     jqr -n -c --arg p "${_dg_path}" '{ok:true,path:$p}'
@@ -1241,6 +1300,9 @@ cmd_restore() (
     else continue; fi
     cat "${_rt_from}" >"${_rt_tmp}/next/${_rt_f}" && chmod 0600 "${_rt_tmp}/next/${_rt_f}" || jerr 'restore: cannot prepare configuration'
   done
+  if [ -f "${_rt_tmp}/next/context.conf" ]; then
+    _rt_why=$("${TS_SCRIPTS_DIR}/foxytail.context" validate "${_rt_tmp}/next/context.conf" 2>&1) || jerr "restore: ${_rt_why}"
+  fi
   if ! ( TS_CONF_DIR="${_rt_tmp}/next"; load_conf && { [ "$TS_MODE" != tun ] || [ "$ROUTE_SCOPE" = all ]; } ); then
     jerr 'restore: invalid configuration or native tun UID routing is unsupported'
   fi
@@ -1290,6 +1352,11 @@ if [ "$1" = --request-id ]; then
   _op_init "$2" "$3"
   shift 2
 fi
+case "$1:$2" in
+  logs:* | control:stop | restore:* | cancel:*) ;;
+  status:* | tun:* | dns:*) load_runtime_conf || jerr 'invalid runtime configuration; inspect the service log' ;;
+  *) load_conf || jerr 'invalid configuration; inspect the service log' ;;
+esac
 case "$1" in
   control | mode-set | exitnode-set | exitnode-clear | login | login-authkey | logout | switch | serve-set | serve-del | funnel-set | funnel-del | routes-set | subnet-routes-set | settings-set | context-set | file-send | file-receive | restore)
     [ ! -f "${TS_DIR}/.installing" ] || jerr 'an upgrade is in progress; retry after it completes' ;;
@@ -1330,7 +1397,7 @@ case "$1" in
   settings-get) cmd_settings_get ;;
   settings-set) shift; cmd_settings_set "$1" "$2" ;;
   context-get) cmd_context_get ;;
-  context-set) shift; cmd_context_set "$1" ;;
+  context-set) shift; cmd_context_set "$@" ;;
   logs) shift; cmd_logs "$1" "$2" ;;
   compat) cmd_compat ;;
   diag) cmd_diag ;;

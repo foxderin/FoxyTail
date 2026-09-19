@@ -7,7 +7,7 @@
 #
 # What can you use here?
 #   Same environment as foxytail.tun.up: everything from settings.sh plus the
-#   values loaded by load_conf. Use `log Info "..."` for logging.
+#   values loaded by load_runtime_conf. Use `log Info "..."` for logging.
 #
 # What is it for?
 #   Undo whatever your foxytail.tun.up added, e.g. remove extra routes:
@@ -20,8 +20,9 @@
 #     iptables -t mangle -D FOXY_MARK -p tcp --dport 445 -j RETURN
 #     iptables -t filter -D FOXY_STAT -s 100.64.0.0/10 -j RETURN
 #
-# Everything here must be best-effort: the interface may already be gone, so
-# failing commands are expected. Do not `set -e`.
+# Cleanup must tolerate an already-gone interface and expected "not found"
+# errors. Return non-zero if required cleanup remains incomplete; stop will
+# report failure and cleanup will be retried before another start. Do not `set -e`.
 #
 # The installer never overwrites this file once you have modified it.
 
@@ -30,11 +31,9 @@ DIR=$(dirname "$(realpath "$0")")
 . "${DIR}/../settings.sh"
 
 ensure_run_dirs
-load_conf
+load_runtime_conf || :
 
 # Default behavior: remove FoxyTail policy routing.
 if [ -x "${TS_SCRIPTS_DIR}/foxytail.route" ]; then
   "${TS_SCRIPTS_DIR}/foxytail.route" teardown
 fi
-
-exit 0

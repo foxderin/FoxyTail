@@ -11,6 +11,7 @@ load_conf
 ensure_run_dirs
 
 TS_SOCKET="${TS_RUN_DIR}/tailscaled.sock"
+trap 'exit 130' HUP INT TERM
 
 # Strip Tailscale login URLs from daemon output: the diag bundle lands in
 # shared storage and an auth URL is a bearer secret for the node identity.
@@ -32,15 +33,12 @@ collect() {
     mkdir -p "$_outdir" 2>/dev/null
   fi
 
-  _stamp=$(date +%Y%m%d-%H%M%S)
+  _stamp=$(date +%Y%m%d-%H%M%S)-$$
   _out="${_outdir}/foxytail-diag-${_stamp}.tar.gz"
+  _partial="${_out}.partial"
 
-  _stage=$(mktemp -d "${TS_RUN_DIR}/diag.XXXXXX" 2>/dev/null)
-  if [ -z "$_stage" ]; then
-    _stage="${TS_RUN_DIR}/diag.$$"
-    rm -rf "$_stage"
-    mkdir -p "$_stage"
-  fi
+  _stage=$(mktemp -d "${TS_RUN_DIR}/diag.XXXXXX" 2>/dev/null) || return 1
+  trap 'rm -rf "${_stage}"; rm -f "${_partial}"' 0
 
   log Info "diag: collecting into ${_stage}"
 
@@ -94,10 +92,7 @@ collect() {
   [ -f "$TS_MOD_PROP" ] && cp "$TS_MOD_PROP" "${_stage}/module.prop"
   [ -f "${TS_DIR}/VERSIONS" ] && cp "${TS_DIR}/VERSIONS" "${_stage}/VERSIONS"
 
-  tar -czf "$_out" -C "$TS_RUN_DIR" "$(basename "$_stage")" 2>/dev/null
-  rm -rf "$_stage"
-
-  if [ -f "$_out" ]; then
+  if tar -czf "$_partial" -C "$TS_RUN_DIR" "$(basename "$_stage")" 2>/dev/null && mv "$_partial" "$_out"; then
     log Success "diag: bundle written to ${_out}"
   else
     log Error "diag: failed to write ${_out}"

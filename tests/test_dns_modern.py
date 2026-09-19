@@ -70,6 +70,8 @@ esac
         (self.base / 'context.json').write_text(json.dumps({'suffix': 'example.ts.net', 'self': 'node-a', 'hosts': []}, separators=(',', ':')))
         self.config()
         self.runner = self.base / 'runner.sh'
+        settings = (ROOT / 'tailscale/settings.sh').read_text()
+        locks = settings[settings.index('_lock_identity() {'):settings.index('conf_lock_acquire() {')]
         self.runner.write_text('''
 TS_DIR="$TEST_DIR"
 TS_RUN_DIR="$TEST_DIR/run"
@@ -80,6 +82,7 @@ TS_SOCKET="$TS_RUN_DIR/tailscaled.sock"
 DNS_CONTEXT_FILE="$TS_RUN_DIR/dnsmasq.context.json"
 ensure_run_dirs() { mkdir -p "$TS_RUN_DIR" "$TS_PID_DIR"; }
 load_conf() { . "$TEST_DIR/config"; }
+load_runtime_conf() { load_conf; }
 jqr() { jq "$@"; }
 tmo() { shift; "$@"; }
 log() { printf '%s: %s\\n' "$1" "$2" >>"$TEST_DIR/service-log"; }
@@ -97,7 +100,7 @@ ipv6_module_status() { echo not-checked; }
 native_dns_present() { test -f "$TEST_DIR/native-present"; }
 dns_hijack_conflict() { test -f "$TEST_DIR/other-dns"; }
 flush_android_dns_cache() { echo flush >>"$TEST_DIR/flushes"; }
-''' + '. ' + shlex.quote(str(ROOT / 'tailscale/scripts/foxytail.dns-modern.sh')) + '''
+''' + locks + '\n. ' + shlex.quote(str(ROOT / 'tailscale/scripts/foxytail.dns-modern.sh')) + '''
 modern_pids() {
   [ -f "$TEST_DIR/alive" ] || return 0
   if [ -f "$MODERN_STATE" ] && [ ! -f "$TEST_DIR/stale-helper" ]; then

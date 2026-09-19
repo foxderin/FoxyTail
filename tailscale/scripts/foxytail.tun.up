@@ -7,7 +7,7 @@
 #
 # What can you use here?
 #   All variables from settings.sh are available after the source line below,
-#   e.g. $TS_DIR, $TS_BIN_DIR, $TS_RUN_DIR, $TS_CONF_DIR, and after load_conf
+#   e.g. $TS_DIR, $TS_BIN_DIR, $TS_RUN_DIR, $TS_CONF_DIR, and after load_runtime_conf
 #   also $TS_MODE, $ROUTE_TABLE, $FWMARK, $IPV6, ... Use `log Info "..."` to
 #   write to the FoxyTail runtime log.
 #
@@ -24,7 +24,8 @@
 #     iptables -t filter -A FOXY_STAT -s 100.64.0.0/10 -j RETURN
 #
 # Keep it POSIX sh (mksh/busybox), quote every variable, and never let this
-# script hang: it blocks the tunnel startup sequence.
+# script hang: it blocks the tunnel startup sequence. A non-zero exit rolls
+# back through the down hook; cleanup must succeed before another start.
 #
 # The installer never overwrites this file once you have modified it.
 
@@ -33,11 +34,9 @@ DIR=$(dirname "$(realpath "$0")")
 . "${DIR}/../settings.sh"
 
 ensure_run_dirs
-load_conf
+load_runtime_conf || exit 1
 
 # Default behavior: (re)install FoxyTail policy routing for the new interface.
 if [ -x "${TS_SCRIPTS_DIR}/foxytail.route" ]; then
   "${TS_SCRIPTS_DIR}/foxytail.route" apply
 fi
-
-exit 0

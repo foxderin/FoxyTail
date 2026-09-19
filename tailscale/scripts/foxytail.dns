@@ -373,7 +373,7 @@ flush_android_dns_cache() {
 
 dns_start() {
   ensure_run_dirs
-  load_conf || return 1
+  load_runtime_conf || return 1
   if [ "${DNS_MODE:-legacy}" != legacy ]; then
     [ "${MAGIC_DNS}" = on ] || { dns_stop; return $?; }
     modern_dns_start
@@ -496,7 +496,7 @@ dns_stop() {
 
 dns_status() {
   ensure_run_dirs
-  load_conf || return 1
+  load_runtime_conf || return 1
   if [ "${DNS_MODE:-legacy}" != legacy ] ||
     { command -v modern_runtime_active >/dev/null 2>&1 && modern_runtime_active; }; then
     modern_dns_status "$1"
