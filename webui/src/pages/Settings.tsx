@@ -4,6 +4,7 @@ import { createApiScope, hasRoot } from '../api';
 import { t, lang, setLang, type Lang } from '../i18n';
 import { NETWORK, BACKGROUND, ROUTE_TABLE, type Field } from '../settings';
 import SettingsMaintenance from './SettingsMaintenance';
+import SettingsTrial from './SettingsTrial';
 import { refreshStatus } from '../state';
 import { getTask } from '../tasks';
 import { BACKUP_TASK } from '../backup';
@@ -20,6 +21,7 @@ export default function Settings(): JSX.Element {
   const [settingsError, setSettingsError] = createSignal<string | null>(null);
   const [restartRequired, setRestartRequired] = createSignal(false);
   const [restartBusy, setRestartBusy] = createSignal(false);
+  const [trialActive, setTrialActive] = createSignal(false);
   const [saving, setSaving] = createSignal<string | null>(null);
   const [restoreBusy, setRestoreBusy] = createSignal(false);
   const backupBusy = () => getTask(BACKUP_TASK)?.status === 'running';
@@ -78,7 +80,7 @@ export default function Settings(): JSX.Element {
     }
   }
   async function applySavedSettings() {
-    if (locked()) return;
+    if (locked() || trialActive()) return;
     setRestartBusy(true);
     const res = await scope.api('control', 'restart');
     if (!res.cancelled) {
@@ -164,7 +166,7 @@ export default function Settings(): JSX.Element {
           </div>
           <p class="tool-hint">{t('tools_saved_pending_desc')}</p>
           <div class="tool-actions">
-            <Button busy={restartBusy()} disabled={locked()} onClick={() => void applySavedSettings()}>
+            <Button busy={restartBusy()} disabled={locked() || trialActive()} onClick={() => void applySavedSettings()}>
               <MdIcon name="refresh" size={18} />
               {restartBusy() ? t('loading') : t('tools_restart')}
             </Button>
@@ -239,6 +241,7 @@ export default function Settings(): JSX.Element {
           </Card>
         </Show>
       </Show>
+      <SettingsTrial locked={locked()} onActive={setTrialActive} onUpdate={loadSettings} />
       <SettingsMaintenance locked={locked()} busy={restoreBusy()} setBusy={setRestoreBusy}
         onPending={() => setRestartRequired(true)} onRestore={loadSettings}>
         <Show when={settings()}>

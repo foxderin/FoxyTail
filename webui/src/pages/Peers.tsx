@@ -9,6 +9,8 @@ import {
   type JSX,
 } from 'solid-js';
 import { createApiScope } from '../api';
+import { getTask } from '../tasks';
+import { TaskButton, TaskProgress } from '../components/TaskProgress';
 import { t } from '../i18n';
 import { status } from '../state';
 import { fmtBytes } from '../format';
@@ -37,7 +39,8 @@ export default function Peers(): JSX.Element {
   const [tab, setTab] = createSignal<'list' | 'topo'>('list');
   const [peers, setPeers] = createSignal<Peer[] | null>(null);
   const [loadError, setLoadError] = createSignal<string | null>(null);
-  const [detail, setDetail] = createSignal<Peer | null>(null);
+  const [detailId, setDetailId] = createSignal<string | null>(null);
+  const detail = createMemo(() => peers()?.find(peer => peer.id === detailId()));
   const [query, setQuery] = createSignal('');
   const [filter, setFilter] = createSignal<PeerFilter>('all');
   const onlineCount = () =>
@@ -73,6 +76,7 @@ export default function Peers(): JSX.Element {
         ips: (Array.isArray(peer.ips) ? peer.ips : [peer.ip])
           .filter(ip => typeof ip === 'string' && ip !== '' && ip !== '-'),
       })));
+      if (detailId() && !detail()) setDetailId(null);
       setLoadError(null);
     } else setLoadError(res.error || t('error'));
   }
@@ -230,7 +234,7 @@ export default function Peers(): JSX.Element {
                     <TopologyChart
                       self={status()?.self ?? null}
                       peers={visiblePeers()}
-                      onPeerClick={setDetail}
+                      onPeerClick={peer => setDetailId(peer.id)}
                     />
                   </>
                 }
@@ -247,7 +251,7 @@ export default function Peers(): JSX.Element {
                         <button
                           type="button"
                           class="network-peer-main"
-                          onClick={() => setDetail(peer)}
+                          onClick={() => setDetailId(peer.id)}
                           aria-label={
                             t('net_peer_details') + ': ' + peer.hostname
                           }
@@ -306,7 +310,7 @@ export default function Peers(): JSX.Element {
                             aria-label={
                               t('net_peer_details') + ': ' + peer.hostname
                             }
-                            onClick={() => setDetail(peer)}
+                            onClick={() => setDetailId(peer.id)}
                           >
                             <MdIcon name="chevron_right" size={20} />
                           </IconButton>
@@ -326,7 +330,7 @@ export default function Peers(): JSX.Element {
           <Dialog
             open
             headline={t('peers_detail')}
-            onClose={() => setDetail(null)}
+            onClose={() => setDetailId(null)}
           >
             <div class="network-device-heading">
               <OsIcon os={peer().os} />
@@ -343,18 +347,22 @@ export default function Peers(): JSX.Element {
             <div class="network-addresses">
               <For each={peer().ips} fallback={<span>{t('net_address_pending')}</span>}>
                 {ip => (
-                  <div class="network-address">
-                    <code>{ip}</code>
-                    <IconButton
-                      aria-label={t('net_copy_address') + ': ' + ip}
-                      onClick={() => copyAddress(ip)}
-                    >
-                      <MdIcon name="content_copy" size={18} />
-                    </IconButton>
+                  <div>
+                    <div class="network-address">
+                      <code>{ip}</code>
+                      <IconButton
+                        aria-label={t('net_copy_address') + ': ' + ip}
+                        onClick={() => copyAddress(ip)}
+                      >
+                        <MdIcon name="content_copy" size={18} />
+                      </IconButton>
+                    </div>
+                    <PeerProbe peerId={peer().id} ip={ip} disabled={Boolean(loadError())} />
                   </div>
                 )}
               </For>
             </div>
+            <p class="tool-hint">{t('net_peer_probe_hint')}</p>
             <KvRow k={t('net_os')} v={peer().os || '—'} />
             <KvRow k={t('net_relay_region')} v={peer().relay || '—'} />
             <KvRow k={t('peers_rx')} v={fmtBytes(peer().rxBytes)} />
@@ -364,13 +372,47 @@ export default function Peers(): JSX.Element {
               v={peer().exitNodeOption ? t('net_enabled') : t('net_disabled')}
             />
             <div class="md-dialog-actions">
-              <Button variant="text" onClick={() => setDetail(null)}>
+              <Button variant="text" onClick={() => setDetailId(null)}>
                 {t('close')}
               </Button>
             </div>
           </Dialog>
         )}
       </Show>
+    </div>
+  );
+}
+
+function PeerProbe(props: { peerId: string; ip: string; disabled: boolean }): JSX.Element {
+  const key = () => 'peer-ping:' + props.peerId + ':' + props.ip;
+  const task = () => getTask(key());
+  const result = () => {
+    const value = task()?.result;
+    return value?.ok && value.peerId === props.peerId && value.ip === props.ip &&
+      typeof value.latencyMs === 'number' && Number.isFinite(value.latencyMs) && value.latencyMs >= 0 &&
+      typeof value.via === 'string' ? value : null;
+  };
+  const path = () => {
+    switch (result()?.path) {
+      case 'direct': return t('net_peer_direct');
+      case 'derp': return 'DERP';
+      case 'peer-relay': return t('net_peer_relay');
+      default: return t('net_unknown');
+    }
+  };
+  return (
+    <div data-peer-probe={props.ip}>
+      <TaskButton taskKey={key()} cmd="peer-ping" args={[props.peerId, props.ip]}
+        label={t('net_peer_probe') + (props.ip.includes(':') ? ' IPv6' : ' IPv4')}
+        disabled={props.disabled} />
+      <TaskProgress taskKey={key()} />
+      <Show when={task()?.status === 'done' && result()?.ok}>
+        <p role="status">{path()} · {Number(result()?.latencyMs)} ms <code>{String(result()?.via ?? '')}</code></p>
+      </Show>
+      <Show when={task()?.status === 'error' || (task()?.status === 'done' && !result())}>
+        <ErrorState text={String(task()?.result?.error || t('net_peer_probe_invalid'))} />
+      </Show>
+      <Show when={task()?.status === 'cancelled'}><p role="status">{t('cancelled')}</p></Show>
     </div>
   );
 }

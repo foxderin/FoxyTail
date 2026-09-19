@@ -1,7 +1,7 @@
 #!/system/bin/sh
 # FoxyTail - one-shot diagnostics bundle.
 #
-# Usage: foxytail.diag collect [output-dir]   (default /sdcard/Download)
+# Usage: foxytail.diag collect [output-dir] [share|local] (default: share)
 # Prints the tar.gz path as the LAST line of stdout (webapi parses it).
 
 DIR=$(dirname "$(realpath "$0")")
@@ -16,11 +16,72 @@ trap 'exit 130' HUP INT TERM
 # Strip Tailscale login URLs from daemon output: the diag bundle lands in
 # shared storage and an auth URL is a bearer secret for the node identity.
 _redact() {
-  sed 's|https://login\.tailscale\.com/[^ ]*|[redacted-login-url]|g'
+  sed -E 's|https://login\.tailscale\.com/[^[:space:]]*|[redacted-login-url]|g; s|tskey-[A-Za-z0-9_-]+|[redacted-key]|g'
+}
+
+# One bundle-wide mapping preserves relationships across status, logs and
+# rules. The raw mapping/input never enters shared storage or the archive.
+share_redact() {
+  _redact_input=$(mktemp "${TS_RUN_DIR}/diag-records.XXXXXX") || return 1
+  _redact_output=$(mktemp "${TS_RUN_DIR}/diag-redacted.XXXXXX") || return 1
+  for _dr_file in "$_stage"/* "$_stage"/conf/*; do
+    [ -f "$_dr_file" ] || continue
+    jqr -n -c --arg path "${_dr_file#"$_stage"/}" --rawfile text "$_dr_file" \
+      '{path:$path,text:$text}' >>"$_redact_input" || return 1
+  done
+  jqr -s -c '
+    def escaped: explode | map(. as $c |
+      if ([92,46,94,36,124,63,42,43,40,41,91,93,123,125] | index($c)) != null
+      then [92,$c] else [$c] end) | add | implode;
+    . as $files | (map(.text)|join("\n")) as $all
+    | (map(select(.path=="status.json") | .text | fromjson?) | .[0] // {}) as $status
+    | [
+        ($status | .. | objects | to_entries[]
+          | select(.key | test("^(HostName|DNSName|MagicDNSSuffix|DisplayName|LoginName|Name|ID|UserID|PublicKey|MachineKey|NodeKey|DiscoKey|AuthURL)$"))
+          | .value | select(type=="string" or type=="number") | tostring | select(length>0)),
+        ($files[] | select(.path=="conf/context.conf") | .text | split("\n")[]
+          | select(startswith("ssid:")) | split(":")[1] | select(length>0)),
+        ($files[] | select(.path=="conf/context.conf") | .text | split("\n")[]
+          | split(":") | select(.[2]=="exit-node") | .[3:] | join(":") | gsub("^[ \\t]+|[ \\t\\r]+$";"") | select(length>0)),
+        ($all | scan("ssid:[^:\\r\\n\\x27\"]+") | ltrimstr("ssid:")),
+        ($all | scan("[0-9]{1,3}(?:\\.[0-9]{1,3}){3}")),
+        ($all | scan("(?:[0-9A-Fa-f]{0,4}:){2,}[0-9A-Fa-f:.]*(?:%[A-Za-z0-9_.-]+)?")
+          | select(contains("::") or (split(":")|length)>=8)),
+        ($all | scan("[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}")),
+        ($all | scan("https?://[^\\s<>\"]+|tskey-[A-Za-z0-9_-]+|(?:nodekey|machinekey|discokey):[A-Za-z0-9]+"))
+      ] | unique | sort_by(-length, .) | to_entries
+      | map({pattern:("(?<![\\p{L}\\p{N}_.-])"+(.value|escaped)+"(?![\\p{L}\\p{N}_.-])"),
+             replacement:("[anon-"+(.key|tostring)+"]")}) as $map
+    | def anonymize: reduce $map[] as $m (. ; gsub($m.pattern; $m.replacement));
+    $files[] | .text |= (
+      . as $raw | try (fromjson | walk(
+        if type=="string" then anonymize
+        elif type=="object" then with_entries(
+          if (.key=="ID" or .key=="UserID") and (.value|type)=="number"
+          then .value |= (tostring | anonymize) else . end | .key |= anonymize)
+        else . end) | tojson) catch ($raw | anonymize)
+    )
+  ' "$_redact_input" >"$_redact_output" || return 1
+  while IFS= read -r _dr_record; do
+    _dr_path=$(printf '%s' "$_dr_record" | jqr -r '.path') || return 1
+    printf '%s' "$_dr_record" | jqr -j '.text' >"$_stage/$_dr_path" || return 1
+  done <"$_redact_output"
+  rm -f "$_redact_input" "$_redact_output" || return 1
+}
+
+diag_cleanup() {
+  _diag_rc=$?
+  rm -rf "${_stage}"
+  rm -f "${_partial}" "${_redact_input:-}" "${_redact_output:-}"
+  [ "$_diag_rc" = 0 ] || rm -f "$_out"
+  exit "$_diag_rc"
 }
 
 collect() {
   _outdir="${1:-/sdcard/Download}"
+  _mode=${2:-share}
+  case "$_mode" in share|local) ;; *) echo 'expected share|local' >&2; return 1 ;; esac
+  umask 077
 
   # Verify the output dir is writable; fall back to $TS_DIR otherwise.
   if { [ -d "$_outdir" ] || mkdir -p "$_outdir" 2>/dev/null; } \
@@ -38,7 +99,7 @@ collect() {
   _partial="${_out}.partial"
 
   _stage=$(mktemp -d "${TS_RUN_DIR}/diag.XXXXXX" 2>/dev/null) || return 1
-  trap 'rm -rf "${_stage}"; rm -f "${_partial}"' 0
+  trap 'diag_cleanup' 0
 
   log Info "diag: collecting into ${_stage}"
 
@@ -70,7 +131,7 @@ collect() {
 
   # Sanitized config copies: drop any line containing authkey/key.
   mkdir -p "${_stage}/conf"
-  for _c in "${TS_CONF_DIR}"/*; do
+  for _c in "${TS_CONF_DIR}/foxytail.conf" "${TS_CONF_DIR}/routes.conf" "${TS_CONF_DIR}/context.conf"; do
     [ -f "$_c" ] || continue
     sed '/[Kk][Ee][Yy]/d' "$_c" >"${_stage}/conf/$(basename "$_c")"
   done
@@ -92,6 +153,11 @@ collect() {
   [ -f "$TS_MOD_PROP" ] && cp "$TS_MOD_PROP" "${_stage}/module.prop"
   [ -f "${TS_DIR}/VERSIONS" ] && cp "${TS_DIR}/VERSIONS" "${_stage}/VERSIONS"
 
+  if [ "$_mode" = share ]; then
+    share_redact || { log Error 'diag: anonymization failed; no archive was published'; return 1; }
+  fi
+  printf 'mode=%s\n' "$_mode" >"${_stage}/diagnostic-mode.txt"
+
   if tar -czf "$_partial" -C "$TS_RUN_DIR" "$(basename "$_stage")" 2>/dev/null && mv "$_partial" "$_out"; then
     log Success "diag: bundle written to ${_out}"
   else
@@ -104,7 +170,7 @@ collect() {
 case "$1" in
   collect) shift; collect "$@" ;;
   *)
-    echo "usage: $0 collect [output-dir]" >&2
+    echo "usage: $0 collect [output-dir] [share|local]" >&2
     exit 1
     ;;
 esac

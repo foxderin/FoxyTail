@@ -29,12 +29,12 @@ if [ "$1" = --request-id ]; then
   shift 2
 fi
 case "$1:$2" in
-  logs:* | control:stop | restore:* | cancel:*) ;;
+  logs:* | control:stop | restore:* | cancel:* | diag-check:* | trial-status:* | trial-confirm:* | trial-revert:* | backup-list:* | restore-preview:*) ;;
   status:* | tun:* | dns:*) load_runtime_conf || jerr 'invalid runtime configuration; inspect the service log' ;;
   *) load_conf || jerr 'invalid configuration; inspect the service log' ;;
 esac
 case "$1" in
-  control | mode-set | exitnode-set | exitnode-clear | login | login-authkey | logout | switch | serve-set | serve-del | funnel-set | funnel-del | routes-set | subnet-routes-set | settings-set | context-set | file-send | file-receive | restore)
+  control | mode-set | exitnode-set | exitnode-clear | login | login-authkey | logout | switch | serve-set | serve-del | funnel-set | funnel-del | routes-set | subnet-routes-set | settings-set | context-set | file-send | file-receive | restore | trial-start | trial-confirm | trial-revert)
     [ ! -f "${TS_DIR}/.installing" ] || jerr 'an upgrade is in progress; retry after it completes' ;;
 esac
 
@@ -42,6 +42,7 @@ case "$1" in
   cancel) shift; cmd_cancel "$1" ;;
   status) cmd_status ;;
   peers) cmd_peers ;;
+  peer-ping) shift; cmd_peer_ping "$1" "$2" ;;
   exitnodes) cmd_exitnodes ;;
   speedtest-exitnodes) cmd_speedtest_exitnodes ;;
   derp-speedtest) cmd_derp_speedtest ;;
@@ -76,12 +77,19 @@ case "$1" in
   context-set) shift; cmd_context_set "$@" ;;
   logs) shift; cmd_logs "$1" "$2" ;;
   compat) cmd_compat ;;
-  diag) cmd_diag ;;
+  diag) shift; cmd_diag "$1" ;;
+  diag-check) cmd_diag_check ;;
   files-inbox) cmd_files_inbox ;;
   file-send) shift; cmd_file_send "$1" "$2" ;;
   file-receive) cmd_file_receive ;;
   backup) cmd_backup ;;
-  restore) shift; cmd_restore "$1" ;;
+  backup-list) cmd_backup_list ;;
+  restore-preview) shift; cmd_restore_preview "$1" ;;
+  restore) shift; cmd_restore "$1" "$2" ;;
+  trial-start) shift; cmd_trial_start "$1" "$2" ;;
+  trial-status) cmd_trial_status ;;
+  trial-confirm) shift; cmd_trial_confirm "$1" ;;
+  trial-revert) shift; cmd_trial_revert "$1" ;;
   key-expiry) cmd_key_expiry ;;
   *)
     [ -n "$1" ] && jerr "unknown command: $1"

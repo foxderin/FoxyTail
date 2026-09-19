@@ -146,7 +146,7 @@ cmd_cancel() {
   mkdir -p "${_oc_dir}" || jerr 'cannot record cancellation'
   _oc_cmd=$(cat "${_oc_dir}/command" 2>/dev/null)
   case "${_oc_cmd}" in
-    control | mode-set | routes-set | subnet-routes-set | settings-set | context-set | restore | backup)
+    control | mode-set | routes-set | subnet-routes-set | settings-set | context-set | restore | backup | trial-start | trial-confirm | trial-revert)
       if _op_pid_alive "${_oc_dir}/runner"; then jerr 'operation is committing changes and cannot be cancelled'; fi ;;
   esac
   : >"${_oc_dir}/cancelled" || jerr 'cannot record cancellation'

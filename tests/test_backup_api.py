@@ -1,5 +1,6 @@
 """Host-only backup regressions against the actual shell functions."""
 import json
+import hashlib
 from pathlib import Path
 import shlex
 import tarfile
@@ -9,6 +10,65 @@ from api_fixture import ApiTestCase
 
 
 class BackupApiTests(ApiTestCase):
+    def selected_archive(self, entries):
+        path = self.sdcard / 'Download/foxytail-backup-test.tar.gz'
+        self.archive(entries).replace(path)
+        return path
+
+    def test_picker_excludes_symlinks_unrelated_names_and_path_escape(self):
+        good = self.selected_archive({'conf/foxytail.conf': 'SOCKS_PORT=1200\n'})
+        download = self.sdcard / 'Download'
+        (download / 'foxytail-backup-link.tar.gz').symlink_to(good)
+        (download / 'other.tar.gz').write_bytes(good.read_bytes())
+        (download / 'foxytail-backup-directory.tar.gz').mkdir()
+        result = json.loads(self.shell('cmd_backup_list').stdout)
+        self.assertEqual([item['path'] for item in result['backups']], [str(good)])
+        self.assertEqual(result['backups'][0]['size'], good.stat().st_size)
+        outside = self.archive({'conf/foxytail.conf': 'SOCKS_PORT=1400\n'})
+        result = self.shell('cmd_restore_preview ' + shlex.quote(str(outside)), ok=False)
+        self.assertNotEqual(result.returncode, 0)
+
+    def test_preview_is_read_only_and_shows_validated_config_diff_and_hook_names(self):
+        before = self.snapshot()
+        archive = self.selected_archive({'conf/foxytail.conf': 'SOCKS_PORT=1200\n',
+                                         'foxytail.tun.up': 'do-not-execute-secret-hook\n'})
+        state = self.base / 'state'
+        state.mkdir()
+        identity = state / 'tailscaled.state'
+        identity.write_text('private-identity')
+        result = json.loads(self.shell('cmd_restore_preview ' + shlex.quote(str(archive))).stdout)
+        self.assertEqual(self.snapshot(), before)
+        self.assertEqual(result['sha256'], hashlib.sha256(archive.read_bytes()).hexdigest())
+        change = next(change for change in result['changes'] if change['key'] == 'SOCKS_PORT')
+        self.assertEqual(change, {'file': 'foxytail.conf', 'key': 'SOCKS_PORT', 'before': '1099', 'after': '1200'})
+        self.assertEqual(result['hooks'], ['foxytail.tun.up'])
+        self.assertNotIn('private-identity', json.dumps(result))
+        self.assertNotIn('do-not-execute-secret-hook', json.dumps(result))
+        self.assertEqual(identity.read_text(), 'private-identity')
+        self.assertFalse((self.run / 'settings.pending').exists())
+        self.assertFalse(list(self.base.glob('restored-hooks-*')))
+        self.assertFalse(list(self.base.glob('.restore.*')))
+
+    def test_preview_rejects_links_and_invalid_config_without_writes(self):
+        before = self.snapshot()
+        for entries in ({'conf/foxytail.conf': ('/etc/passwd',)}, {'conf/foxytail.conf': 'TS_MODE=invalid\n'}):
+            with self.subTest(entries=entries):
+                archive = self.selected_archive(entries)
+                result = self.shell('cmd_restore_preview ' + shlex.quote(str(archive)), ok=False)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertEqual(self.snapshot(), before)
+
+    def test_restore_rejects_archive_changed_after_preview_before_any_write(self):
+        archive = self.selected_archive({'conf/foxytail.conf': 'SOCKS_PORT=1200\n'})
+        preview = json.loads(self.shell('cmd_restore_preview ' + shlex.quote(str(archive))).stdout)
+        before = self.snapshot()
+        self.selected_archive({'conf/foxytail.conf': 'SOCKS_PORT=1300\n'})
+        result = self.shell('cmd_restore ' + shlex.quote(str(archive)) + ' ' + preview['sha256'], ok=False)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('changed after preview', json.loads(result.stdout)['error'])
+        self.assertEqual(self.snapshot(), before)
+        self.assertFalse(list(self.base.glob('conf.bak-*')))
+
     def test_restore_validation_has_no_partial_writes(self):
         previous = self.snapshot()
         archive = self.archive({'conf/foxytail.conf': 'SOCKS_PORT=1200\n', 'conf/routes.conf': 'PATH=/sdcard/evil\n'})

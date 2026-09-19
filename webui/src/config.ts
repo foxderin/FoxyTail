@@ -6,6 +6,11 @@ export const DEFAULT_TIMEOUT_MS = 15000;
 export const CLEANUP_TIMEOUT_MS = 8000;
 
 export const COMMAND_TIMEOUTS: Record<string, number> = {
+  'peer-ping': 30000,
+  'diag-check': 65000,
+  'trial-start': 120000,
+  'trial-revert': 120000,
+  'restore-preview': 30000,
   'speedtest-exitnodes': 90000,
   'derp-speedtest': 60000,
   // Profile DNS restoration precedes teardown; keep the asynchronous request
@@ -31,6 +36,7 @@ export const COMMAND_TIMEOUTS: Record<string, number> = {
   'subnet-routes-get': 20000,
   'subnet-routes-set': 35000,
   'context-set': 45000,
+  'context-get': 20000,
   'file-send': 320000,
   'file-receive': 70000,
   diag: 130000,

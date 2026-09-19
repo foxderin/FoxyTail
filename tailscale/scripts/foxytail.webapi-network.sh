@@ -84,6 +84,36 @@ cmd_exitnodes() {
   cmd_peers true
 }
 
+cmd_peer_ping() {
+  [ -n "$1" ] || jerr 'peer-ping: missing peer id'
+  case "$2" in '' | *[!0-9a-fA-F:.]*) jerr 'peer-ping: expected a peer IP address' ;; esac
+  case "$2" in *:*) _pp_bits=128 ;; *.*) _pp_bits=32 ;; *) jerr 'peer-ping: expected a peer IP address' ;; esac
+  normalize_cidrs "$2/${_pp_bits}" >/dev/null || jerr 'peer-ping: invalid IP address'
+  daemon_up || jerr 'tailscaled is unavailable'
+  _pp_status=$(ts_status_json)
+  _pp_ips=$(printf '%s' "${_pp_status}" | jqr -e -c --arg id "$1" --arg ip "$2" '
+    if type=="object" and .BackendState=="Running" and (.Peer|type)=="object" then
+      [.Peer[] | select(type=="object" and .ID==$id and (.TailscaleIPs|type)=="array")
+        | .TailscaleIPs[] | select(type=="string")] | select(index($ip)!=null)
+    else empty end' 2>/dev/null) ||
+    jerr 'peer-ping: address does not belong to this peer in the current device list'
+  # ponytail: the pinned CLI has no JSON ping; use structured output when available.
+  # DERP pongs count even when --until-direct exits nonzero. Disco replies use
+  # the peer's primary NodeIP, which can differ from the requested IPv6 address.
+  _pp_out=$(ts_cli 12 ping --c=3 --timeout=3s "$2" </dev/null 2>&1)
+  _op_cancelled && jerr 'peer ping cancelled'
+  _pp_result=$(printf '%s\n' "${_pp_out}" | jqr -R -s -e -c --arg id "$1" --arg ip "$2" --argjson ips "${_pp_ips}" '
+    [split("\n")[] | capture("^pong from .+ \\((?<ip>[^),]+)(?:, [0-9]+)?\\) via (?<via>.+) in (?<latency>[0-9]+(?:\\.[0-9]+)?)(?<unit>ms|s)$")
+      | select(.ip as $reply | $ips | index($reply)!=null)] | last | select(.!=null)
+    | {ok:true,peerId:$id,ip:$ip,
+       latencyMs:((.latency|tonumber) * (if .unit=="s" then 1000 else 1 end)),via:.via,
+       path:(if (.via|test("^DERP\\([a-z0-9-]+\\)$")) then "derp"
+         elif (.via|test("^peer-relay\\(.+\\)$")) then "peer-relay"
+         elif (.via|test("^([0-9]{1,3}\\.){3}[0-9]{1,3}:[0-9]+$|^\\[[0-9a-fA-F:]+\\]:[0-9]+$")) then "direct"
+         else "unknown" end)}' 2>/dev/null) || jerr "peer ping failed: ${_pp_out:-no reply}"
+  printf '%s\n' "${_pp_result}"
+}
+
 cmd_speedtest_exitnodes() {
   daemon_up || jerr "tailscaled is not running"
   _se_st=$(ts_status_json)

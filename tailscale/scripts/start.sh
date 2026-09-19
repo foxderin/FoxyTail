@@ -5,6 +5,17 @@ DIR=$(dirname "$(realpath "$0")")
 . "$DIR"/../settings.sh
 ensure_run_dirs
 
+# A reboot or interrupted upgrade must not silently keep an unconfirmed trial.
+_start_applied=
+case "${1:-start}" in
+  start|postinstall|enable)
+    if [ -x "${TS_SCRIPTS_DIR}/foxytail.trial" ]; then
+      "${TS_SCRIPTS_DIR}/foxytail.trial" boot
+      _start_trial_rc=$?
+      case "${_start_trial_rc}" in 0) _start_applied=--applied ;; 3) ;; *) exit 1 ;; esac
+    fi ;;
+esac
+
 stop_inotifyd() {
   _si_pids=""
   for _si_pid in $(busybox pidof inotifyd 2>/dev/null || pidof inotifyd 2>/dev/null); do
@@ -59,6 +70,10 @@ start_residents() {
 }
 
 case "${1:-start}" in
+  pause-residents) stop_residents; exit $? ;;
+  resume-residents)
+    [ ! -f "${TS_MOD_DIR}/disable" ] && [ ! -f "${TS_RUN_DIR}/manual-stop" ] || exit 1
+    start_residents; exit $? ;;
   stop)
     # Stop controllers before the resources they can recreate.
     stop_inotifyd || exit 1
@@ -73,9 +88,16 @@ case "${1:-start}" in
     exit 0
     ;;
   reload)
+    if conf_trial_active; then
+      log Error 'confirm or revert the active configuration trial before restarting'
+      exit 1
+    fi
     stop_residents || exit 1
     _start_action=restart
     ;;
+  reload-trial)
+    "${TS_SCRIPTS_DIR}/foxytail.service" trial "$2" "$3"
+    exit $? ;;
   postinstall|start|enable) _start_action=start ;;
   *) echo "usage: $0 {start|postinstall|reload|reload-residents|stop}" >&2; exit 1 ;;
 esac
@@ -93,7 +115,11 @@ fi
 # Preserve run/ (PID files, route ownership, stats and manual-stop state).
 # Even a partially ready tunnel needs the watchdog for eventual recovery.
 _start_rc=0
-"${TS_SCRIPTS_DIR}/foxytail.service" "$_start_action" || _start_rc=1
+if [ -n "${_start_applied}" ]; then
+  "${TS_SCRIPTS_DIR}/foxytail.service" "$_start_action" "${_start_applied}" || _start_rc=1
+else
+  "${TS_SCRIPTS_DIR}/foxytail.service" "$_start_action" || _start_rc=1
+fi
 start_residents || _start_rc=1
 if [ -x "${TS_SCRIPTS_DIR}/foxytail.compat" ]; then
   "${TS_SCRIPTS_DIR}/foxytail.compat" probe >"${TS_RUN_DIR}/compat.json" 2>/dev/null

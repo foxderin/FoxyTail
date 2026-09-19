@@ -4,7 +4,7 @@
 # Subcommands:
 #   start       resident loop (exits when context.conf has no effective rules)
 #   stop        stop the resident loop
-#   status      JSON: {"running":bool,"context":...}
+#   status      JSON: {"running":bool,"context":...,"lastResult":object|null}
 #   check-once  detect the current context, apply actions on change, exit
 #   validate    validate a rules file without loading the main configuration
 
@@ -15,6 +15,7 @@ DIR=$(dirname "$(realpath "$0")")
 PID_FILE="${TS_PID_DIR}/foxytail.context.pid"
 TS_SOCKET="${TS_RUN_DIR}/tailscaled.sock"
 STATE_FILE="${TS_RUN_DIR}/context.state"
+RESULT_FILE="${TS_RUN_DIR}/context.result.json"
 RULES_FILE="${TS_CONF_DIR}/context.conf"
 INTERVAL=20
 
@@ -116,7 +117,7 @@ run_action() {
       [ -x "$SERVICE" ] && "$SERVICE" stop >>"${TS_RUN_LOG_FILE}" 2>&1
       ;;
     exit-node)
-      log Info "context: action exit-node ${_arg}"
+      log Info "context: action exit-node"
       tmo 10 tailscale --socket="$TS_SOCKET" set --exit-node="$_arg" >/dev/null 2>&1
       ;;
     no-exit-node)
@@ -135,12 +136,13 @@ run_action() {
 apply_context() {
   _ac_kind=${1%%:*}
   _ac_val=${1#*:}
-  _ac_failed=0
+  _ac_failed=0 _ac_matched=0
   while IFS=: read -r _trig _tval _act _arg; do
     [ "$_trig" = "$_ac_kind" ] || continue
     if [ "$_ac_kind" = "ssid" ] && [ "$_tval" != "$_ac_val" ]; then
       continue
     fi
+    _ac_matched=1
     if ! run_action "$_act" "$_arg"; then
       _ac_failed=1
       log Warning "context: action '${_act}' failed; retrying next round"
@@ -151,13 +153,24 @@ EOF_RULES
   return "$_ac_failed"
 }
 
+record_result() {
+  _cr_tmp=$(mktemp "${RESULT_FILE}.XXXXXX") || return 1
+  if jqr -n -c --arg c "$_ctx" --argjson ok "$1" --argjson at "$(date +%s)" \
+    '{context:$c,ok:$ok,at:$at} + (if $ok then {} else {error:"context-action-failed"} end)' \
+    >"$_cr_tmp" && mv -f "$_cr_tmp" "$RESULT_FILE"; then
+    return 0
+  fi
+  rm -f "$_cr_tmp"
+  return 1
+}
+
 # Retry unconfirmed contexts; replay when the rules or applied snapshot change.
 check_once() {
   load_runtime_conf || return 1
   RULES_FILE="${_RUNTIME_CONF_DIR}/context.conf"
   _rules=$(read_rules) || return 1
   if [ -z "$_rules" ]; then
-    rm -f "$STATE_FILE"
+    rm -f "$STATE_FILE" "$RESULT_FILE"
     return $?
   fi
   _ctx=$(current_context)
@@ -168,7 +181,11 @@ check_once() {
     # Partial actions invalidate the previous context too, even if we return
     # to that network before the next retry.
     rm -f "$STATE_FILE" || return 1
-    apply_context "$_ctx" "$_rules" || return 1
+    if ! apply_context "$_ctx" "$_rules"; then
+      record_result false
+      return 1
+    fi
+    [ "$_ac_matched" = 0 ] || record_result true || return 1
     printf '%s\n' "$_ctx" >"$STATE_FILE" || return 1
   fi
   _applied_rules=$_rules _applied_rules_file=$RULES_FILE
@@ -185,12 +202,13 @@ do_start() {
   _rules=$(read_rules) || return 1
   if [ -z "$_rules" ]; then
     log Info "context: no rules in context.conf, not starting"
-    return 0
+    rm -f "$STATE_FILE" "$RESULT_FILE"
+    return $?
   fi
   daemon_claim_pidfile foxytail.context || return 0
   # Force the first resident round to replay the rules: the persisted token
   # would otherwise suppress actions that are still owed after a reboot.
-  rm -f "$STATE_FILE" || return 1
+  rm -f "$STATE_FILE" "$RESULT_FILE" || return 1
   _ctx_running=1
   trap '_context_stop' TERM INT
   log Info "foxytail.context started (pid $$, interval ${INTERVAL}s)"
@@ -213,13 +231,19 @@ do_status() {
   # could feed jq an empty string and produce broken JSON.
   _ctx_pid=$(cat "$PID_FILE" 2>/dev/null)
   case "$_ctx_pid" in '' | *[!0-9]*) _ctx_pid="" ;; esac
+  _ctx_result=$(jqr -s -c '
+    if length == 1 and (.[0] | type == "object" and (.context | type) == "string"
+        and (.ok | type) == "boolean" and (.at | type) == "number")
+    then .[0] | {context,ok,at} + (if .ok then {} else {error:"context-action-failed"} end)
+    else null end' "$RESULT_FILE" 2>/dev/null) || _ctx_result=null
+  _ctx_live=false
   if [ -n "$_ctx_pid" ] && kill -0 "$_ctx_pid" 2>/dev/null; then
-    jqr -n -c --argjson r true --argjson p "$_ctx_pid" --arg c "$_ctx" \
-      '{running:$r,pid:$p,context:$c}'
+    _ctx_live=true
   else
-    jqr -n -c --argjson r false --arg c "$_ctx" \
-      '{running:$r,pid:null,context:$c}'
+    _ctx_pid=null
   fi
+  jqr -n -c --argjson r "$_ctx_live" --argjson p "$_ctx_pid" --arg c "$_ctx" \
+    --argjson result "$_ctx_result" '{running:$r,pid:$p,context:$c,lastResult:$result}'
 }
 
 case "$1" in

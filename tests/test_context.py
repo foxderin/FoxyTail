@@ -1,5 +1,6 @@
 """Run the context script on the host with private paths and network command stubs."""
 import os
+import json
 from pathlib import Path
 import subprocess
 import tempfile
@@ -29,6 +30,7 @@ class ContextTests(unittest.TestCase):
                     'MODPATH': str(self.base / 'module')}
         self.rules = self.base / 'conf/context.conf'
         self.state = self.base / 'run/context.state'
+        self.result = self.base / 'run/context.result.json'
         self.events = self.base / 'events'
         self.write_stub('bin/ip', '''
 if [ -f "$TS_TEST_DIR/offline" ]; then exit 0; fi
@@ -179,8 +181,19 @@ fi
         (self.base / 'fail-service-start').touch()
         self.assertNotEqual(self.run_script('check-once', ok=False).returncode, 0)
         self.assertFalse(self.state.exists())
+        status = json.loads(self.run_script('status').stdout)
+        self.assertFalse(status['running'])
+        self.assertEqual(status['lastResult']['context'], 'cellular:-')
+        self.assertEqual(status['lastResult']['error'], 'context-action-failed')
+        self.assertFalse(status['lastResult']['ok'])
         self.run_script('check-once')
+        completed = self.result.read_bytes()
+        status = json.loads(self.run_script('status').stdout)
+        self.assertTrue(status['lastResult']['ok'])
+        self.assertIsInstance(status['lastResult']['at'], int)
+        self.assertNotIn('error', status['lastResult'])
         self.run_script('check-once')
+        self.assertEqual(self.result.read_bytes(), completed)
         self.assertEqual(self.events.read_text().splitlines(), ['service:start'] * 2)
         self.assertEqual(self.state.read_text(), 'cellular:-\n')
 
@@ -233,6 +246,7 @@ printf '%s\n' "$*" >"$TS_TEST_DIR/daemon-args"
         self.run_checks('''
 check_once && exit 10
 [ ! -e "$STATE_FILE" ] || exit 11
+jqr -e '.ok == false and .error == "context-action-failed"' "$RESULT_FILE" >/dev/null || exit 14
 check_once || exit 12
 check_once || exit 13
 ''')
@@ -353,6 +367,42 @@ check_once || exit 11
         self.run_script('stop')
         self.run_script('validate', self.rules)
         self.assertFalse(self.events.exists())
+        self.assertFalse(self.state.exists())
+
+    def test_result_does_not_expose_arguments_or_claim_unsaved_execution(self):
+        self.rules.write_text('cellular:-:exit-node:private-node.example')
+        (self.base / 'fail-cli').touch()
+        self.run_script('check-once', ok=False)
+        previous = self.result.read_bytes()
+        self.assertNotIn(b'private-node.example', previous)
+        self.assertEqual(self.result.stat().st_mode & 0o777, 0o600)
+        self.rules.write_text('cellular:-:up')
+        self.assertFalse(json.loads(self.run_script('status').stdout)['lastResult']['ok'])
+        self.assertEqual(self.result.read_bytes(), previous)
+        self.run_script('stop')
+        self.assertEqual(self.result.read_bytes(), previous)
+        self.rules.write_text('')
+        self.run_script('check-once')
+        self.assertFalse(self.result.exists())
+        self.rules.write_text('ssid:Other Network:up')
+        self.run_script('check-once')
+        self.assertIsNone(json.loads(self.run_script('status').stdout)['lastResult'])
+
+    def test_result_publication_failure_leaves_no_partial_json_and_status_tolerates_corruption(self):
+        self.rules.write_text('cellular:-:up')
+        self.run_script('check-once')
+        completed = self.result.read_bytes()
+        self.state.unlink()
+        self.run_checks('''
+mv() { return 1; }
+check_once && exit 10
+[ ! -e "$STATE_FILE" ] || exit 11
+''')
+        self.assertEqual(self.result.read_bytes(), completed)
+        self.assertEqual(list(self.base.glob('run/context.result.json.*')), [])
+        for content in ('not json', '{"context":"cellular:-","ok":"yes"}', '{}\n{}'):
+            self.result.write_text(content)
+            self.assertIsNone(json.loads(self.run_script('status').stdout)['lastResult'])
         self.assertFalse(self.state.exists())
 
     def test_special_ssids_match_literally_and_unknown_or_offline_does_not(self):

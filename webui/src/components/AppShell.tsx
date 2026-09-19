@@ -35,6 +35,7 @@ const TASK_DESTINATIONS: Record<string, { route: string; label: I18nKey; icon: I
   'speedtest-exitnodes': { route: 'exitnodes', label: 'exit_test', icon: 'speed' },
   'derp-speedtest': { route: 'tunnel', label: 'tun_derp', icon: 'network_check' },
   diag: { route: 'diag', label: 'diag_run', icon: 'bug_report' },
+  'diag-check': { route: 'diag', label: 'diag_check', icon: 'network_check' },
   'file-send': { route: 'files', label: 'files_send', icon: 'send' },
   'file-receive': { route: 'files', label: 'files_receive', icon: 'download' },
   backup: { route: 'settings', label: 'set_backup', icon: 'backup' },
@@ -50,7 +51,9 @@ function TaskMenu(): JSX.Element {
   });
   const tasks = () => [...listTasks()].sort((a, b) => Number(b.status === 'running') - Number(a.status === 'running') || b.startedAt - a.startedAt).slice(0, 5);
   const running = () => tasks().filter((task) => task.status === 'running').length;
-  const destination = (task: Task) => TASK_DESTINATIONS[task.key] ?? { route: 'more', label: 'shell_tasks' as I18nKey, icon: 'sync' as IconName };
+  const destination = (task: Task) => task.key.startsWith('peer-ping:')
+    ? { route: 'peers', label: 'net_peer_probe' as I18nKey, icon: 'network_check' as IconName }
+    : TASK_DESTINATIONS[task.key] ?? { route: 'more', label: 'shell_tasks' as I18nKey, icon: 'sync' as IconName };
   return <details class="task-menu" ref={menu} onKeyDown={(event) => {
     if (event.key === 'Escape' && menu.open) { menu.open = false; menu.querySelector('summary')?.focus(); }
   }}>

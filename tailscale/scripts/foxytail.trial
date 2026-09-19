@@ -1,0 +1,281 @@
+#!/system/bin/sh
+# A durable configuration trial. Only the worker's timer owns automatic rollback.
+DIR=$(dirname "$(realpath "$0")")
+# shellcheck source=../settings.sh
+. "${DIR}/../settings.sh"
+ensure_run_dirs
+detach_from_app_cgroup || exit 1
+TRIAL_DIR="${TS_DIR}/state/config-trial"
+
+trial_error() { jqr -n -c --arg error "$1" '{ok:false,error:$error}'; exit 1; }
+trial_id() {
+  case "$1" in ''|*[!A-Za-z0-9_-]*) return 1 ;; esac
+  [ "$1" = "$(cat "${TRIAL_DIR}/id" 2>/dev/null)" ]
+}
+trial_state() {
+  printf '%s\n' "$1" >"${TRIAL_DIR}/.status.$$" && mv "${TRIAL_DIR}/.status.$$" "${TRIAL_DIR}/status"
+  printf '%s\n' "${2:-}" >"${TRIAL_DIR}/reason"
+}
+trial_same() {
+  for _ts_file in foxytail.conf routes.conf context.conf; do
+    cmp -s "$1/${_ts_file}" "$2/${_ts_file}" || return 1
+  done
+}
+trial_summary() (
+  load_conf "$1" || exit 1
+  jqr -n -c --arg mode "$TS_MODE" --arg dns "$DNS_MODE" --arg scope "$ROUTE_SCOPE" \
+    '{mode:$mode,dnsMode:$dns,routeScope:$scope}'
+)
+trial_status() {
+  [ -f "${TRIAL_DIR}/id" ] || { echo '{"ok":true,"trial":null}'; return; }
+  jqr -n -c --arg id "$(cat "${TRIAL_DIR}/id")" --arg status "$(cat "${TRIAL_DIR}/status")" \
+    --arg deadline "$(cat "${TRIAL_DIR}/deadline" 2>/dev/null)" --arg reason "$(cat "${TRIAL_DIR}/reason" 2>/dev/null)" \
+    --slurpfile previous "${TRIAL_DIR}/previous.json" --slurpfile candidate "${TRIAL_DIR}/candidate.json" \
+    '{ok:true,trial:{id:$id,status:$status,deadline:($deadline|tonumber? // null),reason:$reason,previous:$previous[0],candidate:$candidate[0]}}'
+}
+trial_service_lock() {
+  _lock_identity
+  _TRIAL_LOCK_TOKEN=${_LOCK_TOKEN}
+  _owner_lock_acquire "${TS_RUN_DIR}/.service-lock" "${_TRIAL_LOCK_TOKEN}" 120 0.5 || trial_error 'service controller is busy'
+}
+trial_unlock() {
+  conf_lock_release
+  [ -z "${_TRIAL_LOCK_TOKEN:-}" ] || _owner_lock_release "${TS_RUN_DIR}/.service-lock" "${_TRIAL_LOCK_TOKEN}"
+}
+trial_begin() (
+  _num_in_range "$1" 30 300 || trial_error 'trial duration must be 30–300 seconds'
+  case "${2:-saved}" in saved|bridge|tun|proxy) ;; *) trial_error 'invalid trial mode' ;; esac
+  [ ! -f "${TS_DIR}/.installing" ] || trial_error 'an upgrade is in progress'
+  trial_service_lock
+  trap 'trial_unlock; [ -z "${_tb_tmp:-}" ] || rm -rf "${_tb_tmp}"; [ -z "${_tb_candidate:-}" ] || rm -rf "${_tb_candidate}"' 0
+  trap 'exit 1' HUP INT TERM
+  conf_trial_active && trial_error 'a configuration trial is already active'
+  [ -n "$(pids_of_path "${TS_BIN_DIR}/${TS_DAEMON_CMD}")" ] || trial_error 'start the service before trying a configuration'
+  _tb_candidate=$(conf_prepare_runtime) || trial_error 'saved candidate configuration is invalid'
+  conf_lock_acquire || trial_error 'configuration is busy'
+  _conf_runtime_dir && [ "${_RUNTIME_CONF_DIR}" != "${TS_CONF_DIR}" ] || trial_error 'an applied configuration snapshot is required'
+  mkdir -p "${TS_DIR}/state" || trial_error 'cannot create trial journal'
+  _tb_tmp=$(mktemp -d "${TS_DIR}/state/.config-trial.XXXXXX") || trial_error 'cannot stage trial journal'
+  cp -R "${_RUNTIME_CONF_DIR}" "${_tb_tmp}/previous" && cp -R "${_tb_candidate}" "${_tb_tmp}/candidate" || trial_error 'cannot retain trial snapshots'
+  cp "${_tb_candidate}/foxytail.conf" "${_tb_tmp}/saved-main" || trial_error 'cannot retain saved revision'
+  if [ "${2:-saved}" != saved ]; then
+    awk -v mode="$2" 'BEGIN {done=0} /^TS_MODE=/ {print "TS_MODE=" mode;done=1;next} {print} END {if(!done) print "TS_MODE=" mode}' \
+      "${_tb_tmp}/candidate/foxytail.conf" >"${_tb_tmp}/mode.next" && mv "${_tb_tmp}/mode.next" "${_tb_tmp}/candidate/foxytail.conf" || trial_error 'cannot prepare trial mode'
+  fi
+  (load_conf "${_tb_tmp}/candidate" && { [ "$TS_MODE" != tun ] || { [ "$ROUTE_SCOPE" = all ] && [ -c /dev/net/tun ]; }; }) || trial_error 'candidate mode is unavailable or incompatible with UID routing'
+  trial_summary "${_tb_tmp}/previous" >"${_tb_tmp}/previous.json" && trial_summary "${_tb_tmp}/candidate" >"${_tb_tmp}/candidate.json" || trial_error 'cannot describe trial configuration'
+  _tb_id="$(date +%s)_${_tb_tmp##*.}"
+  printf '%s\n' "${_tb_id}" >"${_tb_tmp}/id"
+  printf '%s\n' "$1" >"${_tb_tmp}/duration"
+  echo preparing >"${_tb_tmp}/status"
+  chmod -R go-rwx "${_tb_tmp}"
+  rm -rf "${TRIAL_DIR}"
+  mv "${_tb_tmp}" "${TRIAL_DIR}" || trial_error 'cannot publish trial journal'
+  _tb_tmp=
+  conf_lock_release
+  trial_ensure_worker
+  trial_status
+)
+
+# Called while foxytail.service owns its lifecycle lock. Never replace a
+# different runtime: an out-of-band newer apply supersedes this trial.
+trial_prepare() (
+  [ ! -f "${TS_DIR}/.installing" ] || exit 1
+  trial_id "$1" && conf_trial_active || exit 1
+  conf_lock_acquire || exit 1
+  trap 'conf_lock_release' 0
+  trial_id "$1" || exit 1
+  case "$2:$(cat "${TRIAL_DIR}/status")" in candidate:preparing|previous:rolling-back) ;; *) exit 1 ;; esac
+  if [ "${_TRIAL_BOOT:-0}" = 1 ] && [ ! -e "${TS_RUN_DIR}/applied-config" ]; then :
+  elif ! _conf_runtime_dir; then exit 1
+  elif ! trial_same "${_RUNTIME_CONF_DIR}" "${TRIAL_DIR}/previous" &&
+     ! trial_same "${_RUNTIME_CONF_DIR}" "${TRIAL_DIR}/candidate"; then
+    trial_state superseded 'a newer runtime configuration replaced this trial'
+    exit 1
+  fi
+  conf_lock_release
+  conf_prepare_runtime "${TRIAL_DIR}/$2"
+)
+
+trial_revert() (
+  [ ! -f "${TS_DIR}/.installing" ] || exit 0
+  conf_lock_acquire || exit 1
+  trap 'conf_lock_release' 0
+  trial_id "$1" && conf_trial_active || exit 0
+  trial_state rolling-back "${2:-$(cat "${TRIAL_DIR}/reason" 2>/dev/null)}"
+  conf_lock_release
+  if tmo 120 "${TS_SCRIPTS_DIR}/start.sh" reload-trial "$1" previous >>"${TS_RUN_LOG_FILE}" 2>&1; then
+    conf_lock_acquire || trial_error 'rollback completed but status is busy'
+    trial_id "$1" && [ "$(cat "${TRIAL_DIR}/status")" = rolling-back ] || exit 0
+    conf_mark_pending || { trial_state rollback-failed 'rollback completed but pending marker failed'; exit 1; }
+    trial_state rolled-back "$(cat "${TRIAL_DIR}/reason" 2>/dev/null)"
+  else
+    conf_lock_acquire || exit 1
+    if trial_id "$1" && [ "$(cat "${TRIAL_DIR}/status")" = rolling-back ]; then
+      trial_state rollback-failed 'rollback could not restart the previous configuration; retry or restart the module'
+    fi
+  fi
+)
+
+trial_request_revert() (
+  conf_lock_acquire || trial_error 'configuration is busy'
+  trap 'conf_lock_release' 0
+  trial_id "$1" || trial_error 'trial no longer exists'
+  if conf_trial_active; then trial_state rolling-back 'reverted by user'; fi
+  conf_lock_release
+  trial_ensure_worker
+  trial_status
+)
+
+trial_health() {
+  _th_status=$(tmo 10 tailscale --socket="${TS_RUN_DIR}/tailscaled.sock" status --json 2>/dev/null) || return 1
+  printf '%s' "${_th_status}" | jqr -e '.BackendState=="Running"' >/dev/null || return 1
+  load_runtime_conf || return 1
+  if [ "$MAGIC_DNS" = on ]; then
+    _th_dns=$(tmo 10 "${TS_SCRIPTS_DIR}/foxytail.dns" status --json 2>/dev/null) || return 1
+    printf '%s' "${_th_dns}" | jqr -e --arg mode "${DNS_MODE}" '
+      type=="object" and .state=="running" and .repairNeeded!=true and
+      (if (.mode // $mode)=="legacy" then (.pid|type)=="number" and .pid>0 and .enabled==true
+       else .enabled==true and .listenerReady==true and .repairNeeded==false and .policyState=="owned" and
+         (((.mode // $mode)=="local" and .reason=="local") or
+          ((.mode // $mode)=="transparent" and .reason=="running" and .interception4==true)) end)
+    ' >/dev/null 2>&1 || return 1
+  fi
+  [ "$TS_MODE" = proxy ] || ip link show dev tailscale0 >/dev/null 2>&1
+}
+
+trial_run() {
+  trial_id "$1" || exit 1
+  _TRIAL_WORKER_ID=$1
+  trap 'trial_worker_cleanup' 0
+  trap 'exit 1' HUP INT TERM
+  if [ "${2:-}" = candidate ] && [ "$(cat "${TRIAL_DIR}/status")" = preparing ]; then
+    if ! tmo 120 "${TS_SCRIPTS_DIR}/start.sh" reload-trial "$1" candidate >>"${TS_RUN_LOG_FILE}" 2>&1 || ! trial_health; then
+      trial_revert "$1" 'candidate startup or health check failed' >/dev/null
+      trap - 0
+      return
+    fi
+    conf_lock_acquire || return 1
+    if trial_id "$1" && [ "$(cat "${TRIAL_DIR}/status")" = preparing ]; then
+      printf '%s\n' "$(($(date +%s) + $(cat "${TRIAL_DIR}/duration")))" >"${TRIAL_DIR}/deadline"
+      trial_state running
+    fi
+    conf_lock_release
+  fi
+  if trial_id "$1" && [ "$(cat "${TRIAL_DIR}/status")" = preparing ]; then
+    trial_revert "$1" 'trial worker stopped during candidate startup' >/dev/null
+  fi
+  _tr_deadline=$(cat "${TRIAL_DIR}/deadline" 2>/dev/null)
+  case "${_tr_deadline}" in ''|*[!0-9]*) _tr_deadline=0 ;; esac
+  while [ ! -f "${TS_DIR}/.installing" ] && trial_id "$1" && [ "$(cat "${TRIAL_DIR}/status")" = running ]; do
+    if [ "$(date +%s)" -ge "${_tr_deadline}" ]; then
+      trial_revert "$1" 'trial expired without confirmation' >/dev/null
+      break
+    fi
+    sleep 1
+  done
+  if trial_id "$1" && [ "$(cat "${TRIAL_DIR}/status")" = rolling-back ]; then
+    trial_revert "$1" >/dev/null
+  fi
+  trap - 0
+}
+
+trial_worker_cleanup() {
+  conf_lock_release
+  [ ! -f "${TS_DIR}/.installing" ] || return 0
+  trial_id "${_TRIAL_WORKER_ID}" || return 0
+  case "$(cat "${TRIAL_DIR}/status")" in
+    preparing|running|rolling-back)
+      trial_revert "${_TRIAL_WORKER_ID}" 'trial worker stopped before confirmation' >/dev/null ;;
+  esac
+}
+
+trial_process_alive() {
+  [ -f "${TRIAL_DIR}/$1" ] || return 1
+  IFS=' ' read -r _tp_pid _tp_stamp <"${TRIAL_DIR}/$1"
+  case "${_tp_pid}" in ''|*[!0-9]*) return 1 ;; esac
+  _conf_owner_alive "${_tp_pid}:${_tp_stamp}"
+}
+
+# Readers only repair a missing worker. A nonblocking configuration lock keeps
+# worker registration with its journal and never waits for service work.
+trial_ensure_worker() (
+  [ ! -f "${TS_DIR}/.installing" ] || exit 0
+  _lock_identity
+  _CONF_LOCK_TOKEN=${_LOCK_TOKEN}
+  _owner_lock_acquire "${TS_RUN_DIR}/.conf-write-lock" "${_CONF_LOCK_TOKEN}" 1 0 || exit 0
+  _CONF_LOCK_HELD=1
+  trap 'conf_lock_release' 0
+  case "$(cat "${TRIAL_DIR}/status" 2>/dev/null)" in preparing|running|rolling-back) ;; *) exit 0 ;; esac
+  trial_process_alive worker && exit 0
+  _te_id=$(cat "${TRIAL_DIR}/id")
+  _te_action=recover
+  [ -e "${TRIAL_DIR}/worker" ] || _te_action=candidate
+  nohup "${TS_SCRIPTS_DIR}/foxytail.trial" run "${_te_id}" "${_te_action}" >>"${TS_RUN_LOG_FILE}" 2>&1 </dev/null &
+  _te_pid=$!
+  printf '%s %s\n' "${_te_pid}" "$(_conf_pid_stamp "${_te_pid}")" >"${TRIAL_DIR}/worker"
+)
+
+trial_confirm() (
+  trial_id "$1" || trial_error 'trial no longer exists'
+  trial_service_lock
+  trap 'trial_unlock' 0
+  conf_lock_acquire || trial_error 'configuration is busy'
+  trial_id "$1" || trial_error 'trial no longer exists'
+  [ "$(cat "${TRIAL_DIR}/status")" = running ] || trial_error 'trial is not ready for confirmation'
+  [ "$(date +%s)" -lt "$(cat "${TRIAL_DIR}/deadline")" ] || trial_error 'trial has expired'
+  _conf_runtime_dir && trial_same "${_RUNTIME_CONF_DIR}" "${TRIAL_DIR}/candidate" || trial_error 'trial runtime was replaced'
+  # Preserve later saves. Only persist a trial-only mode choice if the original
+  # saved main file is still unchanged; routes and context are never overwritten.
+  if cmp -s "${TS_CONF_DIR}/foxytail.conf" "${TRIAL_DIR}/saved-main"; then
+    cp "${TRIAL_DIR}/candidate/foxytail.conf" "${TS_CONF_DIR}/.trial-main.$$" &&
+      chmod 0600 "${TS_CONF_DIR}/.trial-main.$$" && mv "${TS_CONF_DIR}/.trial-main.$$" "${TS_CONF_DIR}/foxytail.conf" || trial_error 'cannot save confirmed trial mode'
+  fi
+  if trial_same "${TS_CONF_DIR}" "${TRIAL_DIR}/candidate"; then rm -f "${TS_RUN_DIR}/settings.pending"
+  else conf_mark_pending || trial_error 'cannot preserve pending settings'; fi
+  trial_state confirmed
+  trial_status
+)
+
+# Boot/install recovery does not start processes. The caller starts the retained
+# applied snapshot afterward; unconfirmed saved candidates remain pending.
+trial_boot() (
+  conf_trial_active || exit 3
+  trial_service_lock
+  trap 'trial_unlock' 0
+  conf_lock_acquire || exit 1
+  conf_trial_active || exit 3
+  trial_process_alive worker && trial_error 'confirm or revert the active trial before starting the module again'
+  for _tb_binary in "${TS_DAEMON_CMD}" hev-socks5-tunnel; do
+    [ -z "$(pids_of_path "${TS_BIN_DIR}/${_tb_binary}")" ] || trial_error 'confirm or revert the active trial before starting a running service'
+  done
+  for _tb_resident in foxytail.watchdog foxytail.context foxytail.stats foxytail.logd; do
+    daemon_pid_alive "${_tb_resident}" && trial_error 'confirm or revert the active trial before starting running companions'
+  done
+  _TRIAL_ID=$(cat "${TRIAL_DIR}/id")
+  trial_state rolling-back 'unconfirmed trial recovered after restart'
+  conf_lock_release
+  _TRIAL_BOOT=1
+  _tb_next=$(trial_prepare "${_TRIAL_ID}" previous) || exit 1
+  conf_activate_runtime "${_tb_next}" || exit 1
+  conf_lock_acquire || exit 1
+  conf_mark_pending || exit 1
+  trial_state rolled-back 'unconfirmed trial recovered after restart'
+)
+
+case "$1" in
+  begin) shift; trial_begin "$@" ;;
+  status) trial_ensure_worker; trial_status ;;
+  prepare) shift; trial_prepare "$@" ;;
+  run) shift; trial_run "$@" ;;
+  check) trial_ensure_worker ;;
+  confirm) trial_confirm "$2" ;;
+  revert) trial_request_revert "$2" ;;
+  boot) trial_boot ;;
+  supersede)
+    conf_lock_acquire || exit 1
+    trap 'conf_lock_release' 0
+    conf_trial_active && trial_state superseded 'service stopped explicitly'
+    exit 0 ;;
+  *) trial_error 'unknown trial command' ;;
+esac

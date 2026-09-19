@@ -594,10 +594,26 @@ service_lock() {
 }
 
 case "$1" in
-  start|stop|restart|mode|reconcile|recover) service_lock || exit 1 ;;
+  start|stop|restart|mode|reconcile|recover|trial) service_lock || exit 1 ;;
 esac
 
+if conf_trial_active; then
+  case "$1:${2:-}" in
+    stop:*) [ -f "${TS_DIR}/.installing" ] || "${TS_SCRIPTS_DIR}/foxytail.trial" supersede || exit 1 ;;
+    restart:*|mode:*|start:)
+      log Error 'configuration trial active; confirm or revert it before applying another configuration'
+      exit 1 ;;
+  esac
+fi
+
 case "$1" in
+  trial)
+    _TRIAL_ID="$2"
+    _SERVICE_CANDIDATE=$("${TS_SCRIPTS_DIR}/foxytail.trial" prepare "$2" "$3") || exit 1
+    "${TS_SCRIPTS_DIR}/start.sh" pause-residents || exit 1
+    restart_service || exit 1
+    "${TS_SCRIPTS_DIR}/start.sh" resume-residents
+    ;;
   reconcile)
     [ -f "${TS_RUN_DIR}/manual-stop" ] && exit 0
     _SERVICE_RECOVERY=1

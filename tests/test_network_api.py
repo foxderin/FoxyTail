@@ -304,6 +304,69 @@ cmd_status''').stdout)
         self.assertEqual(len(json.loads(self.shell(prefix + 'cmd_peers').stdout)['peers']), 2)
         self.assertEqual([peer['id'] for peer in json.loads(self.shell(prefix + 'cmd_exitnodes').stdout)['peers']], ['a'])
 
+    def peer_ping_fixture(self):
+        (self.run / 'peer-status.json').write_text(json.dumps({'BackendState': 'Running', 'Peer': {
+            'p1': {'ID': 'p1', 'TailscaleIPs': ['100.64.0.2', 'fd7a:115c:a1e0::2'], 'Relay': 'sin'},
+            'p2': {'ID': 'p2', 'TailscaleIPs': ['100.64.0.3']},
+        }}))
+        return '''load_conf
+daemon_up() { return 0; }
+ts_status_json() { cat "$TS_RUN_DIR/peer-status.json"; }
+ts_cli() { printf '%s\\n' "$*" >>"$TS_RUN_DIR/ping-calls"; cat "$TS_RUN_DIR/ping-output"; return "${PING_RC:-0}"; }
+'''
+
+    def test_peer_ping_reports_the_actual_reply_path_for_each_address_family(self):
+        prefix = self.peer_ping_fixture()
+        cases = [
+            ('100.64.0.2', '192.0.2.1:41641', '12ms', 0, 'direct', 12),
+            ('fd7a:115c:a1e0::2', '[2001:db8::1]:41641', '0s', 0, 'direct', 0),
+            ('100.64.0.2', 'DERP(tok)', '1.234s', 1, 'derp', 1234),
+            ('fd7a:115c:a1e0::2', 'peer-relay(other)', '7ms', 1, 'peer-relay', 7),
+            ('100.64.0.2', 'disco', '2ms', 0, 'unknown', 2),
+        ]
+        for ip, via, latency, rc, path, ms in cases:
+            with self.subTest(ip=ip, via=via):
+                output = f'pong from peer ({ip}) via DERP(sin) in 50ms\npong from peer ({ip}) via {via} in {latency}\n'
+                if rc:
+                    output += 'direct connection not established\n'
+                (self.run / 'ping-output').write_text(output)
+                result = json.loads(self.shell(prefix + f'PING_RC={rc}; cmd_peer_ping p1 ' + shlex.quote(ip)).stdout)
+                self.assertEqual(result, {'ok': True, 'peerId': 'p1', 'ip': ip,
+                                         'latencyMs': ms, 'path': path, 'via': via})
+        self.assertEqual((self.run / 'ping-calls').read_text().splitlines(),
+                         [f'12 ping --c=3 --timeout=3s {case[0]}' for case in cases])
+        # Disco PingResult.NodeIP uses peer.Addresses()[0], not the requested IP.
+        (self.run / 'ping-output').write_text('pong from peer (100.64.0.2) via DERP(tok) in 7ms')
+        result = json.loads(self.shell(prefix + 'cmd_peer_ping p1 fd7a:115c:a1e0::2').stdout)
+        self.assertEqual((result['ip'], result['path'], result['latencyMs']),
+                         ('fd7a:115c:a1e0::2', 'derp', 7))
+
+    def test_peer_ping_rejects_invalid_or_foreign_targets_before_launching(self):
+        prefix = self.peer_ping_fixture()
+        for peer, ip in [('p1', '100.64.0.3'), ('missing', '100.64.0.2'), ('', '100.64.0.2'),
+                         ('p1', '100.64.0.2;touch /tmp/unsafe'), ('p1', '--help'),
+                         ('p1', 'peer.example'), ('p1', '1::2::3'), ('p1', '999.0.0.2')]:
+            with self.subTest(peer=peer, ip=ip):
+                result = self.shell(prefix + 'cmd_peer_ping ' + shlex.quote(peer) + ' ' + shlex.quote(ip), ok=False)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertFalse(json.loads(result.stdout)['ok'])
+        for snapshot in [{}, [], {'BackendState': 'NeedsLogin'}, {'BackendState': 'Running', 'Peer': []}]:
+            (self.run / 'peer-status.json').write_text(json.dumps(snapshot))
+            result = self.shell(prefix + 'cmd_peer_ping p1 100.64.0.2', ok=False)
+            self.assertFalse(json.loads(result.stdout)['ok'])
+        self.assertFalse((self.run / 'ping-calls').exists())
+
+    def test_peer_ping_timeout_malformed_reply_and_cancellation_never_claim_success(self):
+        prefix = self.peer_ping_fixture()
+        for output in ['ping timed out\nno reply', 'pong from peer (100.64.0.3) via DERP(tok) in 2ms',
+                       'pong from peer (100.64.0.2) via DERP(tok) in NaNms']:
+            (self.run / 'ping-output').write_text(output)
+            result = self.shell(prefix + 'cmd_peer_ping p1 100.64.0.2', ok=False)
+            self.assertFalse(json.loads(result.stdout)['ok'])
+        (self.run / 'ping-output').write_text('pong from peer (100.64.0.2) via DERP(tok) in 3ms')
+        result = self.shell(prefix + '_op_cancelled() { return 0; }; cmd_peer_ping p1 100.64.0.2', ok=False)
+        self.assertIn('cancelled', json.loads(result.stdout)['error'])
+
     def test_peer_lists_keep_all_addresses_when_local_ipv6_is_disabled(self):
         expected = {
             'dual': ('100.64.0.2', ['100.64.0.2', 'fd7a:115c:a1e0::2']),

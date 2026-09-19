@@ -107,9 +107,13 @@ Runtime layout: `settings.sh` initializes shared helpers; `scripts/foxytail.conf
 
 Use Node 22.14.0, pnpm 10.30.3 and Go 1.27.1; the WebUI requires Android WebView 109+. After installing dependencies, run `bash .github/tools/verify.sh` for ShellCheck, isolated backend regression tests, types, i18n, smoke, release metadata and committed build consistency. Run `pnpm --dir webui build` after frontend changes to update `webroot/`.
 
-Run `.github/tools/version-bump.sh`, commit version files and build outputs, then tag that commit. Release builds only existing tags and verifies the reviewed `tailscale/checksums.txt`. An explicit `bash .github/tools/build.sh --update-checksums` creates a candidate manifest for source verification and review; it does not package binaries.
+Run `.github/tools/version-bump.sh`, commit version files and build outputs, then tag that commit. A branch push runs Verify and the Linux kernel tests, then builds both ZIPs against the reviewed `tailscale/checksums.txt` and retains them for 30 days. Release reuses those artifacts only from a successful Verify run in this repository at the exact tagged commit; PR artifacts are excluded. If verification is running, Release waits; if no reusable artifact exists, it requests one Verify run at the existing tag. Concurrent requests for the same commit share its successful artifacts. Failed gates stop publication, and downloaded checksums and package versions must match before uploading. Manual Release follows the same path.
+
+An explicit `bash .github/tools/build.sh --update-checksums` creates a candidate manifest for source verification and review; it does not package binaries.
 
 Apply saved settings through the WebUI restart action or `/data/adb/foxytail/scripts/start.sh reload`, which refreshes resident helpers as well as the network service. `foxytail.service restart` affects the network service only. Upgrades preserve received files, supplied dnsmasq, configuration and identity, stop the old components before switching, and retain rollback journals on failure.
+
+Settings also offers a **timed configuration trial** using saved settings with an optional mode override. After startup checks pass, confirm within 30–300 seconds or the previous runtime configuration is restored. The backend timer survives closing the WebUI and preserves settings saved afterward. These checks cover local components; test actual destinations before confirming. Backup restore now selects a file from Download, previews configuration changes and verifies the same archive contents before restoring. Hooks remain parked for review.
 
 ## Configuration
 
@@ -158,6 +162,8 @@ cellular:-:no-exit-node       # clear exit node on mobile data
 ```
 
 Actions: `up`, `down`, `exit-node <arg>`, `no-exit-node`.
+
+Advanced Settings supports adding, editing and reordering rules visually, with a raw-text editor that preserves comments and unrecognized lines. Invalid rules are still rejected by the backend. The latest execution result reports the outcome of the full matching action group; saving rules alone does not confirm successful execution.
 
 ### User hooks
 
@@ -225,7 +231,8 @@ When the module is absent or cannot load, the fallback retains IPv6 tunnel routi
 ## Traffic analytics & diagnostics
 
 - `foxytail.stats` samples per-peer Rx/Tx and dual-stack TUN OUTPUT per-UID transmit counters every `STATS_INTERVAL` seconds into `/data/adb/foxytail/run/stats/YYYY-MM-DD.jsonl` (7-day ring, screen-off throttling). Query with `foxytail.stats query hourly <date> | daily | topn <n>`.
-- `foxytail.diag collect` bundles log tails, `tailscale status --json`, `netcheck`, iptables self-check and config into `/sdcard/Download/foxytail-diag-<timestamp>.tar.gz` — attach this when asking for help.
+- The Diagnostics page provides on-demand service, tunnel, route and DNS summaries with links to relevant tools. Device details can test IPv4/IPv6 separately and report actual ping latency and direct/relay paths.
+- `foxytail.diag collect` bundles log tails, status, netcheck, routes and configuration into `/sdcard/Download/foxytail-diag-<timestamp>.tar.gz`. Sharing mode consistently aliases collected accounts, device names, SSIDs and addresses; review custom logs before sharing. `foxytail.diag collect /sdcard/Download local` retains details for private troubleshooting; the WebUI offers the same explicit choice.
 
 ## Limitations (honest list)
 

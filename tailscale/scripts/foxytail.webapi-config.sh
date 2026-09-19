@@ -213,13 +213,22 @@ cmd_settings_set() {
   jqr -n -c --arg k "$1" --arg v "$2" '{ok:true,key:$k,value:$v,saved:true,applied:false,restartRequired:true,requiresRestart:true}'
 }
 
+cmd_trial_start() {
+  "${TS_SCRIPTS_DIR}/foxytail.trial" begin "${1:-120}" "${2:-saved}"
+}
+cmd_trial_status() { "${TS_SCRIPTS_DIR}/foxytail.trial" status; }
+cmd_trial_confirm() { "${TS_SCRIPTS_DIR}/foxytail.trial" confirm "$1"; }
+cmd_trial_revert() { "${TS_SCRIPTS_DIR}/foxytail.trial" revert "$1"; }
+
 # --- context rules -------------------------------------------------------------
 
 cmd_context_get() {
+  _cg_status=$(_op_exec 15 "${TS_SCRIPTS_DIR}/foxytail.context" status 2>/dev/null) || _cg_status=null
+  printf '%s' "$_cg_status" | jqr -e 'type=="object" and (.running|type)=="boolean"' >/dev/null 2>&1 || _cg_status=null
   if [ -f "${TS_CONF_DIR}/context.conf" ]; then
-    jqr -R -s -c '{ok:true,rules:.}' "${TS_CONF_DIR}/context.conf"
+    jqr -R -s -c --argjson status "$_cg_status" '{ok:true,rules:.,status:$status}' "${TS_CONF_DIR}/context.conf"
   else
-    echo '{"ok":true,"rules":""}'
+    jqr -n -c --argjson status "$_cg_status" '{ok:true,rules:"",status:$status}'
   fi
 }
 
@@ -319,8 +328,7 @@ _restore_cleanup() {
   conf_lock_release
 }
 
-cmd_restore() (
-  [ ! -f "${TS_DIR}/.installing" ] || jerr 'restore: an upgrade is in progress'
+_restore_stage() {
   [ -n "$1" ] || jerr 'restore: missing path'
   case "$1" in /sdcard/*.tar.gz) ;; *) jerr 'restore: expected .tar.gz under /sdcard/' ;; esac
   _rt_path=$(realpath "$1" 2>/dev/null)
@@ -332,6 +340,9 @@ cmd_restore() (
   mkdir "${_rt_tmp}/archive" "${_rt_tmp}/next" || jerr 'restore: staging failed'
   _rt_input="${_rt_tmp}/input.tar.gz"
   cat "${_rt_path}" >"${_rt_input}" && chmod 0600 "${_rt_input}" || jerr 'restore: cannot stage archive'
+  _rt_sha=$(sha256sum "${_rt_input}") || jerr 'restore: cannot hash archive'
+  _rt_sha=${_rt_sha%% *}
+  [ -z "${2:-}" ] || [ "$2" = "${_rt_sha}" ] || jerr 'restore: backup changed after preview; preview it again'
   _restore_archive_safe "${_rt_input}" "${_rt_tmp}" || jerr 'restore: unsafe or damaged archive'
   tar --no-same-owner -xzf "${_rt_input}" -C "${_rt_tmp}/archive" 2>/dev/null || jerr 'restore: archive extraction failed'
   _rt_src="${_rt_tmp}/archive"
@@ -352,8 +363,9 @@ cmd_restore() (
       *) jerr "restore: unknown configuration file ${_rt_f##*/}" ;;
     esac
   done
-  conf_lock_acquire || jerr 'restore: configuration is busy'
-  [ ! -f "${TS_DIR}/.installing" ] || jerr 'restore: an upgrade is in progress'
+}
+
+_restore_prepare_next() {
   # Prepare a complete replacement on the same filesystem. Any copy failure
   # aborts before the first live rename; archive ownership/modes are discarded.
   for _rt_f in foxytail.conf routes.conf context.conf; do
@@ -368,6 +380,14 @@ cmd_restore() (
   if ! ( TS_CONF_DIR="${_rt_tmp}/next"; load_conf && { [ "$TS_MODE" != tun ] || [ "$ROUTE_SCOPE" = all ]; } ); then
     jerr 'restore: invalid configuration or native tun UID routing is unsupported'
   fi
+}
+
+cmd_restore() (
+  [ ! -f "${TS_DIR}/.installing" ] || jerr 'restore: an upgrade is in progress'
+  _restore_stage "$1" "${2:-}"
+  conf_lock_acquire || jerr 'restore: configuration is busy'
+  [ ! -f "${TS_DIR}/.installing" ] || jerr 'restore: an upgrade is in progress'
+  _restore_prepare_next
   _rt_ts="$(date +%Y%m%d-%H%M%S)-$$"
   _rt_old="${TS_DIR}/conf.bak-${_rt_ts}"
   _rt_note=''
@@ -391,4 +411,56 @@ cmd_restore() (
   _rt_committed=1
   conf_lock_release
   jqr -n -c --arg b "${_rt_old}" --arg n "${_rt_note}" '{ok:true,previous:$b,saved:true,applied:false,restartRequired:true,note:(if $n=="" then null else $n end)}'
+)
+
+# Only ordinary backups created in Download are offered by the picker.
+_backup_selected_path() {
+  case "$1" in /sdcard/Download/foxytail-backup-*.tar.gz) ;; *) return 1 ;; esac
+  _bsp_name=${1##*/}
+  case "${_bsp_name}" in *[!A-Za-z0-9._-]*) return 1 ;; esac
+  [ -f "$1" ] && [ ! -L "$1" ] || return 1
+  _bsp_root=$(realpath /sdcard/Download) || return 1
+  _bsp_path=$(realpath "$1") || return 1
+  [ "${_bsp_path%/*}" = "${_bsp_root}" ]
+}
+
+cmd_backup_list() {
+  for _bl_path in /sdcard/Download/foxytail-backup-*.tar.gz; do
+    _backup_selected_path "${_bl_path}" || continue
+    _bl_size=$(wc -c <"${_bl_path}") || continue
+    _bl_mtime=$(stat -c %Y "${_bl_path}" 2>/dev/null) || _bl_mtime=0
+    jqr -n -c --arg p "${_bl_path}" --arg n "${_bl_path##*/}" --argjson s "${_bl_size}" --argjson m "${_bl_mtime}" \
+      '{path:$p,name:$n,size:$s,mtime:$m}'
+  done | jqr -s -c '{ok:true,backups:sort_by(-.mtime,.name)}'
+}
+
+cmd_restore_preview() (
+  _backup_selected_path "$1" || jerr 'restore-preview: select a regular FoxyTail backup from Download'
+  _restore_stage "$1"
+  conf_lock_acquire || jerr 'restore-preview: configuration is busy'
+  _restore_prepare_next
+  _rp_changes=$(
+    for _rp_file in foxytail.conf routes.conf context.conf; do
+      if [ "${_rp_file}" = context.conf ]; then
+        _rp_before=$(cat "${TS_CONF_DIR}/${_rp_file}" 2>/dev/null)
+        _rp_after=$(cat "${_rt_tmp}/next/${_rp_file}" 2>/dev/null)
+        [ "${_rp_before}" = "${_rp_after}" ] || jqr -n -c --arg f "${_rp_file}" --arg b "${_rp_before}" --arg a "${_rp_after}" \
+          '{file:$f,key:"rules",before:$b,after:$a}'
+      else
+        _rp_before=$(_conf_parse_file "${TS_CONF_DIR}/${_rp_file}" 2>/dev/null) || _rp_before=''
+        _rp_after=$(_conf_parse_file "${_rt_tmp}/next/${_rp_file}" 2>/dev/null) || _rp_after=''
+        jqr -n -c --arg f "${_rp_file}" --arg b "${_rp_before}" --arg a "${_rp_after}" '
+          def records: split("\n") | map(select(length>0) | capture("^(?<key>[^=]+)=(?<value>.*)$")) | from_entries;
+          ($b|records) as $before | ($a|records) as $after
+          | (($before|keys)+($after|keys)|unique)[] as $key
+          | select($before[$key]!=$after[$key]) | {file:$f,key:$key,before:$before[$key],after:$after[$key]}'
+      fi
+    done | jqr -s -c .
+  ) || jerr 'restore-preview: cannot compare configuration'
+  _rp_hooks=''
+  for _rp_hook in foxytail.tun.up foxytail.tun.down; do
+    [ ! -f "${_rt_src}/${_rp_hook}" ] || _rp_hooks="${_rp_hooks} ${_rp_hook}"
+  done
+  jqr -n -c --arg p "$1" --arg sha "${_rt_sha}" --argjson changes "${_rp_changes}" --arg hooks "${_rp_hooks}" \
+    '{ok:true,path:$p,sha256:$sha,changes:$changes,hooks:($hooks|split(" ")|map(select(length>0)))}'
 )

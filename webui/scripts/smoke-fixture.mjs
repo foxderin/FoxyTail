@@ -116,6 +116,12 @@ const canned = {
   login: { ok: true, url: 'https://login.example.test/device' },
   logout: { ok: true },
   backup: { ok: true, path: '/sdcard/Download/foxytail-backup-smoke-first.tar.gz' },
+  'backup-list': { ok: true, backups: [{ path: '/sdcard/Download/foxytail-backup-smoke-first.tar.gz', name: 'foxytail-backup-smoke-first.tar.gz', size: 500, mtime: 1700000000 }] },
+  'restore-preview': { ok: true, path: '/sdcard/Download/foxytail-backup-smoke-first.tar.gz', sha256: 'a'.repeat(64), changes: [{ file: 'foxytail.conf', key: 'SOCKS_PORT', before: '1099', after: '1200' }], hooks: ['foxytail.tun.up'] },
+  'trial-status': { ok: true, trial: null },
+  'trial-start': { ok: true },
+  'trial-confirm': { ok: true },
+  'trial-revert': { ok: true },
   'settings-set': { ok: true, saved: true, applied: false, restartRequired: true },
   control: { ok: true, applied: true, restartRequired: false },
   'files-inbox': { ok: true, files: [{ name: 'a.txt', size: 10, mtime: 1700000000 }] },
@@ -165,7 +171,7 @@ window.ksu = {
       return;
     }
     if (sub) return void queueMicrotask(() => cb(1, JSON.stringify({ ok: false, error: 'unmocked API command: ' + sub }), ''));
-    if (cmd.startsWith('iptables -m owner --help') || cmd.startsWith('cat /data/adb/foxytail/scripts/foxytail.tun.')) {
+    if (cmd.startsWith('iptables -m owner --help') || (/^cat '?\/data\/adb\/foxytail\/scripts\/foxytail\.tun\.(up|down)'? /.test(cmd))) {
       queueMicrotask(() => cb(0, 'yes', ''));
       return;
     }

@@ -243,11 +243,12 @@ conf_prepare_runtime() (
   _car_next=
   trap 'if [ -n "${_car_next}" ]; then rm -rf "${_car_next}"; fi; conf_lock_release' 0
   trap 'exit 1' HUP INT TERM
-  load_conf || exit 1
+  _car_source_dir="${1:-${TS_CONF_DIR}}"
+  load_conf "${_car_source_dir}" || exit 1
   [ "${TS_MODE}" != tun ] || [ "${ROUTE_SCOPE}" = all ] || exit 1
   _car_next=$(mktemp -d "${TS_RUN_DIR}/.applied.XXXXXX") || exit 1
   for _car_file in foxytail.conf routes.conf context.conf; do
-    _car_source="${TS_CONF_DIR}/${_car_file}"
+    _car_source="${_car_source_dir}/${_car_file}"
     [ ! -L "${_car_source}" ] || exit 1
     if [ -f "${_car_source}" ]; then cp "${_car_source}" "${_car_next}/${_car_file}" || exit 1
     else : >"${_car_next}/${_car_file}"; fi
@@ -270,6 +271,10 @@ conf_activate_runtime() (
   trap 'rm -f "${TS_RUN_DIR}/.applied-config.$$"; if [ -n "${_car_next}" ]; then rm -rf "${_car_next}"; fi; conf_lock_release' 0
   trap 'exit 1' HUP INT TERM
   conf_lock_acquire || exit 1
+  if conf_trial_active && [ "${_TRIAL_ID:-}" != "$(cat "${TS_DIR}/state/config-trial/id")" ]; then
+    echo 'configuration trial active; confirm or revert it before applying another configuration' >&2
+    exit 1
+  fi
   load_conf "${_car_next}" || exit 1
   if [ -e "${TS_RUN_DIR}/applied-config" ] || [ -L "${TS_RUN_DIR}/applied-config" ]; then
     [ -f "${TS_RUN_DIR}/applied-config" ] && [ ! -L "${TS_RUN_DIR}/applied-config" ] || exit 1
@@ -298,6 +303,11 @@ conf_apply_runtime() {
     conf_lock_acquire || return 1
     _cap_locked=1
   fi
+  if conf_trial_active; then
+    [ "${_cap_locked}" = 0 ] || conf_lock_release
+    echo 'configuration saved; confirm or revert the active trial before applying it' >&2
+    return 1
+  fi
   if _conf_runtime_dir; then
     if [ "${_RUNTIME_CONF_DIR}" != "${TS_CONF_DIR}" ]; then
       if [ "${_cap_file}" = routes.conf ]; then
@@ -317,6 +327,13 @@ conf_apply_runtime() {
   else _cap_rc=1; fi
   [ "${_cap_locked}" = 0 ] || conf_lock_release
   return "${_cap_rc}"
+}
+
+conf_trial_active() {
+  case "$(cat "${TS_DIR}/state/config-trial/status" 2>/dev/null)" in
+    preparing|running|rolling-back|rollback-failed) return 0 ;;
+    *) return 1 ;;
+  esac
 }
 
 # Public writer for service mode changes and WebAPI settings. The subshell owns

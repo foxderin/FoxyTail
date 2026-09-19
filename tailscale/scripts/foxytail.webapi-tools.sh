@@ -117,12 +117,89 @@ cmd_compat() {
     '. + {ok:true, alert:(if $a == "" then null else $a end)}'
 }
 
+_diag_row() {
+  jqr -n -c --arg id "$1" --arg level "$2" --arg reason "$3" --arg page "$4" \
+    '{id:$id,level:$level,reason:$reason,page:$page}'
+}
+
+# Read-only, bounded probes. A stopped service is not a broken route; a
+# missing/invalid response is never promoted to a healthy DNS result.
+cmd_diag_check() {
+  if ! load_runtime_conf; then
+    _diag_row config fail invalid_config settings | jqr -s -c '{ok:true,checks:.}'
+    return
+  fi
+  _dc_status=$(cmd_status) || _dc_status='{}'
+  _dc_state=$(printf '%s' "$_dc_status" | jqr -r '.backend // "unknown"' 2>/dev/null)
+  _dc_daemon=$(printf '%s' "$_dc_status" | jqr -r '.daemon // "unknown"' 2>/dev/null)
+  _dc_rows=$(
+    if [ -f "${TS_RUN_DIR}/settings.pending" ]; then
+      _diag_row config warn pending settings
+    else
+      _diag_row config pass applied settings
+    fi
+    if [ "$_dc_daemon" = stopped ]; then
+      _diag_row service warn stopped dashboard
+    elif [ "$_dc_state" = Running ]; then
+      _diag_row service pass connected dashboard
+    else
+      case "$_dc_state" in
+        (NeedsLogin|NeedsMachineAuth) _diag_row service warn login account ;;
+        (*) _diag_row service fail unreachable logs ;;
+      esac
+    fi
+    if [ "$_dc_state" != Running ]; then
+      _diag_row tunnel skip needs_connection dashboard
+      _diag_row routes skip needs_connection dashboard
+    else
+      if [ "${TS_MODE}" = proxy ]; then
+        _diag_row tunnel skip proxy tunnel
+      elif ip link show dev "${TUN_IFACE}" >/dev/null 2>&1 &&
+        { [ "${TS_MODE}" != bridge ] || [ -n "$(pids_of_path "${TS_BIN_DIR}/hev-socks5-tunnel")" ]; }; then
+        _diag_row tunnel pass interface_ready tunnel
+      else
+        _diag_row tunnel fail interface_missing tunnel
+      fi
+      if [ "${TS_MODE}" != bridge ]; then
+        _diag_row routes skip managed_routes routing
+      elif _op_exec 10 "${TS_SCRIPTS_DIR}/foxytail.route" check >/dev/null 2>&1; then
+        _diag_row routes pass routes_ready routing
+      else
+        _diag_row routes fail routes_incomplete routing
+      fi
+    fi
+    if [ "${MAGIC_DNS}" != on ]; then
+      _diag_row dns skip dns_disabled settings
+    else
+      _dc_dns=$(_op_exec 20 "${TS_SCRIPTS_DIR}/foxytail.dns" status --json 2>/dev/null) || _dc_dns='{}'
+      _dc_reason=$(printf '%s' "$_dc_dns" | jqr -r '.reason // "unknown"' 2>/dev/null)
+      case "$_dc_reason" in
+        (*conflict*) _diag_row dns warn dns_conflict tunnel ;;
+        (transparent-unavailable|ipv6-unavailable|private-dns) _diag_row dns warn dns_limited tunnel ;;
+        (*)
+          if printf '%s' "$_dc_dns" | jqr -e --arg mode "${DNS_MODE}" '
+            type=="object" and .state=="running" and .repairNeeded!=true and
+            (if (.mode // $mode)=="legacy" then (.pid|type)=="number" and .pid>0 and .enabled==true
+             else .enabled==true and .listenerReady==true and .repairNeeded==false and .policyState=="owned" and
+               (((.mode // $mode)=="local" and .reason=="local") or
+                ((.mode // $mode)=="transparent" and .reason=="running" and .interception4==true)) end)
+          ' >/dev/null 2>&1; then _diag_row dns pass dns_ready tunnel
+          else _diag_row dns fail dns_unavailable tunnel; fi ;;
+      esac
+    fi
+  )
+  _op_cancelled && jerr 'diagnostics cancelled'
+  printf '%s\n' "$_dc_rows" | jqr -s -c '{ok:true,checks:.}'
+}
+
 cmd_diag() {
+  _dg_mode=${1:-share}
+  case "$_dg_mode" in share|local) ;; *) jerr 'diag: expected share|local' ;; esac
   [ -x "${TS_SCRIPTS_DIR}/foxytail.diag" ] || jerr "foxytail.diag not found"
-  _dg_out=$(_op_exec 120 "${TS_SCRIPTS_DIR}/foxytail.diag" collect 2>/dev/null) || jerr 'diag collection failed or cancelled'
+  _dg_out=$(_op_exec 120 "${TS_SCRIPTS_DIR}/foxytail.diag" collect /sdcard/Download "$_dg_mode" 2>/dev/null) || jerr 'diag collection failed or cancelled'
   _dg_path=$(printf '%s\n' "${_dg_out}" | tail -n 1 | tr -d ' ')
   if [ -n "${_dg_path}" ] && [ -f "${_dg_path}" ]; then
-    jqr -n -c --arg p "${_dg_path}" '{ok:true,path:$p}'
+    jqr -n -c --arg p "${_dg_path}" --arg mode "$_dg_mode" '{ok:true,path:$p,mode:$mode}'
   else
     jerr "diag collection failed (see ${TS_RUN_LOG_FILE})"
   fi

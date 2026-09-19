@@ -103,9 +103,13 @@ WebUI 源码位于 `webui/`（Vite + SolidJS + Material Web 3 组件 + `kernelsu
 
 开发工具链固定为 Node 22.14.0、pnpm 10.30.3、Go 1.27.1，WebUI 要求 Android WebView 109+。安装依赖后执行 `bash .github/tools/verify.sh`，统一检查 ShellCheck、隔离后端回归、类型、国际化、smoke、版本元数据和生产产物一致性；前端改动后先执行 `pnpm --dir webui build` 更新 `webroot/`。
 
-发布前运行 `.github/tools/version-bump.sh`，提交版本元数据与前端产物后创建版本标签。Release 工作流只构建现有标签，普通构建校验已审阅的 `tailscale/checksums.txt`。更新依赖时显式运行 `bash .github/tools/build.sh --update-checksums` 生成候选文件，核对上游来源后再审阅、替换并提交；该模式不打包。
+发布前运行 `.github/tools/version-bump.sh`，提交版本元数据与前端产物后创建版本标签。分支推送执行 Verify 和 Linux 内核测试，通过后按已审阅的 `tailscale/checksums.txt` 构建两种 ZIP 并保存 30 天。Release 仅复用同仓库、标签对应完整提交 SHA 的成功 Verify 产物，排除 PR 产物；验证进行中则等待，没有可复用产物则对现有标签触发一次 Verify。同一提交的并发请求复用成功产物，失败门禁阻止发布，上传前再次核对下载包的校验和与版本。手动 Release 走同一路径。
+
+更新依赖时显式运行 `bash .github/tools/build.sh --update-checksums` 生成候选文件，核对上游来源后再审阅、替换并提交；该模式不打包。
 
 设置保存后以 WebUI 的“重启应用”或 `/data/adb/foxytail/scripts/start.sh reload` 刷新主服务和驻留组件。`foxytail.service restart` 仅重启网络服务层。升级保留接收文件、自备 dnsmasq、配置和身份；切换前停止旧组件，失败保留回滚记录。
+
+设置页也可选择 **限时试用配置**：以已保存配置为候选，可单独选择运行模式；启动检查通过后，在 30–300 秒内确认保留，否则恢复之前的运行配置。计时由后台进程负责，关闭 WebUI 不影响回退；试用期间后续保存的配置不会被覆盖。检查只确认本机组件状态，仍需自行测试实际目标连通性。备份恢复先从 Download 选择文件并预览差异，恢复时校验相同文件内容；钩子仍只停放供审阅。
 
 ## 配置
 
@@ -146,6 +150,8 @@ cellular:-:no-exit-node       # 切到蜂窝时清除出口节点
 ```
 
 动作：`up`、`down`、`exit-node <参数>`、`no-exit-node`。
+
+WebUI 设置的高级选项支持可视化增删、编辑与排序，也可切换原文编辑；保留注释和未识别行，非法规则仍由后端拒绝。最近执行结果来自实际整组动作，保存成功不等于动作已执行成功。
 
 ### 用户钩子
 
@@ -209,7 +215,8 @@ Android 16 + FlClash 测试机已通过本地 UDP/TCP 与 IPv6 DNS 验证，但�
 ## 流量分析与诊断包
 
 - `foxytail.stats` 每 `STATS_INTERVAL` 秒采样一次 per-peer Rx/Tx 与双栈隧道 OUTPUT 的 UID 发送计数，写入 `/data/adb/foxytail/run/stats/YYYY-MM-DD.jsonl`（7 天环形，熄屏降频）。查询：`foxytail.stats query hourly <日期> | daily | topn <n>`。
-- `foxytail.diag collect` 把日志尾部、`tailscale status --json`、`netcheck`、iptables 自检与配置打包到 `/sdcard/Download/foxytail-diag-<时间戳>.tar.gz`——求助时请附上它。
+- 诊断页可按需查看服务、隧道、路由和 DNS 摘要，并跳转到对应处理页面；设备详情可分别测试 IPv4/IPv6，显示实际 Ping 的延迟及直连/中继路径。
+- `foxytail.diag collect` 把日志尾部、状态、netcheck、路由与配置打包到 `/sdcard/Download/foxytail-diag-<时间戳>.tar.gz`，默认用一致代号替换采集到的账户、设备名、SSID 和地址。分享前仍应检查自定义日志内容。`foxytail.diag collect /sdcard/Download local` 保留详细信息，仅供本机排查；WebUI 也可显式选择此模式。
 
 ## 限制（如实说明）
 

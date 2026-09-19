@@ -106,6 +106,9 @@ bad_count_inc() {
 }
 
 check_once() {
+  if conf_trial_active && [ -x "${TS_SCRIPTS_DIR}/foxytail.trial" ]; then
+    "${TS_SCRIPTS_DIR}/foxytail.trial" check >>"${TS_RUN_LOG_FILE}" 2>&1
+  fi
   _state=""
   # 0. A user-requested stop (WebUI/CLI) is not a crash: stay down.
   if [ -f "$MANUAL_STOP_FILE" ]; then

@@ -222,6 +222,7 @@ export async function checkPages() {
   onlineFilter?.click();
   assert(window.document.querySelectorAll('.network-peer-row').length === 0, 'device search combines with online filtering');
   assert(commandLog.length === beforeSearch, 'search and filters never launch native bridge calls');
+  await checkPeerProbes();
 
   nav('exitnodes');
   await flush();
@@ -306,13 +307,16 @@ export async function checkPages() {
   await flush();
   canned.restore = { ok: true, previous: '/data/adb/foxytail/backups/before-restore', note: 'Hooks staged in /data/adb/foxytail/backups/restored-hooks' };
   canned['settings-get'].restartRequired = true;
-  const restoreInput = window.document.querySelector('.tool-danger input');
-  restoreInput.value = '/sdcard/Download/backup.tar.gz';
-  restoreInput.dispatchEvent(new window.Event('input', { bubbles: true }));
-  window.document.querySelector('.tool-danger button')?.click();
+  const restoreInput = window.document.querySelector('#restore-backup');
+  restoreInput.value = canned['backup-list'].backups[0].path;
+  restoreInput.dispatchEvent(new window.Event('change', { bubbles: true }));
+  window.document.querySelector('.restore-preview')?.click();
+  await flush();
+  window.document.querySelector('.restore-apply')?.click();
   await flush();
   window.document.querySelector('.md-dialog-actions .btn-filled')?.click();
   await flush();
+  assert(commandLog.findLast(entry => entry.sub === 'restore')?.args.join('|') === [restoreInput.value, canned['restore-preview'].sha256].join('|'), 'restore submits the selected archive and preview hash');
   assert(window.document.querySelector('[data-testid="restore-previous"]')?.textContent === canned.restore.previous, 'restore keeps the previous configuration location visible');
   assert(window.document.querySelector('[data-testid="restore-note"]')?.textContent === canned.restore.note, 'restore keeps the hook staging instructions visible');
 
@@ -425,4 +429,61 @@ export async function checkPages() {
   await flush();
   assert(window.document.querySelector('#view svg[role="img"]') && !window.document.querySelector('.network-traffic-empty'), 'a recorded zero sample renders the chart instead of an empty state');
 
+}
+
+export async function checkPeerProbes() {
+  console.log('per-address peer probes and live device details');
+  const previousPeers = structuredClone(canned.peers);
+  const previousPing = canned['peer-ping'];
+  const peer = { ...canned.peers.peers[0], online: true, ips: ['100.64.0.2', 'fd7a:115c:a1e0::2'] };
+  canned.peers = { ok: true, peers: [peer] };
+  const probe = ip => window.document.querySelector(`[data-peer-probe="${ip}"]`);
+  const openDetails = () => window.document.querySelector('.network-peer-main')?.click();
+  const refreshPeers = () => window.document.querySelector('.network-inventory-summary button')?.click();
+  try {
+    nav('more'); await flush(); nav('peers'); await flush();
+    const beforeOpen = commandLog.length;
+    openDetails(); await flush();
+    assert(!commandLog.slice(beforeOpen).some(entry => entry.sub === 'peer-ping'), 'opening device details never sends an unsolicited connectivity probe');
+    assert(peer.ips.every(ip => probe(ip)?.querySelector('button')), 'each advertised address has its own explicit probe action');
+    canned['peer-ping'] = { ok: true, peerId: peer.id, ip: peer.ips[0], latencyMs: 4, path: 'direct', via: '192.0.2.1:41641' };
+    probe(peer.ips[0])?.querySelector('button')?.click(); await flush();
+    assert(/Direct|直连/.test(probe(peer.ips[0])?.textContent || '') && probe(peer.ips[0])?.textContent.includes('4 ms'), 'IPv4 displays the response path and measured latency, independently of the peer Relay field');
+    canned['peer-ping'] = { ok: true, peerId: peer.id, ip: peer.ips[1], latencyMs: 23, path: 'derp', via: 'DERP(tok)' };
+    holdNext.add('peer-ping');
+    const firstHeld = heldReplies.length;
+    probe(peer.ips[1])?.querySelector('button')?.click(); await flush();
+    const reply = heldReplies.slice(firstHeld).find(entry => entry.sub === 'peer-ping');
+    assert(reply && probe(peer.ips[1])?.querySelector('.task-progress'), 'IPv6 probing exposes cancellable progress');
+    nav('more'); await flush();
+    assert(window.__foxy.getTask(`peer-ping:${peer.id}:${peer.ips[1]}`)?.status === 'running', 'an explicit peer probe survives navigation');
+    nav('peers'); await flush(); openDetails(); await flush();
+    assert(probe(peer.ips[1])?.querySelector('.task-progress'), 'reopening the peer adopts its in-flight address probe');
+    reply?.finish(); await flush();
+    assert(probe(peer.ips[1])?.textContent.includes('DERP(tok)') && probe(peer.ips[1])?.textContent.includes('23 ms') && probe(peer.ips[0])?.textContent.includes('4 ms'), 'IPv6 and IPv4 results stay separate after navigation');
+    assert(JSON.stringify(commandLog.slice(beforeOpen).filter(entry => entry.sub === 'peer-ping').map(entry => entry.args)) === JSON.stringify(peer.ips.map(ip => [peer.id, ip])), 'probing forwards the selected peer identity and exact address only');
+    canned.peers.peers[0] = { ...peer, hostname: 'updated-peer', online: false, rxBytes: 9999 };
+    refreshPeers(); await flush();
+    const dialog = window.document.querySelector('dialog[open]');
+    assert(dialog?.textContent.includes('updated-peer') && /Offline|离线/.test(dialog.querySelector('.network-device-heading')?.textContent || ''), 'an open device detail tracks refreshed identity and online state by id');
+    holdNext.add('peer-ping');
+    probe(peer.ips[0])?.querySelector('button')?.click(); await flush();
+    probe(peer.ips[0])?.querySelector('.task-progress button')?.click(); await flush();
+    assert(window.__foxy.getTask(`peer-ping:${peer.id}:${peer.ips[0]}`)?.status === 'cancelled' && /Cancelled|已取消/.test(probe(peer.ips[0])?.textContent || ''), 'cancelling a peer probe settles only its selected address task');
+    overrides['peer-ping'] = [1, JSON.stringify({ ok: false, error: 'peer-test-no-reply' }), ''];
+    probe(peer.ips[0])?.querySelector('button')?.click(); await flush();
+    assert(probe(peer.ips[0])?.textContent.includes('peer-test-no-reply'), 'peer probe errors are visible with a retry action');
+    delete overrides['peer-ping'];
+    canned['peer-ping'] = { ok: true, peerId: 'different-peer', ip: peer.ips[0], latencyMs: 0, path: 'direct', via: '192.0.2.1:1' };
+    probe(peer.ips[0])?.querySelector('button')?.click(); await flush();
+    assert(probe(peer.ips[0])?.querySelector('.state-box') && !probe(peer.ips[0])?.textContent.includes('0 ms'), 'a mismatched success payload cannot claim connectivity for the selected peer');
+    canned.peers = { ok: true, peers: [] };
+    refreshPeers(); await flush();
+    assert(!window.document.querySelector('dialog[open]'), 'a peer removed from the fresh device list closes its stale detail');
+  } finally {
+    canned.peers = previousPeers;
+    if (previousPing === undefined) delete canned['peer-ping']; else canned['peer-ping'] = previousPing;
+    delete overrides['peer-ping'];
+    nav('more'); await flush();
+  }
 }

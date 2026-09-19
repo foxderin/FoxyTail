@@ -14,49 +14,49 @@ on:
         default: false
 permissions:
   contents: write
+  actions: write
 concurrency:
   group: release-${{ inputs.tag || github.ref_name }}
   cancel-in-progress: false
 jobs:
   release:
     runs-on: ubuntu-latest
+    timeout-minutes: 40
+    env:
+      RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-      - name: Select the existing release commit
-        env:
-          RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
+      - name: Resolve the existing release commit
+        id: source
         run: |
           [[ "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-rc\.[0-9]+)?$ ]] || exit 1
           git show-ref --verify "refs/tags/$RELEASE_TAG"
-          git checkout --detach "refs/tags/$RELEASE_TAG"
-          test "$(git rev-parse HEAD)" = "$(git rev-parse "refs/tags/$RELEASE_TAG^{commit}")"
-          test "$RELEASE_TAG" = "$(sed -n 's/^version=//p' module.prop)"
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '22.14.0'
-      - uses: pnpm/action-setup@v4
-        with:
-          version: '10.30.3'
-      - uses: actions/setup-go@v5
-        with:
-          go-version-file: native/foxydns/go.mod
-          cache: false
-      - name: Install verification tools
-        run: sudo apt-get update && sudo apt-get install -y zip jq shellcheck iptables
-      - run: pnpm --dir webui install --frozen-lockfile
-      - name: Verify sources and committed WebUI
-        run: bash .github/tools/verify.sh
-      - name: Verify real DNS paths in an isolated Linux network
+          test "$RELEASE_TAG" = "$(git show "refs/tags/$RELEASE_TAG:module.prop" | sed -n 's/^version=//p')"
+          echo "sha=$(git rev-parse "refs/tags/$RELEASE_TAG^{commit}")" >> "$GITHUB_OUTPUT"
+      - name: Reuse or request exact-source verification and packaging
+        id: verified
         env:
-          FOXYTAIL_REQUIRE_PRIVILEGED_TESTS: '1'
-        run: bash .github/tools/verify-native-linux.sh
-      - name: Build from the reviewed manifest
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_SHA: ${{ steps.source.outputs.sha }}
         run: |
-          bash .github/tools/build.sh
-          test -z "$(git status --porcelain --untracked-files=no)"
-      - name: Publish the existing tag
+          run=$(python3 .github/tools/verified-artifact.py ensure "$SOURCE_SHA" "$RELEASE_TAG")
+          echo "run=$run" >> "$GITHUB_OUTPUT"
+      - uses: actions/download-artifact@v4
+        with:
+          name: verified-${{ steps.source.outputs.sha }}
+          run-id: ${{ steps.verified.outputs.run }}
+          github-token: ${{ github.token }}
+          path: dist
+      - name: Check downloaded bytes and the release tag
+        env:
+          SOURCE_SHA: ${{ steps.source.outputs.sha }}
+        run: |
+          python3 .github/tools/verified-artifact.py check "$RELEASE_TAG" dist
+          git fetch --force origin "refs/tags/$RELEASE_TAG:refs/tags/$RELEASE_TAG"
+          test "$SOURCE_SHA" = "$(git rev-parse "refs/tags/$RELEASE_TAG^{commit}")"
+      - name: Publish the verified packages
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ inputs.tag || github.ref_name }}

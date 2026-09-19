@@ -76,7 +76,7 @@ stop_by_pids() { :; }
             path.chmod(0o755)
         source = (ROOT / 'tailscale/scripts/start.sh').read_text()
         source = source.replace('nohup "${TS_SCRIPTS_DIR}/${_sr_name}"', 'nohup sh "${TS_SCRIPTS_DIR}/${_sr_name}"')
-        source = source.replace('\n"${TS_SCRIPTS_DIR}/foxytail.service"', '\nsh "${TS_SCRIPTS_DIR}/foxytail.service"')
+        source = source.replace('"${TS_SCRIPTS_DIR}/foxytail.service"', 'sh "${TS_SCRIPTS_DIR}/foxytail.service"')
         (scripts / 'start.sh').write_text(source)
         subprocess.run(['sh', str(scripts / 'start.sh'), 'postinstall'], cwd=self.dir, check=True, timeout=10)
         # Background children write bounded, local files. Wait only for their
@@ -103,6 +103,7 @@ log() { :; }
 stop_by_pids() { :; }
 conf_lock_acquire() { :; }
 conf_lock_release() { :; }
+conf_trial_active() { return 1; }
 _conf_runtime_dir() { _RUNTIME_CONF_DIR="$PWD/run/.applied.test"; }
 ''')
         snapshot = runtime / '.applied.test'; snapshot.mkdir()
@@ -111,7 +112,7 @@ _conf_runtime_dir() { _RUNTIME_CONF_DIR="$PWD/run/.applied.test"; }
         service.write_text('#!/bin/sh\n[ "$WRITE_NEW" != 1 ] || echo new-revision >"$PWD/run/settings.pending"\nexit 0\n')
         service.chmod(0o755)
         source = (ROOT / 'tailscale/scripts/start.sh').read_text()
-        source = source.replace('\n"${TS_SCRIPTS_DIR}/foxytail.service"', '\nsh "${TS_SCRIPTS_DIR}/foxytail.service"')
+        source = source.replace('"${TS_SCRIPTS_DIR}/foxytail.service"', 'sh "${TS_SCRIPTS_DIR}/foxytail.service"')
         (scripts / 'start.sh').write_text(source)
         for newer in ('0', '1'):
             (runtime / 'settings.pending').write_text('old-revision\n')

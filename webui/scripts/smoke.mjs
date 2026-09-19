@@ -6,6 +6,9 @@ import { checkPages } from './smoke-pages.mjs';
 import { checkService, checkAuthentication } from './smoke-service.mjs';
 import { checkRouting } from './smoke-routing.mjs';
 import { checkSettings } from './smoke-settings.mjs';
+import { checkContextRules } from './smoke-context.mjs';
+import { checkDiagnostics } from './smoke-diagnostics.mjs';
+import { checkRecovery } from './smoke-recovery.mjs';
 
 // Reuse one app so navigation, pending work and stale replies cross real page lifetimes.
 await checkCore();
@@ -14,6 +17,9 @@ const serviceStates = await checkService();
 await checkRouting();
 await checkAuthentication(serviceStates);
 await checkSettings();
+await checkContextRules();
+await checkDiagnostics();
+await checkRecovery();
 window.close();
 
 if (failures.length) {

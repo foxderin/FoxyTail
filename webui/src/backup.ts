@@ -29,3 +29,27 @@ export async function createBackup(): Promise<void> {
     showToast(t('tools_backup_ready'), 'ok');
   } else toastApiError(t('tools_backup_failed'), result);
 }
+
+export type BackupFile = { name: string; path: string; size: number; mtime: number };
+export type RestorePreview = {
+  path: string; sha256: string;
+  changes: { file: string; key: string; before: string | null; after: string | null }[];
+  hooks: string[];
+};
+
+export function validBackups(value: unknown): value is BackupFile[] {
+  return Array.isArray(value) && value.every(item => item &&
+    typeof item.name === 'string' && typeof item.path === 'string' &&
+    /^\/sdcard\/Download\/foxytail-backup-[A-Za-z0-9._-]+\.tar\.gz$/.test(item.path) &&
+    Number.isSafeInteger(item.size) && item.size >= 0 && Number.isSafeInteger(item.mtime) && item.mtime >= 0);
+}
+
+export function validRestorePreview(value: unknown): value is RestorePreview {
+  if (!value || typeof value !== 'object') return false;
+  const preview = value as Partial<RestorePreview>;
+  return typeof preview.path === 'string' && typeof preview.sha256 === 'string' && /^[a-f0-9]{64}$/.test(preview.sha256) &&
+    Array.isArray(preview.changes) && preview.changes.every(change => change &&
+      ['foxytail.conf', 'routes.conf', 'context.conf'].includes(change.file) && typeof change.key === 'string' &&
+      (change.before === null || typeof change.before === 'string') && (change.after === null || typeof change.after === 'string')) &&
+    Array.isArray(preview.hooks) && preview.hooks.every(hook => ['foxytail.tun.up', 'foxytail.tun.down'].includes(hook));
+}
