@@ -105,7 +105,7 @@ build_daemon_cmd() {
 prepare_service_config() {
   if [ "${_SERVICE_RECOVERY:-0}" = 1 ]; then load_runtime_conf || return 1
   else
-    [ -n "${_SERVICE_CANDIDATE:-}" ] || _SERVICE_CANDIDATE=$(conf_prepare_runtime) || return 1
+    [ -n "${_SERVICE_CANDIDATE:-}" ] || _SERVICE_CANDIDATE=$(conf_prepare_runtime "${TS_CONF_DIR}") || return 1
     load_conf "${_SERVICE_CANDIDATE}" || return 1
   fi
   if [ "$TS_MODE" = tun ] && [ "$ROUTE_SCOPE" != all ]; then

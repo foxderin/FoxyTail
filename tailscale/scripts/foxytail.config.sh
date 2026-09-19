@@ -265,7 +265,7 @@ conf_prepare_runtime() (
 # Only explicit start/restart publishes a full candidate. Recovery retains it.
 conf_activate_runtime() (
   _car_next=${1:-}
-  [ -n "${_car_next}" ] || _car_next=$(conf_prepare_runtime) || exit 1
+  [ -n "${_car_next}" ] || _car_next=$(conf_prepare_runtime "${TS_CONF_DIR}") || exit 1
   case "${_car_next}" in "${TS_RUN_DIR}"/.applied.*) ;; *) exit 1 ;; esac
   [ -d "${_car_next}" ] && [ ! -L "${_car_next}" ] || exit 1
   trap 'rm -f "${TS_RUN_DIR}/.applied-config.$$"; if [ -n "${_car_next}" ]; then rm -rf "${_car_next}"; fi; conf_lock_release' 0

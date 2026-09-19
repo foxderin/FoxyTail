@@ -51,7 +51,7 @@ trial_begin() (
   trap 'exit 1' HUP INT TERM
   conf_trial_active && trial_error 'a configuration trial is already active'
   [ -n "$(pids_of_path "${TS_BIN_DIR}/${TS_DAEMON_CMD}")" ] || trial_error 'start the service before trying a configuration'
-  _tb_candidate=$(conf_prepare_runtime) || trial_error 'saved candidate configuration is invalid'
+  _tb_candidate=$(conf_prepare_runtime "${TS_CONF_DIR}") || trial_error 'saved candidate configuration is invalid'
   conf_lock_acquire || trial_error 'configuration is busy'
   _conf_runtime_dir && [ "${_RUNTIME_CONF_DIR}" != "${TS_CONF_DIR}" ] || trial_error 'an applied configuration snapshot is required'
   mkdir -p "${TS_DIR}/state" || trial_error 'cannot create trial journal'
