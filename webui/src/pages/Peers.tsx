@@ -3,16 +3,15 @@ import {
   createMemo,
   createSignal,
   For,
-  onCleanup,
-  onMount,
   Show,
   type JSX,
 } from 'solid-js';
 import { createApiScope } from '../api';
+import { pollWhileVisible } from '../schedule';
 import { getTask } from '../tasks';
 import { TaskButton, TaskProgress } from '../components/TaskProgress';
 import { t } from '../i18n';
-import { status } from '../state';
+import { status, viewPollInterval } from '../state';
 import { fmtBytes } from '../format';
 import {
   KvRow,
@@ -86,13 +85,7 @@ export default function Peers(): JSX.Element {
     showToast(copied ? t('copied') : t('op_failed'), copied ? 'ok' : 'err');
   }
 
-  onMount(() => {
-    void loadPeers();
-    const id = setInterval(() => {
-      if (!document.hidden) void loadPeers();
-    }, 8000);
-    onCleanup(() => clearInterval(id));
-  });
+  pollWhileVisible(loadPeers, viewPollInterval);
 
   return (
     <div class="page-stack network-page">

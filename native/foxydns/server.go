@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"crypto/rand"
 	"errors"
 	"fmt"
 	"net"
@@ -25,9 +26,13 @@ type resolver struct {
 	dial                     func(context.Context, string, FlowContext) (net.Conn, error)
 	slots                    chan struct{}
 	local, forwarded, failed atomic.Uint64
+	health                   func() healthState
 }
 
 func (r *resolver) ServeDNS(w dns.ResponseWriter, q *dns.Msg) {
+	if r.serveHealth(w, q) {
+		return
+	}
 	if q.Response || q.Opcode != dns.OpcodeQuery || len(q.Question) != 1 || q.Question[0].Qclass != dns.ClassINET {
 		r.fail(w, q, dns.RcodeFormatError)
 		return
@@ -124,10 +129,11 @@ type service struct {
 	servers     []*dns.Server
 	closers     []interface{ Close() error }
 	errors      chan error
-	done        chan struct{}
 	once        sync.Once
 	wg          sync.WaitGroup
 	stateMu     sync.Mutex
+	ready       atomic.Bool
+	instance    string
 }
 
 // All listeners are bound before any transparent queue is claimed. A port
@@ -139,8 +145,9 @@ func startService(cfg Config) (*service, error) {
 	if _, err := loadRecords(cfg.ContextFile); err != nil {
 		return nil, err
 	}
-	s := &service{cfg: cfg, errors: make(chan error, 5), done: make(chan struct{})}
+	s := &service{cfg: cfg, errors: make(chan error, 5), instance: rand.Text()}
 	s.resolver = &resolver{records: &recordStore{path: cfg.ContextFile}, dial: DialOriginal, slots: make(chan struct{}, 64)}
+	s.resolver.health = s.healthState
 	if err := s.bind("tcp4", "udp4", cfg.Listen); err != nil {
 		s.closeListeners()
 		return nil, err
@@ -164,6 +171,7 @@ func startService(cfg Config) (*service, error) {
 		go func() {
 			defer s.wg.Done()
 			if err := server.ActivateAndServe(); err != nil {
+				s.ready.Store(false)
 				select {
 				case s.errors <- err:
 				default:
@@ -182,29 +190,11 @@ func startService(cfg Config) (*service, error) {
 			return nil, errors.New("DNS listener startup timed out")
 		}
 	}
+	s.ready.Store(true)
 	if err := s.writeState(true); err != nil {
 		s.Close()
 		return nil, err
 	}
-	s.wg.Add(1)
-	go func() {
-		defer s.wg.Done()
-		timer := time.NewTicker(2 * time.Second)
-		defer timer.Stop()
-		for {
-			select {
-			case <-timer.C:
-				if err := s.writeState(true); err != nil {
-					select {
-					case s.errors <- err:
-					default:
-					}
-				}
-			case <-s.done:
-				return
-			}
-		}
-	}()
 	return s, nil
 }
 
@@ -231,24 +221,31 @@ func (s *service) bind(tcp, udp, address string) error {
 	return nil
 }
 
-func (s *service) writeState(ready bool) error {
-	s.stateMu.Lock()
-	defer s.stateMu.Unlock()
+func (s *service) healthState() healthState {
+	ready := s.ready.Load()
 	queueError := s.queueError
 	queueReady := false
 	if s.interceptor != nil {
 		queueError = s.interceptor.Health()
 		queueReady = queueError == nil
 	}
-	state := map[string]any{
-		"ready": ready, "pid": os.Getpid(), "mode": s.cfg.Mode, "port": s.port,
-		"ipv6ListenerReady": ready && s.cfg.IPv6, "queueReady": ready && queueReady,
-		"updatedAt": time.Now().Unix(), "localAnswers": s.resolver.local.Load(),
-		"forwarded": s.resolver.forwarded.Load(), "failed": s.resolver.failed.Load(),
+	state := healthState{
+		Ready: ready, PID: os.Getpid(), Instance: s.instance, Mode: s.cfg.Mode, Port: s.port,
+		IPv6ListenerReady: ready && s.cfg.IPv6, QueueReady: ready && queueReady,
+		UpdatedAt: time.Now().Unix(), LocalAnswers: s.resolver.local.Load(),
+		Forwarded: s.resolver.forwarded.Load(), Failed: s.resolver.failed.Load(),
 	}
 	if queueError != nil {
-		state["error"] = queueError.Error()
+		state.Error = queueError.Error()
 	}
+	return state
+}
+
+func (s *service) writeState(ready bool) error {
+	s.stateMu.Lock()
+	defer s.stateMu.Unlock()
+	state := s.healthState()
+	state.Ready, state.IPv6ListenerReady, state.QueueReady = ready, ready && s.cfg.IPv6, ready && state.QueueReady
 	return writeJSON(s.cfg.StateFile, state)
 }
 
@@ -260,7 +257,7 @@ func (s *service) closeListeners() {
 
 func (s *service) Close() {
 	s.once.Do(func() {
-		close(s.done)
+		s.ready.Store(false)
 		if s.interceptor != nil {
 			_ = s.interceptor.Close()
 		}

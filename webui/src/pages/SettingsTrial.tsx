@@ -1,5 +1,6 @@
-import { createSignal, For, onCleanup, onMount, Show, type JSX } from 'solid-js';
+import { createSignal, For, Show, type JSX } from 'solid-js';
 import { createApiScope } from '../api';
+import { pollWhileVisible } from '../schedule';
 import { t } from '../i18n';
 import { Card, ErrorState } from '../components/Basics';
 import { Button, Select } from '../components/ui';
@@ -44,7 +45,7 @@ export default function SettingsTrial(props: {
   const [now, setNow] = createSignal(Date.now());
   const active = () => ['preparing', 'running', 'rolling-back', 'rollback-failed'].includes(trial()?.status ?? '');
   let loading = false;
-  async function load() {
+  async function load(refresh = true) {
     if (loading) return;
     loading = true;
     const res = await scope.api('trial-status');
@@ -60,7 +61,7 @@ export default function SettingsTrial(props: {
     setKnown(true);
     setError('');
     props.onActive(active());
-    if (previous && previous !== trial()?.status) {
+    if (refresh && previous && previous !== trial()?.status) {
       await props.onUpdate();
       void refreshStatus({ afterCurrent: true });
     }
@@ -73,21 +74,14 @@ export default function SettingsTrial(props: {
       : await scope.api(command, trial()?.id ?? '');
     if (!res.cancelled) {
       if (!res.ok) toastApiError(t('op_failed'), res);
-      await load();
+      await load(false);
       await props.onUpdate();
+      void refreshStatus({ afterCurrent: true });
     }
     setBusy(false);
   }
-  onMount(() => void load());
-  let lastPoll = 0;
-  const timer = setInterval(() => {
-    setNow(Date.now());
-    if (active() && document.visibilityState === 'visible' && now() - lastPoll >= 3000) {
-      lastPoll = now();
-      void load();
-    }
-  }, 1000);
-  onCleanup(() => clearInterval(timer));
+  pollWhileVisible(() => busy() ? undefined : load(), () => (!known() && !error()) || active() ? 3000 : false);
+  pollWhileVisible(() => setNow(Date.now()), () => trial()?.status === 'running' ? 1000 : false);
   return <Card title={t('trial_title')} icon="sync" description={t('trial_description')}>
     <Show when={error()}><ErrorState text={error()} onRetry={() => void load()} /></Show>
     <div class="tool-setting wide-control">

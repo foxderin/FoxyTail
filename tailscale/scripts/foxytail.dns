@@ -39,8 +39,10 @@ CHAIN_DNS="FOXY_DNS"
 [ ! -r "${TS_SCRIPTS_DIR}/foxytail.dns-modern.sh" ] || . "${TS_SCRIPTS_DIR}/foxytail.dns-modern.sh"
 
 set_state() {
-  echo "$1" >"${DNS_STATE_FILE}"
-  printf '%s\n' "${2:-$1}" >"${DNS_REASON_FILE}"
+  _ss_old=; IFS= read -r _ss_old 2>/dev/null <"${DNS_STATE_FILE}" || :
+  [ "${_ss_old}" = "$1" ] || echo "$1" >"${DNS_STATE_FILE}"
+  _ss_old=; IFS= read -r _ss_old 2>/dev/null <"${DNS_REASON_FILE}" || :
+  [ "${_ss_old}" = "${2:-$1}" ] || printf '%s\n' "${2:-$1}" >"${DNS_REASON_FILE}"
 }
 
 # Android commonly ships a compatible dnsmasq for tethering. Prefer an

@@ -93,7 +93,7 @@ rotate_log() (
   [ -f "${_rl_file}" ] || exit 0
   _rl_max_kb="${LOG_MAX_KB:-512}"
   _rl_max_bytes=$((_rl_max_kb * 1024))
-  _rl_size=$(wc -c <"${_rl_file}" 2>/dev/null || echo 0)
+  _rl_size=${2:-$(wc -c <"${_rl_file}" 2>/dev/null || echo 0)}
   [ "${_rl_size}" -gt "${_rl_max_bytes}" ] || exit 0
   _rl_locked=0
   if [ "${_CONF_LOCK_HELD:-0}" != 1 ]; then
@@ -135,14 +135,39 @@ ensure_run_dirs() {
   mkdir -p "${TS_RUN_DIR}" "${TS_PID_DIR}" "${TS_STATS_DIR}"
 }
 
-# Return 0 when the screen is on; tolerant of dumpsys format differences,
-# assumes "on" when the power state cannot be determined.
+# Prefer kernel display state: no Binder dump or helper process on this path.
+# Unknown state stays awake; an unrecognized dumpsys format must not throttle.
 is_screen_on() {
-  _ft_power=$(dumpsys power 2>/dev/null)
-  if [ -z "${_ft_power}" ]; then
-    return 0
+  if [ -r /sys/class/graphics/fb0/blank ] && IFS= read -r _ft_blank </sys/class/graphics/fb0/blank; then
+    case "${_ft_blank}" in 0) return 0 ;; 1|2|3|4) return 1 ;; esac
   fi
-  echo "${_ft_power}" | grep -qi -e 'mScreenOn=true' -e 'Display Power: state=ON'
+  _ft_seen=0
+  for _ft_backlight in /sys/class/backlight/*/bl_power; do
+    [ -r "${_ft_backlight}" ] && IFS= read -r _ft_blank <"${_ft_backlight}" || continue
+    case "${_ft_blank}" in 0) return 0 ;; 4) _ft_seen=1 ;; *) _ft_seen=0; break ;; esac
+  done
+  [ "${_ft_seen}" = 0 ] || return 1
+  _ft_power=$(tmo 2 dumpsys power 2>/dev/null) || return 0
+  printf '%s\n' "${_ft_power}" | awk '
+    /mScreenOn=true|Display Power: state=ON|mWakefulness=(Awake|Dreaming)/ {on=1}
+    /mScreenOn=false|Display Power: state=(OFF|DOZE)|mWakefulness=(Asleep|Dozing)/ {off=1}
+    END {exit on || !off ? 0 : 1}'
+}
+
+# Shared resident schedule. Explicitly disabled features never reach this
+# helper; power saving changes cadence without re-enabling them.
+effective_interval() {
+  _ei_interval=$1 _ei_min=$3
+  if [ "$2" != 1 ] || [ "${POWER_SAVE:-off}" = on ]; then
+    if ! is_screen_on; then
+      _ei_interval=$(($1 * $2))
+      _ei_min=$4
+    fi
+  fi
+  if [ "${POWER_SAVE:-off}" = on ] && [ "$_ei_interval" -lt "$_ei_min" ]; then
+    _ei_interval=$_ei_min
+  fi
+  echo "$_ei_interval"
 }
 
 # --- Process lookup ------------------------------------------------------------

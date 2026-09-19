@@ -16,11 +16,13 @@ cmd_status() {
     fi
     jqr -n -c --arg mode "${TS_MODE}" --arg daemon "${_cs_daemon}" \
       --arg backend "${_cs_backend}" --argjson uptime "${_cs_uptime}" \
-      '{ok:true,daemon:$daemon,backend:$backend,mode:$mode,self:null,exitNode:null,peers:{online:0,offline:0},magicDns:false,keyExpiry:null,uptime:$uptime}'
+      --arg power "${POWER_SAVE:-off}" --arg refresh "${WEBUI_AUTO_REFRESH:-on}" \
+      '{ok:true,daemon:$daemon,backend:$backend,mode:$mode,self:null,exitNode:null,peers:{online:0,offline:0},magicDns:false,keyExpiry:null,uptime:$uptime,powerSave:($power=="on"),autoRefresh:($refresh=="on")}'
     return 0
   fi
   _cs_up=$(daemon_uptime)
-  printf '%s' "${_cs_st}" | jqr -c --arg mode "${TS_MODE}" --argjson uptime "${_cs_up}" '
+  printf '%s' "${_cs_st}" | jqr -c --arg mode "${TS_MODE}" --argjson uptime "${_cs_up}" \
+    --arg power "${POWER_SAVE:-off}" --arg refresh "${WEBUI_AUTO_REFRESH:-on}" '
     (.Peer // {} | to_entries | map(.value)) as $peers
     | (.ExitNodeStatus // null) as $en
     | {
@@ -28,6 +30,8 @@ cmd_status() {
         daemon: "running",
         backend: (.BackendState // "unknown"),
         mode: $mode,
+        powerSave: ($power=="on"),
+        autoRefresh: ($refresh=="on"),
         self: (.Self // {} | {
           hostname: (.HostName // "-"),
           ips: (.TailscaleIPs // []),

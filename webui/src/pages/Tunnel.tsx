@@ -1,9 +1,11 @@
 /*
- * Tunnel — tailscale0 interface state (light 6s poll), SOCKS5 self-check
+ * Tunnel — tailscale0 interface state (visible 15s poll), SOCKS5 self-check
  * (button-triggered), DERP relay speed test as a cancellable session task.
  */
-import { createSignal, onCleanup, onMount, Show, type JSX } from 'solid-js';
+import { createSignal, onCleanup, Show, type JSX } from 'solid-js';
 import { createApiScope, execRaw, hasRoot, type ApiResult } from '../api';
+import { pollWhileVisible } from '../schedule';
+import { viewPollInterval } from '../state';
 import { t, type I18nKey } from '../i18n';
 import './tools.css';
 import { getTask } from '../tasks';
@@ -239,13 +241,7 @@ export default function Tunnel(): JSX.Element {
     }
   }
 
-  onMount(() => {
-    void loadTun();
-    const id = setInterval(() => {
-      if (!document.hidden) void loadTun();
-    }, 6000);
-    onCleanup(() => clearInterval(id));
-  });
+  pollWhileVisible(loadTun, viewPollInterval);
 
   const modeDescription = () =>
     t(

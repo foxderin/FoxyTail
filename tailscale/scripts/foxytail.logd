@@ -10,9 +10,16 @@ rotate_all() {
   # Invalid configuration still leaves safe default limits; keep protecting
   # storage while its parse diagnostics are being written.
   load_runtime_conf || :
+  _la_interval=30
+  [ "${POWER_SAVE:-off}" != on ] || _la_interval=60
+  _la_limit=$((${LOG_MAX_KB:-512} * 1024))
   for _la_file in "${TS_RUN_DIR}"/*.log; do
     [ -f "$_la_file" ] && [ ! -L "$_la_file" ] || continue
-    rotate_log "$_la_file"
+    _la_size=$(wc -c <"$_la_file" 2>/dev/null) || continue
+    # Quiet logs need no two-second wakeup. Near the limit, keep the original
+    # fast cadence so a noisy daemon is still rotated promptly.
+    [ "$_la_size" -le "$((_la_limit / 2))" ] || _la_interval=2
+    [ "$_la_size" -le "$_la_limit" ] || rotate_log "$_la_file" "$_la_size"
   done
 }
 
@@ -23,7 +30,7 @@ case "$1" in
     trap '_la_running=0' TERM INT
     while [ "$_la_running" = 1 ]; do
       rotate_all
-      isleep 2
+      isleep "$_la_interval"
     done
     rm -f "${TS_PID_DIR}/foxytail.logd.pid"
     ;;

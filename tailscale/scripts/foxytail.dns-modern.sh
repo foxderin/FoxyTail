@@ -36,8 +36,10 @@ modern_unlock() {
 }
 
 modern_reason() {
-  printf '%s\n' "$1" >"${MODERN_REASON}"
-  printf '%s\n' "${2:-unknown}" >"${MODERN_POLICY}"
+  _mr_old=; IFS= read -r _mr_old 2>/dev/null <"${MODERN_REASON}" || :
+  [ "${_mr_old}" = "$1" ] || printf '%s\n' "$1" >"${MODERN_REASON}"
+  _mr_old=; IFS= read -r _mr_old 2>/dev/null <"${MODERN_POLICY}" || :
+  [ "${_mr_old}" = "${2:-unknown}" ] || printf '%s\n' "${2:-unknown}" >"${MODERN_POLICY}"
 }
 
 # Persist only bounded capability diagnostics, never arbitrary helper output.
@@ -323,18 +325,18 @@ modern_packet_policy_safe() {
 }
 
 modern_listener_ready() {
+  _ml_state=
   _ml_pids=$(modern_pids)
   [ -n "${_ml_pids}" ] && [ -r "${MODERN_STATE}" ] || return 1
-  _ml_port=$(jqr -e -r '.listen | split(":") | last | tonumber' "${MODERN_CONF}" 2>/dev/null) || return 1
-  jqr -e --arg pids " ${_ml_pids} " --argjson port "${_ml_port}" --argjson now "$(date +%s)" '
-    . as $s | $s.ready == true and $s.port == $port and ($s.pid | type == "number")
-    and ($s.updatedAt | type == "number") and $s.updatedAt <= $now+1 and $s.updatedAt >= $now-8
+  _ml_state=$("${MODERN_BIN}" health --config "${MODERN_CONF}" 2>/dev/null) || return 1
+  printf '%s' "${_ml_state}" | jqr -e --arg pids " ${_ml_pids} " '
+    . as $s | $s.ready == true and ($s.pid | type == "number")
     and (($pids | [splits("[[:space:]]+")]) | index($s.pid | tostring) != null)' \
-    "${MODERN_STATE}" >/dev/null 2>&1
+    >/dev/null 2>&1
 }
 
 modern_queue_ready() {
-  modern_listener_ready && jqr -e '.queueReady == true' "${MODERN_STATE}" >/dev/null 2>&1
+  modern_listener_ready && printf '%s' "${_ml_state}" | jqr -e '.queueReady == true' >/dev/null 2>&1
 }
 
 modern_stop_process() {
@@ -379,20 +381,22 @@ modern_guard_start() {
 
 modern_guard_health() {
   [ "$(_proc_starttime "${_GUARD_HELPER_PID}")" = "${_GUARD_HELPER_STAMP}" ] &&
-    jqr -e --argjson pid "${_GUARD_HELPER_PID}" --argjson now "$(date +%s)" \
-      '.ready == true and .queueReady == true and .pid == $pid
-        and (.updatedAt | type == "number") and .updatedAt <= $now+1 and .updatedAt >= $now-8' \
-      "${MODERN_STATE}" >/dev/null 2>&1
+    _gh_state=$("${MODERN_BIN}" health --config "${MODERN_CONF}" --instance "${_GUARD_HELPER_INSTANCE}" 2>/dev/null) &&
+    printf '%s' "${_gh_state}" | jqr -e '.ready == true and .queueReady == true' >/dev/null 2>&1
 }
 
 modern_guard_cleanup() {
+  if [ -n "${_GUARD_WATCH_PID:-}" ]; then
+    _conf_owner_alive "${_GUARD_WATCH_PID}:${_GUARD_WATCH_STAMP}" && kill "${_GUARD_WATCH_PID}" 2>/dev/null
+    wait "${_GUARD_WATCH_PID}" 2>/dev/null
+  fi
   [ "${_GUARD_LOCK_HELD:-0}" != 1 ] || modern_unlock
   [ "$(readlink "${MODERN_GUARD}" 2>/dev/null)" != "${_GUARD_TOKEN}" ] || rm -f "${MODERN_GUARD}"
 }
 
-# This small guard is separate from the full watchdog: one state read and one
-# proc start-time read every two seconds. No status RPC or iptables inventory
-# occurs on the healthy path, and a failed queue is never restarted in a loop.
+# One native monitor keeps the existing two-second health cadence entirely in
+# memory. The shell wakes only on failure; no heartbeat files, jq/date/sleep
+# children or iptables inventory occur on its healthy path.
 modern_dns_guard() {
   ensure_run_dirs
   _GUARD_TOKEN="$$:$(_conf_pid_stamp "$$")"
@@ -402,20 +406,27 @@ modern_dns_guard() {
   _GUARD_HELPER_PID=$(jqr -e -r '.pid | select(type == "number" and . > 0)' "${MODERN_STATE}" 2>/dev/null) || return 1
   _GUARD_HELPER_STAMP=$(_proc_starttime "${_GUARD_HELPER_PID}")
   [ -n "${_GUARD_HELPER_STAMP}" ] || return 1
+  _GUARD_HELPER_INSTANCE=$(jqr -e -r '.instance | select(type == "string" and length > 0)' "${MODERN_STATE}" 2>/dev/null) || return 1
+  "${MODERN_BIN}" watch --config "${MODERN_CONF}" --instance "${_GUARD_HELPER_INSTANCE}" --parent "$$" &
+  _GUARD_WATCH_PID=$!
+  _GUARD_WATCH_STAMP=$(_conf_pid_stamp "${_GUARD_WATCH_PID}")
+  wait "${_GUARD_WATCH_PID}"
+  _GUARD_WATCH_PID=
+  # A killed/broken monitor must also withdraw capture, even if the listener
+  # still responds. The ordinary watchdog can later reconcile a fresh guard.
   while :; do
-    isleep 2
-    modern_guard_health && continue
-    modern_lock || continue
+    modern_lock || { isleep 2; continue; }
     _GUARD_LOCK_HELD=1
-    if ! modern_guard_health; then
-      if modern_rules_teardown; then
-        modern_reason queue-failed "$(cat "${MODERN_POLICY}" 2>/dev/null)"
-        modern_unlock; _GUARD_LOCK_HELD=0
-        return 0
-      fi
-      modern_reason cleanup-failed "$(cat "${MODERN_POLICY}" 2>/dev/null)"
+    _gg_reason=queue-failed
+    modern_guard_health && _gg_reason=guard-failed
+    if modern_rules_teardown; then
+      modern_reason "${_gg_reason}" "$(cat "${MODERN_POLICY}" 2>/dev/null)"
+      modern_unlock; _GUARD_LOCK_HELD=0
+      return 0
     fi
+    modern_reason cleanup-failed "$(cat "${MODERN_POLICY}" 2>/dev/null)"
     modern_unlock; _GUARD_LOCK_HELD=0
+    isleep 2
   done
 }
 
@@ -586,7 +597,7 @@ modern_dns_status() {
   case "${_mo_port}" in ''|*[!0-9]*) _mo_port=${DNS_PORT} ;; esac
   _mo_ready=false; modern_listener_ready && _mo_ready=true
   _mo_queue=false
-  [ "${_mo_ready}" != true ] || ! jqr -e '.queueReady == true' "${MODERN_STATE}" >/dev/null 2>&1 || _mo_queue=true
+  [ "${_mo_ready}" != true ] || ! printf '%s' "${_ml_state}" | jqr -e '.queueReady == true' >/dev/null 2>&1 || _mo_queue=true
   _mo_v4=false; [ "${_mo_queue}" != true ] || ! modern_rules_present iptables "${_mo_port}" || _mo_v4=true
   _mo_v6=false; [ "${_mo_queue}" != true ] || ! modern_rules_present ip6tables "${_mo_port}" || _mo_v6=true
   _mo_reason=$(cat "${MODERN_REASON}" 2>/dev/null)
@@ -637,8 +648,7 @@ modern_dns_status() {
   fi
   _mo_capability_error=
   if [ "${_mo_mode}" = transparent ]; then
-    _mo_capability_error=$(jqr -r '(.error // "") | select(type == "string") | gsub("[[:cntrl:]]";" ") | .[0:512]' \
-      "${MODERN_STATE}" 2>/dev/null)
+    _mo_capability_error=$(printf '%s' "${_ml_state:-}" | jqr -r '(.error // "") | select(type == "string") | gsub("[[:cntrl:]]";" ") | .[0:512]' 2>/dev/null)
     if [ -z "${_mo_capability_error}" ] && [ "${_mo_reason}" = transparent-unavailable ]; then
       _mo_capability_error=$(jqr -r 'select(.ok == false) | (.error // "") | select(type == "string") | .[0:512]' \
         "${MODERN_CAPABILITIES}" 2>/dev/null)

@@ -423,6 +423,93 @@ check_once && exit 10
         self.run_script('check-once')
         self.assertFalse(self.events.exists())
 
+    def test_compact_wifi_status_avoids_full_dump_and_cellular_only_rules_skip_wifi_queries(self):
+        self.rules.write_text('cellular:-:up')
+        (self.base / 'ssid').write_text('Home')
+        self.write_stub('bin/cmd', 'echo cmd >>"$TS_TEST_DIR/wifi-calls"\necho \'WifiInfo: SSID: "Home", BSSID: 00:11:22:33:44:55\'\n')
+        self.write_stub('bin/dumpsys', 'echo dump >>"$TS_TEST_DIR/wifi-calls"\nexit 1\n')
+        self.run_checks('''
+check_once || exit 10
+check_once || exit 11
+check_once || exit 12
+[ ! -e "$TS_TEST_DIR/wifi-calls" ] || exit 13
+printf 'ssid:Home:down\n' >"$RULES_FILE"
+check_once || exit 14
+check_once || exit 15
+check_once || exit 16
+''')
+        self.assertEqual((self.base / 'wifi-calls').read_text().splitlines(), ['cmd'] * 3)
+        self.assertEqual(self.events.read_text().splitlines(), ['service:stop'])
+
+    def test_wifi_command_capability_is_cached_but_transient_failure_recovers(self):
+        self.rules.write_text('ssid:Home:up\nssid:Away:down')
+        (self.base / 'ssid').write_text('Home')
+        self.write_stub('bin/cmd', 'echo cmd >>"$TS_TEST_DIR/wifi-calls"\necho "Unknown command: status"\nexit 1\n')
+        self.write_stub('bin/dumpsys', 'echo dump >>"$TS_TEST_DIR/wifi-calls"\necho \'SSID: "Home"\'\n')
+        self.run_checks('check_once\ncheck_once\ncheck_once\n')
+        self.assertEqual((self.base / 'wifi-calls').read_text().splitlines(), ['cmd', 'dump', 'dump', 'dump'])
+        (self.base / 'wifi-calls').unlink()
+        self.write_stub('bin/cmd', '''echo cmd >>"$TS_TEST_DIR/wifi-calls"
+if [ ! -e "$TS_TEST_DIR/cmd-ready" ]; then exit 9; fi
+echo 'WifiInfo: SSID: "Away", BSSID: 00:11:22:33:44:55'
+''')
+        self.run_checks('''check_once || exit 10
+touch "$TS_TEST_DIR/cmd-ready"
+check_once || exit 11
+check_once || exit 12
+''')
+        self.assertEqual((self.base / 'wifi-calls').read_text().splitlines(), ['cmd', 'dump', 'cmd', 'cmd'])
+        self.assertEqual(self.state.read_text(), 'ssid:Away\n')
+
+    def test_resident_throttles_screen_off_without_replaying_successful_actions(self):
+        self.rules.write_text('cellular:-:up')
+        with self.settings.open('a') as stream:
+            stream.write('''
+is_screen_on() { [ "${_test_round:-0}" -ge 2 ]; }
+isleep() {
+  echo "$1" >>"$TS_TEST_DIR/intervals"
+  _test_round=$((${_test_round:-0} + 1))
+  [ "$_test_round" -lt 3 ] || _context_stop
+}
+''')
+        for power_save, expected in [('off', ['100', '100', '20']), ('on', ['180', '180', '60'])]:
+            (self.base / 'conf/foxytail.conf').write_text('POWER_SAVE=' + power_save + '\n')
+            (self.base / 'intervals').unlink(missing_ok=True)
+            self.run_script('start')
+            self.assertEqual((self.base / 'intervals').read_text().splitlines(), expected)
+        self.assertEqual(self.events.read_text().splitlines(), ['service:start'] * 2)
+
+    def test_disabled_context_keeps_result_without_process_or_rule_actions_and_can_restart(self):
+        self.rules.write_text('cellular:-:up')
+        self.run_script('check-once')
+        previous = self.result.read_bytes()
+        (self.base / 'conf/foxytail.conf').write_text('CONTEXT=off\n')
+        self.run_script('start')
+        self.run_script('check-once')
+        self.assertEqual(self.result.read_bytes(), previous)
+        self.assertEqual(self.events.read_text().splitlines(), ['service:start'])
+        self.assertFalse((self.base / 'run/pids/foxytail.context.pid').exists())
+        (self.base / 'conf/foxytail.conf').write_text('CONTEXT=on\n')
+        with self.settings.open('a') as stream:
+            stream.write('\nisleep() { _context_stop; }\n')
+        self.run_script('start')
+        self.assertEqual(self.events.read_text().splitlines(), ['service:start'] * 2)
+
+    def test_running_context_stops_on_disabled_runtime_without_erasing_result(self):
+        self.rules.write_text('cellular:-:up')
+        with self.settings.open('a') as stream:
+            stream.write('''
+isleep() {
+  echo slept >>"$TS_TEST_DIR/intervals"
+  printf 'CONTEXT=off\n' >"$TS_CONF_DIR/foxytail.conf"
+}
+''')
+        self.run_script('start')
+        self.assertEqual((self.base / 'intervals').read_text().splitlines(), ['slept'])
+        self.assertEqual(self.events.read_text().splitlines(), ['service:start'])
+        self.assertTrue(json.loads(self.result.read_text())['ok'])
+        self.assertFalse((self.base / 'run/pids/foxytail.context.pid').exists())
+
 
 if __name__ == '__main__':
     unittest.main()

@@ -78,7 +78,7 @@ export function AppShell(props: {
   route: Accessor<string>;
   routes: Record<string, RouteDef>;
 }): JSX.Element {
-  startStatusPolling(5000);
+  startStatusPolling();
 
   const def = () => props.routes[props.route()] ?? props.routes.dashboard;
   let main!: HTMLElement;

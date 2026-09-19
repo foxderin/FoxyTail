@@ -5,7 +5,7 @@ import { t, lang, setLang, type Lang } from '../i18n';
 import { NETWORK, BACKGROUND, ROUTE_TABLE, type Field } from '../settings';
 import SettingsMaintenance from './SettingsMaintenance';
 import SettingsTrial from './SettingsTrial';
-import { refreshStatus } from '../state';
+import { refreshStatus, status } from '../state';
 import { getTask } from '../tasks';
 import { BACKUP_TASK } from '../backup';
 import { mode, applyTheme, type ThemeMode } from '../theme';
@@ -105,6 +105,9 @@ export default function Settings(): JSX.Element {
         <div class="tool-setting-copy">
           <span class="tool-setting-label">{t(field.label)}</span>
           <Show when={hint()}>{key => <span class="tool-hint">{t(key())}</span>}</Show>
+          <Show when={field.key === 'WATCHDOG_PROBE' && status()?.powerSave === true}>
+            <span class="tool-hint" data-testid="power-probe-paused">{t('tools_probe_paused')}</span>
+          </Show>
           <Show when={field.range}>
             <span class="tool-hint">
               {t('tools_range')} {field.range![0]}–{field.range![1]}

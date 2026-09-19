@@ -1,6 +1,8 @@
 /* Log filtering is local. Only one page-scoped read may run at a time. */
-import { createMemo, createSignal, For, Index, onCleanup, onMount, Show, type JSX } from 'solid-js';
+import { createMemo, createSignal, For, Index, Show, type JSX } from 'solid-js';
 import { createApiScope } from '../api';
+import { pollWhileVisible } from '../schedule';
+import { status, viewPollInterval } from '../state';
 import { t } from '../i18n';
 import { Card, EmptyState, ErrorState, SkeletonRows, StatusBadge } from '../components/Basics';
 import { copyText } from '../components/LoginHero';
@@ -23,6 +25,7 @@ export default function Logs(): JSX.Element {
   const [busy, setBusy] = createSignal(false);
   const [error, setError] = createSignal<string | null>(null);
   const [updated, setUpdated] = createSignal('');
+  const refreshing = () => live() && status()?.autoRefresh !== false;
   let logView: HTMLDivElement | undefined;
   let rerun = false;
   const filtered = createMemo(() => {
@@ -43,10 +46,11 @@ export default function Logs(): JSX.Element {
     if (!res.cancelled && source === src() && count === limit()) {
       if (res.ok) {
         const next = (res.lines as string[]) || [];
-        if (JSON.stringify(next) !== JSON.stringify(lines())) setLines(next);
+        const changed = next.length !== lines()?.length || next.some((line, index) => line !== lines()?.[index]);
+        if (changed) setLines(next);
         setError(null);
         setUpdated(new Date().toLocaleTimeString());
-        if (follow() && logView)
+        if (changed && follow() && logView && !document.hidden)
           requestAnimationFrame(() => {
             if (logView) logView.scrollTop = logView.scrollHeight;
           });
@@ -58,13 +62,7 @@ export default function Logs(): JSX.Element {
       void load();
     }
   }
-  onMount(() => {
-    void load();
-    const id = setInterval(() => {
-      if (live() && !document.hidden && !busy()) void load();
-    }, 3000);
-    onCleanup(() => clearInterval(id));
-  });
+  pollWhileVisible(() => busy() ? undefined : load(), () => live() ? viewPollInterval(5000) : false);
   function copyResults() {
     showToast(
       t(
@@ -120,7 +118,8 @@ export default function Logs(): JSX.Element {
             <div class="tool-toggle">
               <Switch
                 aria-label={t('tools_logs_live')}
-                checked={live()}
+                checked={refreshing()}
+                disabled={status()?.autoRefresh === false}
                 onChange={(e) => setLive((e.target as HTMLInputElement).checked)}
               />
               <span>{t('tools_logs_live')}</span>
@@ -152,8 +151,8 @@ export default function Logs(): JSX.Element {
           </div>
         </div>
         <div class="tool-actions spread">
-          <StatusBadge tone={live() ? 'success' : 'neutral'}>
-            {live() ? t('tools_logs_live') : t('tools_logs_paused')}
+          <StatusBadge tone={refreshing() ? 'success' : 'neutral'}>
+            {refreshing() ? t('tools_logs_live') : t('tools_logs_paused')}
           </StatusBadge>
           <div class="toolbar">
             <Button variant="text" busy={busy()} onClick={() => void load()}>
@@ -166,6 +165,7 @@ export default function Logs(): JSX.Element {
             </Button>
           </div>
         </div>
+        <Show when={status()?.autoRefresh === false}><p class="tool-hint">{t('tools_refresh_disabled')}</p></Show>
       </Card>
       <Card>
         <div class="tool-form">

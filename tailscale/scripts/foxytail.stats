@@ -68,7 +68,7 @@ prune_stats() {
   fi
   for _f in "${TS_STATS_DIR}"/????-??-??.jsonl; do
     [ -f "$_f" ] || continue
-    _base=$(basename "$_f" .jsonl)
+    _base=${_f##*/}; _base=${_base%.jsonl}
     if ! _in_retention "$_f" "$_base" "$1" "${2:-}"; then
       rm -f "$_f"
     fi
@@ -82,61 +82,88 @@ stats_recent_files() {
   set -- ${_srf_cut}
   for _f in "${TS_STATS_DIR}"/????-??-??.jsonl; do
     [ -f "$_f" ] || continue
-    _base=$(basename "$_f" .jsonl)
+    _base=${_f##*/}; _base=${_base%.jsonl}
     if _in_retention "$_f" "$_base" "$1" "${2:-}"; then
       echo "$_f"
     fi
-  done | sort
+  done
 }
 
 collect_once() {
-  _ts=$(date +%s)
-  _file="${TS_STATS_DIR}/$(date +%F).jsonl"
-
-  _status=$(tmo 10 tailscale --socket="$TS_SOCKET" status --json 2>/dev/null)
-  if [ -z "$_status" ] || ! printf '%s' "$_status" | jqr -e . >/dev/null 2>&1; then
-    echo "{\"ts\":${_ts},\"error\":\"daemon-unreachable\"}" >>"$_file"
-    chmod 0640 "$_file" 2>/dev/null
+  _when=$(date '+%s %F')
+  _ts=${_when%% *} _day=${_when#* }
+  _file="${TS_STATS_DIR}/${_day}.jsonl"
+  # Retention changes once per date, not once per sample. Repair permissions
+  # on the first opened file too, including files left by an earlier version.
+  if [ "${_stats_day:-}" != "$_day" ] || [ ! -f "$_file" ]; then
+    : >>"$_file" || return 1
+    chmod 0640 "$_file" || return 1
     prune_stats
-    return 0
+    _stats_day=$_day
   fi
-  _peers=$(printf '%s' "$_status" | jqr -c \
-    '[.Peer // {} | .[] | {id:(.ID|tostring),rx:(.RxBytes // 0),tx:(.TxBytes // 0)}]')
+  if ! _status=$(tmo 10 tailscale --socket="$TS_SOCKET" status --json 2>/dev/null) || [ -z "$_status" ]; then
+    stats_unreachable
+    return $?
+  fi
 
   _iface="null"
   if [ -d /sys/class/net/tailscale0 ]; then
-    _rx=$(cat /sys/class/net/tailscale0/statistics/rx_bytes 2>/dev/null)
-    _tx=$(cat /sys/class/net/tailscale0/statistics/tx_bytes 2>/dev/null)
+    _rx='' _tx=''
+    IFS= read -r _rx </sys/class/net/tailscale0/statistics/rx_bytes 2>/dev/null || :
+    IFS= read -r _tx </sys/class/net/tailscale0/statistics/tx_bytes 2>/dev/null || :
     case "$_rx" in '' | *[!0-9]*) _rx=0 ;; esac
     case "$_tx" in '' | *[!0-9]*) _tx=0 ;; esac
     _iface="{\"rx\":${_rx},\"tx\":${_tx}}"
   fi
 
-  # OUTPUT counters measure only TX through tailscale0. Read both families;
-  # RETURN rules are mutually exclusive per UID and reach the terminal rule.
-  _uids=$({
-    for _uid_cmd in iptables ip6tables; do
-      "${_uid_cmd}" -t filter -nvxL FOXY_STAT 2>/dev/null |
-        awk '/owner UID match/ { for(i=1;i<=NF;i++) if($i=="match") print $2, $(i+1) }'
-    done
-  } | jqr -R -s -c 'split("\n") | map(select(length > 0) | split(" ")
-      | {uid:.[1],rx:0,tx:(.[0] | tonumber)}) | group_by(.uid)
-      | map({uid:.[0].uid,rx:0,tx:(map(.tx)|add)})')
+  # Read only families whose current ownership snapshot has UID counters.
+  # Re-read these tiny files every round so a hot apply is visible immediately.
+  _uid_tables=
+  for _uid_cmd in iptables ip6tables; do
+    _uid_snapshot="${TS_RUN_DIR}/route.snapshot/${_uid_cmd}.filter"
+    [ -f "$_uid_snapshot" ] || continue
+    while IFS= read -r _uid_rule; do
+      case "$_uid_rule" in *' --uid-owner '*) _uid_tables="$_uid_tables $_uid_cmd"; break ;; esac
+    done <"$_uid_snapshot"
+  done
+  _uids=
+  if [ -n "$_uid_tables" ]; then
+    _uids=$({
+      for _uid_cmd in $_uid_tables; do
+        "${_uid_cmd}" -t filter -nvxL FOXY_STAT 2>/dev/null
+      done
+    } | awk '/owner UID match/ { for(i=1;i<=NF;i++) if($i=="match") print $2, $(i+1) }')
+  fi
 
   _daemon_generation=$(for _sg_pid in $(pids_of_path "${TS_BIN_DIR}/tailscaled"); do
-    printf '%s:' "${_sg_pid}"
-    awk '{print $22}' "/proc/${_sg_pid}/stat" 2>/dev/null
+    printf '%s:%s\n' "${_sg_pid}" "$(_conf_pid_stamp "${_sg_pid}")"
   done)
-  _iface_generation=$(cat /sys/class/net/tailscale0/ifindex 2>/dev/null)
-  _uid_generation=$(cat "${TS_RUN_DIR}/route.snapshot/generation" 2>/dev/null)
-  jqr -n -c --argjson ts "$_ts" --argjson peers "$_peers" \
-    --argjson iface "$_iface" --argjson uids "$_uids" \
+  _iface_generation='' _uid_generation=''
+  [ ! -f /sys/class/net/tailscale0/ifindex ] || IFS= read -r _iface_generation </sys/class/net/tailscale0/ifindex
+  [ ! -f "${TS_RUN_DIR}/route.snapshot/generation" ] || IFS= read -r _uid_generation <"${TS_RUN_DIR}/route.snapshot/generation"
+  if ! _sample=$(printf '%s' "$_status" | jqr -s -c --argjson ts "$_ts" \
+    --argjson iface "$_iface" --arg uids "$_uids" \
     --arg dg "${_daemon_generation}" --arg ig "${_iface_generation}" --arg ug "${_uid_generation}" \
-    '{ts:$ts,peers:$peers,iface:$iface,uids:$uids,uidDirection:"tx",
-      generation:{peers:$dg,iface:$ig,uids:$ug}}' >>"$_file"
-  chmod 0640 "$_file" 2>/dev/null
+    'if length!=1 or (.[0]|type)!="object" then error("invalid status") else .[0] end
+     | [.Peer // {} | .[] | {id:(.ID|tostring),rx:(.RxBytes // 0),tx:(.TxBytes // 0)}] as $peers
+     | ($uids | split("\n") | map(select(length>0) | split(" ")
+         | {uid:.[1],rx:0,tx:(.[0]|tonumber)}) | group_by(.uid)
+         | map({uid:.[0].uid,rx:0,tx:(map(.tx)|add)})) as $uidRows
+     | {ts:$ts,peers:$peers,iface:$iface,uids:$uidRows,uidDirection:"tx",
+        generation:{peers:$dg,iface:$ig,uids:$ug}}' 2>/dev/null); then
+    stats_unreachable
+    return $?
+  fi
+  printf '%s\n' "$_sample" >>"$_file" || return 1
+  _stats_error_day=
+}
 
-  prune_stats
+# Error rows are ignored by the delta reader. Keep one per uninterrupted outage
+# and day instead of writing identical failures for a stopped daemon forever.
+stats_unreachable() {
+  [ "${_stats_error_day:-}" != "$_day" ] || return 0
+  printf '{"ts":%s,"error":"daemon-unreachable"}\n' "$_ts" >>"$_file" || return 1
+  _stats_error_day=$_day
 }
 
 _stats_stop() {
@@ -144,15 +171,16 @@ _stats_stop() {
 }
 
 do_start() {
+  [ "${STATS:-on}" = on ] || return 0
   daemon_claim_pidfile foxytail.stats || return 0
   _stats_running=1
   trap '_stats_stop' TERM INT
   log Info "foxytail.stats started (pid $$, interval ${STATS_INTERVAL}s)"
   while [ "$_stats_running" = "1" ]; do
     load_runtime_conf || { log Error "stats: invalid runtime configuration"; break; }
+    [ "${STATS:-on}" = on ] || break
     collect_once
-    _int="${STATS_INTERVAL}"
-    is_screen_on || _int=$((_int * 5))
+    _int=$(effective_interval "${STATS_INTERVAL}" 5 300 900)
     isleep "$_int"
   done
   rm -f "$PID_FILE"

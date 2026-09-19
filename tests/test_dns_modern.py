@@ -3,8 +3,10 @@ import json
 import os
 from pathlib import Path
 import shlex
+import signal
 import subprocess
 import tempfile
+import time
 import unittest
 
 from test_network import MOCK
@@ -55,6 +57,15 @@ case "$1" in
     if [ -f "$TEST_DIR/probe-failed" ]; then echo '{"ok":false}'; exit 1; fi
     echo '{"ok":true,"queue":true,"conntrack":true,"socketContext":true}' ;;
   check) [ ! -f "$TEST_DIR/check-failed" ] ;;
+  health)
+    [ -f "$TEST_DIR/alive" ] && [ ! -f "$TEST_DIR/stale-helper" ] || exit 1
+    state="$TEST_DIR/run/foxydns.state.json"
+    port=$(jq -r '.listen | split(":") | last | tonumber' "$3")
+    jq -e --argjson port "$port" --arg instance "${5:-fixture-instance}" \
+      'select(.ready == true and .port == $port and .instance == $instance)' "$state" ;;
+  watch)
+    echo watch >>"$TEST_DIR/guard-watches"
+    exit 1 ;;
   serve)
     [ ! -f "$TEST_DIR/bind-failed" ] || exit 1
     mode=$(jq -r .mode "$3")
@@ -62,7 +73,7 @@ case "$1" in
     [ "$mode" != transparent ] || [ -f "$TEST_DIR/queue-failed" ] || queue=true
     touch "$TEST_DIR/alive"
     port=$(jq -r '.listen | split(":") | last' "$3")
-    printf '{"ready":true,"queueReady":%s,"pid":100,"port":%s,"updatedAt":%s}\\n' "$queue" "$port" "$(date +%s)" >"$5" ;;
+    printf '{"ready":true,"queueReady":%s,"pid":100,"instance":"fixture-instance","port":%s,"updatedAt":%s}\\n' "$queue" "$port" "$(date +%s)" >"$5" ;;
   *) exit 99 ;;
 esac
 ''')
@@ -103,9 +114,6 @@ flush_android_dns_cache() { echo flush >>"$TEST_DIR/flushes"; }
 ''' + locks + '\n. ' + shlex.quote(str(ROOT / 'tailscale/scripts/foxytail.dns-modern.sh')) + '''
 modern_pids() {
   [ -f "$TEST_DIR/alive" ] || return 0
-  if [ -f "$MODERN_STATE" ] && [ ! -f "$TEST_DIR/stale-helper" ]; then
-    jq '.updatedAt=(now|floor)' "$MODERN_STATE" >"$MODERN_STATE.next" && mv "$MODERN_STATE.next" "$MODERN_STATE"
-  fi
   echo 100
 }
 if [ "${REAL_GUARD_TEST:-0}" != 1 ]; then
@@ -114,14 +122,6 @@ if [ "${REAL_GUARD_TEST:-0}" != 1 ]; then
   modern_guard_alive() { test -f "$TEST_DIR/guard-active"; }
 else
   _proc_starttime() { echo fixture-helper; }
-  isleep() {
-    printf '%s\\n' sleep >>"$TEST_DIR/guard-sleeps"
-    if [ -f "$TEST_DIR/stale-helper" ]; then
-      printf '{"ready":true,"queueReady":true,"pid":100,"port":1054,"updatedAt":1}\\n' >"$MODERN_STATE"
-    else
-      printf '{"ready":true,"queueReady":false,"pid":100,"port":1054,"updatedAt":%s}\\n' "$(date +%s)" >"$MODERN_STATE"
-    fi
-  }
 fi
 load_conf
 "$@"
@@ -286,9 +286,49 @@ load_conf
         self.assertEqual(self.sets(), ['--accept-dns=false'])
         self.assertEqual((self.base / 'flushes').read_text(), flushes)
 
+    def test_status_and_unchanged_reason_do_not_rewrite_runtime_state(self):
+        self.run_script('modern_dns_start')
+        paths = [self.base / 'run' / name for name in
+                 ('foxydns.state.json', 'foxydns.reason', 'foxydns.policy')]
+        before = [(path.stat().st_ino, path.stat().st_mtime_ns) for path in paths]
+        for _ in range(2):
+            self.status()
+            self.run_script('modern_reason', 'running', 'owned')
+        self.assertEqual([(path.stat().st_ino, path.stat().st_mtime_ns) for path in paths], before)
+
+    def test_guard_termination_reaps_its_native_monitor(self):
+        self.run_script('modern_dns_start')
+        helper = self.base / 'bin/foxydns'
+        helper.write_text(helper.read_text().replace('echo watch >>"$TEST_DIR/guard-watches"\n    exit 1',
+                                                     'echo $$ >"$TEST_DIR/watch-pid"\n    exec sleep 30'))
+        self.env['REAL_GUARD_TEST'] = '1'
+        guard = subprocess.Popen(['sh', str(self.runner), 'modern_dns_guard'], env=self.env,
+                                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        self.addCleanup(lambda: guard.poll() is not None or guard.kill())
+        deadline = time.monotonic() + 3
+        marker = self.base / 'watch-pid'
+        while not marker.exists():
+            self.assertIsNone(guard.poll())
+            self.assertLess(time.monotonic(), deadline)
+            time.sleep(0.02)
+        monitor = int(marker.read_text())
+        guard.send_signal(signal.SIGTERM)
+        guard.wait(timeout=3)
+        with self.assertRaises(ProcessLookupError):
+            os.kill(monitor, 0)
+        self.assertFalse((self.base / 'run/foxydns.guard').exists())
+
+    def test_monitor_failure_with_healthy_listener_also_withdraws_capture(self):
+        self.run_script('modern_dns_start')
+        self.env['REAL_GUARD_TEST'] = '1'
+        self.run_script('modern_dns_guard')
+        self.assertEqual((self.base / 'run/foxydns.reason').read_text().strip(), 'guard-failed')
+        self.assertNotIn('FOXY_DNS_CAPTURE', self.kernel()['chains']['iptables:nat'])
+        self.assertTrue((self.base / 'alive').exists())
+
     def test_queue_health_loss_requests_cleanup_until_guard_removes_rules(self):
         self.run_script('modern_dns_start')
-        (self.base / 'run/foxydns.state.json').write_text('{"ready":true,"queueReady":false,"pid":100,"port":1054,"updatedAt":1}')
+        (self.base / 'run/foxydns.state.json').write_text('{"ready":true,"queueReady":false,"pid":100,"instance":"fixture-instance","port":1054,"updatedAt":1}')
         status = self.status()
         self.assertFalse(status['interception4']); self.assertTrue(status['repairNeeded'])
         self.assertEqual(status['reason'], 'queue-failed')
@@ -297,7 +337,7 @@ load_conf
         self.env.pop('REAL_GUARD_TEST')
         self.assertTrue((self.base / 'alive').exists())
         self.assertFalse((self.base / 'run/foxydns.guard').exists())
-        self.assertEqual((self.base / 'guard-sleeps').read_text().splitlines(), ['sleep'])
+        self.assertEqual((self.base / 'guard-watches').read_text().splitlines(), ['watch'])
         self.assertEqual(self.sets(), ['--accept-dns=false'])
         status = self.status()
         self.assertFalse(status['interception4']); self.assertFalse(status['repairNeeded'])
@@ -351,10 +391,10 @@ load_conf
         self.assertFalse((self.base / 'alive').exists())
         self.assertEqual(self.sets(), [])
 
-    def test_stale_helper_state_is_unready_and_guard_withdraws_capture(self):
+    def test_unresponsive_helper_is_unready_and_guard_withdraws_capture(self):
         self.run_script('modern_dns_start')
         (self.base / 'stale-helper').touch()
-        (self.base / 'run/foxydns.state.json').write_text('{"ready":true,"queueReady":true,"pid":100,"port":1054,"updatedAt":1}')
+        (self.base / 'run/foxydns.state.json').write_text('{"ready":true,"queueReady":true,"pid":100,"instance":"fixture-instance","port":1054,"updatedAt":1}')
         self.assertFalse(self.status()['listenerReady'])
         self.assertFalse(self.status()['interception4'])
         self.env['REAL_GUARD_TEST'] = '1'

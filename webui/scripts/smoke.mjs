@@ -9,6 +9,7 @@ import { checkSettings } from './smoke-settings.mjs';
 import { checkContextRules } from './smoke-context.mjs';
 import { checkDiagnostics } from './smoke-diagnostics.mjs';
 import { checkRecovery } from './smoke-recovery.mjs';
+import { checkPower } from './smoke-power.mjs';
 
 // Reuse one app so navigation, pending work and stale replies cross real page lifetimes.
 await checkCore();
@@ -20,6 +21,7 @@ await checkSettings();
 await checkContextRules();
 await checkDiagnostics();
 await checkRecovery();
+await checkPower();
 window.close();
 
 if (failures.length) {

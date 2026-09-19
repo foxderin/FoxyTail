@@ -132,8 +132,29 @@ Three files in `/data/adb/foxytail/conf/`, installed **only if missing** — you
 | `ROUTE_TABLE` | `1052` | dedicated policy routing table (1000–65535) |
 | `FWMARK` / `FWMARK_MASK` | `0x40000000` | fixed shared mark bit; legacy 0xF7 migrates on read |
 | `WATCHDOG` / `WATCHDOG_INTERVAL` | `on` / `30` | crash restart + rebind, seconds between checks |
+| `WATCHDOG_PROBE` | `on` | Active connectivity probes after network changes; paused by power saving |
+| `POWER_SAVE` | `off` | Reduce optional background work and WebUI refresh frequency |
+| `STATS` / `CONTEXT` | `on` / `on` | Independently control traffic sampling and context automation; retain history and rules |
+| `WEBUI_AUTO_REFRESH` | `on` | Automatic page refresh; initial reads and manual refresh remain available when off |
 | `STATS_INTERVAL` | `60` | stats collection interval (auto-throttled when the screen is off) |
 | `LOG_MAX_KB` | `512` | log rotation threshold (one `.bak` kept) |
+
+### Power controls
+
+Use **Settings → Power & background** to select power saving or individual feature switches, then **Restart & apply**. Upgrades keep existing features enabled by default; power saving never enables a disabled feature. Disabling the watchdog stops automatic recovery; disabling context automation stops SSID/mobile-data actions.
+
+| Feature | Normal: screen on / off | Power saving: screen on / off |
+|---|---|---|
+| Watchdog | Configured interval for both (default 30 s) | At least 60 / 180 s |
+| Traffic sampling | Configured interval / interval × 5 (default 60 / 300 s) | At least 300 / 900 s |
+| Context checks | 20 / 100 s | 60 / 180 s |
+| Log size checks | 30 s when quiet; 2 s near the limit | 60 s when quiet; 2 s near the limit |
+| WebUI status, peers and tunnel | 15 s while visible and stable | 30 s while visible and stable |
+| WebUI logs | 5 s while visible | 30 s while visible |
+
+Longer custom intervals are preserved. Hidden WebUI pages stop polling. Startup status and active configuration trials retain timely updates. Disabling automatic refresh still permits manual actions and trial confirmation. Disabling sampling or context automation exits its resident process without deleting history or rules; manual `collect-once` remains available.
+
+Power saving pauses active network-change pings, preserves the Tailscale connection and keeps independent DNS failure monitoring at 2 s. DNS health is queried in memory over loopback, eliminating idle state writes every 2 s. Battery savings depend on the device, traffic and network and require measurement on real hardware.
 
 ### `routes.conf` (routing scope)
 

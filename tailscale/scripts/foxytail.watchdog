@@ -30,7 +30,7 @@ SERVICE="${TS_SCRIPTS_DIR}/foxytail.service"
 
 # tailscale status --json, empty string on timeout/failure.
 ts_status_json() {
-  _st=$(tmo 8 tailscale --socket="$TS_SOCKET" status --json 2>/dev/null)
+  _st=$(tmo 8 tailscale --socket="$TS_SOCKET" status --json --peers="${1:-false}" 2>/dev/null)
   if [ -n "$_st" ] && printf '%s' "$_st" | jqr -e . >/dev/null 2>&1; then
     printf '%s' "$_st"
   fi
@@ -39,7 +39,7 @@ ts_status_json() {
 # Tailnet reachability: try quad-100 first, then the first online peer.
 tailnet_reachable() {
   _targets="100.100.100.100"
-  _st=$(ts_status_json)
+  _st=$(ts_status_json true)
   if [ -n "$_st" ]; then
     _peer=$(printf '%s' "$_st" | jqr -r \
       '[.Peer // {} | .[] | select(.Online == true) | .TailscaleIPs[0]] | .[0] // empty' \
@@ -112,23 +112,22 @@ check_once() {
   _state=""
   # 0. A user-requested stop (WebUI/CLI) is not a crash: stay down.
   if [ -f "$MANUAL_STOP_FILE" ]; then
-    log Debug "watchdog: manual-stop marker present, not recovering tailscaled"
     return 0
   fi
 
-  # 1. Process liveness.
-  if [ -z "$(pids_of_path "${TS_BIN_DIR}/${TS_DAEMON_CMD}")" ]; then
-    log Warning "watchdog: tailscaled process is dead"
-    recover start "process-dead"
-    return 0
-  fi
-
-  # 2. Backend state health (3 consecutive bad rounds -> restart).
+  # A reply on our private socket proves liveness without a process-table scan.
+  # Scan only on failure to distinguish a crash from an unresponsive daemon.
+  # Backend state health (3 consecutive bad rounds -> restart).
   # Only an unanswered daemon (timeout/empty) counts as a strike. User-level
   # states (NeedsLogin/Stopped/Starting/...) mean the daemon is healthy and a
   # restart cannot fix them, so they reset the counter instead.
   _st=$(ts_status_json)
   if [ -z "$_st" ]; then
+    if [ -z "$(pids_of_path "${TS_BIN_DIR}/${TS_DAEMON_CMD}")" ]; then
+      log Warning "watchdog: tailscaled process is dead"
+      recover start "process-dead"
+      return 0
+    fi
     _bad=$(bad_count_inc)
     log Warning "watchdog: tailscaled not answering (${_bad}/${BACKEND_BAD_LIMIT})"
     if [ "$_bad" -ge $BACKEND_BAD_LIMIT ]; then
@@ -138,8 +137,11 @@ check_once() {
     fi
   else
     _state=$(printf '%s' "$_st" | jqr -r '.BackendState // "unknown"' 2>/dev/null)
-    [ "$_state" = "Running" ] || log Debug "watchdog: backend state '${_state}' (user state, no action)"
-    echo 0 >"$BAD_COUNT_FILE"
+    if [ "$_state" != Running ] && [ "$_state" != "${_wd_last_state:-}" ]; then
+      log Debug "watchdog: backend state '${_state}' (user state, no action)"
+    fi
+    _wd_last_state=$_state
+    [ ! -f "$BAD_COUNT_FILE" ] || [ "$(bad_count_get)" = 0 ] || echo 0 >"$BAD_COUNT_FILE"
   fi
 
   # Reconcile layers after first login, a helper crash, or rule removal.
@@ -167,15 +169,12 @@ check_once() {
   # 3. Default route change -> verify tailnet connectivity.
   # Skipped unless the backend is Running: while logged out (NeedsLogin etc.)
   # the tailnet is unreachable by definition and a restart fixes nothing.
-  if [ "$_state" != "Running" ]; then
-    ip route show default 2>/dev/null | tr '\n' ' ' | tr -s ' ' >"$ROUTE_CACHE"
-    return 0
-  fi
   _route=$(ip route show default 2>/dev/null | tr '\n' ' ' | tr -s ' ')
   _old=$(cat "$ROUTE_CACHE" 2>/dev/null)
   if [ "$_route" != "$_old" ]; then
     echo "$_route" >"$ROUTE_CACHE"
-    if [ -n "$_old" ]; then
+    if [ "$_state" = Running ] && [ -n "$_old" ] &&
+       [ "${WATCHDOG_PROBE:-on}" = on ] && [ "${POWER_SAVE:-off}" != on ]; then
       log Info "watchdog: default route changed, verifying tailnet connectivity"
       if tailnet_reachable; then
         log Info "watchdog: tailnet still reachable after network change"
@@ -205,7 +204,7 @@ do_start() {
       [ "$WATCHDOG" = on ] || break
       check_once
     fi
-    isleep "$WATCHDOG_INTERVAL"
+    isleep "$(effective_interval "$WATCHDOG_INTERVAL" 1 60 180)"
   done
   rm -f "$PID_FILE"
   log Info "foxytail.watchdog stopped"

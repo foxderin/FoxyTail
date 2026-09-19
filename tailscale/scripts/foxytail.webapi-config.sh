@@ -201,6 +201,8 @@ cmd_settings_get() {
     --arg DNS_PORT "$DNS_PORT" --arg MAGIC_DNS "$MAGIC_DNS" --arg DNS_MODE "$DNS_MODE" --arg IPV6 "$IPV6" \
     --arg ROUTE_TABLE "$ROUTE_TABLE" --arg FWMARK "$FWMARK" --arg FWMARK_MASK "$FWMARK_MASK" \
     --arg WATCHDOG "$WATCHDOG" --arg WATCHDOG_INTERVAL "$WATCHDOG_INTERVAL" \
+    --arg POWER_SAVE "$POWER_SAVE" --arg STATS "$STATS" --arg CONTEXT "$CONTEXT" \
+    --arg WATCHDOG_PROBE "$WATCHDOG_PROBE" --arg WEBUI_AUTO_REFRESH "$WEBUI_AUTO_REFRESH" \
     --arg STATS_INTERVAL "$STATS_INTERVAL" --arg LOG_MAX_KB "$LOG_MAX_KB" \
     --argjson pending "${_sg_pending}" \
     '{ok:true,settings:($ARGS.named|del(.pending)),restartRequired:$pending}'

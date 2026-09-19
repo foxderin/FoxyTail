@@ -21,38 +21,49 @@ INTERVAL=20
 
 SERVICE="${TS_SCRIPTS_DIR}/foxytail.service"
 
-# Best-effort SSID from dumpsys wifi; prints "unknown" on any failure.
+# Keep command capability in this resident process. A transient Binder/network
+# failure falls back this round without permanently disabling the compact API.
 get_ssid() {
-  _w=$(dumpsys wifi 2>/dev/null)
-  if [ -z "$_w" ]; then
-    echo "unknown"
-    return
+  _w=
+  if [ "${_wifi_command:-}" != unsupported ]; then
+    if command -v cmd >/dev/null 2>&1; then
+      _w=$(tmo 5 cmd wifi status 2>/dev/null)
+      _wifi_rc=$?
+      case "$_wifi_rc" in 126|127) _wifi_command=unsupported ;; esac
+      case "$_w" in
+        *'Unknown command'*|*'Unknown option'*|*'No shell command implementation'*|*'usage:'*|*'Usage:'*) _wifi_command=unsupported; _w= ;;
+        *'SSID: '*|*'Wifi is '*|*'Wi-Fi is '*) [ "$_wifi_rc" = 0 ] || _w= ;;
+        *) _w= ;;
+      esac
+    else
+      _wifi_command=unsupported
+    fi
   fi
-  # Quoted form: SSID: "MyWifi" (covers mWifiInfo / WifiInfo lines too).
-  _s=$(printf '%s\n' "$_w" | grep -o 'SSID: "[^"]*"' | head -n 1 | cut -d'"' -f2)
-  if [ -z "$_s" ]; then
-    # Unquoted form: ... SSID: MyWifi, BSSID: ...
-    _s=$(printf '%s\n' "$_w" | grep -o 'SSID: [^,"]*' | head -n 1 | sed 's/^SSID: //')
-  fi
-  case "$_s" in
-    "" | "unknown" | "<unknown ssid>" | "<none>") echo "unknown" ;;
-    *) printf '%s\n' "$_s" ;;
-  esac
+  [ -n "$_w" ] || _w=$(tmo 5 dumpsys wifi 2>/dev/null)
+  _ssid=$(printf '%s\n' "$_w" | awk '
+    match($0, /(^|[[:space:],])SSID: /) {
+      value=substr($0,RSTART+RLENGTH)
+      if (substr(value,1,1)=="\"") {value=substr(value,2); sub(/".*/,"",value)}
+      else sub(/,.*/,"",value)
+      if (value=="" || value=="<unknown ssid>" || value=="<none>") value="unknown"
+      print value; found=1; exit
+    }
+    END {if (!found) print "unknown"}
+  ')
 }
 
-# Print the current context token: "ssid:<SSID>" | "ssid:unknown" |
-# "cellular:-" | "none:-".
+# Set the current context token. Cellular-only rules need no Wi-Fi Binder call;
+# explicit status reads still obtain the actual SSID for display.
 current_context() {
   _def=$(ip route show default 2>/dev/null)
-  if [ -z "$_def" ]; then
-    echo "none:-"
-    return
-  fi
-  if printf '%s\n' "$_def" | grep -q 'dev wlan'; then
-    printf 'ssid:%s\n' "$(get_ssid)"
-    return
-  fi
-  echo "cellular:-"
+  case "$_def" in
+    '') _ctx=none:- ;;
+    *'dev wlan'*)
+      _ssid=unknown
+      [ "${1:-}" = cellular-only ] || get_ssid
+      _ctx="ssid:${_ssid}" ;;
+    *) _ctx=cellular:- ;;
+  esac
 }
 
 # Emit normalized rules; callers discard all output if any line is invalid.
@@ -167,14 +178,17 @@ record_result() {
 # Retry unconfirmed contexts; replay when the rules or applied snapshot change.
 check_once() {
   load_runtime_conf || return 1
+  [ "${CONTEXT:-on}" = on ] || return 0
   RULES_FILE="${_RUNTIME_CONF_DIR}/context.conf"
   _rules=$(read_rules) || return 1
   if [ -z "$_rules" ]; then
     rm -f "$STATE_FILE" "$RESULT_FILE"
     return $?
   fi
-  _ctx=$(current_context)
-  _old=$(cat "$STATE_FILE" 2>/dev/null)
+  case "$_rules" in ssid:*|*'
+ssid:'*) current_context ;; *) current_context cellular-only ;; esac
+  _old=
+  [ ! -f "$STATE_FILE" ] || IFS= read -r _old <"$STATE_FILE"
   if [ "$_ctx" != "$_old" ] || [ "${_applied_rules-$_rules}" != "$_rules" ] ||
     [ "${_applied_rules_file-$RULES_FILE}" != "$RULES_FILE" ]; then
     log Info "context: '${_old:-none}' -> '${_ctx}', applying matching rules"
@@ -198,6 +212,7 @@ _context_stop() {
 
 do_start() {
   load_runtime_conf || return 1
+  [ "${CONTEXT:-on}" = on ] || return 0
   RULES_FILE="${_RUNTIME_CONF_DIR}/context.conf"
   _rules=$(read_rules) || return 1
   if [ -z "$_rules" ]; then
@@ -214,7 +229,9 @@ do_start() {
   log Info "foxytail.context started (pid $$, interval ${INTERVAL}s)"
   while [ "$_ctx_running" = "1" ]; do
     check_once
-    isleep "$INTERVAL"
+    [ "${CONTEXT:-on}" = on ] || break
+    _int=$(effective_interval "$INTERVAL" 5 60 180)
+    isleep "$_int"
   done
   rm -f "$PID_FILE"
   log Info "foxytail.context stopped"
@@ -226,7 +243,7 @@ do_stop() {
 }
 
 do_status() {
-  _ctx=$(current_context)
+  current_context
   # Read the pid once: the loop removes the file on exit, so a second read
   # could feed jq an empty string and produce broken JSON.
   _ctx_pid=$(cat "$PID_FILE" 2>/dev/null)

@@ -23,7 +23,12 @@ export const NETWORK: Field[] = [
   { key: 'DNS_PORT', label: 'tools_dns_port', hint: 'tools_dns_port_hint', range: [1024, 65535] },
 ];
 export const BACKGROUND: Field[] = [
-  { key: 'WATCHDOG', label: 'tools_watchdog', hint: 'tools_watchdog_desc', bool: true },
+  { key: 'POWER_SAVE', label: 'tools_power_save', hint: 'tools_power_save_desc', bool: true, defaultValue: 'off' },
+  { key: 'WATCHDOG', label: 'tools_watchdog', hint: 'tools_watchdog_desc', bool: true, defaultValue: 'on' },
+  { key: 'WATCHDOG_PROBE', label: 'tools_watchdog_probe', hint: 'tools_watchdog_probe_desc', bool: true, defaultValue: 'on' },
+  { key: 'STATS', label: 'tools_stats_enabled', hint: 'tools_stats_enabled_desc', bool: true, defaultValue: 'on' },
+  { key: 'CONTEXT', label: 'tools_context_enabled', hint: 'tools_context_enabled_desc', bool: true, defaultValue: 'on' },
+  { key: 'WEBUI_AUTO_REFRESH', label: 'tools_auto_refresh', hint: 'tools_auto_refresh_desc', bool: true, defaultValue: 'on' },
   { key: 'WATCHDOG_INTERVAL', label: 'tools_watchdog_interval', range: [5, 300] },
   { key: 'STATS_INTERVAL', label: 'tools_stats_interval', range: [10, 3600] },
   { key: 'LOG_MAX_KB', label: 'tools_log_limit', range: [64, 10240] },

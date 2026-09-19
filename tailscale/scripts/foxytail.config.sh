@@ -9,6 +9,7 @@ _conf_has_key() {
   case "$1:$2" in
     foxytail.conf:TS_MODE | foxytail.conf:SOCKS_PORT | foxytail.conf:DNS_PORT | foxytail.conf:MAGIC_DNS | foxytail.conf:IPV6 | foxytail.conf:ROUTE_TABLE | foxytail.conf:FWMARK | foxytail.conf:FWMARK_MASK | foxytail.conf:WATCHDOG | foxytail.conf:WATCHDOG_INTERVAL | foxytail.conf:STATS_INTERVAL | foxytail.conf:LOG_MAX_KB | routes.conf:ROUTE_SCOPE | routes.conf:UID_LIST | routes.conf:ROUTE_SUBNETS) return 0 ;;
     foxytail.conf:DNS_MODE) return 0 ;;
+    foxytail.conf:POWER_SAVE | foxytail.conf:STATS | foxytail.conf:CONTEXT | foxytail.conf:WATCHDOG_PROBE | foxytail.conf:WEBUI_AUTO_REFRESH) return 0 ;;
     *) return 1 ;;
   esac
 }
@@ -105,6 +106,7 @@ _conf_value_error() {
   case "$1:$2" in
     TS_MODE:bridge | TS_MODE:tun | TS_MODE:proxy | ROUTE_SCOPE:all | ROUTE_SCOPE:selected | ROUTE_SCOPE:bypass) return 0 ;;
     MAGIC_DNS:on | MAGIC_DNS:off | IPV6:on | IPV6:off | WATCHDOG:on | WATCHDOG:off) return 0 ;;
+    POWER_SAVE:on | POWER_SAVE:off | STATS:on | STATS:off | CONTEXT:on | CONTEXT:off | WATCHDOG_PROBE:on | WATCHDOG_PROBE:off | WEBUI_AUTO_REFRESH:on | WEBUI_AUTO_REFRESH:off) return 0 ;;
     DNS_MODE:legacy | DNS_MODE:local | DNS_MODE:transparent) return 0 ;;
     FWMARK:0x40000000 | FWMARK_MASK:0x40000000 | FWMARK:0xF7 | FWMARK:0xf7) return 0 ;;
   esac
@@ -172,13 +174,25 @@ conf_mark_pending() {
     mv "${TS_RUN_DIR}/.settings.pending.$$" "${TS_RUN_DIR}/settings.pending"
 }
 
+_conf_assign() {
+  TS_MODE=bridge ROUTE_TABLE=1052 FWMARK=0x40000000 FWMARK_MASK=0x40000000
+  MAGIC_DNS=off DNS_MODE=legacy IPV6=off WATCHDOG=on WATCHDOG_INTERVAL=30 STATS_INTERVAL=60
+  POWER_SAVE=off STATS=on CONTEXT=on WATCHDOG_PROBE=on WEBUI_AUTO_REFRESH=on
+  LOG_MAX_KB=512 SOCKS_PORT=1099 DNS_PORT=1053 ROUTE_SCOPE=all
+  ROUTE_SUBNETS=100.64.0.0/10 UID_LIST=
+  while IFS= read -r _lc_record; do
+    [ -n "${_lc_record}" ] || continue
+    # shellcheck disable=SC2163 # fixed-schema KEY=value record, no evaluation
+    export "${_lc_record}"
+  done <<EOF_CONF_DATA
+$1
+EOF_CONF_DATA
+}
+
 # Read both files under the writer lock, so restore cannot expose a mixed pair.
 load_conf() {
   _lc_dir="${1:-${TS_CONF_DIR}}"
-  TS_MODE=bridge ROUTE_TABLE=1052 FWMARK=0x40000000 FWMARK_MASK=0x40000000
-  MAGIC_DNS=off DNS_MODE=legacy IPV6=off WATCHDOG=on WATCHDOG_INTERVAL=30 STATS_INTERVAL=60
-  LOG_MAX_KB=512 SOCKS_PORT=1099 DNS_PORT=1053 ROUTE_SCOPE=all
-  ROUTE_SUBNETS=100.64.0.0/10 UID_LIST=
+  _conf_assign ''
   _lc_locked=0
   if [ "${_CONF_LOCK_HELD:-0}" != 1 ]; then
     conf_lock_acquire || return 1
@@ -194,14 +208,7 @@ load_conf() {
   _lc_rc=$?
   [ "${_lc_locked}" = 0 ] || conf_lock_release
   [ "${_lc_rc}" = 0 ] || return 1
-  while IFS= read -r _lc_record; do
-    [ -n "${_lc_record}" ] || continue
-    # shellcheck disable=SC2163 # fixed-schema KEY=value record, no evaluation
-    export "${_lc_record}"
-  done <<EOF_CONF_DATA
-${_lc_data}
-EOF_CONF_DATA
-
+  _conf_assign "${_lc_data}"
 }
 
 # Called under the configuration lock. The pointer is a regular file, replaced
@@ -224,7 +231,23 @@ _conf_runtime_dir() {
   fi
 }
 
+# Snapshot files are atomically replaced by their writers. One metadata read
+# avoids parsing and creating/removing lock tickets on every resident tick.
+# Include high-resolution times and inodes to detect hot applies and edits.
+_runtime_conf_stamp() {
+  stat -c '%d:%i:%s:%y:%z' "${TS_RUN_DIR}/applied-config" "$1" \
+    "$1/foxytail.conf" "$1/routes.conf" "$1/context.conf" 2>/dev/null
+}
+
 load_runtime_conf() {
+  if [ -n "${_RUNTIME_CONF_STAMP:-}" ] &&
+     _lrc_stamp=$(_runtime_conf_stamp "${_RUNTIME_CONF_CACHE_DIR}") &&
+     [ "${_lrc_stamp}" = "${_RUNTIME_CONF_STAMP}" ]; then
+    _RUNTIME_CONF_DIR=${_RUNTIME_CONF_CACHE_DIR}
+    _conf_assign "${_RUNTIME_CONF_DATA}"
+    return 0
+  fi
+  _RUNTIME_CONF_STAMP=
   _lrc_locked=0
   if [ "${_CONF_LOCK_HELD:-0}" != 1 ]; then
     conf_lock_acquire || return 1
@@ -232,6 +255,11 @@ load_runtime_conf() {
   fi
   _lrc_rc=0
   _conf_runtime_dir && load_conf "${_RUNTIME_CONF_DIR}" || _lrc_rc=1
+  if [ "${_lrc_rc}" = 0 ] && [ "${_RUNTIME_CONF_DIR}" != "${TS_CONF_DIR}" ]; then
+    _RUNTIME_CONF_CACHE_DIR=${_RUNTIME_CONF_DIR}
+    _RUNTIME_CONF_DATA=${_lc_data}
+    _RUNTIME_CONF_STAMP=$(_runtime_conf_stamp "${_RUNTIME_CONF_DIR}") || _RUNTIME_CONF_STAMP=
+  fi
   [ "${_lrc_locked}" = 0 ] || conf_lock_release
   return "${_lrc_rc}"
 }
@@ -330,7 +358,9 @@ conf_apply_runtime() {
 }
 
 conf_trial_active() {
-  case "$(cat "${TS_DIR}/state/config-trial/status" 2>/dev/null)" in
+  [ -r "${TS_DIR}/state/config-trial/status" ] &&
+    IFS= read -r _cta_state <"${TS_DIR}/state/config-trial/status" || return 1
+  case "${_cta_state}" in
     preparing|running|rolling-back|rollback-failed) return 0 ;;
     *) return 1 ;;
   esac

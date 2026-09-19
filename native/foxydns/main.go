@@ -12,12 +12,14 @@ import (
 
 func run(args []string) error {
 	if len(args) == 0 {
-		return errors.New("usage: foxydns serve|check|probe [options]")
+		return errors.New("usage: foxydns serve|check|probe|health|watch [options]")
 	}
 	flags := flag.NewFlagSet(args[0], flag.ContinueOnError)
 	config := flags.String("config", "", "absolute JSON configuration path")
 	state := flags.String("state", "", "absolute state file override")
 	queue := flags.Uint("queue", 1053, "netfilter queue number")
+	instance := flags.String("instance", "", "expected listener instance for watch")
+	parent := flags.Int("parent", 0, "expected guard PID for watch")
 	if err := flags.Parse(args[1:]); err != nil {
 		return err
 	}
@@ -33,7 +35,7 @@ func run(args []string) error {
 		}
 		return json.NewEncoder(os.Stdout).Encode(map[string]any{"ok": true, "queue": true, "conntrack": true, "socketContext": true})
 	}
-	if args[0] != "check" && args[0] != "serve" {
+	if args[0] != "check" && args[0] != "serve" && args[0] != "health" && args[0] != "watch" {
 		return errors.New("unknown command")
 	}
 	cfg, err := readConfig(*config)
@@ -45,6 +47,9 @@ func run(args []string) error {
 	}
 	if err = cfg.validate(); err != nil {
 		return err
+	}
+	if args[0] == "health" || args[0] == "watch" {
+		return monitorHealth(cfg, args[0] == "watch", *instance, *parent)
 	}
 	if _, err = loadRecords(cfg.ContextFile); err != nil {
 		return err

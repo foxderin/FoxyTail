@@ -1,5 +1,5 @@
 /*
- * Global status store: ONE 5s poller for `webapi status`, shared by the
+ * Global status store: one visible poller for `webapi status`, shared by the
  * header StatusDot, the Dashboard cards and the LoginHero. Pages never call
  * status on their own — they subscribe to this store or trigger
  * refreshStatus() after a mutating action.
@@ -7,8 +7,9 @@
  * The poller is pure view refresh (not a user task): it stops when the
  * shell unmounts and pauses while document.hidden.
  */
-import { createSignal, onCleanup } from 'solid-js';
-import { api, type ApiResult } from './api';
+import { createSignal } from 'solid-js';
+import { api, hasRoot, type ApiResult } from './api';
+import { pollWhileVisible } from './schedule';
 
 export interface StatusSnapshot extends ApiResult {
   daemon?: string;
@@ -27,6 +28,8 @@ export interface StatusSnapshot extends ApiResult {
   magicDns?: boolean;
   keyExpiry?: string | null;
   uptime?: number;
+  powerSave?: boolean;
+  autoRefresh?: boolean;
 }
 
 const [status, setStatus] = createSignal<StatusSnapshot | null>(null);
@@ -34,6 +37,13 @@ const [statusError, setStatusError] = createSignal<string | null>(null);
 const [statusLoading, setStatusLoading] = createSignal(true);
 
 export { status, statusError, statusLoading };
+
+/** Applied runtime preferences govern view reads; unsaved/pending settings
+ * never change polling. Explicit refreshes and user tasks bypass this. */
+export function viewPollInterval(normalMs = 15000): number | false {
+  if (!hasRoot || status()?.autoRefresh === false) return false;
+  return status()?.powerSave === true ? 30000 : normalMs;
+}
 
 type StatusRead = Promise<StatusSnapshot | null>;
 let inFlight: StatusRead | null = null;
@@ -80,12 +90,12 @@ export function refreshStatus(options: { afterCurrent?: boolean } = {}): StatusR
 
 /* Start the shared poller. Called once from the AppShell; returns via
  * onCleanup registration of the caller. */
-export function startStatusPolling(intervalMs = 5000): void {
-  void refreshStatus();
-  const id = setInterval(() => {
-    if (!document.hidden) void refreshStatus();
-  }, intervalMs);
-  onCleanup(() => clearInterval(id));
+export function startStatusPolling(): void {
+  if (!hasRoot) { void refreshStatus(); return; }
+  pollWhileVisible(refreshStatus, () => {
+    const interval = viewPollInterval();
+    return interval !== false && connState(status()) === 'starting' ? 5000 : interval;
+  });
 }
 
 /* Backend state classification for the header dot / hero. */
