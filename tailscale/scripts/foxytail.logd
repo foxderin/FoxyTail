@@ -13,14 +13,25 @@ rotate_all() {
   _la_interval=30
   [ "${POWER_SAVE:-off}" != on ] || _la_interval=60
   _la_limit=$((${LOG_MAX_KB:-512} * 1024))
+  _la_sizes='
+'
   for _la_file in "${TS_RUN_DIR}"/*.log; do
     [ -f "$_la_file" ] && [ ! -L "$_la_file" ] || continue
     _la_size=$(wc -c <"$_la_file" 2>/dev/null) || continue
-    # Quiet logs need no two-second wakeup. Near the limit, keep the original
-    # fast cadence so a noisy daemon is still rotated promptly.
-    [ "$_la_size" -le "$((_la_limit / 2))" ] || _la_interval=2
+    # Only changing logs near the limit need fast checks. Keep sizes in memory
+    # so a quiet half-full log cannot pin the entire monitor to two seconds.
+    # ponytail: O(n^2) size lookups for a few logs; use a map if the set grows.
+    case "${_la_previous_sizes:-}" in
+      *"
+${_la_file}:${_la_size}
+"*) ;;
+      *) [ "$_la_size" -le "$((_la_limit / 2))" ] || _la_interval=2 ;;
+    esac
+    _la_sizes="${_la_sizes}${_la_file}:${_la_size}
+"
     [ "$_la_size" -le "$_la_limit" ] || rotate_log "$_la_file" "$_la_size"
   done
+  _la_previous_sizes=$_la_sizes
 }
 
 case "$1" in

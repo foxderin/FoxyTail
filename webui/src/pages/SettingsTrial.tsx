@@ -80,7 +80,8 @@ export default function SettingsTrial(props: {
     }
     setBusy(false);
   }
-  pollWhileVisible(() => busy() ? undefined : load(), () => (!known() && !error()) || active() ? 3000 : false);
+  pollWhileVisible(() => busy() ? undefined : load(), () =>
+    (!known() && !error()) || (active() && trial()?.status !== 'rollback-failed') ? 3000 : false);
   pollWhileVisible(() => setNow(Date.now()), () => trial()?.status === 'running' ? 1000 : false);
   return <Card title={t('trial_title')} icon="sync" description={t('trial_description')}>
     <Show when={error()}><ErrorState text={error()} onRetry={() => void load()} /></Show>

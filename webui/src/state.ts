@@ -94,7 +94,8 @@ export function startStatusPolling(): void {
   if (!hasRoot) { void refreshStatus(); return; }
   pollWhileVisible(refreshStatus, () => {
     const interval = viewPollInterval();
-    return interval !== false && connState(status()) === 'starting' ? 5000 : interval;
+    const starting = status()?.daemon === 'running' && ['NoState', 'Starting'].includes(status()?.backend ?? '');
+    return interval !== false && starting ? 5000 : interval;
   });
 }
 

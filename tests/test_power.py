@@ -130,9 +130,25 @@ POWER_SAVE=on
 rotate_all; test "$_la_interval" = 60 || exit 2
 head -c 800 /dev/zero >"$TS_RUN_DIR/daemon.log"
 rotate_all; test "$_la_interval" = 2 || exit 3
+# A half-full log that stops growing must not keep either mode at two seconds.
+for POWER_SAVE in off on; do
+  expected=30; [ "$POWER_SAVE" != on ] || expected=60
+  for i in 1 2 3; do
+    echo activity >>"$TS_RUN_DIR/other.log"
+    rotate_all; test "$_la_interval" = "$expected" || exit 4
+  done
+done
+# Each changing near-limit file must still trigger fast checks independently.
+echo growth >>"$TS_RUN_DIR/daemon.log"
+rotate_all; test "$_la_interval" = 2 || exit 5
+rotate_all; test "$_la_interval" = 60 || exit 6
+head -c 800 /dev/zero >"$TS_RUN_DIR/other.log"
+rotate_all; test "$_la_interval" = 2 || exit 7
+rotate_all; test "$_la_interval" = 60 || exit 8
 head -c 2000 /dev/zero >"$TS_RUN_DIR/daemon.log"
 rotate_all
-test ! -s "$TS_RUN_DIR/daemon.log" && test -s "$TS_RUN_DIR/daemon.log.bak"
+test ! -s "$TS_RUN_DIR/daemon.log" && test -s "$TS_RUN_DIR/daemon.log.bak" || exit 9
+rotate_all; test "$_la_interval" = 60 || exit 10
 ''')
 
     def test_status_exposes_runtime_power_preferences_even_when_stopped(self):

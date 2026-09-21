@@ -148,7 +148,7 @@ Use **Settings → Power & background** to select power saving or individual fea
 | Watchdog | Configured interval for both (default 30 s) | At least 60 / 180 s |
 | Traffic sampling | Configured interval / interval × 5 (default 60 / 300 s) | At least 300 / 900 s |
 | Context checks | 20 / 100 s | 60 / 180 s |
-| Log size checks | 30 s when quiet; 2 s near the limit | 60 s when quiet; 2 s near the limit |
+| Log size checks | 30 s when quiet; 2 s near the limit while size changes | 60 s when quiet; 2 s near the limit while size changes |
 | WebUI status, peers and tunnel | 15 s while visible and stable | 30 s while visible and stable |
 | WebUI logs | 5 s while visible | 30 s while visible |
 

@@ -216,7 +216,9 @@ func (s *service) bind(tcp, udp, address string) error {
 	s.closers = append(s.closers, packet)
 	s.servers = append(s.servers,
 		&dns.Server{Listener: bounded, Handler: s.resolver, ReadTimeout: 5 * time.Second, WriteTimeout: 5 * time.Second, IdleTimeout: func() time.Duration { return 15 * time.Second }, MaxTCPQueries: 128},
-		&dns.Server{PacketConn: packet, Handler: s.resolver, UDPSize: 65535, ReadTimeout: 5 * time.Second, WriteTimeout: 5 * time.Second},
+		// Zero defaults to 2s in miekg/dns. ShutdownContext interrupts blocked reads.
+		// ponytail: UDP still wakes hourly when idle; disable the deadline if supported upstream.
+		&dns.Server{PacketConn: packet, Handler: s.resolver, UDPSize: 65535, ReadTimeout: time.Hour, WriteTimeout: 5 * time.Second},
 	)
 	return nil
 }

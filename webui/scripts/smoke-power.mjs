@@ -171,14 +171,47 @@ export async function checkPower() {
     assert(count('settings-get') === beforeAction + 1, 'trial confirmation reloads settings once instead of twice');
     await advance(4000);
     assert(timers.size === 0, 'a confirmed trial releases both timers while automatic refresh remains disabled');
-    fixtures.status = { ...fixtures.status, backend: 'NoState', powerSave: false, autoRefresh: true };
-    const transition = w.__foxy.refreshStatus();
-    await flush(); await transition;
-    const beforeTransition = count('status');
-    await advance(15000);
-    assert(count('status') === beforeTransition + 3, 'startup retains five-second status polling');
+    fixtures['trial-status'] = { ok: true, trial: { ...trial, status: 'rollback-failed', reason: 'retry-needed' } };
+    await nav('more'); await nav('settings');
+    const failedTrialReads = count('trial-status');
+    await advance(60000);
+    assert(count('trial-status') === failedTrialReads && timers.size === 0, 'a failed rollback stops polling with power saving on and automatic refresh off');
+    const failedControls = w.document.querySelector('[data-testid="trial-controls"]');
+    const failedButtons = failedControls?.querySelectorAll('button');
+    assert(w.document.querySelector('[data-testid="trial-status"]')?.textContent.includes('retry-needed') &&
+      failedButtons?.length === 2 && failedButtons[0].disabled && !failedButtons[1].disabled &&
+      [...failedControls.closest('.card').querySelectorAll('select')].every(select => select.disabled),
+    'a failed rollback retains its error, blocks new trials and permits manual rollback retry');
+    fixtures['trial-status'] = { ok: true, trial: { ...trial, status: 'rolling-back' } };
+    const beforeRetry = count('trial-revert');
+    failedButtons?.[1].click();
+    await flush();
+    assert(count('trial-revert') === beforeRetry + 1, 'manual rollback retry still reaches the backend while polling is stopped');
+    const retryTrialReads = count('trial-status');
+    await advance(9000);
+    assert(count('trial-status') === retryTrialReads + 3, 'manual retry resumes three-second checks while rollback is running');
+    fixtures['trial-status'] = { ok: true, trial: { ...trial, status: 'rolled-back' } };
+    await advance(3000);
+    const finishedTrialReads = count('trial-status');
+    await advance(60000);
+    assert(count('trial-status') === finishedTrialReads && timers.size === 0, 'completed rollback releases the retry polling timer');
+    for (const backend of ['NoState', 'Starting']) {
+      fixtures.status = { ...fixtures.status, backend, powerSave: true, autoRefresh: true };
+      const transition = w.__foxy.refreshStatus();
+      await flush(); await transition;
+      const beforeTransition = count('status');
+      await advance(15000);
+      assert(count('status') === beforeTransition + 3, `${backend} retains five-second status polling even with power saving on`);
+    }
+    const approval = {};
+    for (const [powerSave, autoRefresh, expected] of [[false, true, 4], [true, true, 2], [true, false, 0]]) {
+      fixtures.status = { ...fixtures.status, backend: 'NeedsMachineAuth', powerSave, autoRefresh };
+      const awaitingApproval = w.__foxy.refreshStatus();
+      await flush(); await awaitingApproval;
+      approval[autoRefresh ? powerSave ? 'saving' : 'normal' : 'disabled'] = await budget('dashboard', 'status', expected);
+    }
     assert(intervals === 0, 'the app installs no perpetual setInterval callbacks');
-    console.log('POWER 60s command counts (excluding initial reads): normal=' + JSON.stringify(measurements) + ', saving=' + JSON.stringify(saving) + '; hidden/auto-off timers=0; idle trial timers=0');
+    console.log('POWER 60s command counts (excluding initial reads): normal=' + JSON.stringify(measurements) + ', saving=' + JSON.stringify(saving) + ', approval=' + JSON.stringify(approval) + '; hidden/auto-off timers=0; idle/failed/finished trial timers=0');
   } finally { w.close(); }
 }
 
