@@ -224,6 +224,32 @@ export async function checkPages() {
   assert(commandLog.length === beforeSearch, 'search and filters never launch native bridge calls');
   await checkPeerProbes();
 
+  console.log('topology diagram reflects the loaded devices');
+  nav('peers');
+  await flush();
+  const topoTab = [...window.document.querySelectorAll('#view button[aria-pressed]')].find(button => /^(Topology|拓扑)$/.test(button.textContent.trim()));
+  topoTab?.click();
+  await flush();
+  const topoSvg = window.document.querySelector('svg.network-topology-svg');
+  const topoPeers = canned.peers.peers;
+  assert(topoSvg, 'the topology tab renders the diagram');
+  assert(topoSvg?.querySelectorAll('g.network-topology-peer').length === topoPeers.length, 'every device appears as a topology node');
+  assert(topoSvg?.querySelectorAll('path').length === topoPeers.length + 1, 'each device links to the self node over a shared trunk');
+  const branchEdges = [...(topoSvg?.querySelectorAll('path') ?? [])].slice(1);
+  assert(branchEdges.filter(edge => edge.getAttribute('stroke-dasharray') === '4 4').length === topoPeers.filter(peer => !peer.online).length, 'offline devices get dashed edges');
+  assert(topoSvg?.textContent.includes(canned.status.self.hostname), 'the self node carries the local hostname');
+  assert(window.document.querySelector('.network-chart-hint')?.textContent.includes(topoPeers.length + ' / ' + topoPeers.length), 'the legend counts diagram nodes against all devices');
+  const topoList = window.document.querySelectorAll('.network-topology-list button');
+  assert(topoList.length === topoPeers.length, 'the accessible list mirrors every device');
+  topoList[1]?.click();
+  await flush();
+  const topoDialog = window.document.querySelector('dialog[open]');
+  assert(topoDialog?.textContent.includes(topoPeers[1].hostname), 'selecting a device from the diagram opens its details');
+  topoDialog?.close();
+  [...window.document.querySelectorAll('#view button[aria-pressed]')].find(button => /^(List|列表)$/.test(button.textContent.trim()))?.click();
+  await flush();
+  assert(window.document.querySelectorAll('.network-peer-row').length === topoPeers.length, 'returning to the list restores every device row');
+
   nav('exitnodes');
   await flush();
   const beforeSelection = commandLog.length;
