@@ -83,7 +83,7 @@ su -c 'foxytail.service mode tun'          # 切换运行模式并重启
 WebUI 已内置：位于 `webroot/`（纯静态零构建，后端为 `foxytail.webapi.sh` JSON 接口）。使用须知：
 
 - 从 **KernelSU 管理器** 或 **MMRL** 打开。**Magisk 官方管理器不支持模块 WebUI**——那里不会出现入口按钮。
-- 共 12 页（底部导航 +「更多」分组）：Dashboard · Peers（列表 + canvas 拓扑图）· Exit Nodes · Account · Tunnel · Routing · Traffic · Serve · Files（Taildrop）· Logs · Settings · Diagnostics。
+- 共 12 页（底部导航 +「更多」分组）：Dashboard · Peers（列表 + 拓扑图：直连/中继路径）· Exit Nodes · Account · Tunnel · Routing · Traffic · Serve · Files（Taildrop）· Logs · Settings · Diagnostics。
 - 无第三方依赖；中/英 i18n 与深浅色主题。
 
 <!-- 截图占位：docs/screenshots/*.png（待补充，见 Roadmap） -->

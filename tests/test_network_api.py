@@ -306,8 +306,9 @@ cmd_status''').stdout)
 
     def peer_ping_fixture(self):
         (self.run / 'peer-status.json').write_text(json.dumps({'BackendState': 'Running', 'Peer': {
-            'p1': {'ID': 'p1', 'TailscaleIPs': ['100.64.0.2', 'fd7a:115c:a1e0::2'], 'Relay': 'sin'},
-            'p2': {'ID': 'p2', 'TailscaleIPs': ['100.64.0.3']},
+            'p1': {'ID': 'p1', 'TailscaleIPs': ['100.64.0.2', 'fd7a:115c:a1e0::2'], 'Relay': 'sin',
+                   'CurAddr': '192.0.2.1:41641', 'Active': True},
+            'p2': {'ID': 'p2', 'TailscaleIPs': ['100.64.0.3'], 'Online': True},
         }}))
         return '''load_conf
 daemon_up() { return 0; }
@@ -387,6 +388,12 @@ ts_cli() { cat "$TS_RUN_DIR/status.json"; }
             with self.subTest(command=command):
                 result = json.loads(self.shell(prefix + command).stdout)
                 self.assertEqual({peer['id']: (peer['ip'], peer['ips']) for peer in result['peers']}, expected)
+
+    def test_peer_lists_carry_the_established_path_fields_verbatim(self):
+        prefix = self.peer_ping_fixture()
+        peers = json.loads(self.shell(prefix + 'cmd_peers').stdout)['peers']
+        self.assertEqual({peer['id']: (peer['curAddr'], peer['active']) for peer in peers},
+                         {'p1': ('192.0.2.1:41641', True), 'p2': ('', False)})
 
     def test_status_rechecks_process_after_localapi_failure(self):
         sock = socket.socket(socket.AF_UNIX)

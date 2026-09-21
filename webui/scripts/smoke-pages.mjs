@@ -224,31 +224,51 @@ export async function checkPages() {
   assert(commandLog.length === beforeSearch, 'search and filters never launch native bridge calls');
   await checkPeerProbes();
 
-  console.log('topology diagram reflects the loaded devices');
+  console.log('topology diagram reflects direct, relayed and offline paths');
+  const previousTopoPeers = canned.peers;
+  canned.peers = { ok: true, peers: [
+    { id: 'p-direct', hostname: 'direct-node', ip: '198.51.100.7', ips: ['198.51.100.7'], os: 'linux', relay: 'sin', online: true, curAddr: '198.51.100.7:41641', active: true, rxBytes: 32, txBytes: 64, exitNodeOption: false },
+    { id: 'p-relay', hostname: 'relay-node', ip: '198.51.100.8', ips: ['198.51.100.8'], os: 'linux', relay: 'tok', online: true, curAddr: '', active: false, rxBytes: 32, txBytes: 64, exitNodeOption: false },
+    { id: 'p-off', hostname: 'offline-node', ip: '198.51.100.9', ips: ['198.51.100.9'], os: 'linux', relay: 'sin', online: false, rxBytes: 32, txBytes: 64, exitNodeOption: false },
+  ] };
   nav('peers');
   await flush();
   const topoTab = [...window.document.querySelectorAll('#view button[aria-pressed]')].find(button => /^(Topology|拓扑)$/.test(button.textContent.trim()));
   topoTab?.click();
   await flush();
   const topoSvg = window.document.querySelector('svg.network-topology-svg');
-  const topoPeers = canned.peers.peers;
+  const card = (hostname) => [...(topoSvg?.querySelectorAll('g.network-topology-peer') ?? [])].find(node => node.querySelector('title')?.textContent.includes(hostname));
   assert(topoSvg, 'the topology tab renders the diagram');
-  assert(topoSvg?.querySelectorAll('g.network-topology-peer').length === topoPeers.length, 'every device appears as a topology node');
-  assert(topoSvg?.querySelectorAll('path').length === topoPeers.length + 1, 'each device links to the self node over a shared trunk');
-  const branchEdges = [...(topoSvg?.querySelectorAll('path') ?? [])].slice(1);
-  assert(branchEdges.filter(edge => edge.getAttribute('stroke-dasharray') === '4 4').length === topoPeers.filter(peer => !peer.online).length, 'offline devices get dashed edges');
+  assert(topoSvg?.querySelectorAll('g.network-topology-peer').length === 3, 'every loaded device appears as a topology node');
   assert(topoSvg?.textContent.includes(canned.status.self.hostname), 'the self node carries the local hostname');
-  assert(window.document.querySelector('.network-chart-hint')?.textContent.includes(topoPeers.length + ' / ' + topoPeers.length), 'the legend counts diagram nodes against all devices');
+  const relayPills = topoSvg?.querySelectorAll('g.network-topology-relay') ?? [];
+  assert(relayPills.length === 1 && relayPills[0].textContent.trim() === 'TOK', 'one relay pill per region in use is labeled with its DERP region');
+  assert(topoSvg?.querySelectorAll('.network-topology-edge.is-direct').length === 1, 'an established direct path renders exactly one solid edge');
+  assert(topoSvg?.querySelectorAll('.network-topology-edge.is-relay').length === 2, 'a relayed device links the self node to its region pill and the pill to its card');
+  assert(topoSvg?.querySelectorAll('.network-topology-edge.is-offline').length === 1, 'an offline member renders exactly one edge');
+  assert(/Direct|直连/.test(card('direct-node')?.querySelector('.network-topology-detail')?.textContent || ''), 'a device with an established address shows the direct path');
+  assert(/中继.*TOK|Relay.*TOK/i.test(card('relay-node')?.querySelector('.network-topology-detail')?.textContent || ''), 'a relayed device names its DERP region');
+  assert(/Offline|离线/.test(card('offline-node')?.querySelector('.network-topology-detail')?.textContent || ''), 'an offline device shows its membership state');
+  assert(card('direct-node')?.querySelector('title')?.textContent.includes('198.51.100.7:41641'), 'the direct card tooltip names the established address');
+  const legend = window.document.querySelector('.network-chart-legend');
+  assert(legend?.querySelectorAll('svg.network-chart-sample').length === 2 && /Direct|直连/.test(legend.textContent) && /Relay|中继/.test(legend.textContent), 'the legend samples both path kinds');
+  assert(legend?.querySelector('.network-chart-hint')?.textContent.includes('3 / 3'), 'the legend counts diagram nodes against all devices');
   const topoList = window.document.querySelectorAll('.network-topology-list button');
-  assert(topoList.length === topoPeers.length, 'the accessible list mirrors every device');
-  topoList[1]?.click();
+  assert(topoList.length === 3, 'the accessible list mirrors every loaded device');
+  [...topoList].find(button => button.textContent.includes('relay-node'))?.click();
   await flush();
   const topoDialog = window.document.querySelector('dialog[open]');
-  assert(topoDialog?.textContent.includes(topoPeers[1].hostname), 'selecting a device from the diagram opens its details');
+  assert(topoDialog?.textContent.includes('relay-node'), 'selecting a device from the diagram opens its details');
   topoDialog?.close();
+  const tallTopo = Number((topoSvg?.getAttribute('viewBox') || '').split(' ')[3]);
+  canned.peers = previousTopoPeers;
+  window.document.querySelector('.network-inventory-summary button')?.click();
+  await flush();
+  assert(topoSvg?.querySelectorAll('g.network-topology-relay').length === 0, 'a tailnet without relayed devices renders no relay pill');
+  assert(Number((topoSvg?.getAttribute('viewBox') || '').split(' ')[3]) < tallTopo, 'the diagram drops the relay band once no device is relayed');
   [...window.document.querySelectorAll('#view button[aria-pressed]')].find(button => /^(List|列表)$/.test(button.textContent.trim()))?.click();
   await flush();
-  assert(window.document.querySelectorAll('.network-peer-row').length === topoPeers.length, 'returning to the list restores every device row');
+  assert(window.document.querySelectorAll('.network-peer-row').length === previousTopoPeers.peers.length, 'returning to the list restores every device row');
 
   nav('exitnodes');
   await flush();

@@ -83,7 +83,7 @@ Plus the stock `tailscale` CLI (`tailscale` is a symlink to `tailscaled`; for ra
 The WebUI is built in: it lives in `webroot/` (zero-build static HTML/JS, backed by the `foxytail.webapi.sh` JSON API). How to use it:
 
 - Open it from the **KernelSU manager** or **MMRL**. The **official Magisk app does not support module WebUIs** — that button will not exist there.
-- 13 pages (bottom nav + "More" group): Dashboard · Peers (list + SVG topology) · Exit Nodes · Account · Tunnel · Routing · Traffic · Serve / Funnel · Files (Taildrop) · Logs · Settings · Diagnostics · More.
+- 13 pages (bottom nav + "More" group): Dashboard · Peers (list + SVG topology with direct/relay paths) · Exit Nodes · Account · Tunnel · Routing · Traffic · Serve / Funnel · Files (Taildrop) · Logs · Settings · Diagnostics · More.
 - Chinese/English, light/dark themes, official Material Symbols, loading placeholders and accessible native controls.
 
 For Funnel, choose a supported public listener: HTTPS, TCP or TLS-terminated TCP on port 443, 8443 or 10000. A local HTTP service such as `http://localhost:3000` normally uses a public **HTTPS** listener; the target's protocol and port are independent of the public listener. Plain HTTP listeners remain available for private Serve mappings.

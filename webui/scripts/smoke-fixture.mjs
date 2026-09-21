@@ -88,7 +88,7 @@ const holdNext = new Set();
 const heldReplies = [];
 const canned = {
   status: { ok: true, daemon: 'running', backend: 'NeedsLogin', mode: 'tun', self: { hostname: 'fox', ips: ['100.64.0.1'], relay: 'sin' }, exitNode: null, peers: { online: 1, offline: 0 }, magicDns: true, keyExpiry: null, uptime: 60 },
-  peers: { ok: true, peers: [{ id: 'p1', hostname: 'peer-one', ip: '100.64.0.2', ips: ['100.64.0.2', 'fd7a:115c:a1e0::2'], os: 'linux', relay: 'sin', online: true, rxBytes: 1024, txBytes: 2048, exitNodeOption: true }] },
+  peers: { ok: true, peers: [{ id: 'p1', hostname: 'peer-one', ip: '100.64.0.2', ips: ['100.64.0.2', 'fd7a:115c:a1e0::2'], os: 'linux', relay: 'sin', online: true, curAddr: '192.0.2.1:41641', active: true, rxBytes: 1024, txBytes: 2048, exitNodeOption: true }] },
   exitnodes: { ok: true, peers: [{ id: 'p1', hostname: 'peer-one', ip: '100.64.0.2', os: 'linux', relay: 'sin', online: true, rxBytes: 1024, txBytes: 2048, exitNodeOption: true }] },
   compat: { ok: true, modules: [], apps: [], warnings: [], alert: null },
   tun: { ok: true, ifaceUp: true, gateway: '100.64.0.1', hevPid: 123, mode: 'tun', socksPort: 1099 },

@@ -8,6 +8,8 @@ export interface Peer {
   os: string;
   relay: string;
   online: boolean;
+  curAddr?: string; // Established direct path; older backends omit it.
+  active?: boolean; // Recent direct activity; older backends omit it.
   rxBytes: number;
   txBytes: number;
   exitNodeOption: boolean;

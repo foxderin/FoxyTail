@@ -67,6 +67,8 @@ _peers_jq='
        os: (.OS // "-"),
        relay: (.Relay // "-"),
        online: (.Online // false),
+       curAddr: (.CurAddr // ""),
+       active: (.Active // false),
        rxBytes: (.RxBytes // 0),
        txBytes: (.TxBytes // 0),
        exitNodeOption: (.ExitNodeOption // false)

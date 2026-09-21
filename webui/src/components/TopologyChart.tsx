@@ -1,43 +1,97 @@
-/** Tailnet membership diagram. Edges deliberately do not imply direct paths. */
+/** Tailnet membership diagram. Every edge classifies the established path of
+ * its device: a direct connection, a relay over a named DERP region, or an
+ * offline member. */
 import {
   createMemo,
   createSignal,
   For,
   onCleanup,
   onMount,
+  Show,
   type JSX,
 } from 'solid-js';
 import { t } from '../i18n';
 import { StatusDot } from './Basics';
 import type { Peer } from '../types';
 
+type PeerPath = 'direct' | 'relay' | 'off';
+
 export function TopologyChart(props: {
   self: { hostname: string } | null;
   peers: Peer[];
+  exitNodeId?: string | null;
   onPeerClick: (peer: Peer) => void;
 }): JSX.Element {
   let root!: HTMLDivElement;
   const [width, setWidth] = createSignal(640);
   const columns = () => (width() >= 560 ? 3 : 2);
+  // Older backends omit the path fields: an online device without curAddr is
+  // rendered as relayed rather than claiming an established direct path.
+  const path = (peer: Peer): PeerPath =>
+    !peer.online ? 'off' : (peer.curAddr || '') !== '' ? 'direct' : 'relay';
+  const region = (peer: Peer) => (peer.relay || '—').toUpperCase();
+  const rank: Record<PeerPath, number> = { direct: 0, relay: 1, off: 2 };
+  // Direct devices first, then relay groups by region, then offline members.
   // A large Tailnet remains readable: the diagram is bounded, the list is complete.
   const visible = createMemo(() =>
     [...props.peers]
       .sort(
         (a, b) =>
-          a.relay.localeCompare(b.relay) ||
-          Number(b.online) - Number(a.online) ||
+          rank[path(a)] - rank[path(b)] ||
+          (path(a) === 'relay' ? region(a).localeCompare(region(b)) : 0) ||
           a.hostname.localeCompare(b.hostname),
       )
       .slice(0, 12),
   );
   const cardWidth = () => (width() - 20 - (columns() - 1) * 14) / columns();
-  const height = () => 118 + Math.ceil(visible().length / columns()) * 88;
   const x = (index: number) => 10 + (index % columns()) * (cardWidth() + 14);
-  const y = (index: number) => 118 + Math.floor(index / columns()) * 88;
+  // One pill per DERP region in use by the visible relayed devices, centered
+  // over its member cards.
+  const pills = createMemo(() => {
+    const regions = new Map<string, number[]>();
+    visible().forEach((peer, index) => {
+      if (path(peer) !== 'relay') return;
+      regions.set(region(peer), [...(regions.get(region(peer)) || []), index]);
+    });
+    return [...regions.entries()]
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([code, indices]) => {
+        const center =
+          indices.reduce((sum, index) => sum + x(index) + cardWidth() / 2, 0) /
+          indices.length;
+        return {
+          code,
+          indices,
+          cx: Math.min(Math.max(center, 50), width() - 50),
+          width: Math.max(36, code.length * 7 + 16),
+        };
+      });
+  });
+  // The relay band only exists while a relayed device is on screen.
+  const band = () => (pills().length ? 40 : 0);
+  const pillTop = () => 109;
+  const pillBottom = () => pillTop() + 18;
+  const gridTop = () => 118 + band();
+  const height = () => gridTop() + Math.ceil(visible().length / columns()) * 88;
+  const y = (index: number) => gridTop() + Math.floor(index / columns()) * 88;
   const label = (value: string) => {
     const max = Math.max(11, Math.floor((cardWidth() - 26) / 7));
     return value.length > max ? value.slice(0, max - 1) + '…' : value;
   };
+  const pathLabel = (peer: Peer) =>
+    path(peer) === 'direct'
+      ? t('net_topo_direct')
+      : path(peer) === 'relay'
+        ? t('net_topo_relay') + ' ' + region(peer)
+        : t('net_filter_offline');
+  const edgeClass = (peer: Peer) =>
+    'network-topology-edge is-' +
+    (path(peer) === 'off' ? 'offline' : path(peer));
+  const isExit = (peer: Peer) => props.exitNodeId === peer.id;
+  const addrHint = (peer: Peer) =>
+    path(peer) === 'direct' && peer.curAddr ? ' · ' + peer.curAddr : '';
+  const exitHint = (peer: Peer) =>
+    isExit(peer) ? ' · ' + t('net_topo_exit') : '';
 
   onMount(() => {
     const resize = () =>
@@ -64,6 +118,37 @@ export function TopologyChart(props: {
           <StatusDot state="off" />
           {t('net_filter_offline')}
         </span>
+        <span>
+          <svg
+            class="network-chart-sample"
+            viewBox="0 0 22 8"
+            aria-hidden="true"
+          >
+            <path
+              d="M1,4 H21"
+              stroke="var(--md-sys-color-primary)"
+              stroke-width="1.5"
+              fill="none"
+            />
+          </svg>
+          {t('net_topo_direct')}
+        </span>
+        <span>
+          <svg
+            class="network-chart-sample"
+            viewBox="0 0 22 8"
+            aria-hidden="true"
+          >
+            <path
+              d="M1,4 H21"
+              stroke="var(--md-sys-color-outline-variant)"
+              stroke-width="1.5"
+              stroke-dasharray="4 3"
+              fill="none"
+            />
+          </svg>
+          {t('net_topo_relay')}
+        </span>
         <span class="network-chart-hint">
           {visible().length} / {props.peers.length} {t('net_peer_total')}
         </span>
@@ -82,18 +167,66 @@ export function TopologyChart(props: {
         />
         <For each={visible()}>
           {(peer, index) => (
+            <Show when={path(peer) !== 'relay'}>
+              <path
+                class={edgeClass(peer)}
+                d={`M${width() / 2},93 H${x(index()) + cardWidth() / 2} V${gridTop()}`}
+                stroke={
+                  path(peer) === 'direct'
+                    ? 'var(--md-sys-color-primary)'
+                    : 'var(--md-sys-color-outline-variant)'
+                }
+                opacity={path(peer) === 'direct' ? '.4' : '.6'}
+                stroke-dasharray={path(peer) === 'direct' ? undefined : '4 4'}
+                fill="none"
+                stroke-width="1.25"
+              />
+            </Show>
+          )}
+        </For>
+        <For each={pills()}>
+          {(pill) => (
             <path
-              d={`M${width() / 2},93 H${x(index()) + cardWidth() / 2} V${y(index())}`}
-              stroke={
-                peer.online
-                  ? 'var(--md-sys-color-primary)'
-                  : 'var(--md-sys-color-outline-variant)'
-              }
-              opacity={peer.online ? '.4' : '.6'}
-              stroke-dasharray={peer.online ? undefined : '4 4'}
+              class="network-topology-edge is-relay"
+              d={`M${width() / 2},93 H${pill.cx} V${pillTop()}`}
+              stroke="var(--md-sys-color-outline-variant)"
+              stroke-dasharray="6 4"
               fill="none"
               stroke-width="1.25"
             />
+          )}
+        </For>
+        <For each={pills()}>
+          {(pill) => (
+            <For each={pill.indices}>
+              {(index) => (
+                <path
+                  class="network-topology-edge is-relay"
+                  d={`M${pill.cx},${pillBottom()} V${
+                    (pillBottom() + gridTop()) / 2
+                  } H${x(index) + cardWidth() / 2} V${gridTop()}`}
+                  stroke="var(--md-sys-color-outline-variant)"
+                  stroke-dasharray="6 4"
+                  fill="none"
+                  stroke-width="1.25"
+                />
+              )}
+            </For>
+          )}
+        </For>
+        <For each={pills()}>
+          {(pill) => (
+            <g class="network-topology-relay">
+              <rect
+                x={pill.cx - pill.width / 2}
+                y={pillTop()}
+                width={pill.width}
+                height="18"
+              />
+              <text x={pill.cx} y={pillTop() + 12.5} text-anchor="middle">
+                {pill.code}
+              </text>
+            </g>
           )}
         </For>
         <rect
@@ -127,7 +260,9 @@ export function TopologyChart(props: {
         <For each={visible()}>
           {(peer, index) => (
             <g
-              class="network-topology-peer"
+              class={
+                'network-topology-peer' + (isExit(peer) ? ' is-exit' : '')
+              }
               role="button"
               tabindex="0"
               aria-label={t('net_peer_details') + ': ' + peer.hostname}
@@ -142,6 +277,8 @@ export function TopologyChart(props: {
               <title>
                 {peer.hostname} · {peer.ips?.join(' · ') || peer.ip} ·{' '}
                 {peer.online ? t('net_filter_online') : t('net_filter_offline')}
+                {addrHint(peer)}
+                {exitHint(peer)}
               </title>
               <rect
                 x={x(index())}
@@ -150,7 +287,12 @@ export function TopologyChart(props: {
                 height="66"
                 rx="12"
                 fill="var(--md-sys-color-surface)"
-                stroke="var(--md-sys-color-outline-variant)"
+                stroke={
+                  isExit(peer)
+                    ? 'var(--md-sys-color-primary)'
+                    : 'var(--md-sys-color-outline-variant)'
+                }
+                stroke-width={isExit(peer) ? '2' : undefined}
               />
               <circle
                 cx={x(index()) + 14}
@@ -173,7 +315,7 @@ export function TopologyChart(props: {
                 x={x(index()) + 14}
                 y={y(index()) + 46}
               >
-                {peer.os || '—'} · {peer.relay || '—'}
+                {peer.os || '—'} · {pathLabel(peer)}
               </text>
             </g>
           )}

@@ -207,6 +207,7 @@ export default function Peers(): JSX.Element {
                     <TopologyChart
                       self={status()?.self ?? null}
                       peers={visiblePeers()}
+                      exitNodeId={status()?.exitNode?.id ?? null}
                       onPeerClick={peer => setDetailId(peer.id)}
                     />
                   </>

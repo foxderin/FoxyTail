@@ -116,8 +116,11 @@ export const networkZh = {
   net_traffic_table: '查看图表数据',
   net_traffic_time: '时间',
   net_traffic_unrecorded: '未采集',
+  net_topo_direct: '直连',
+  net_topo_relay: '中继',
+  net_topo_exit: '出口',
   net_topology_hint:
-    '节点位置按中继区域分组，线条表示 Tailnet 关联，不代表已建立直连。',
+    '实线为已建立的直连，虚线经对应 DERP 中继，点线为离线成员。',
   net_topology_list: '可操作节点列表',
   net_login_secure: '设备授权',
 } as const;
@@ -255,8 +258,11 @@ export const networkEn: Record<keyof typeof networkZh, string> = {
   net_traffic_table: 'View chart data',
   net_traffic_time: 'Time',
   net_traffic_unrecorded: 'Not recorded',
+  net_topo_direct: 'Direct',
+  net_topo_relay: 'Relay',
+  net_topo_exit: 'Exit',
   net_topology_hint:
-    'Devices are grouped by relay region. Lines show Tailnet membership, not an established direct connection.',
+    'Solid: established direct connection. Dashed: relayed via the named DERP region. Dotted: offline member.',
   net_topology_list: 'Accessible device list',
   net_login_secure: 'Device authorization',
 };

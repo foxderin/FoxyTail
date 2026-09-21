@@ -29,6 +29,24 @@
   stroke: var(--md-sys-color-primary);
   stroke-width: 2;
 }
+.network-topology-relay rect {
+  fill: var(--md-sys-color-surface-container-high);
+  stroke: var(--md-sys-color-outline-variant);
+  rx: 10;
+}
+.network-topology-relay text {
+  fill: var(--md-sys-color-on-surface-variant);
+  font:
+    9px system-ui,
+    sans-serif;
+  letter-spacing: 0.06em;
+}
+/* The legend samples keep their own size instead of stretching with the row. */
+.network-chart-sample {
+  flex: none;
+  width: 22px;
+  height: 8px;
+}
 .network-topology-list {
   display: flex;
   flex-wrap: wrap;
