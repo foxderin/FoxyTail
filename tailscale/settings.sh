@@ -21,6 +21,14 @@ TS_RUN_LOG_FILE="${TS_RUN_DIR}/foxytail.log"
 TS_PID_DIR="${TS_RUN_DIR}/pids"
 TS_STATS_DIR="${TS_RUN_DIR}/stats"
 
+# Private LocalAPI socket and pid file of the tailscaled daemon; resident
+# scripts keep their own PID_FILE for the process they supervise.
+TS_SOCKET="${TS_RUN_DIR}/tailscaled.sock"
+TS_DAEMON_PID_FILE="${TS_PID_DIR}/tailscaled.pid"
+
+# Tunnel interface, created by hev-socks5-tunnel (bridge) or tailscaled (tun).
+TUN_IFACE="tailscale0"
+
 # --- Environment -------------------------------------------------------------
 
 export PATH="${TS_BIN_DIR}:${TS_SCRIPTS_DIR}:/data/adb/magisk:/data/adb/ksu/bin:${PATH}"
@@ -253,6 +261,13 @@ stop_by_pids() {
   return 0
 }
 
+# --- Network interface ---------------------------------------------------------
+
+# True when the configured tunnel interface exists.
+iface_exists() {
+  ip link show dev "${TUN_IFACE}" >/dev/null 2>&1
+}
+
 # --- Waiting / sleeping / timing -------------------------------------------------
 
 # wait_for <description> <tries> <interval> <command...>
@@ -311,6 +326,37 @@ jqr() {
     echo "jqr: jq binary not found (looked in ${TS_BIN_DIR}/jq and PATH)" >&2
     return 127
   fi
+}
+
+# --- Daemon status --------------------------------------------------------------
+
+# Run a `status --json` query against the private socket and print the reply only
+# when it parses as JSON. <runner> wraps the CLI and receives <timeout> first:
+# tmo in the resident scripts (which degrades to an unbounded run, with one
+# Warning, when timeout(1) is missing), timeout(1) itself where an unbounded run
+# is unacceptable, and ts_cli in the WebAPI (which registers the child for
+# cancellation). The CLI command follows the runner and each call site keeps its
+# own stderr redirection. A failed, empty or non-JSON reply prints nothing and
+# returns 1.
+ts_status_json() {
+  _tsj_runner="$1"
+  shift
+  _tsj_json=$("${_tsj_runner}" "$@") || return 1
+  [ -n "${_tsj_json}" ] || return 1
+  printf '%s' "${_tsj_json}" | jqr -e . >/dev/null 2>&1 || return 1
+  printf '%s' "${_tsj_json}"
+}
+
+# MagicDNS readiness of one `foxytail.dns status --json` document: a running
+# resolver whose listener, policy and interception match the current DNS_MODE.
+dns_status_healthy() {
+  printf '%s' "$1" | jqr -e --arg mode "${DNS_MODE}" '
+  type=="object" and .state=="running" and .repairNeeded!=true and
+  (if (.mode // $mode)=="legacy" then (.pid|type)=="number" and .pid>0 and .enabled==true
+   else .enabled==true and .listenerReady==true and .repairNeeded==false and .policyState=="owned" and
+     (((.mode // $mode)=="local" and .reason=="local") or
+      ((.mode // $mode)=="transparent" and .reason=="running" and .interception4==true)) end)
+' >/dev/null 2>&1
 }
 
 # --- Resident daemon scaffolding -------------------------------------------------

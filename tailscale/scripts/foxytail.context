@@ -13,11 +13,9 @@ DIR=$(dirname "$(realpath "$0")")
 . "$DIR"/../settings.sh
 
 PID_FILE="${TS_PID_DIR}/foxytail.context.pid"
-TS_SOCKET="${TS_RUN_DIR}/tailscaled.sock"
 STATE_FILE="${TS_RUN_DIR}/context.state"
 RESULT_FILE="${TS_RUN_DIR}/context.result.json"
 RULES_FILE="${TS_CONF_DIR}/context.conf"
-INTERVAL=20
 
 SERVICE="${TS_SCRIPTS_DIR}/foxytail.service"
 
@@ -226,20 +224,16 @@ do_start() {
   rm -f "$STATE_FILE" "$RESULT_FILE" || return 1
   _ctx_running=1
   trap '_context_stop' TERM INT
-  log Info "foxytail.context started (pid $$, interval ${INTERVAL}s)"
+  log Info "foxytail.context started (pid $$, interval ${CONTEXT_INTERVAL}s)"
   while [ "$_ctx_running" = "1" ]; do
     check_once
     [ "${CONTEXT:-on}" = on ] || break
-    _int=$(effective_interval "$INTERVAL" 5 60 180)
+    _int=$(effective_interval "$CONTEXT_INTERVAL" 5 60 180)
     isleep "$_int"
   done
   rm -f "$PID_FILE"
   log Info "foxytail.context stopped"
   return 0
-}
-
-do_stop() {
-  daemon_stop_pidfile foxytail.context
 }
 
 do_status() {
@@ -268,7 +262,7 @@ case "$1" in
     ensure_run_dirs || exit 1
     if [ "$1" = start ]; then do_start; else check_once; fi
     ;;
-  stop) do_stop ;;
+  stop) daemon_stop_pidfile foxytail.context ;;
   status) do_status ;;
   validate)
     [ "$#" = 2 ] && [ -n "$2" ] || { echo "usage: $0 validate <file>" >&2; exit 1; }

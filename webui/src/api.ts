@@ -267,7 +267,7 @@ export interface ApiCall {
   cancel(): Promise<ApiResult>;
 }
 
-export function apiCall(cmd: string, ...args: (string | number)[]): ApiCall {
+function apiCall(cmd: string, ...args: (string | number)[]): ApiCall {
   return apiCallAfter(Promise.resolve({ ok: true }), cmd, ...args);
 }
 

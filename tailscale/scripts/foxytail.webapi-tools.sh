@@ -177,13 +177,7 @@ cmd_diag_check() {
         (*conflict*) _diag_row dns warn dns_conflict tunnel ;;
         (transparent-unavailable|ipv6-unavailable|private-dns) _diag_row dns warn dns_limited tunnel ;;
         (*)
-          if printf '%s' "$_dc_dns" | jqr -e --arg mode "${DNS_MODE}" '
-            type=="object" and .state=="running" and .repairNeeded!=true and
-            (if (.mode // $mode)=="legacy" then (.pid|type)=="number" and .pid>0 and .enabled==true
-             else .enabled==true and .listenerReady==true and .repairNeeded==false and .policyState=="owned" and
-               (((.mode // $mode)=="local" and .reason=="local") or
-                ((.mode // $mode)=="transparent" and .reason=="running" and .interception4==true)) end)
-          ' >/dev/null 2>&1; then _diag_row dns pass dns_ready tunnel
+          if dns_status_healthy "$_dc_dns"; then _diag_row dns pass dns_ready tunnel
           else _diag_row dns fail dns_unavailable tunnel; fi ;;
       esac
     fi

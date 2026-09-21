@@ -221,18 +221,6 @@
 .network-current-exit > .banner {
   flex-basis: 100%;
 }
-.network-selection-header {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 12px;
-}
-.network-selection-header .network-supporting {
-  max-width: 600px;
-}
-.network-selection-header .btn {
-  flex-shrink: 0;
-}
 .network-exit-options {
   display: grid;
   gap: 10px;
@@ -325,17 +313,5 @@
   overflow-wrap: anywhere;
 }
 .network-apply-bar > .btn {
-  flex-shrink: 0;
-}
-.network-probe-controls {
-  display: flex;
-  align-items: center;
-  gap: 20px;
-}
-.network-probe-controls .network-supporting {
-  flex: 1;
-  margin: 0;
-}
-.network-probe-controls .btn {
   flex-shrink: 0;
 }

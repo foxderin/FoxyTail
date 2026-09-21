@@ -18,7 +18,7 @@ FoxyTail 的灵感来自 [anasfanani/Magisk-Tailscaled](https://github.com/anasf
 | 三种运行模式（`bridge` / `tun` / `proxy`） | ✅ | CLI 热切换；`tun` 需要 `/dev/net/tun` |
 | 路由范围（`all` / `selected` / `bypass`） | ✅ | selected/bypass 仅 bridge；需要内核 `xt_owner` |
 | 独立策略路由（表 1052，fwmark `0x40000000/0x40000000`） | ✅ | 绝不写 main 表 |
-| 流量分析（`foxytail.stats`） | ✅ | JSONL 环形存储 7 天，熄屏自动降频 |
+| 流量分析（`foxytail.stats`） | ✅ | JSONL 环形存储，默认保留 7 天（`STATS_RETENTION_DAYS`），熄屏自动降频 |
 | MagicDNS 分流（`foxytail.dns`） | ✅ | 内置通用 DNS 端点，可选透明共存；保留旧 dnsmasq 模式 |
 | IPv6 双栈 | ✅ | `IPV6=on`，ip6tables 对称规则 |
 | 共存探针（`foxytail.compat`） | ✅ | 识别 Clash/mihomo、AFWall+、NetGuard |
@@ -128,12 +128,18 @@ WebUI 源码位于 `webui/`（Vite + SolidJS + Material Web 3 组件 + `kernelsu
 | `ROUTE_TABLE` | `1052` | 独立策略路由表号（1000–65535） |
 | `FWMARK` / `FWMARK_MASK` | `0x40000000` | 固定共享标记位；旧 0xF7 配置读取时迁移 |
 | `WATCHDOG` / `WATCHDOG_INTERVAL` | `on` / `30` | 崩溃重启 + rebind，检查间隔秒数 |
+| `WATCHDOG_RESTART_LIMIT` / `WATCHDOG_RESTART_WINDOW` | `5` / `600` | 窗口（秒）内允许的重启次数，达到上限后进入冷却 |
+| `WATCHDOG_COOLDOWN` / `WATCHDOG_BACKEND_BAD_LIMIT` | `300` / `3` | 冷却秒数；连续无应答轮次达到该值后触发重启 |
 | `WATCHDOG_PROBE` | `on` | 网络切换后的主动连通性探测；节能模式下暂停 |
 | `POWER_SAVE` | `off` | 节能模式，降低可选后台功能与 WebUI 的刷新频率 |
 | `STATS` / `CONTEXT` | `on` / `on` | 独立控制流量采集与场景自动化；关闭保留数据和规则 |
 | `WEBUI_AUTO_REFRESH` | `on` | 页面自动刷新；关闭后仍可首次加载与手动刷新 |
 | `STATS_INTERVAL` | `60` | 流量采集间隔（熄屏自动降频） |
+| `STATS_RETENTION_DAYS` | `7` | 流量样本保留天数（JSONL 环形） |
+| `CONTEXT_INTERVAL` | `20` | 场景检测间隔（熄屏自动降频） |
 | `LOG_MAX_KB` | `512` | 日志轮转阈值（保留一个 `.bak`） |
+
+`CONTEXT_INTERVAL`、`STATS_RETENTION_DAYS` 与 `WATCHDOG_*` 恢复限额属于高级文件级选项：编辑 `foxytail.conf` 后重启生效。WebUI 设置接口既不返回也不写入这些键。
 
 ### 功耗控制
 
@@ -235,7 +241,7 @@ Android 16 + FlClash 测试机已通过本地 UDP/TCP 与 IPv6 DNS 验证，但�
 
 ## 流量分析与诊断包
 
-- `foxytail.stats` 每 `STATS_INTERVAL` 秒采样一次 per-peer Rx/Tx 与双栈隧道 OUTPUT 的 UID 发送计数，写入 `/data/adb/foxytail/run/stats/YYYY-MM-DD.jsonl`（7 天环形，熄屏降频）。查询：`foxytail.stats query hourly <日期> | daily | topn <n>`。
+- `foxytail.stats` 每 `STATS_INTERVAL` 秒采样一次 per-peer Rx/Tx 与双栈隧道 OUTPUT 的 UID 发送计数，写入 `/data/adb/foxytail/run/stats/YYYY-MM-DD.jsonl`（默认 7 天环形，由 `STATS_RETENTION_DAYS` 控制，熄屏降频）。查询：`foxytail.stats query hourly <日期> | daily | topn <n>`。
 - 诊断页可按需查看服务、隧道、路由和 DNS 摘要，并跳转到对应处理页面；设备详情可分别测试 IPv4/IPv6，显示实际 Ping 的延迟及直连/中继路径。
 - `foxytail.diag collect` 把日志尾部、状态、netcheck、路由与配置打包到 `/sdcard/Download/foxytail-diag-<时间戳>.tar.gz`，默认用一致代号替换采集到的账户、设备名、SSID 和地址。分享前仍应检查自定义日志内容。`foxytail.diag collect /sdcard/Download local` 保留详细信息，仅供本机排查；WebUI 也可显式选择此模式。
 

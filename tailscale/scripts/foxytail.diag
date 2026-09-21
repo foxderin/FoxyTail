@@ -10,7 +10,6 @@ DIR=$(dirname "$(realpath "$0")")
 load_conf
 ensure_run_dirs
 
-TS_SOCKET="${TS_RUN_DIR}/tailscaled.sock"
 trap 'exit 130' HUP INT TERM
 
 # Strip Tailscale login URLs from daemon output: the diag bundle lands in
@@ -109,8 +108,9 @@ collect() {
       >"${_stage}/$(basename "$_l").tail"
   done
 
-  # Daemon state.
-  tmo 15 tailscale --socket="$TS_SOCKET" status --json \
+  # Daemon state: the bundle keeps the raw CLI output with its stderr beside it,
+  # so this capture stays outside the validating ts_status_json helper.
+  tmo 15 tailscale --socket="${TS_SOCKET}" status --json \
     >"${_stage}/status.json" 2>"${_stage}/status.err"
   tmo 20 tailscale --socket="$TS_SOCKET" netcheck \
     >"${_stage}/netcheck.txt" 2>&1

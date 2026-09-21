@@ -63,9 +63,3 @@ export function initTheme(): void {
     else if (typeof mql.addListener === 'function') mql.addListener(onChange);
   }
 }
-
-/* Read a resolved MD3 token (used by the canvas charts). */
-export function token(name: string, fallback: string): string {
-  const v = getComputedStyle(document.documentElement).getPropertyValue(name).trim();
-  return v || fallback;
-}

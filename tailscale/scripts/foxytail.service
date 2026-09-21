@@ -47,8 +47,7 @@ DIR=$(dirname "$(realpath "$0")")
 . "${DIR}/../settings.sh"
 
 scripts_name=$(basename "$0")
-TS_SOCKET="${TS_RUN_DIR}/tailscaled.sock"
-PID_FILE="${TS_PID_DIR}/tailscaled.pid"
+PID_FILE="${TS_DAEMON_PID_FILE}"
 
 # Print PIDs of OUR tailscaled daemon (multi-PID safe). A bare
 # `pgrep -f tailscaled` would also match `tail -F tailscaled.log`, the
@@ -279,7 +278,7 @@ status_service() {
   fi
 
   printf '%s' "  ${blue}Daemon: ${green}running${normal}"
-  _ss_status=$(timeout 10 tailscale --socket="${TS_SOCKET}" status --json 2>/dev/null || echo '{}')
+  _ss_status=$(ts_status_json timeout 10 tailscale --socket="${TS_SOCKET}" status --json 2>/dev/null) || _ss_status='{}'
   _ss_backend=$(echo "${_ss_status}" | jqr -r '.BackendState // "unknown"')
   if [ "${_ss_backend}" != "Running" ]; then
     printf '%s\n' " | ${blue}Backend: ${yellow}${_ss_backend}${normal}"
@@ -594,7 +593,7 @@ service_lock() {
 }
 
 case "$1" in
-  start|stop|restart|mode|reconcile|recover|trial) service_lock || exit 1 ;;
+  start|stop|restart|mode|recover|trial) service_lock || exit 1 ;;
 esac
 
 if conf_trial_active; then
@@ -613,11 +612,6 @@ case "$1" in
     "${TS_SCRIPTS_DIR}/start.sh" pause-residents || exit 1
     restart_service || exit 1
     "${TS_SCRIPTS_DIR}/start.sh" resume-residents
-    ;;
-  reconcile)
-    [ -f "${TS_RUN_DIR}/manual-stop" ] && exit 0
-    _SERVICE_RECOVERY=1
-    start_service
     ;;
   recover)
     [ -f "${TS_RUN_DIR}/manual-stop" ] && exit 0

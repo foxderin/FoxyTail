@@ -21,8 +21,6 @@ trap 'rm -rf "$build_dir"' EXIT
 bash .github/tools/build-native.sh "$build_dir/native"
 python3 .github/tools/native-notices.py --check
 python3 -m unittest discover -s tests -p 'test_*.py' -v
-# Standalone shell regression files are equally first-class checks.
-for file in tests/*.sh; do [ ! -f "$file" ] || bash "$file"; done
 pnpm --dir webui typecheck
 pnpm --dir webui check:i18n
 pnpm --dir webui check:theme

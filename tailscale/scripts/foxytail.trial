@@ -128,20 +128,14 @@ trial_request_revert() (
 )
 
 trial_health() {
-  _th_status=$(tmo 10 tailscale --socket="${TS_RUN_DIR}/tailscaled.sock" status --json 2>/dev/null) || return 1
+  _th_status=$(ts_status_json tmo 10 tailscale --socket="${TS_SOCKET}" status --json 2>/dev/null) || return 1
   printf '%s' "${_th_status}" | jqr -e '.BackendState=="Running"' >/dev/null || return 1
   load_runtime_conf || return 1
   if [ "$MAGIC_DNS" = on ]; then
     _th_dns=$(tmo 10 "${TS_SCRIPTS_DIR}/foxytail.dns" status --json 2>/dev/null) || return 1
-    printf '%s' "${_th_dns}" | jqr -e --arg mode "${DNS_MODE}" '
-      type=="object" and .state=="running" and .repairNeeded!=true and
-      (if (.mode // $mode)=="legacy" then (.pid|type)=="number" and .pid>0 and .enabled==true
-       else .enabled==true and .listenerReady==true and .repairNeeded==false and .policyState=="owned" and
-         (((.mode // $mode)=="local" and .reason=="local") or
-          ((.mode // $mode)=="transparent" and .reason=="running" and .interception4==true)) end)
-    ' >/dev/null 2>&1 || return 1
+    dns_status_healthy "${_th_dns}" || return 1
   fi
-  [ "$TS_MODE" = proxy ] || ip link show dev tailscale0 >/dev/null 2>&1
+  [ "$TS_MODE" = proxy ] || iface_exists
 }
 
 trial_run() {

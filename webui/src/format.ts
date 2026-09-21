@@ -27,7 +27,7 @@ export function fmtTime(epochSec: number | null | undefined): string {
   );
 }
 
-export type LatClass = 'lat-good' | 'lat-mid' | 'lat-bad' | '';
+type LatClass = 'lat-good' | 'lat-mid' | 'lat-bad' | '';
 
 export function latClass(ms: number | null | undefined): LatClass {
   if (ms == null) return '';

@@ -20,20 +20,21 @@ import {
   EmptyState,
   ErrorState,
 } from '../components/Basics';
-import { copyText } from '../components/LoginHero';
+import { LoadGate } from '../components/LoadGate';
+import { copyWithToast } from '../clipboard';
+import { RefreshButton } from '../components/RefreshButton';
 import { TopologyChart } from '../components/TopologyChart';
 import { OsIcon } from '../components/OsIcon';
-import { showToast } from '../components/Toast';
 import { MdIcon } from '../icons';
 import { Button, Dialog, IconButton, TextField } from '../components/ui';
 import type { Peer } from '../types';
 import './network.css';
+import { createGuardedLoad } from './tools-refresh';
 
 type PeerFilter = 'all' | 'online' | 'offline';
 
 export default function Peers(): JSX.Element {
   const scope = createApiScope();
-  let seq = 0;
   const [loading, setLoading] = createSignal(false);
   const [tab, setTab] = createSignal<'list' | 'topo'>('list');
   const [peers, setPeers] = createSignal<Peer[] | null>(null);
@@ -62,27 +63,24 @@ export default function Peers(): JSX.Element {
       );
   });
 
-  async function loadPeers() {
-    if (loading()) return;
-    setLoading(true);
-    const my = ++seq;
-    const res = await scope.api('peers');
-    setLoading(false);
-    if (res.cancelled || my !== seq) return;
-    if (res.ok) {
-      setPeers(((res.peers as Peer[]) || []).map(peer => ({
-        ...peer,
-        ips: (Array.isArray(peer.ips) ? peer.ips : [peer.ip])
-          .filter(ip => typeof ip === 'string' && ip !== '' && ip !== '-'),
-      })));
-      if (detailId() && !detail()) setDetailId(null);
-      setLoadError(null);
-    } else setLoadError(res.error || t('error'));
-  }
+  const loadPeers = createGuardedLoad(
+    () => scope.api('peers'),
+    (res) => {
+      if (res.ok) {
+        setPeers(((res.peers as Peer[]) || []).map(peer => ({
+          ...peer,
+          ips: (Array.isArray(peer.ips) ? peer.ips : [peer.ip])
+            .filter(ip => typeof ip === 'string' && ip !== '' && ip !== '-'),
+        })));
+        if (detailId() && !detail()) setDetailId(null);
+        setLoadError(null);
+      } else setLoadError(res.error || t('error'));
+    },
+    setLoading,
+  );
 
   function copyAddress(ip: string) {
-    const copied = copyText(ip);
-    showToast(copied ? t('copied') : t('op_failed'), copied ? 'ok' : 'err');
+    copyWithToast(ip);
   }
 
   pollWhileVisible(loadPeers, viewPollInterval);
@@ -104,18 +102,7 @@ export default function Peers(): JSX.Element {
             {(peers()?.length ?? 0) - onlineCount()} {t('net_filter_offline')}
           </span>
         </div>
-        <Button
-          variant="outlined"
-          disabled={loading()}
-          onClick={() => void loadPeers()}
-        >
-          <MdIcon
-            name="refresh"
-            size={18}
-            class={loading() ? 'network-refreshing' : ''}
-          />
-          {loading() ? t('loading') : t('net_refresh')}
-        </Button>
+        <RefreshButton loading={loading()} onClick={() => void loadPeers()} />
       </div>
 
       <div class="panel network-inventory-panel">
@@ -185,21 +172,14 @@ export default function Peers(): JSX.Element {
             {visiblePeers().length} {t('net_result_count')}
           </span>
         </div>
-        <Show when={loadError()}>
-          <ErrorState text={loadError()!} onRetry={() => void loadPeers()} />
-        </Show>
-        <Show
-          when={peers() !== null || loadError() !== null}
-          fallback={<SkeletonRows rows={5} />}
+        <LoadGate
+          ready={peers() !== null}
+          error={loadError()}
+          onRetry={() => void loadPeers()}
+          skeleton={<SkeletonRows rows={5} />}
+          hasContent={(peers() || []).length > 0}
+          empty={<EmptyState text={t('peers_empty')} icon="group" />}
         >
-          <Show
-            when={(peers() || []).length > 0}
-            fallback={
-              <Show when={!loadError()}>
-                <EmptyState text={t('peers_empty')} icon="group" />
-              </Show>
-            }
-          >
             <Show
               when={visiblePeers().length > 0}
               fallback={
@@ -314,8 +294,7 @@ export default function Peers(): JSX.Element {
                 </div>
               </Show>
             </Show>
-          </Show>
-        </Show>
+        </LoadGate>
       </div>
 
       <Show when={detail()}>

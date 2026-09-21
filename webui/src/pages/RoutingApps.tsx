@@ -2,7 +2,8 @@ import { createEffect, createMemo, createSignal, For, onCleanup, Show, type JSX 
 import { createApiScope } from '../api';
 import { t } from '../i18n';
 import type { AppInfo } from '../types';
-import { Card, SkeletonRows, EmptyState, ErrorState } from '../components/Basics';
+import { Card, SkeletonRows, EmptyState } from '../components/Basics';
+import { LoadGate } from '../components/LoadGate';
 import { Button, Checkbox, TextField } from '../components/ui';
 import { MdIcon } from '../icons';
 
@@ -85,15 +86,14 @@ export default function RoutingApps(props: {
         <Show when={props.selected && !props.uids.length}>
           <p class="tool-hint">{t('tools_route_empty_selection')}</p>
         </Show>
-        <Show when={apps() !== null} fallback={<SkeletonRows rows={5} />}>
-          <Show
-            when={!appsError()}
-            fallback={<ErrorState text={appsError()!} onRetry={() => void loadApps()} />}
-          >
-            <Show
-              when={matchingApps().length}
-              fallback={<EmptyState text={t('empty')} icon="search" />}
-            >
+        <LoadGate
+          ready={apps() !== null}
+          error={appsError()}
+          onRetry={() => void loadApps()}
+          skeleton={<SkeletonRows rows={5} />}
+          hasContent={matchingApps().length > 0}
+          empty={<EmptyState text={t('empty')} icon="search" />}
+        >
               <div class="tool-app-list">
                 <For each={matchingApps().slice(0, visibleLimit())}>
                   {(app) => (
@@ -125,9 +125,7 @@ export default function RoutingApps(props: {
                   {t('tools_route_show_all')} ({matchingApps().length - visibleLimit()})
                 </Button>
               </Show>
-            </Show>
-          </Show>
-        </Show>
+        </LoadGate>
       </Card>
     </Show>
   );

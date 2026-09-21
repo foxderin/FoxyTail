@@ -4,7 +4,6 @@ import {
   createSignal,
   For,
   onMount,
-  Show,
   type JSX,
 } from 'solid-js';
 import { createApiScope } from '../api';
@@ -14,11 +13,11 @@ import {
   Card,
   SkeletonRows,
   EmptyState,
-  ErrorState,
 } from '../components/Basics';
 import { LineChart, chartColors } from '../components/LineChart';
+import { LoadGate } from '../components/LoadGate';
+import { RefreshButton } from '../components/RefreshButton';
 import { MdIcon } from '../icons';
-import { Button } from '../components/ui';
 import type { Peer, AppInfo } from '../types';
 import './network.css';
 
@@ -236,14 +235,7 @@ export default function Traffic(): JSX.Element {
             )}
           </For>
         </div>
-        <Button variant="outlined" disabled={refreshing()} onClick={refresh}>
-          <MdIcon
-            name="refresh"
-            size={18}
-            class={refreshing() ? 'network-refreshing' : ''}
-          />
-          {refreshing() ? t('loading') : t('net_refresh')}
-        </Button>
+        <RefreshButton loading={refreshing()} onClick={refresh} />
       </div>
 
       <div class="metric-grid network-metrics network-traffic-metrics">
@@ -287,12 +279,11 @@ export default function Traffic(): JSX.Element {
 
       <Card title={t('net_traffic_chart')} icon="monitoring">
         <p class="network-supporting">{t('net_traffic_chart_hint')}</p>
-        <Show when={chartError()}>
-          <ErrorState text={chartError()!} onRetry={() => void loadChart()} />
-        </Show>
-        <Show
-          when={chart() !== null || chartError()}
-          fallback={
+        <LoadGate
+          ready={chart() !== null}
+          error={chartError()}
+          onRetry={() => void loadChart()}
+          skeleton={
             <div class="network-chart-skeleton" aria-busy="true">
               <div class="skeleton" />
               <div class="skeleton" />
@@ -305,58 +296,46 @@ export default function Traffic(): JSX.Element {
               </div>
             </div>
           }
+          hasContent={hasSamples()}
+          empty={
+            <div class="empty-state network-traffic-empty">
+              <div class="network-empty-graphic">
+                <MdIcon name="monitoring" size={34} />
+              </div>
+              <strong>{t('net_traffic_no_samples')}</strong>
+            </div>
+          }
         >
-          <Show
-            when={hasSamples()}
-            fallback={
-              <Show when={!chartError()}>
-                <div class="empty-state network-traffic-empty">
-                  <div class="network-empty-graphic">
-                    <MdIcon name="monitoring" size={34} />
-                  </div>
-                  <strong>{t('net_traffic_no_samples')}</strong>
-                </div>
-              </Show>
-            }
-          >
-            <LineChart
-              labels={chart()!.labels}
-              series={[
-                {
-                  name: t('traffic_rx'),
-                  color: colors.rx,
-                  values: chart()!.rx,
-                },
-                {
-                  name: t('traffic_tx'),
-                  color: colors.tx,
-                  values: chart()!.tx,
-                },
-              ]}
-            />
-          </Show>
-        </Show>
+          <LineChart
+            labels={chart()!.labels}
+            series={[
+              {
+                name: t('traffic_rx'),
+                color: colors.rx,
+                values: chart()!.rx,
+              },
+              {
+                name: t('traffic_tx'),
+                color: colors.tx,
+                values: chart()!.tx,
+              },
+            ]}
+          />
+        </LoadGate>
       </Card>
 
       <div class="content-grid network-detail-grid network-traffic-breakdown">
         <Card title={t('traffic_topn')} icon="group">
           <p class="network-supporting">{t('net_traffic_top_hint')}</p>
-          <Show when={topError()}>
-            <ErrorState text={topError()!} onRetry={() => void loadTopn()} />
-          </Show>
-          <Show
-            when={topn() !== null || topError()}
-            fallback={<SkeletonRows rows={4} />}
+          <LoadGate
+            ready={topn() !== null}
+            error={topError()}
+            onRetry={() => void loadTopn()}
+            skeleton={<SkeletonRows rows={4} />}
+            hasContent={(topn() || []).length > 0}
+            empty={<EmptyState text={t('net_traffic_no_peer')} icon="group" />}
           >
-            <Show
-              when={(topn() || []).length > 0}
-              fallback={
-                <Show when={!topError()}>
-                  <EmptyState text={t('net_traffic_no_peer')} icon="group" />
-                </Show>
-              }
-            >
-              <div class="network-rank-list">
+            <div class="network-rank-list">
                 <For each={topn() || []}>
                   {(row, index) => (
                     <div class="network-rank-row">
@@ -395,27 +374,19 @@ export default function Traffic(): JSX.Element {
                   )}
                 </For>
               </div>
-            </Show>
-          </Show>
+          </LoadGate>
         </Card>
         <Card title={t('traffic_by_app')} icon="router">
           <p class="network-supporting">{t('traffic_app_tx_hint')}</p>
-          <Show when={uidError()}>
-            <ErrorState text={uidError()!} onRetry={() => void loadUids()} />
-          </Show>
-          <Show
-            when={uidRows() !== null || uidError()}
-            fallback={<SkeletonRows rows={4} />}
+          <LoadGate
+            ready={uidRows() !== null}
+            error={uidError()}
+            onRetry={() => void loadUids()}
+            skeleton={<SkeletonRows rows={4} />}
+            hasContent={(uidRows() || []).length > 0}
+            empty={<EmptyState text={t('net_traffic_no_app')} icon="router" />}
           >
-            <Show
-              when={(uidRows() || []).length > 0}
-              fallback={
-                <Show when={!uidError()}>
-                  <EmptyState text={t('net_traffic_no_app')} icon="router" />
-                </Show>
-              }
-            >
-              <div class="network-app-list">
+            <div class="network-app-list">
                 <For each={uidRows() || []}>
                   {(row) => (
                     <div class="network-app-row">
@@ -431,8 +402,7 @@ export default function Traffic(): JSX.Element {
                   )}
                 </For>
               </div>
-            </Show>
-          </Show>
+          </LoadGate>
         </Card>
       </div>
     </div>

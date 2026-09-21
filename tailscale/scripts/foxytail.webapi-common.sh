@@ -1,13 +1,10 @@
 #!/system/bin/sh
 # Request ownership, cancellation, CLI execution and shared JSON helpers.
-# Sourced by foxytail.webapi.sh.
+# Sourced by foxytail.webapi.sh after settings.sh.
 
-TS_SOCKET="${TS_RUN_DIR}/tailscaled.sock"
-PID_FILE="${TS_PID_DIR}/tailscaled.pid"
 COMPAT_JSON="${TS_RUN_DIR}/compat.json"
 COMPAT_ALERT="${TS_RUN_DIR}/compat-alert"
 FILES_DIR="${TS_DIR}/files"
-TUN_IFACE="tailscale0"
 
 # --- Helpers -----------------------------------------------------------------
 
@@ -226,14 +223,6 @@ ts_cli() {
   _op_exec "${_tc_t}" tailscale --socket="${TS_SOCKET}" "$@"
 }
 
-# status --json, empty string on any failure.
-ts_status_json() {
-  _sj=$(ts_cli 10 status --json) || return 1
-  if [ -n "${_sj}" ] && printf '%s' "${_sj}" | jqr -e . >/dev/null 2>&1; then
-    printf '%s' "${_sj}"
-  fi
-}
-
 # Process liveness is independent of LocalAPI/socket health. An unresponsive
 # daemon still needs a working Stop control, and cannot be called stopped.
 daemon_exists() {
@@ -247,7 +236,7 @@ daemon_up() {
 
 # Uptime in seconds, derived from the pid file mtime (0 when unknown).
 daemon_uptime() {
-  _du_mt=$(stat -c %Y "${PID_FILE}" 2>/dev/null)
+  _du_mt=$(stat -c %Y "${TS_DAEMON_PID_FILE}" 2>/dev/null)
   case "${_du_mt}" in '' | *[!0-9]*) echo 0; return ;; esac
   _du_now=$(date +%s)
   [ "${_du_now}" -gt "${_du_mt}" ] && echo $((_du_now - _du_mt)) || echo 0

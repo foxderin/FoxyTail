@@ -14,32 +14,19 @@ if [ "${1:-}" != stop ]; then load_runtime_conf || exit 1; fi
 ensure_run_dirs
 
 PID_FILE="${TS_PID_DIR}/foxytail.watchdog.pid"
-TS_SOCKET="${TS_RUN_DIR}/tailscaled.sock"
 ROUTE_CACHE="${TS_RUN_DIR}/watchdog.route-cache"
 BAD_COUNT_FILE="${TS_RUN_DIR}/watchdog.bad-count"
 RESTARTS_FILE="${TS_RUN_DIR}/watchdog.restarts"
 # Written by foxytail.service stop; removed by start. While present the
 # watchdog must not recover tailscaled — the user asked for it to be down.
 MANUAL_STOP_FILE="${TS_RUN_DIR}/manual-stop"
-RESTART_LIMIT=5
-RESTART_WINDOW=600
-COOLDOWN=300
-BACKEND_BAD_LIMIT=3
 
 SERVICE="${TS_SCRIPTS_DIR}/foxytail.service"
-
-# tailscale status --json, empty string on timeout/failure.
-ts_status_json() {
-  _st=$(tmo 8 tailscale --socket="$TS_SOCKET" status --json --peers="${1:-false}" 2>/dev/null)
-  if [ -n "$_st" ] && printf '%s' "$_st" | jqr -e . >/dev/null 2>&1; then
-    printf '%s' "$_st"
-  fi
-}
 
 # Tailnet reachability: try quad-100 first, then the first online peer.
 tailnet_reachable() {
   _targets="100.100.100.100"
-  _st=$(ts_status_json true)
+  _st=$(ts_status_json tmo 8 tailscale --socket="${TS_SOCKET}" status --json --peers=true 2>/dev/null)
   if [ -n "$_st" ]; then
     _peer=$(printf '%s' "$_st" | jqr -r \
       '[.Peer // {} | .[] | select(.Online == true) | .TailscaleIPs[0]] | .[0] // empty' \
@@ -59,7 +46,7 @@ tailnet_reachable() {
 restarts_count() {
   _now=$(date +%s)
   if [ -f "$RESTARTS_FILE" ]; then
-    awk -v cut="$((_now - RESTART_WINDOW))" '$1 >= cut' "$RESTARTS_FILE" \
+    awk -v cut="$((_now - WATCHDOG_RESTART_WINDOW))" '$1 >= cut' "$RESTARTS_FILE" \
       >"${RESTARTS_FILE}.tmp" 2>/dev/null
     mv "${RESTARTS_FILE}.tmp" "$RESTARTS_FILE"
   else
@@ -71,7 +58,7 @@ restarts_count() {
 # Read-only variant for status reporting: never touches RESTARTS_FILE.
 restarts_count_ro() {
   [ -f "$RESTARTS_FILE" ] || { echo 0; return; }
-  awk -v cut="$(( $(date +%s) - RESTART_WINDOW ))" '$1 >= cut {n++} END {print n+0}' \
+  awk -v cut="$(( $(date +%s) - WATCHDOG_RESTART_WINDOW ))" '$1 >= cut {n++} END {print n+0}' \
     "$RESTARTS_FILE"
 }
 
@@ -80,9 +67,9 @@ recover() {
   _how="$1"
   _why="$2"
   _c=$(restarts_count)
-  if [ "$_c" -ge $RESTART_LIMIT ]; then
-    log Error "watchdog: >${RESTART_LIMIT} restarts in ${RESTART_WINDOW}s, cooling down ${COOLDOWN}s (${_why})"
-    isleep $COOLDOWN
+  if [ "$_c" -ge "$WATCHDOG_RESTART_LIMIT" ]; then
+    log Error "watchdog: >${WATCHDOG_RESTART_LIMIT} restarts in ${WATCHDOG_RESTART_WINDOW}s, cooling down ${WATCHDOG_COOLDOWN}s (${_why})"
+    isleep "$WATCHDOG_COOLDOWN"
     : >"$RESTARTS_FILE"
     return 0
   fi
@@ -117,11 +104,11 @@ check_once() {
 
   # A reply on our private socket proves liveness without a process-table scan.
   # Scan only on failure to distinguish a crash from an unresponsive daemon.
-  # Backend state health (3 consecutive bad rounds -> restart).
-  # Only an unanswered daemon (timeout/empty) counts as a strike. User-level
-  # states (NeedsLogin/Stopped/Starting/...) mean the daemon is healthy and a
-  # restart cannot fix them, so they reset the counter instead.
-  _st=$(ts_status_json)
+  # Backend state health (WATCHDOG_BACKEND_BAD_LIMIT consecutive bad rounds ->
+  # restart). Only an unanswered daemon (timeout/empty) counts as a strike.
+  # User-level states (NeedsLogin/Stopped/Starting/...) mean the daemon is
+  # healthy and a restart cannot fix them, so they reset the counter instead.
+  _st=$(ts_status_json tmo 8 tailscale --socket="${TS_SOCKET}" status --json --peers=false 2>/dev/null)
   if [ -z "$_st" ]; then
     if [ -z "$(pids_of_path "${TS_BIN_DIR}/${TS_DAEMON_CMD}")" ]; then
       log Warning "watchdog: tailscaled process is dead"
@@ -129,8 +116,8 @@ check_once() {
       return 0
     fi
     _bad=$(bad_count_inc)
-    log Warning "watchdog: tailscaled not answering (${_bad}/${BACKEND_BAD_LIMIT})"
-    if [ "$_bad" -ge $BACKEND_BAD_LIMIT ]; then
+    log Warning "watchdog: tailscaled not answering (${_bad}/${WATCHDOG_BACKEND_BAD_LIMIT})"
+    if [ "$_bad" -ge "$WATCHDOG_BACKEND_BAD_LIMIT" ]; then
       echo 0 >"$BAD_COUNT_FILE"
       recover restart "daemon-unreachable"
       return 0
@@ -211,10 +198,6 @@ do_start() {
   return 0
 }
 
-do_stop() {
-  daemon_stop_pidfile foxytail.watchdog
-}
-
 do_status() {
   # Read the pid once: the loop removes the file on exit, so a second read
   # could feed jq an empty string and produce broken JSON.
@@ -233,7 +216,7 @@ do_status() {
 
 case "$1" in
   start) do_start ;;
-  stop) do_stop ;;
+  stop) daemon_stop_pidfile foxytail.watchdog ;;
   status) do_status ;;
   check-once) check_once ;;
   *)

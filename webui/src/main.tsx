@@ -11,6 +11,7 @@ import { createSignal, getOwner, onCleanup } from 'solid-js';
 import './style.css';
 import { initTheme } from './theme';
 import { AppShell, type RouteDef } from './components/AppShell';
+import { ROUTE_META, ROUTE_NAMES, type RouteName } from './navigation';
 
 import Dashboard from './pages/Dashboard';
 import Peers from './pages/Peers';
@@ -26,28 +27,36 @@ import Logs from './pages/Logs';
 import Settings from './pages/Settings';
 import Diag from './pages/Diag';
 
-export const ROUTES: Record<string, RouteDef> = {
-  dashboard: { name: 'dashboard', titleKey: 'nav_dashboard', component: Dashboard },
-  peers: { name: 'peers', titleKey: 'peers_title', component: Peers },
-  exitnodes: { name: 'exitnodes', titleKey: 'exit_title', component: ExitNodes },
-  traffic: { name: 'traffic', titleKey: 'traffic_title', component: Traffic },
-  more: { name: 'more', titleKey: 'more_title', component: More },
-  tunnel: { name: 'tunnel', titleKey: 'tun_title', component: Tunnel },
-  routing: { name: 'routing', titleKey: 'route_title', component: Routing },
-  account: { name: 'account', titleKey: 'acc_title', component: Account },
-  serve: { name: 'serve', titleKey: 'serve_title', component: Serve },
-  files: { name: 'files', titleKey: 'files_title', component: Files },
-  logs: { name: 'logs', titleKey: 'logs_title', component: Logs },
-  settings: { name: 'settings', titleKey: 'set_title', component: Settings },
-  diag: { name: 'diag', titleKey: 'diag_title', component: Diag },
+const PAGES: Record<RouteName, RouteDef['component']> = {
+  dashboard: Dashboard,
+  peers: Peers,
+  exitnodes: ExitNodes,
+  traffic: Traffic,
+  more: More,
+  tunnel: Tunnel,
+  routing: Routing,
+  account: Account,
+  serve: Serve,
+  files: Files,
+  logs: Logs,
+  settings: Settings,
+  diag: Diag,
 };
+
+/* Titles and the route set come from navigation.ts; the components stay here. */
+export const ROUTES: Record<string, RouteDef> = Object.fromEntries(
+  ROUTE_NAMES.map((name): [string, RouteDef] => [
+    name,
+    { name, titleKey: ROUTE_META[name].pageTitleKey, component: PAGES[name] },
+  ]),
+);
 
 function parseRoute(): string {
   const m = /^#\/([a-z-]+)/.exec(location.hash || '');
   return m && ROUTES[m[1]] ? m[1] : 'dashboard';
 }
 
-export function createRouter() {
+function createRouter() {
   const [route, setRoute] = createSignal(parseRoute());
   const onRouteChange = () => setRoute(parseRoute());
   window.addEventListener('hashchange', onRouteChange);
@@ -55,7 +64,7 @@ export function createRouter() {
   return route;
 }
 
-export function mountApp(target: HTMLElement): void {
+function mountApp(target: HTMLElement): void {
   initTheme();
   render(() => {
     const route = createRouter();
@@ -64,8 +73,8 @@ export function mountApp(target: HTMLElement): void {
   document.getElementById('boot-screen')?.remove();
 }
 
-/* Auto-boot in a real browser; the jsdom smoke harness calls mountApp
- * itself after stubbing globals. */
+/* Auto-boot on load — a real browser and the jsdom smoke harness (which
+ * stubs globals and evaluates this bundle) both rely on this path. */
 if (typeof document !== 'undefined' && document.getElementById('app')) {
   mountApp(document.getElementById('app')!);
 }

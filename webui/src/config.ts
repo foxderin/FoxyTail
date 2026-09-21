@@ -5,6 +5,16 @@ export const WEBAPI = DATA_DIR + '/scripts/foxytail.webapi.sh';
 export const DEFAULT_TIMEOUT_MS = 15000;
 export const CLEANUP_TIMEOUT_MS = 8000;
 
+/* View polling intervals (ms). Power saving and startup states widen or
+ * tighten the shared status poll; each value is pinned by the smoke suite. */
+export const STATUS_POLL_MS = 15000;
+export const STATUS_POLL_POWER_SAVE_MS = 30000;
+export const STATUS_POLL_STARTING_MS = 5000;
+export const LOGS_POLL_MS = 5000;
+export const TRIAL_POLL_MS = 3000;
+export const TRIAL_COUNTDOWN_MS = 1000;
+export const LOGIN_REFRESH_DELAY_MS = 1500;
+
 export const COMMAND_TIMEOUTS: Record<string, number> = {
   'peer-ping': 30000,
   'diag-check': 65000,

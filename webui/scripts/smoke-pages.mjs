@@ -1,4 +1,4 @@
-import { window, ROUTES, bridge, commandLog, holdNext, heldReplies, canned, overrides, spawnLog, flush, nav, assert } from './smoke-fixture.mjs';
+import { window, ROUTES, bridge, commandLog, holdNext, heldReplies, canned, overrides, spawnLog, flush, nav, magicDnsCard, assert } from './smoke-fixture.mjs';
 
 export async function checkPages() {
   console.log('ServeConfig protocols, paths and Funnel visibility');
@@ -76,7 +76,7 @@ export async function checkPages() {
   assert(dnsButton, 'manual DNS status check is available');
   dnsButton?.click();
   await flush();
-  const dnsCard = [...window.document.querySelectorAll('#view .card')].find((card) => card.textContent.includes('MagicDNS'));
+  const dnsCard = magicDnsCard();
   assert(dnsCard?.textContent.includes('Tailnet MagicDNS may still be enabled') || dnsCard?.textContent.includes('不代表 Tailnet MagicDNS 关闭'), 'disabled local resolver is distinguished from Tailnet MagicDNS');
   assert(dnsCard?.textContent.includes('fox.ts.net') && /Detected|已检测到|已检测/.test(dnsCard?.textContent || ''), 'DNS inspection shows native routing configuration and suffix');
   const originalDns = canned.dns;
@@ -128,7 +128,7 @@ export async function checkPages() {
   nav('tunnel');
   await flush();
   assert(commandLog.filter(entry => entry.sub === 'dns').length === beforeLocalizedDns && !window.document.querySelector('[data-testid="dns-ipv6-path"]'), 'changing language and reopening Tunnel leaves DNS inspection manual');
-  const localizedDnsCard = [...window.document.querySelectorAll('#view .card')].find(card => card.querySelector('h2')?.textContent.includes('MagicDNS'));
+  const localizedDnsCard = magicDnsCard();
   localizedDnsCard?.querySelector('button')?.click();
   await flush();
   const localizedPath = localizedDnsCard?.querySelector('[data-testid="dns-ipv6-path"]');
@@ -152,11 +152,11 @@ export async function checkPages() {
   assert((await quotedCall.promise).message === 'streamed', 'line-oriented stdout reconstructs complete multiline JSON');
   assert(spawnLog.some(({ cmd }) => cmd.endsWith("'alpha'\\'';$(echo unsafe)`echo unsafe`\nlast'")), 'quotes, substitutions and newlines remain within the prequoted command argument');
   delete overrides['login-authkey'];
-  overrides['mode-get'] = [1, '', 'first stderr line\nsecond stderr line'];
-  const stderrFailure = window.__foxy.startTask('spawn-stderr', 'mode-get');
+  overrides['settings-get'] = [1, '', 'first stderr line\nsecond stderr line'];
+  const stderrFailure = window.__foxy.startTask('spawn-stderr', 'settings-get');
   await flush();
   assert((await stderrFailure.promise).error === 'first stderr line\nsecond stderr line', 'stderr lines survive a nonzero streamed exit');
-  delete overrides['mode-get'];
+  delete overrides['settings-get'];
   overrides['subnet-routes-get'] = [1, JSON.stringify({
     ok: false, error: 'subnet-inspection-failed', acceptRoutes: true, mode: 'tun', ipv6Enabled: true, peers: [],
   }, null, 2), 'subnet command exited with an error'];
@@ -172,7 +172,7 @@ export async function checkPages() {
   assert((await invalidSubnetSuccess.promise).ok === false && window.__foxy.getTask('spawn-false-success')?.status === 'error', 'a nonzero exit cannot become successful because its JSON claims ok true');
   delete overrides['subnet-routes-get'];
   bridge.throwSpawn = true;
-  const failedSpawn = window.__foxy.startTask('spawn-error', 'mode-get');
+  const failedSpawn = window.__foxy.startTask('spawn-error', 'settings-get');
   await flush();
   assert((await failedSpawn.promise).error.includes('spawn-shell-unavailable'), 'synchronous spawn failure settles immediately instead of waiting for timeout');
   bridge.throwSpawn = false;
@@ -431,7 +431,7 @@ export async function checkPages() {
 
 }
 
-export async function checkPeerProbes() {
+async function checkPeerProbes() {
   console.log('per-address peer probes and live device details');
   const previousPeers = structuredClone(canned.peers);
   const previousPing = canned['peer-ping'];

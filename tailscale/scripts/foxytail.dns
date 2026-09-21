@@ -25,11 +25,9 @@ DIR=$(dirname "$(realpath "$0")")
 . "${DIR}/../settings.sh"
 
 scripts_name=$(basename "$0")
-TS_SOCKET="${TS_RUN_DIR}/tailscaled.sock"
 DNS_BIN=""
 DNS_CONF="${TS_RUN_DIR}/dnsmasq.conf"
 DNS_LOG="${TS_RUN_DIR}/dnsmasq.log"
-PID_FILE="${TS_PID_DIR}/dnsmasq.pid"
 DNS_STATE_FILE="${TS_RUN_DIR}/dnsmasq.state"
 DNS_REASON_FILE="${TS_RUN_DIR}/dnsmasq.reason"
 DNS_CONTEXT_FILE="${TS_RUN_DIR}/dnsmasq.context.json"
@@ -89,72 +87,50 @@ dns_hijack_conflict() {
 # Mount FOXY_DNS (nat) on OUTPUT and redirect UDP/53 into dnsmasq. The first
 # rules exempt dnsmasq and marked Tailscale upstream queries. ACCEPT ends nat
 # traversal: RETURN would fall through to Android tailscaled's global DNAT.
-redirect_apply() {
-  iptables -t nat -N "${CHAIN_DNS}" 2>/dev/null
-  while iptables -t nat -D "${CHAIN_DNS}" -m owner --uid-owner 9999 -j RETURN 2>/dev/null; do :; done
-  iptables -t nat -C "${CHAIN_DNS}" -m owner --uid-owner 9999 -j RETURN 2>/dev/null && return 1
+# One implementation serves both families; <cmd> is iptables or ip6tables.
+redirect_family_apply() {
+  _dr_cmd="$1"
+  "${_dr_cmd}" -t nat -N "${CHAIN_DNS}" 2>/dev/null
+  while "${_dr_cmd}" -t nat -D "${CHAIN_DNS}" -m owner --uid-owner 9999 -j RETURN 2>/dev/null; do :; done
+  "${_dr_cmd}" -t nat -C "${CHAIN_DNS}" -m owner --uid-owner 9999 -j RETURN 2>/dev/null && return 1
   for _dr_proto in udp tcp; do
-    if ! iptables -t nat -C "${CHAIN_DNS}" -p "${_dr_proto}" --dport 53 -m owner --uid-owner 9999 -j ACCEPT 2>/dev/null; then
-      iptables -t nat -I "${CHAIN_DNS}" 1 -p "${_dr_proto}" --dport 53 -m owner --uid-owner 9999 -j ACCEPT || return 1
+    if ! "${_dr_cmd}" -t nat -C "${CHAIN_DNS}" -p "${_dr_proto}" --dport 53 -m owner --uid-owner 9999 -j ACCEPT 2>/dev/null; then
+      "${_dr_cmd}" -t nat -I "${CHAIN_DNS}" 1 -p "${_dr_proto}" --dport 53 -m owner --uid-owner 9999 -j ACCEPT || return 1
     fi
-    if ! iptables -t nat -C "${CHAIN_DNS}" -p "${_dr_proto}" --dport 53 -m mark ! --mark 0x0/0x1e000000 -j ACCEPT 2>/dev/null; then
-      iptables -t nat -I "${CHAIN_DNS}" 1 -p "${_dr_proto}" --dport 53 -m mark ! --mark 0x0/0x1e000000 -j ACCEPT || return 1
+    if ! "${_dr_cmd}" -t nat -C "${CHAIN_DNS}" -p "${_dr_proto}" --dport 53 -m mark ! --mark 0x0/0x1e000000 -j ACCEPT 2>/dev/null; then
+      "${_dr_cmd}" -t nat -I "${CHAIN_DNS}" 1 -p "${_dr_proto}" --dport 53 -m mark ! --mark 0x0/0x1e000000 -j ACCEPT || return 1
     fi
-    if ! iptables -t nat -C "${CHAIN_DNS}" -p "${_dr_proto}" --dport 53 -j REDIRECT --to-ports "${DNS_PORT}" 2>/dev/null; then
-      iptables -t nat -A "${CHAIN_DNS}" -p "${_dr_proto}" --dport 53 -j REDIRECT --to-ports "${DNS_PORT}" ||
-        { log Warning "failed to add DNS REDIRECT rule."; return 1; }
+    if ! "${_dr_cmd}" -t nat -C "${CHAIN_DNS}" -p "${_dr_proto}" --dport 53 -j REDIRECT --to-ports "${DNS_PORT}" 2>/dev/null; then
+      "${_dr_cmd}" -t nat -A "${CHAIN_DNS}" -p "${_dr_proto}" --dport 53 -j REDIRECT --to-ports "${DNS_PORT}" ||
+        { log Warning "failed to add DNS REDIRECT rule (${_dr_cmd})."; return 1; }
     fi
   done
   # Run before tailscaled's own DNAT, otherwise short queries skip dnsmasq.
-  if [ "$(iptables -t nat -S OUTPUT 2>/dev/null | awk '$1=="-A" {print; exit}')" != "-A OUTPUT -j ${CHAIN_DNS}" ]; then
-    while iptables -t nat -D OUTPUT -j "${CHAIN_DNS}" 2>/dev/null; do :; done
-    iptables -t nat -I OUTPUT 1 -j "${CHAIN_DNS}" ||
-      { log Warning "failed to mount ${CHAIN_DNS} on nat/OUTPUT."; return 1; }
+  if [ "$("${_dr_cmd}" -t nat -S OUTPUT 2>/dev/null | awk '$1=="-A" {print; exit}')" != "-A OUTPUT -j ${CHAIN_DNS}" ]; then
+    while "${_dr_cmd}" -t nat -D OUTPUT -j "${CHAIN_DNS}" 2>/dev/null; do :; done
+    "${_dr_cmd}" -t nat -I OUTPUT 1 -j "${CHAIN_DNS}" ||
+      { log Warning "failed to mount ${CHAIN_DNS} on ${_dr_cmd} nat/OUTPUT."; return 1; }
   fi
   return 0
 }
 
-redirect_teardown() {
-  while iptables -t nat -D OUTPUT -j "${CHAIN_DNS}" 2>/dev/null; do :; done
-  iptables -t nat -F "${CHAIN_DNS}" 2>/dev/null
-  iptables -t nat -X "${CHAIN_DNS}" 2>/dev/null
-  iptables -t nat -C OUTPUT -j "${CHAIN_DNS}" 2>/dev/null && return 1
-  iptables -t nat -S "${CHAIN_DNS}" >/dev/null 2>&1 && return 1
+redirect_family_teardown() {
+  _dt_cmd="$1"
+  while "${_dt_cmd}" -t nat -D OUTPUT -j "${CHAIN_DNS}" 2>/dev/null; do :; done
+  "${_dt_cmd}" -t nat -F "${CHAIN_DNS}" 2>/dev/null
+  "${_dt_cmd}" -t nat -X "${CHAIN_DNS}" 2>/dev/null
+  "${_dt_cmd}" -t nat -C OUTPUT -j "${CHAIN_DNS}" 2>/dev/null && return 1
+  "${_dt_cmd}" -t nat -S "${CHAIN_DNS}" >/dev/null 2>&1 && return 1
   return 0
 }
 
-redirect6_apply() {
-  ip6tables -t nat -N "${CHAIN_DNS}" 2>/dev/null
-  while ip6tables -t nat -D "${CHAIN_DNS}" -m owner --uid-owner 9999 -j RETURN 2>/dev/null; do :; done
-  ip6tables -t nat -C "${CHAIN_DNS}" -m owner --uid-owner 9999 -j RETURN 2>/dev/null && return 1
-  for _dr6_proto in udp tcp; do
-    if ! ip6tables -t nat -C "${CHAIN_DNS}" -p "${_dr6_proto}" --dport 53 -m owner --uid-owner 9999 -j ACCEPT 2>/dev/null; then
-      ip6tables -t nat -I "${CHAIN_DNS}" 1 -p "${_dr6_proto}" --dport 53 -m owner --uid-owner 9999 -j ACCEPT || return 1
-    fi
-    if ! ip6tables -t nat -C "${CHAIN_DNS}" -p "${_dr6_proto}" --dport 53 -m mark ! --mark 0x0/0x1e000000 -j ACCEPT 2>/dev/null; then
-      ip6tables -t nat -I "${CHAIN_DNS}" 1 -p "${_dr6_proto}" --dport 53 -m mark ! --mark 0x0/0x1e000000 -j ACCEPT || return 1
-    fi
-    if ! ip6tables -t nat -C "${CHAIN_DNS}" -p "${_dr6_proto}" --dport 53 -j REDIRECT --to-ports "${DNS_PORT}" 2>/dev/null; then
-      ip6tables -t nat -A "${CHAIN_DNS}" -p "${_dr6_proto}" --dport 53 -j REDIRECT --to-ports "${DNS_PORT}" ||
-        { log Warning "failed to add v6 DNS REDIRECT rule."; return 1; }
-    fi
-  done
-  if [ "$(ip6tables -t nat -S OUTPUT 2>/dev/null | awk '$1=="-A" {print; exit}')" != "-A OUTPUT -j ${CHAIN_DNS}" ]; then
-    while ip6tables -t nat -D OUTPUT -j "${CHAIN_DNS}" 2>/dev/null; do :; done
-    ip6tables -t nat -I OUTPUT 1 -j "${CHAIN_DNS}" ||
-      { log Warning "failed to mount ${CHAIN_DNS} on ip6tables nat/OUTPUT."; return 1; }
-  fi
-  return 0
-}
+redirect_apply() { redirect_family_apply iptables; }
 
-redirect6_teardown() {
-  while ip6tables -t nat -D OUTPUT -j "${CHAIN_DNS}" 2>/dev/null; do :; done
-  ip6tables -t nat -F "${CHAIN_DNS}" 2>/dev/null
-  ip6tables -t nat -X "${CHAIN_DNS}" 2>/dev/null
-  ip6tables -t nat -C OUTPUT -j "${CHAIN_DNS}" 2>/dev/null && return 1
-  ip6tables -t nat -S "${CHAIN_DNS}" >/dev/null 2>&1 && return 1
-  return 0
-}
+redirect_teardown() { redirect_family_teardown iptables; }
+
+redirect6_apply() { redirect_family_apply ip6tables; }
+
+redirect6_teardown() { redirect_family_teardown ip6tables; }
 
 # Android kernels can support IPv6 routing/filtering without an IPv6 nat
 # table. DNS interception then remains useful over IPv4; this capability is
@@ -297,7 +273,7 @@ redirect_present() {
 # Keep the observed context as JSON data; suffixes are validated before they
 # are written to dnsmasq configuration. An unreachable daemon is not ready.
 current_dns_context() {
-  _dc_json=$(tmo 5 tailscale --socket="${TS_SOCKET}" status --json 2>/dev/null) || return 1
+  _dc_json=$(ts_status_json tmo 5 tailscale --socket="${TS_SOCKET}" status --json 2>/dev/null) || return 1
   printf '%s' "${_dc_json}" | jqr -e -c '
     select(.CurrentTailnet.MagicDNSEnabled == true)
     | (.MagicDNSSuffix // "" | ascii_downcase) as $suffix
@@ -317,7 +293,6 @@ dns_context_matches() {
   [ -f "${DNS_CONTEXT_FILE}" ] &&
     [ "$(cat "${DNS_CONTEXT_FILE}" 2>/dev/null)" = "$1" ] &&
     [ "$(awk -F/ '/^server=\// {print $2; exit}' "${DNS_CONF}" 2>/dev/null)" = "$(printf '%s' "$1" | jqr -r '.suffix')" ] &&
-    ! grep -q '^addn-hosts=' "${DNS_CONF}" 2>/dev/null &&
     [ "$(sed -n '/^address=/p' "${DNS_CONF}" 2>/dev/null)" = "$(dns_alias_lines "$1")" ]
 }
 
@@ -449,7 +424,7 @@ dns_start() {
   rotate_log "${DNS_LOG}"
   log Info "Starting dnsmasq on 127.0.0.1:${DNS_PORT} (suffix: ${_ds_suffix}, upstream: ${_ds_default_dns})."
   nohup "${DNS_BIN}" --keep-in-foreground --conf-file="${DNS_CONF}" \
-    --pid-file="${PID_FILE}" --user=nobody >>"${DNS_LOG}" 2>&1 &
+    --user=nobody >>"${DNS_LOG}" 2>&1 &
 
   sleep 1
   if [ -z "$(dns_pids)" ]; then
@@ -487,7 +462,7 @@ dns_stop() {
 
   [ -z "$(dns_pids)" ] || _dt_rc=1
   if [ "${_dt_rc}" = 0 ]; then
-    rm -f "${PID_FILE}" "${DNS_CONTEXT_FILE}" "${TS_RUN_DIR}/dnsmasq.hosts"
+    rm -f "${DNS_CONTEXT_FILE}"
     set_state stopped
   else
     log Error "DNS cleanup incomplete; retaining degraded state for retry"

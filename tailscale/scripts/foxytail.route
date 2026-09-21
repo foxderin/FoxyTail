@@ -5,7 +5,6 @@ DIR=$(dirname "$(realpath "$0")")
 # shellcheck source=../settings.sh
 . "${DIR}/../settings.sh"
 
-TUN_IFACE=tailscale0
 CHAIN_MARK=FOXY_MARK
 CHAIN_STAT=FOXY_STAT
 ROUTE_RULE_PREF=12510
@@ -53,8 +52,6 @@ route_lock() {
   trap 'conf_lock_release' EXIT
   trap 'exit 1' INT TERM
 }
-
-iface_exists() { ip link show dev "${TUN_IFACE}" >/dev/null 2>&1; }
 
 # Match every part of the policy rule, including priority and table.
 fwmark_rule_present() {

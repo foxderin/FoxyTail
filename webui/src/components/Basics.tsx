@@ -6,21 +6,15 @@ import { Button } from './ui';
 
 export type StatusTone = 'neutral' | 'accent' | 'success' | 'warning' | 'danger';
 
-export function PageHeader(props: ParentProps<{
-  title: string; description?: string; eyebrow?: string; actions?: JSX.Element; id?: string;
-}>): JSX.Element {
+export function PageHeader(props: { title: string; id?: string }): JSX.Element {
   return <div class="page-heading">
     <div class="page-heading-copy">
-      <Show when={props.eyebrow}><div class="eyebrow">{props.eyebrow}</div></Show>
       <h1 id={props.id}>{props.title}</h1>
-      <Show when={props.description}><p class="page-description">{props.description}</p></Show>
-      {props.children}
     </div>
-    <Show when={props.actions}><div class="page-heading-actions">{props.actions}</div></Show>
   </div>;
 }
 
-export function SectionHeading(props: {
+function SectionHeading(props: {
   title: string; description?: string; actions?: JSX.Element; icon?: IconName;
 }): JSX.Element {
   return <div class="section-heading">

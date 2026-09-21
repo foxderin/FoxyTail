@@ -11,7 +11,6 @@ export async function checkCore() {
   assert(bridge.execCount === 0 && spawnLog.length === 0, 'first UI renders before any native bridge invocation');
   await flush();
 
-  console.log('boot without root bridge is covered separately; here a mock bridge exists');
   const firstLoginHero = window.document.querySelector('[data-testid="login-hero"][data-hero-state="login"]');
   assert(firstLoginHero && !firstLoginHero.querySelector('.hero-actions button.btn-filled')?.disabled, 'an initial explicit NeedsLogin snapshot exposes an enabled login action');
   const beforeFirstLogin = commandLog.length;

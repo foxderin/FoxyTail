@@ -8,8 +8,9 @@ import { t } from '../i18n';
 import './tools.css';
 import { createQueuedRefresh } from './tools-refresh';
 import { refreshStatus } from '../state';
-import { Card, SkeletonRows, EmptyState, ErrorState, StatusBadge } from '../components/Basics';
-import { copyText } from '../components/LoginHero';
+import { Card, SkeletonRows, EmptyState, StatusBadge } from '../components/Basics';
+import { LoadGate } from '../components/LoadGate';
+import { copyWithToast } from '../clipboard';
 import { confirmDialog } from '../components/ConfirmDialog';
 import { showToast, toastApiError } from '../components/Toast';
 import { MdIcon } from '../icons';
@@ -126,15 +127,14 @@ export default function Account(): JSX.Element {
           </Button>
         }
       >
-        <Show when={accounts() !== null} fallback={<SkeletonRows rows={3} />}>
-          <Show
-            when={!accountsError()}
-            fallback={<ErrorState text={accountsError()!} onRetry={() => void loadAccounts()} />}
-          >
-            <Show
-              when={accounts()!.length}
-              fallback={<EmptyState text={t('acc_not_logged_in')} icon="person" />}
-            >
+        <LoadGate
+          ready={accounts() !== null}
+          error={accountsError()}
+          onRetry={() => void loadAccounts()}
+          skeleton={<SkeletonRows rows={3} />}
+          hasContent={(accounts()?.length ?? 0) > 0}
+          empty={<EmptyState text={t('acc_not_logged_in')} icon="person" />}
+        >
               <For each={accounts()!}>
                 {(account) => (
                   <div class="list-row tool-row-wrap">
@@ -158,9 +158,7 @@ export default function Account(): JSX.Element {
                   </div>
                 )}
               </For>
-            </Show>
-          </Show>
-        </Show>
+        </LoadGate>
       </Card>
       <Card title={t('acc_login')} icon="login">
         <Show when={waiting()}>
@@ -181,7 +179,7 @@ export default function Account(): JSX.Element {
               <div class="tool-actions">
                 <Button
                   variant="tonal"
-                  onClick={() => showToast(t(copyText(url()) ? 'copied' : 'op_failed'), 'info')}
+                  onClick={() => copyWithToast(url(), 'info')}
                 >
                   <MdIcon name="content_copy" size={18} />
                   {t('copy')}

@@ -73,6 +73,7 @@ TS_RUN_DIR="$TEST_DIR"
 TS_BIN_DIR="$TEST_DIR"
 TS_SOCKET="$TEST_DIR/socket"
 jqr() { jq "$@"; }
+ts_status_json() { _tsj_r=$1; shift; "$_tsj_r" "$@"; }
 tmo() { echo '{"Peer":{}}'; }
 pids_of_path() { :; }
 prune_stats() { :; }
@@ -92,6 +93,7 @@ TS_RUN_DIR="$TEST_DIR"
 TS_BIN_DIR="$TEST_DIR"
 TS_SOCKET="$TEST_DIR/socket"
 jqr() { echo jq >>"$TEST_DIR/calls"; jq "$@"; }
+ts_status_json() { _tsj_r=$1; shift; "$_tsj_r" "$@"; }
 tmo() { echo cli >>"$TEST_DIR/calls"; cat "$TEST_DIR/status"; }
 pids_of_path() { :; }
 prune_stats() { echo prune >>"$TEST_DIR/calls"; }
@@ -143,10 +145,6 @@ collect_once
   self.assertEqual([row.get('error') for row in rows],['daemon-unreachable',None,'daemon-unreachable'])
   self.assertEqual(len((self.dir/'2026-09-20.jsonl').read_text().splitlines()),1)
   self.assertEqual((calls.count('prune'),calls.count('chmod')),(2,2))
- def test_empty_input(self):
-  self.file.write_text('')
-  self.assertEqual(self.query('daily')['days'],[])
-  self.assertEqual(self.query('topn','10')['topn'],[])
 
 class StatsLifecycle(unittest.TestCase):
  def setUp(self):

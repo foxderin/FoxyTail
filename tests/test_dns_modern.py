@@ -95,6 +95,7 @@ ensure_run_dirs() { mkdir -p "$TS_RUN_DIR" "$TS_PID_DIR"; }
 load_conf() { . "$TEST_DIR/config"; }
 load_runtime_conf() { load_conf; }
 jqr() { jq "$@"; }
+ts_status_json() { _tsj_r=$1; shift; "$_tsj_r" "$@"; }
 tmo() { shift; "$@"; }
 log() { printf '%s: %s\\n' "$1" "$2" >>"$TEST_DIR/service-log"; }
 rotate_log() { :; }
@@ -111,7 +112,7 @@ ipv6_module_status() { echo not-checked; }
 native_dns_present() { test -f "$TEST_DIR/native-present"; }
 dns_hijack_conflict() { test -f "$TEST_DIR/other-dns"; }
 flush_android_dns_cache() { echo flush >>"$TEST_DIR/flushes"; }
-''' + locks + '\n. ' + shlex.quote(str(ROOT / 'tailscale/scripts/foxytail.dns-modern.sh')) + '''
+''' + locks + '\n. ' + shlex.quote(str(ROOT / 'tailscale/scripts/foxytail.dns-modern.sh')) + '\n. ' + shlex.quote(str(ROOT / 'tailscale/scripts/foxytail.dns-pref.sh')) + '''
 modern_pids() {
   [ -f "$TEST_DIR/alive" ] || return 0
   echo 100

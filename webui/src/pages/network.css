@@ -240,13 +240,6 @@
   .network-apply-bar > .btn {
     width: 100%;
   }
-  .network-probe-controls {
-    flex-wrap: wrap;
-    gap: 13px;
-  }
-  .network-probe-controls .network-supporting {
-    flex-basis: 100%;
-  }
   .network-period-toolbar {
     flex-wrap: wrap;
     gap: 10px;
@@ -272,9 +265,6 @@
   }
   .network-chart-readout > span {
     gap: 5px;
-  }
-  .network-selection-header {
-    align-items: flex-start;
   }
 }
 @media (max-width: 359px) {

@@ -1,12 +1,12 @@
 /* Log filtering is local. Only one page-scoped read may run at a time. */
 import { createMemo, createSignal, For, Index, Show, type JSX } from 'solid-js';
 import { createApiScope } from '../api';
+import { LOGS_POLL_MS } from '../config';
 import { pollWhileVisible } from '../schedule';
 import { status, viewPollInterval } from '../state';
 import { t } from '../i18n';
 import { Card, EmptyState, ErrorState, SkeletonRows, StatusBadge } from '../components/Basics';
-import { copyText } from '../components/LoginHero';
-import { showToast } from '../components/Toast';
+import { copyWithToast } from '../clipboard';
 import { MdIcon } from '../icons';
 import { Button, Select, Switch, Tabs, TextField } from '../components/ui';
 import './tools.css';
@@ -62,20 +62,9 @@ export default function Logs(): JSX.Element {
       void load();
     }
   }
-  pollWhileVisible(() => busy() ? undefined : load(), () => live() ? viewPollInterval(5000) : false);
+  pollWhileVisible(() => busy() ? undefined : load(), () => live() ? viewPollInterval(LOGS_POLL_MS) : false);
   function copyResults() {
-    showToast(
-      t(
-        copyText(
-          filtered()
-            .map((row) => row.line)
-            .join('\n'),
-        )
-          ? 'copied'
-          : 'op_failed',
-      ),
-      'info',
-    );
+    copyWithToast(filtered().map((row) => row.line).join('\n'), 'info');
   }
   return (
     <div class="tools-page">

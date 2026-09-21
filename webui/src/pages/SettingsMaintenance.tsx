@@ -1,6 +1,6 @@
 import { createSignal, For, onCleanup, Show, type JSX, type ParentProps } from 'solid-js';
 import { execRaw, quote } from '../api';
-import { DATA_DIR } from '../config';
+import { DATA_DIR, DEFAULT_TIMEOUT_MS } from '../config';
 import { t } from '../i18n';
 import { Card, SkeletonRows } from '../components/Basics';
 import { MdIcon } from '../icons';
@@ -30,7 +30,7 @@ export default function SettingsMaintenance(props: ParentProps<{
     setAdvancedBusy(true);
     await Promise.all(HOOKS.map(async ([file, key]) => {
       try {
-        const out = await execRaw('cat ' + quote(DATA_DIR + '/scripts/' + file) + ' 2>/dev/null || echo "(missing)"', 15000, hookAbort.signal);
+        const out = await execRaw('cat ' + quote(DATA_DIR + '/scripts/' + file) + ' 2>/dev/null || echo "(missing)"', DEFAULT_TIMEOUT_MS, hookAbort.signal);
         if (!hookAbort.signal.aborted) setHooks(h => ({ ...h, [key]: out === '(missing)' ? t('misc_missing') : out || t('misc_empty') }));
       } catch {
         if (!hookAbort.signal.aborted) setHooks(h => ({ ...h, [key]: t('misc_unavailable') }));

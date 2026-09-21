@@ -20,6 +20,7 @@ import {
   EmptyState,
   ErrorState,
 } from '../components/Basics';
+import { RefreshButton } from '../components/RefreshButton';
 import { OsIcon } from '../components/OsIcon';
 import { TaskButton, TaskProgress } from '../components/TaskProgress';
 import { showToast, toastApiError } from '../components/Toast';
@@ -27,6 +28,7 @@ import { MdIcon } from '../icons';
 import { Button } from '../components/ui';
 import type { Peer, ExitNodeProbe } from '../types';
 import './network.css';
+import { createGuardedLoad } from './tools-refresh';
 
 const TASK_KEY = 'speedtest-exitnodes';
 
@@ -89,17 +91,16 @@ export default function ExitNodes(): JSX.Element {
     );
   });
 
-  async function loadList() {
-    if (loading()) return;
-    setLoading(true);
-    const res = await scope.api('exitnodes');
-    setLoading(false);
-    if (res.cancelled) return;
-    if (res.ok) {
-      setPeers((res.peers as Peer[]) || []);
-      setLoadError(null);
-    } else setLoadError(res.error || t('error'));
-  }
+  const loadList = createGuardedLoad(
+    () => scope.api('exitnodes'),
+    (res) => {
+      if (res.ok) {
+        setPeers((res.peers as Peer[]) || []);
+        setLoadError(null);
+      } else setLoadError(res.error || t('error'));
+    },
+    setLoading,
+  );
 
   async function applySelection() {
     if (switching() || !canApply()) return;
@@ -137,18 +138,7 @@ export default function ExitNodes(): JSX.Element {
           icon={<MdIcon name="speed" size={18} />}
           disabled={!rows().some((peer) => peer.online)}
         />
-        <Button
-          variant="outlined"
-          disabled={loading()}
-          onClick={() => void loadList()}
-        >
-          <MdIcon
-            name="refresh"
-            size={18}
-            class={loading() ? 'network-refreshing' : ''}
-          />
-          {loading() ? t('loading') : t('net_refresh')}
-        </Button>
+        <RefreshButton loading={loading()} onClick={() => void loadList()} />
       </div>
       <TaskProgress taskKey={TASK_KEY} />
       <Show when={task()?.status === 'error'}>

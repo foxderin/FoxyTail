@@ -9,6 +9,7 @@
  */
 import { createSignal } from 'solid-js';
 import { api, hasRoot, type ApiResult } from './api';
+import { STATUS_POLL_MS, STATUS_POLL_POWER_SAVE_MS, STATUS_POLL_STARTING_MS } from './config';
 import { pollWhileVisible } from './schedule';
 
 export interface StatusSnapshot extends ApiResult {
@@ -40,9 +41,9 @@ export { status, statusError, statusLoading };
 
 /** Applied runtime preferences govern view reads; unsaved/pending settings
  * never change polling. Explicit refreshes and user tasks bypass this. */
-export function viewPollInterval(normalMs = 15000): number | false {
+export function viewPollInterval(normalMs = STATUS_POLL_MS): number | false {
   if (!hasRoot || status()?.autoRefresh === false) return false;
-  return status()?.powerSave === true ? 30000 : normalMs;
+  return status()?.powerSave === true ? STATUS_POLL_POWER_SAVE_MS : normalMs;
 }
 
 type StatusRead = Promise<StatusSnapshot | null>;
@@ -95,7 +96,7 @@ export function startStatusPolling(): void {
   pollWhileVisible(refreshStatus, () => {
     const interval = viewPollInterval();
     const starting = status()?.daemon === 'running' && ['NoState', 'Starting'].includes(status()?.backend ?? '');
-    return interval !== false && starting ? 5000 : interval;
+    return interval !== false && starting ? STATUS_POLL_STARTING_MS : interval;
   });
 }
 

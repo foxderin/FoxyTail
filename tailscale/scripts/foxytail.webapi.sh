@@ -14,10 +14,14 @@ ensure_run_dirs
 
 # shellcheck source=foxytail.webapi-common.sh
 . "${DIR}/foxytail.webapi-common.sh"
+# shellcheck source=foxytail.webapi-account.sh
+. "${DIR}/foxytail.webapi-account.sh"
 # shellcheck source=foxytail.webapi-network.sh
 . "${DIR}/foxytail.webapi-network.sh"
 # shellcheck source=foxytail.webapi-config.sh
 . "${DIR}/foxytail.webapi-config.sh"
+# shellcheck source=foxytail.webapi-backup.sh
+. "${DIR}/foxytail.webapi-backup.sh"
 # shellcheck source=foxytail.webapi-tools.sh
 . "${DIR}/foxytail.webapi-tools.sh"
 
@@ -47,7 +51,6 @@ case "$1" in
   speedtest-exitnodes) cmd_speedtest_exitnodes ;;
   derp-speedtest) cmd_derp_speedtest ;;
   control) shift; cmd_control "$1" ;;
-  mode-get) cmd_mode_get ;;
   mode-set) shift; cmd_mode_set "$1" ;;
   exitnode-set) shift; cmd_exitnode_set "$1" ;;
   exitnode-clear) cmd_exitnode_clear ;;
@@ -90,7 +93,6 @@ case "$1" in
   trial-status) cmd_trial_status ;;
   trial-confirm) shift; cmd_trial_confirm "$1" ;;
   trial-revert) shift; cmd_trial_revert "$1" ;;
-  key-expiry) cmd_key_expiry ;;
   *)
     [ -n "$1" ] && jerr "unknown command: $1"
     jerr "usage: foxytail.webapi.sh <cmd> [args]"

@@ -18,7 +18,7 @@ FoxyTail is inspired by [anasfanani/Magisk-Tailscaled](https://github.com/anasfa
 | Three run modes (`bridge` / `tun` / `proxy`) | ✅ | hot-switch via CLI; `tun` requires `/dev/net/tun` |
 | Route scope (`all` / `selected` / `bypass`) | ✅ | selected/bypass require bridge and kernel `xt_owner` |
 | Dedicated policy routing (table 1052, fwmark `0x40000000/0x40000000`) | ✅ | main table is never touched |
-| Traffic analytics (`foxytail.stats`) | ✅ | JSONL ring buffer, 7-day retention, screen-off throttling |
+| Traffic analytics (`foxytail.stats`) | ✅ | JSONL ring buffer, 7-day default retention (`STATS_RETENTION_DAYS`), screen-off throttling |
 | MagicDNS split-DNS (`foxytail.dns`) | ✅ | Built-in generic DNS endpoint, optional transparent coexistence, legacy dnsmasq support |
 | IPv6 dual-stack | ✅ | `IPV6=on`, symmetric ip6tables rules |
 | Coexistence probes (`foxytail.compat`) | ✅ | Clash/mihomo, AFWall+, NetGuard detection |
@@ -132,12 +132,18 @@ Three files in `/data/adb/foxytail/conf/`, installed **only if missing** — you
 | `ROUTE_TABLE` | `1052` | dedicated policy routing table (1000–65535) |
 | `FWMARK` / `FWMARK_MASK` | `0x40000000` | fixed shared mark bit; legacy 0xF7 migrates on read |
 | `WATCHDOG` / `WATCHDOG_INTERVAL` | `on` / `30` | crash restart + rebind, seconds between checks |
+| `WATCHDOG_RESTART_LIMIT` / `WATCHDOG_RESTART_WINDOW` | `5` / `600` | restarts allowed inside the window (seconds) before the watchdog cools down |
+| `WATCHDOG_COOLDOWN` / `WATCHDOG_BACKEND_BAD_LIMIT` | `300` / `3` | cool-down seconds; consecutive unanswered daemon rounds that trigger a restart |
 | `WATCHDOG_PROBE` | `on` | Active connectivity probes after network changes; paused by power saving |
 | `POWER_SAVE` | `off` | Reduce optional background work and WebUI refresh frequency |
 | `STATS` / `CONTEXT` | `on` / `on` | Independently control traffic sampling and context automation; retain history and rules |
 | `WEBUI_AUTO_REFRESH` | `on` | Automatic page refresh; initial reads and manual refresh remain available when off |
 | `STATS_INTERVAL` | `60` | stats collection interval (auto-throttled when the screen is off) |
+| `STATS_RETENTION_DAYS` | `7` | days of traffic samples kept in the JSONL ring |
+| `CONTEXT_INTERVAL` | `20` | context check interval (auto-throttled when the screen is off) |
 | `LOG_MAX_KB` | `512` | log rotation threshold (one `.bak` kept) |
+
+`CONTEXT_INTERVAL`, `STATS_RETENTION_DAYS` and the `WATCHDOG_*` recovery limits are advanced file-only knobs: edit `foxytail.conf` and restart. The WebUI settings API neither reports nor writes them.
 
 ### Power controls
 
@@ -251,7 +257,7 @@ When the module is absent or cannot load, the fallback retains IPv6 tunnel routi
 
 ## Traffic analytics & diagnostics
 
-- `foxytail.stats` samples per-peer Rx/Tx and dual-stack TUN OUTPUT per-UID transmit counters every `STATS_INTERVAL` seconds into `/data/adb/foxytail/run/stats/YYYY-MM-DD.jsonl` (7-day ring, screen-off throttling). Query with `foxytail.stats query hourly <date> | daily | topn <n>`.
+- `foxytail.stats` samples per-peer Rx/Tx and dual-stack TUN OUTPUT per-UID transmit counters every `STATS_INTERVAL` seconds into `/data/adb/foxytail/run/stats/YYYY-MM-DD.jsonl` (7-day ring by default via `STATS_RETENTION_DAYS`, screen-off throttling). Query with `foxytail.stats query hourly <date> | daily | topn <n>`.
 - The Diagnostics page provides on-demand service, tunnel, route and DNS summaries with links to relevant tools. Device details can test IPv4/IPv6 separately and report actual ping latency and direct/relay paths.
 - `foxytail.diag collect` bundles log tails, status, netcheck, routes and configuration into `/sdcard/Download/foxytail-diag-<timestamp>.tar.gz`. Sharing mode consistently aliases collected accounts, device names, SSIDs and addresses; review custom logs before sharing. `foxytail.diag collect /sdcard/Download local` retains details for private troubleshooting; the WebUI offers the same explicit choice.
 

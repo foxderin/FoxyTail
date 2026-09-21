@@ -14,7 +14,9 @@ import {
   type ConnState,
 } from '../state';
 import { createApiScope, hasRoot } from '../api';
+import { LOGIN_REFRESH_DELAY_MS } from '../config';
 import { t } from '../i18n';
+import { copyWithToast } from '../clipboard';
 import { MdIcon } from '../icons';
 import { showToast, toastApiError } from './Toast';
 import {
@@ -32,29 +34,6 @@ function readDismissed(): string | null {
     return sessionStorage.getItem(DISMISS_KEY);
   } catch {
     return null;
-  }
-}
-
-export function copyText(text: string): boolean {
-  /* navigator.clipboard requires a secure context and is unavailable on
-   * file:// WebUI pages; the legacy execCommand path is the one that works
-   * in KSU/MMRL WebViews. */
-  const previousFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
-  const ta = document.createElement('textarea');
-  try {
-    ta.value = text;
-    ta.readOnly = true;
-    ta.tabIndex = -1;
-    ta.style.position = 'fixed';
-    ta.style.opacity = '0';
-    document.body.appendChild(ta);
-    ta.select();
-    return document.execCommand('copy');
-  } catch {
-    return false;
-  } finally {
-    ta.remove();
-    if (previousFocus?.isConnected) previousFocus.focus({ preventScroll: true });
   }
 }
 
@@ -141,7 +120,7 @@ export function LoginHero(props: { showStopped?: boolean } = {}): JSX.Element {
     if (res.ok) showToast(t('dash_action_done'), 'ok');
     else toastApiError(t('op_failed'), res);
     clearTimeout(refreshTimer);
-    refreshTimer = setTimeout(() => void refreshStatus({ afterCurrent: true }), 1500);
+    refreshTimer = setTimeout(() => void refreshStatus({ afterCurrent: true }), LOGIN_REFRESH_DELAY_MS);
   }
 
   return (
@@ -240,10 +219,7 @@ export function LoginHero(props: { showStopped?: boolean } = {}): JSX.Element {
                       <div class="btn-row">
                         <Button
                           variant="tonal"
-                          onClick={() => {
-                            if (copyText(url())) showToast(t('copied'), 'ok');
-                            else showToast(t('op_failed'), 'err');
-                          }}
+                          onClick={() => copyWithToast(url())}
                         >
                           <MdIcon name="content_copy" size={18} /> {t('copy')}
                         </Button>

@@ -1,37 +1,33 @@
 import { For, type JSX } from 'solid-js';
 import { t, type I18nKey } from '../i18n';
 import type { ToolsKey } from '../i18n-tools';
-import { MdIcon, type IconName } from '../icons';
+import { MdIcon } from '../icons';
+import { routeIcon, type RouteName } from '../navigation';
 import './tools.css';
 
-type Tool = { route: string; label: I18nKey; description: ToolsKey; icon: IconName };
+type Tool = { route: RouteName; label: I18nKey; description: ToolsKey };
 const GROUPS: { title: ToolsKey; tools: Tool[] }[] = [
   {
     title: 'tools_network',
     tools: [
-      { route: 'tunnel', label: 'more_tunnel', description: 'tools_tunnel_desc', icon: 'router' },
-      { route: 'routing', label: 'more_routing', description: 'tools_routing_desc', icon: 'alt_route' },
-      { route: 'serve', label: 'more_serve', description: 'tools_serve_desc', icon: 'dns' },
+      { route: 'tunnel', label: 'more_tunnel', description: 'tools_tunnel_desc' },
+      { route: 'routing', label: 'more_routing', description: 'tools_routing_desc' },
+      { route: 'serve', label: 'more_serve', description: 'tools_serve_desc' },
     ],
   },
   {
     title: 'tools_device',
     tools: [
-      { route: 'account', label: 'more_account', description: 'tools_account_desc', icon: 'person' },
-      { route: 'files', label: 'more_files', description: 'tools_files_desc', icon: 'folder' },
+      { route: 'account', label: 'more_account', description: 'tools_account_desc' },
+      { route: 'files', label: 'more_files', description: 'tools_files_desc' },
     ],
   },
   {
     title: 'tools_maintenance',
     tools: [
-      { route: 'logs', label: 'more_logs', description: 'tools_logs_desc', icon: 'article' },
-      { route: 'diag', label: 'more_diag', description: 'tools_diag_desc', icon: 'bug_report' },
-      {
-        route: 'settings',
-        label: 'more_settings',
-        description: 'tools_settings_desc',
-        icon: 'settings',
-      },
+      { route: 'logs', label: 'more_logs', description: 'tools_logs_desc' },
+      { route: 'diag', label: 'more_diag', description: 'tools_diag_desc' },
+      { route: 'settings', label: 'more_settings', description: 'tools_settings_desc' },
     ],
   },
 ];
@@ -49,7 +45,7 @@ export default function More(): JSX.Element {
                 {(item) => (
                   <a class="tool-link" href={'#/' + item.route}>
                     <span class="tool-link-icon">
-                      <MdIcon name={item.icon} size={22} />
+                      <MdIcon name={routeIcon(item.route)} size={22} />
                     </span>
                     <span class="tool-link-copy">
                       <span class="tool-link-name">{t(item.label)}</span>

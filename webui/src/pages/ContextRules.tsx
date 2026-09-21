@@ -1,7 +1,8 @@
 import { createMemo, createSignal, For, onMount, Show, type JSX } from 'solid-js';
 import { createApiScope, hasRoot } from '../api';
 import { t, type I18nKey } from '../i18n';
-import { Card, ErrorState, SkeletonRows, StatusBadge } from '../components/Basics';
+import { Card, SkeletonRows, StatusBadge } from '../components/Basics';
+import { LoadGate } from '../components/LoadGate';
 import { Button, Select, TextField } from '../components/ui';
 import { showToast } from '../components/Toast';
 
@@ -149,8 +150,11 @@ export default function ContextRules(props: { locked: boolean; onPending: () => 
             </p>}
           </Show>
         </div>
-        <Show when={error()}><ErrorState text={error()} /></Show>
-        <Show when={rules() !== null} fallback={<Show when={!error()}><SkeletonRows rows={3} /></Show>}>
+        <LoadGate
+          ready={rules() !== null}
+          error={error()}
+          skeleton={<SkeletonRows rows={3} />}
+        >
           <Show when={textMode()} fallback={
             <>
               <Show when={!rows().length}><p class="tool-hint">{t('context_empty')}</p></Show>
@@ -186,7 +190,7 @@ export default function ContextRules(props: { locked: boolean; onPending: () => 
             <div class="tool-actions"><Button type="submit" disabled={locked()}>{t('context_apply_rule')}</Button><Button variant="text" disabled={locked()} onClick={() => setDraft(null)}>{t('cancel')}</Button></div>
           </form>}</Show>
           <div class="tool-actions"><Button busy={busy()} disabled={locked() || Boolean(draft())} onClick={() => void save()}>{t('save')}</Button></div>
-        </Show>
+        </LoadGate>
       </div>
     </Card>
   );

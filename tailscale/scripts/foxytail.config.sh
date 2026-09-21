@@ -10,6 +10,9 @@ _conf_has_key() {
     foxytail.conf:TS_MODE | foxytail.conf:SOCKS_PORT | foxytail.conf:DNS_PORT | foxytail.conf:MAGIC_DNS | foxytail.conf:IPV6 | foxytail.conf:ROUTE_TABLE | foxytail.conf:FWMARK | foxytail.conf:FWMARK_MASK | foxytail.conf:WATCHDOG | foxytail.conf:WATCHDOG_INTERVAL | foxytail.conf:STATS_INTERVAL | foxytail.conf:LOG_MAX_KB | routes.conf:ROUTE_SCOPE | routes.conf:UID_LIST | routes.conf:ROUTE_SUBNETS) return 0 ;;
     foxytail.conf:DNS_MODE) return 0 ;;
     foxytail.conf:POWER_SAVE | foxytail.conf:STATS | foxytail.conf:CONTEXT | foxytail.conf:WATCHDOG_PROBE | foxytail.conf:WEBUI_AUTO_REFRESH) return 0 ;;
+    # Advanced resident knobs; edited in foxytail.conf, never returned by
+    # cmd_settings_get so the WebUI schema stays unchanged.
+    foxytail.conf:CONTEXT_INTERVAL | foxytail.conf:STATS_RETENTION_DAYS | foxytail.conf:WATCHDOG_RESTART_LIMIT | foxytail.conf:WATCHDOG_RESTART_WINDOW | foxytail.conf:WATCHDOG_COOLDOWN | foxytail.conf:WATCHDOG_BACKEND_BAD_LIMIT) return 0 ;;
     *) return 1 ;;
   esac
 }
@@ -115,6 +118,12 @@ _conf_value_error() {
     ROUTE_TABLE) _num_in_range "$2" 1000 65535 && return 0 ;;
     WATCHDOG_INTERVAL) _num_in_range "$2" 5 300 && return 0 ;;
     STATS_INTERVAL) _num_in_range "$2" 10 3600 && return 0 ;;
+    CONTEXT_INTERVAL) _num_in_range "$2" 5 3600 && return 0 ;;
+    STATS_RETENTION_DAYS) _num_in_range "$2" 1 3650 && return 0 ;;
+    WATCHDOG_RESTART_LIMIT) _num_in_range "$2" 1 100 && return 0 ;;
+    WATCHDOG_RESTART_WINDOW) _num_in_range "$2" 60 86400 && return 0 ;;
+    WATCHDOG_COOLDOWN) _num_in_range "$2" 10 3600 && return 0 ;;
+    WATCHDOG_BACKEND_BAD_LIMIT) _num_in_range "$2" 1 100 && return 0 ;;
     LOG_MAX_KB) _num_in_range "$2" 64 10240 && return 0 ;;
     UID_LIST)
       case "$2" in
@@ -178,6 +187,8 @@ _conf_assign() {
   TS_MODE=bridge ROUTE_TABLE=1052 FWMARK=0x40000000 FWMARK_MASK=0x40000000
   MAGIC_DNS=off DNS_MODE=legacy IPV6=off WATCHDOG=on WATCHDOG_INTERVAL=30 STATS_INTERVAL=60
   POWER_SAVE=off STATS=on CONTEXT=on WATCHDOG_PROBE=on WEBUI_AUTO_REFRESH=on
+  CONTEXT_INTERVAL=20 STATS_RETENTION_DAYS=7 WATCHDOG_RESTART_LIMIT=5
+  WATCHDOG_RESTART_WINDOW=600 WATCHDOG_COOLDOWN=300 WATCHDOG_BACKEND_BAD_LIMIT=3
   LOG_MAX_KB=512 SOCKS_PORT=1099 DNS_PORT=1053 ROUTE_SCOPE=all
   ROUTE_SUBNETS=100.64.0.0/10 UID_LIST=
   while IFS= read -r _lc_record; do

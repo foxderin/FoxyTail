@@ -1,5 +1,6 @@
 import { createSignal, For, Show, type JSX } from 'solid-js';
 import { createApiScope } from '../api';
+import { TRIAL_POLL_MS, TRIAL_COUNTDOWN_MS } from '../config';
 import { pollWhileVisible } from '../schedule';
 import { t } from '../i18n';
 import { Card, ErrorState } from '../components/Basics';
@@ -81,8 +82,8 @@ export default function SettingsTrial(props: {
     setBusy(false);
   }
   pollWhileVisible(() => busy() ? undefined : load(), () =>
-    (!known() && !error()) || (active() && trial()?.status !== 'rollback-failed') ? 3000 : false);
-  pollWhileVisible(() => setNow(Date.now()), () => trial()?.status === 'running' ? 1000 : false);
+    (!known() && !error()) || (active() && trial()?.status !== 'rollback-failed') ? TRIAL_POLL_MS : false);
+  pollWhileVisible(() => setNow(Date.now()), () => trial()?.status === 'running' ? TRIAL_COUNTDOWN_MS : false);
   return <Card title={t('trial_title')} icon="sync" description={t('trial_description')}>
     <Show when={error()}><ErrorState text={error()} onRetry={() => void load()} /></Show>
     <div class="tool-setting wide-control">

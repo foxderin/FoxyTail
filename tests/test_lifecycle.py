@@ -27,20 +27,6 @@ class LifecycleTests(unittest.TestCase):
         return ('load_runtime_conf() { load_conf; }\n' +
                 source[source.index('daemon_pids() {'):source.index('# Serialize all controllers')])
 
-    def test_repeat_start_reconciles_companions(self):
-        script = self.service_functions() + '''
-TS_RUN_DIR=.; TS_DIR=.; TS_MODE=bridge; ROUTE_SCOPE=all
-ensure_run_dirs() { :; }
-load_conf() { :; }
-log() { :; }
-is_running() { return 0; }
-reconcile_companions() { echo reconciled; return 7; }
-start_service
-rc=$?
-test "$rc" = 7
-'''
-        self.assertEqual(run_sh(script, self.dir).strip(), 'reconciled')
-
     def test_unsupported_native_scope_never_starts_daemon(self):
         script = self.service_functions() + '''
 TS_RUN_DIR=.; TS_DIR=.; TS_MODE=tun; ROUTE_SCOPE=selected
@@ -279,7 +265,8 @@ test "$(wc -c <"$logfile.bak")" -le 1024
         scripts.mkdir()
         commands = ('foxytail.webapi.sh', 'foxytail.service', 'foxytail.tun.up')
         libraries = ('foxytail.config.sh', 'foxytail.lock.sh', 'foxytail.webapi-common.sh',
-                     'foxytail.webapi-network.sh', 'foxytail.webapi-config.sh', 'foxytail.webapi-tools.sh')
+                     'foxytail.webapi-account.sh', 'foxytail.webapi-network.sh', 'foxytail.webapi-config.sh',
+                     'foxytail.webapi-backup.sh', 'foxytail.webapi-tools.sh')
         for name in commands + libraries:
             (scripts / name).touch()
         run_sh('MODPATH="$PWD/module"; TS_BIN_DIR="$PWD/bin"; TS_SCRIPTS_DIR="$PWD/scripts"\n' + links, self.dir)

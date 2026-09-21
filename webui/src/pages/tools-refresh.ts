@@ -47,3 +47,28 @@ export function createQueuedRefresh(
     return current;
   };
 }
+
+/** Single-flight page read for explicit buttons and visible polls. A call made
+ * while a read is running is dropped, the busy state covers exactly one read,
+ * and a cancelled or superseded reply is never published.
+ */
+export function createGuardedLoad(
+  read: () => Promise<ApiResult>,
+  publish: (result: ApiResult) => void,
+  setBusy: (busy: boolean) => void,
+): () => Promise<void> {
+  let busy = false;
+  let seq = 0;
+
+  return async () => {
+    if (busy) return;
+    busy = true;
+    setBusy(true);
+    const my = ++seq;
+    const result = await read();
+    busy = false;
+    setBusy(false);
+    if (result.cancelled || my !== seq) return;
+    publish(result);
+  };
+}

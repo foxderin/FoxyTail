@@ -105,12 +105,17 @@ class NetworkRegression(unittest.TestCase):
 TS_SCRIPTS_DIR="$TEST_DIR/scripts"
 TS_BIN_DIR="$TEST_DIR/bin"
 TS_PID_DIR="$TS_RUN_DIR/pids"
+TS_SOCKET="$TS_RUN_DIR/tailscaled.sock"
+TS_DAEMON_PID_FILE="$TS_PID_DIR/tailscaled.pid"
+TUN_IFACE=tailscale0
 ensure_run_dirs() { mkdir -p "$TS_RUN_DIR" "$TS_PID_DIR"; }
 load_conf() { . "$TEST_DIR/config"; }
 load_runtime_conf() { load_conf; }
 conf_apply_runtime() { :; }
 log() { :; }
 pids_of_path() { echo 100; }
+iface_exists() { ip link show dev "${TUN_IFACE}" >/dev/null 2>&1; }
+ts_status_json() { _tsj_r=$1; shift; "$_tsj_r" "$@"; }
 jqr() { jq "$@"; }
 have_jq() { return 0; }
 ''')
@@ -290,7 +295,6 @@ DNS_REASON_FILE="$TS_RUN_DIR/dnsmasq.reason"
 DNS_CONTEXT_FILE="$TS_RUN_DIR/dnsmasq.context.json"
 DNS_BIN="$TS_BIN_DIR/dnsmasq"
 DNS_LOG="$TS_RUN_DIR/dnsmasq.log"
-PID_FILE="$TS_RUN_DIR/dnsmasq.pid"
 TS_SOCKET="$TS_RUN_DIR/tailscaled.sock"
 CHAIN_DNS=FOXY_DNS
 """+dns[dns.index('set_state() {'):dns.index('\ncase "$1" in')]+ '\ndns_pids() { [ -f "$TEST_DIR/alive" ] && echo 123; }\nstop_by_pids() { [ "$FAIL_STOP" != 1 ] && rm -f "$TEST_DIR/alive"; }\ntmo() { cat "$TEST_DIR/current.json"; }\nipv6_module_boot() { echo test-boot; }\nipv6_nat_module_dirs() { :; }\ngetprop() { echo 1.1.1.1; }\nrotate_log() { :; }\n"$@"\n')

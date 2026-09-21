@@ -32,7 +32,9 @@ TS_BIN_DIR="$TEST_DIR/bin"
 TS_SCRIPTS_DIR="$TEST_DIR/scripts"
 TS_RUN_DIR="$TEST_DIR/run"
 TS_PID_DIR="$TS_RUN_DIR/pids"
+TUN_IFACE=tailscale0
 ensure_run_dirs() { mkdir -p "$TS_PID_DIR"; }
+iface_exists() { ip link show dev "${TUN_IFACE}" >/dev/null 2>&1; }
 load_conf() { echo unexpected-desired-conf >>"$TEST_DIR/events"; return 99; }
 load_runtime_conf() {
   TS_MODE=bridge; SOCKS_PORT=1099; IPV6=off

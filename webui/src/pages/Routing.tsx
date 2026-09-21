@@ -9,6 +9,7 @@ import {
   type JSX,
 } from 'solid-js';
 import { createApiScope, execRaw, hasRoot } from '../api';
+import { DEFAULT_TIMEOUT_MS } from '../config';
 import { t, type I18nKey } from '../i18n';
 import { status } from '../state';
 import { Card, SkeletonRows, EmptyState, ErrorState, StatusBadge } from '../components/Basics';
@@ -79,7 +80,7 @@ export default function Routing(): JSX.Element {
     void loadRoutes();
     void execRaw(
       'iptables -m owner --help >/dev/null 2>&1 && echo yes || echo no',
-      15000,
+      DEFAULT_TIMEOUT_MS,
       probeAbort.signal,
     )
       .then((out) => {

@@ -1,4 +1,4 @@
-import { window, commandLog, holdNext, heldReplies, canned, overrides, flush, nav, assert } from './smoke-fixture.mjs';
+import { window, commandLog, holdNext, heldReplies, canned, overrides, flush, nav, magicDnsCard, assert } from './smoke-fixture.mjs';
 
 export async function checkSettings() {
   console.log('backup actions show progress and retain recoverable results across pages');
@@ -131,7 +131,7 @@ export async function checkSettings() {
   const beforeDnsModeNavigation = commandLog.filter(entry => entry.sub === 'dns').length;
   nav('tunnel');
   await flush();
-  const modernDnsCard = () => [...window.document.querySelectorAll('#view .card')].find(card => card.querySelector('h2')?.textContent.includes('MagicDNS'));
+  const modernDnsCard = magicDnsCard;
   const modernDnsCheck = () => window.document.querySelector('[data-testid="dns-actions"] > button');
   const modernDnsBadge = () => window.document.querySelector('[data-testid="dns-capability"] .status-badge');
   assert(commandLog.filter(entry => entry.sub === 'dns').length === beforeDnsModeNavigation && !modernDnsBadge(), 'a DNS mode change never starts an automatic inspection or fabricates an applied status');

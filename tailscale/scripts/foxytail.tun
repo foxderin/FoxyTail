@@ -30,16 +30,11 @@ HEV_CONF="${TS_RUN_DIR}/hev.yaml"
 HEV_LOG="${TS_RUN_DIR}/hev-socks5-tunnel.log"
 PID_FILE="${TS_PID_DIR}/hev-socks5-tunnel.pid"
 TUN_PENDING="${TS_RUN_DIR}/hev.pending"
-TUN_IFACE="tailscale0"
 
 # PIDs of OUR hev-socks5-tunnel instance: argv[0] must be the binary under
 # $TS_BIN_DIR (or its bare name), so other modules' instances never match.
 hev_pids() {
   pids_of_path "${HEV_BIN}"
-}
-
-iface_exists() {
-  ip link show dev "${TUN_IFACE}" >/dev/null 2>&1
 }
 
 # Wait up to 10s for the tunnel interface to appear.

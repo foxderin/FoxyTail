@@ -4,11 +4,12 @@ import { t } from '../i18n';
 import { getTask } from '../tasks';
 import { BACKUP_TASK, backupPath, createBackup, validBackups, validRestorePreview, type BackupFile, type RestorePreview } from '../backup';
 import { Card, ErrorState } from '../components/Basics';
-import { copyText } from '../components/LoginHero';
+import { copyWithToast } from '../clipboard';
 import { confirmDialog } from '../components/ConfirmDialog';
 import { TaskProgress } from '../components/TaskProgress';
 import { showToast, toastApiError } from '../components/Toast';
 import { Button, Select } from '../components/ui';
+import { createGuardedLoad } from './tools-refresh';
 
 export default function SettingsBackup(props: {
   locked: boolean; busy: boolean; setBusy: (busy: boolean) => void;
@@ -25,21 +26,20 @@ export default function SettingsBackup(props: {
   const backupTask = () => getTask(BACKUP_TASK);
   const backupBusy = () => backupTask()?.status === 'running';
   const backupFailed = () => ['error', 'cancelled'].includes(backupTask()?.status || '');
-  async function load() {
-    if (loading()) return;
-    setLoading(true);
-    const res = await scope.api('backup-list');
-    setLoading(false);
-    if (res.cancelled) return;
-    if (!res.ok || !validBackups(res.backups)) {
-      setError(res.error || t('backup_invalid_response'));
-      setBackups([]); setSelected(''); setPreview(null);
-      return;
-    }
-    setBackups(res.backups);
-    setError('');
-    if (!backups().some(item => item.path === selected())) { setSelected(''); setPreview(null); }
-  }
+  const load = createGuardedLoad(
+    () => scope.api('backup-list'),
+    (res) => {
+      if (!res.ok || !validBackups(res.backups)) {
+        setError(res.error || t('backup_invalid_response'));
+        setBackups([]); setSelected(''); setPreview(null);
+        return;
+      }
+      setBackups(res.backups);
+      setError('');
+      if (!backups().some(item => item.path === selected())) { setSelected(''); setPreview(null); }
+    },
+    setLoading,
+  );
   createEffect(() => { backupPath(); void untrack(load); });
   async function inspect() {
     if (!selected() || props.locked || previewBusy()) return;
@@ -81,7 +81,7 @@ export default function SettingsBackup(props: {
         <strong>{t('tools_backup_latest')}</strong>
         <p class="mono" data-testid="backup-path">{backupPath()}</p>
         <p class="tool-hint">{t('tools_backup_file_hint')}</p>
-        <Button variant="text" onClick={() => showToast(t(copyText(backupPath()) ? 'copied' : 'op_failed'), 'info')}>{t('tools_copy_path')}</Button>
+        <Button variant="text" onClick={() => copyWithToast(backupPath(), 'info')}>{t('tools_copy_path')}</Button>
       </div></Show>
     </Card>
     <Card title={t('set_restore')} icon="refresh" description={t('backup_picker_hint')}>

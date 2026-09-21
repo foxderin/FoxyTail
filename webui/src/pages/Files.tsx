@@ -6,7 +6,8 @@ import { t } from '../i18n';
 import { getTask, startTask } from '../tasks';
 import { fmtBytes, fmtTime } from '../format';
 import { Card, SkeletonRows, EmptyState, ErrorState, MetricCard } from '../components/Basics';
-import { copyText } from '../components/LoginHero';
+import { LoadGate } from '../components/LoadGate';
+import { copyWithToast } from '../clipboard';
 import { TaskButton, TaskProgress } from '../components/TaskProgress';
 import { showToast } from '../components/Toast';
 import { MdIcon } from '../icons';
@@ -140,12 +141,7 @@ export default function Files(): JSX.Element {
                     </div>
                     <IconButton
                       aria-label={t('tools_copy_path') + ' ' + file.name}
-                      onClick={() =>
-                        showToast(
-                          t(copyText(DATA_DIR + '/files/' + file.name) ? 'copied' : 'op_failed'),
-                          'info',
-                        )
-                      }
+                      onClick={() => copyWithToast(DATA_DIR + '/files/' + file.name, 'info')}
                     >
                       <MdIcon name="content_copy" size={18} />
                     </IconButton>
@@ -185,22 +181,21 @@ export default function Files(): JSX.Element {
               {t('tools_files_path_invalid')}
             </p>
           </Show>
-          <Show when={peers() !== null} fallback={<SkeletonRows rows={1} />}>
-            <Show
-              when={!peerError()}
-              fallback={<ErrorState text={peerError()!} onRetry={() => void loadPeers()} />}
-            >
-              <Show
-                when={peers()!.length}
-                fallback={
-                  <div>
-                    <EmptyState text={t('tools_no_peers')} icon="group" />
-                    <Button variant="text" onClick={() => void loadPeers()}>
-                      {t('tools_retry')}
-                    </Button>
-                  </div>
-                }
-              >
+          <LoadGate
+            ready={peers() !== null}
+            error={peerError()}
+            onRetry={() => void loadPeers()}
+            skeleton={<SkeletonRows rows={1} />}
+            hasContent={(peers()?.length ?? 0) > 0}
+            empty={
+              <div>
+                <EmptyState text={t('tools_no_peers')} icon="group" />
+                <Button variant="text" onClick={() => void loadPeers()}>
+                  {t('tools_retry')}
+                </Button>
+              </div>
+            }
+          >
                 <Select
                   label={t('files_peer')}
                   value={peer()}
@@ -216,9 +211,7 @@ export default function Files(): JSX.Element {
                     )}
                   </For>
                 </Select>
-              </Show>
-            </Show>
-          </Show>
+          </LoadGate>
           <TaskProgress taskKey={SEND_KEY} />
           <Show when={sendTask()?.status === 'done'}>
             <div class="alert ok" role="status">

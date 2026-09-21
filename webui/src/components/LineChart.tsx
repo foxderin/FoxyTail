@@ -11,7 +11,7 @@ import {
 import { fmtBytes } from '../format';
 import { t } from '../i18n';
 
-export interface ChartSeries {
+interface ChartSeries {
   name: string;
   color: string;
   values: (number | null)[];

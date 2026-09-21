@@ -11,8 +11,8 @@ import {
 } from '../state';
 import { fmtUptime, fmtBytes } from '../format';
 import { Card, KvRow, StatusDot, SkeletonCard } from '../components/Basics';
-import { copyText, LoginHero } from '../components/LoginHero';
-import { showToast } from '../components/Toast';
+import { LoginHero } from '../components/LoginHero';
+import { copyWithToast } from '../clipboard';
 import { MdIcon } from '../icons';
 import { Button, IconButton } from '../components/ui';
 import './network.css';
@@ -62,10 +62,7 @@ export default function Dashboard(): JSX.Element {
             ? t('net_login_hint')
             : t('net_connecting_hint');
   // Keep clipboard access within the original click event on file:// WebViews.
-  const copyAddress = (address: string) => {
-    const copied = copyText(address);
-    showToast(copied ? t('copied') : t('op_failed'), copied ? 'ok' : 'err');
-  };
+  const copyAddress = (address: string) => copyWithToast(address);
 
   return (
     <div class="page-stack network-page">

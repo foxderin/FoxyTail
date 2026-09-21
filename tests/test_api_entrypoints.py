@@ -166,16 +166,23 @@ printf '{"state":"stopped","suffix":"","port":%s,"mode":"%s"}' "$DNS_PORT" "$DNS
     def test_real_diagnostic_timeout_cleans_descendants_and_partial_output(self):
         self.slow_fixture()
         tools = self.scripts / 'foxytail.webapi-tools.sh'
-        tools.write_text(tools.read_text().replace('_op_exec 120 ', '_op_exec 1 '))
+        # The fixture chain needs about a second to reach its slow leaf on a
+        # loaded host, so the timeout must not fire before that leaf is running.
+        tools.write_text(tools.read_text().replace('_op_exec 120 ', '_op_exec 4 '))
         self.env['SLOW_PHASE'] = 'status'
         request = str(int(time.time())) + '_timeout'
         runner = subprocess.Popen(['sh', str(self.api), '--request-id', request, 'diag'],
             env=self.env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, start_new_session=True)
         try:
-            stdout, stderr = runner.communicate(timeout=8)
+            stdout, stderr = runner.communicate(timeout=20)
             self.assertNotEqual(runner.returncode, 0, stdout + stderr)
             self.assertFalse(json.loads(stdout)['ok'])
-            leaf = (self.base / 'leaf-pid').read_text()
+            leaffile = self.base / 'leaf-pid'
+            deadline = time.monotonic() + 5
+            while not leaffile.exists() and time.monotonic() < deadline:
+                time.sleep(0.02)
+            self.assertTrue(leaffile.exists(), 'the timed-out operation never reached its slow descendant')
+            leaf = leaffile.read_text()
             state = subprocess.run(['ps', '-p', leaf, '-o', 'stat='], text=True, capture_output=True)
             self.assertTrue(state.returncode != 0 or state.stdout.strip().startswith('Z'))
             self.assertFalse(list((self.run / 'operations' / request).glob('child.*')))

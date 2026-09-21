@@ -26,7 +26,6 @@ function result(cmd:string,args:string[]) {
     case 'status': return {ok:true,daemon:running?'running':'stopped',backend:scenario==='login'?'NeedsLogin':scenario==='starting'?'NoState':scenario==='approval'?'NeedsMachineAuth':running?'Running':'NoState',mode:config.TS_MODE,self:{hostname:'oneplus-ace',ips:['100.69.138.97','fd7a:115c:a1e0::873a:6110'],relay:''},exitNode:selected?{...selected,rx:selected.rxBytes,tx:selected.txBytes}:null,peers:{online:4,offline:2},magicDns:true,keyExpiry:null,uptime:running?184220:0};
     case 'peers':return {ok:true,peers:scenario==='empty'?[]:peers};
     case 'exitnodes':return {ok:true,peers:scenario==='empty'?[]:peers.filter(p=>p.exitNodeOption)};
-    case 'mode-get':return {ok:true,mode:config.TS_MODE};
     case 'tun':return {ok:true,ifaceUp:running,gateway:'100.69.138.97',hevPid:null,mode:config.TS_MODE,socksPort:1099};
     case 'dns': {
       if (appliedDns.mode === 'legacy') return {ok:true,mode:'legacy',state:running?'running':'stopped',reason:running?'running':'stopped',enabled:appliedDns.enabled,suffix:'example.ts.net',port:appliedDns.port,binary:'/system/bin/dnsmasq',upstreamNative:true};

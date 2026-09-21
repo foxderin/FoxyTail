@@ -325,7 +325,7 @@ test -L "$TS_RUN_DIR/.service-lock" || exit 17
             self.assertFalse((self.directory / name).is_symlink())
             self.assertEqual(list((self.directory / (name + '.waiters')).iterdir()), [])
         route = (ROOT / 'tailscale/scripts/foxytail.route').read_text()
-        route = route[route.index('route_lock() {'):route.index('\niface_exists()')]
+        route = route[route.index('route_lock() {'):route.index('\n# Match every part of the policy rule')]
         self.finish(self.start('''route_lock || exit 1
 test "$(readlink "$TS_RUN_DIR/.conf-write-lock")" = "$_CONF_LOCK_TOKEN" || exit 2
 ''', functions=self.functions + route))

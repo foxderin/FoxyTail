@@ -7,7 +7,6 @@
 #   status       JSON: {"running":bool,...}
 #   collect-once append one JSON sample to $TS_STATS_DIR/YYYY-MM-DD.jsonl
 #   query hourly <YYYY-MM-DD> | daily | topn <n>
-#   recent-files print stats files inside the retention window, oldest first
 
 DIR=$(dirname "$(realpath "$0")")
 # shellcheck source=../settings.sh
@@ -18,8 +17,6 @@ ensure_run_dirs
 umask 027
 
 PID_FILE="${TS_PID_DIR}/foxytail.stats.pid"
-TS_SOCKET="${TS_RUN_DIR}/tailscaled.sock"
-RETENTION_DAYS=7
 
 # _date_lt <a> <b>: true when date string a sorts before b (YYYY-MM-DD).
 # POSIX-safe: test's \< / \> are undefined in POSIX sh (SC3012).
@@ -53,12 +50,12 @@ _in_retention() {
 # Print the retention cutoff: "<epoch> <YYYY-MM-DD>" (date empty when the
 # local date(1) cannot convert epochs).
 _stats_cutoff() {
-  _sco_epoch=$(( $(date +%s) - RETENTION_DAYS * 86400 ))
+  _sco_epoch=$(( $(date +%s) - STATS_RETENTION_DAYS * 86400 ))
   _sco_date=$(date -d "@${_sco_epoch}" +%F 2>/dev/null)
   echo "${_sco_epoch} ${_sco_date}"
 }
 
-# Delete stats files older than RETENTION_DAYS.
+# Delete stats files older than STATS_RETENTION_DAYS.
 prune_stats() {
   _ps_cut=$(_stats_cutoff)
   # shellcheck disable=SC2086 # intentional: "<epoch> <date>" splits into $1/$2
@@ -101,16 +98,16 @@ collect_once() {
     prune_stats
     _stats_day=$_day
   fi
-  if ! _status=$(tmo 10 tailscale --socket="$TS_SOCKET" status --json 2>/dev/null) || [ -z "$_status" ]; then
+  if ! _status=$(ts_status_json tmo 10 tailscale --socket="${TS_SOCKET}" status --json 2>/dev/null) || [ -z "$_status" ]; then
     stats_unreachable
     return $?
   fi
 
   _iface="null"
-  if [ -d /sys/class/net/tailscale0 ]; then
+  if [ -d "/sys/class/net/${TUN_IFACE}" ]; then
     _rx='' _tx=''
-    IFS= read -r _rx </sys/class/net/tailscale0/statistics/rx_bytes 2>/dev/null || :
-    IFS= read -r _tx </sys/class/net/tailscale0/statistics/tx_bytes 2>/dev/null || :
+    IFS= read -r _rx <"/sys/class/net/${TUN_IFACE}/statistics/rx_bytes" 2>/dev/null || :
+    IFS= read -r _tx <"/sys/class/net/${TUN_IFACE}/statistics/tx_bytes" 2>/dev/null || :
     case "$_rx" in '' | *[!0-9]*) _rx=0 ;; esac
     case "$_tx" in '' | *[!0-9]*) _tx=0 ;; esac
     _iface="{\"rx\":${_rx},\"tx\":${_tx}}"
@@ -139,7 +136,7 @@ collect_once() {
     printf '%s:%s\n' "${_sg_pid}" "$(_conf_pid_stamp "${_sg_pid}")"
   done)
   _iface_generation='' _uid_generation=''
-  [ ! -f /sys/class/net/tailscale0/ifindex ] || IFS= read -r _iface_generation </sys/class/net/tailscale0/ifindex
+  [ ! -f "/sys/class/net/${TUN_IFACE}/ifindex" ] || IFS= read -r _iface_generation <"/sys/class/net/${TUN_IFACE}/ifindex"
   [ ! -f "${TS_RUN_DIR}/route.snapshot/generation" ] || IFS= read -r _uid_generation <"${TS_RUN_DIR}/route.snapshot/generation"
   if ! _sample=$(printf '%s' "$_status" | jqr -s -c --argjson ts "$_ts" \
     --argjson iface "$_iface" --arg uids "$_uids" \
@@ -186,10 +183,6 @@ do_start() {
   rm -f "$PID_FILE"
   log Info "foxytail.stats stopped"
   return 0
-}
-
-do_stop() {
-  daemon_stop_pidfile foxytail.stats
 }
 
 do_status() {
@@ -282,11 +275,10 @@ query() {
 
 case "$1" in
   start) do_start ;;
-  stop) do_stop ;;
+  stop) daemon_stop_pidfile foxytail.stats ;;
   status) do_status ;;
   collect-once) collect_once ;;
   query) shift; query "$@" ;;
-  recent-files) stats_recent_files ;;
   *)
     echo "usage: $0 {start|stop|status|collect-once|query ...}" >&2
     exit 1

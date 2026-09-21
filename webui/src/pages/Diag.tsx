@@ -2,8 +2,7 @@ import { createSignal, For, Show, type JSX } from 'solid-js';
 import { t, type I18nKey } from '../i18n';
 import { getTask } from '../tasks';
 import { Card, EmptyState, ErrorState, StatusBadge } from '../components/Basics';
-import { copyText } from '../components/LoginHero';
-import { showToast } from '../components/Toast';
+import { copyWithToast } from '../clipboard';
 import { TaskButton, TaskProgress } from '../components/TaskProgress';
 import { MdIcon } from '../icons';
 import { Button, Select } from '../components/ui';
@@ -96,7 +95,7 @@ export default function Diag(): JSX.Element {
             <p class="mono">{path()}</p>
             <Button
               variant="tonal"
-              onClick={() => showToast(t(copyText(path()) ? 'copied' : 'op_failed'), 'info')}
+              onClick={() => copyWithToast(path(), 'info')}
             >
               <MdIcon name="content_copy" size={18} />
               {t('tools_copy_path')}

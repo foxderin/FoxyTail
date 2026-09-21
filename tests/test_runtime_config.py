@@ -65,9 +65,7 @@ test "$DNS_MODE:$MAGIC_DNS:$WATCHDOG" = legacy:off:on || exit 6
 load_conf || exit 7
 test "$DNS_MODE:$MAGIC_DNS:$WATCHDOG" = local:on:off || exit 8
 ''')
-        service = (ROOT / 'tailscale/scripts/foxytail.service').read_text()
-        functions = service[service.index('daemon_pids() {'):service.index('# Serialize all controllers')]
-        output = self.shell(functions + '''
+        output = self.shell(self.service_functions() + '''
 _SERVICE_RECOVERY=1
 is_running() { return 0; }
 reconcile_companions() { echo "$DNS_MODE:$MAGIC_DNS:$WATCHDOG"; }
@@ -83,11 +81,15 @@ start_service
     def test_warm_start_uses_runtime_even_with_invalid_desired(self):
         self.shell('conf_activate_runtime')
         self.main.write_text('TS_MODE=invalid\n')
-        self.shell(self.service_functions() + '''
+        # A repeated start keeps the runtime snapshot and still reports the
+        # reconciler's failure to its caller.
+        output = self.shell(self.service_functions() + '''
 is_running() { return 0; }
-reconcile_companions() { test "$TS_MODE" = bridge; }
+reconcile_companions() { test "$TS_MODE" = bridge || return 9; echo reconciled; return 7; }
 start_service
+test "$?" = 7
 ''')
+        self.assertEqual(output.strip(), 'reconciled')
 
     def test_resident_reload_does_not_parse_broken_desired_settings(self):
         self.shell('conf_activate_runtime')
