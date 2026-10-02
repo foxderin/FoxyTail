@@ -101,8 +101,30 @@ modern_pref_claim() {
 }
 
 modern_pref_restore() {
+  # tailscaled is required to flip accept-dns back. When the daemon is down
+  # (service stop, crash, reboot), the preference persists in tailscaled
+  # state and the journal entry must survive so the next reconcile can finish
+  # the restore. Failing here would deadlock service stop: cleanup can never
+  # complete, restart aborts, and the daemon never comes back to restore.
+  # Liveness is the daemon process, not the socket file: an unclean exit
+  # (kill -9, OOM) leaves the socket behind, and relying on it would re-block
+  # stop exactly like the unfixed code did.
+  if [ -z "$(pids_of_path "${TS_BIN_DIR}/${TS_DAEMON_CMD}" 2>/dev/null)" ]; then
+    _mr_journal=$(modern_journal_read) || return 0
+    if [ "$(printf '%s' "${_mr_journal}" | jqr '.entries | length')" = 0 ]; then
+      [ "$(cat "${MODERN_REASON}" 2>/dev/null)" != restore-pending ] || rm -f "${MODERN_REASON}"
+    else
+      modern_reason restore-pending daemon-down
+    fi
+    return 0
+  fi
   _mr_journal=$(modern_journal_read) || { modern_reason restore-pending invalid-journal; return 1; }
-  [ "$(printf '%s' "${_mr_journal}" | jqr '.entries | length')" != 0 ] || return 0
+  if [ "$(printf '%s' "${_mr_journal}" | jqr '.entries | length')" = 0 ]; then
+    # Nothing left to restore; drop any stale pending marker so the caller
+    # records a clean stopped state instead of a phantom restore-pending.
+    [ "$(cat "${MODERN_REASON}" 2>/dev/null)" != restore-pending ] || rm -f "${MODERN_REASON}"
+    return 0
+  fi
   _mr_snapshot=$(modern_profile_snapshot) || { modern_reason restore-pending unknown; return 1; }
   _mr_id=$(printf '%s' "${_mr_snapshot}" | jqr -r '.id')
   _mr_entry=$(modern_journal_entry "${_mr_journal}" "${_mr_id}")
@@ -131,4 +153,8 @@ modern_pref_restore() {
     return 1
   fi
   printf '%s\n' restored >"${MODERN_POLICY}"
+  # Successful restore clears any stale restore-pending reason left by an
+  # earlier daemon-down stop, so the caller's final state is accurate.
+  [ "$(cat "${MODERN_REASON}" 2>/dev/null)" != restore-pending ] || rm -f "${MODERN_REASON}"
+  return 0
 }

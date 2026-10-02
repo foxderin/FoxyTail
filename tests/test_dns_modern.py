@@ -18,12 +18,14 @@ class ModernDnsLifecycleTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory(prefix='foxytail-modern-dns-')
         self.addCleanup(self.temp.cleanup)
+        self.addCleanup(self.daemon_down)
         self.base = Path(self.temp.name)
         for directory in ('bin', 'run', 'state'):
             (self.base / directory).mkdir()
         self.env = {**os.environ, 'TEST_DIR': str(self.base),
                     'PATH': str(self.base / 'bin') + os.pathsep + os.environ['PATH'],
-                    'MOCK_STATE': str(self.base / 'kernel.json')}
+                    'MOCK_STATE': str(self.base / 'kernel.json'),
+                    'FOXY_BOOT_ID': 'test-boot-1'}
         (self.base / 'kernel.json').write_text(json.dumps({'calls': [], 'chains': {}, 'rules': {}, 'routes': {}}))
         self.executable('mock', MOCK.replace('for name,rules in selected.items():',
             'for name,rules in selected.items():\n'
@@ -78,6 +80,7 @@ case "$1" in
 esac
 ''')
         self.profile()
+        self.daemon_up()
         (self.base / 'context.json').write_text(json.dumps({'suffix': 'example.ts.net', 'self': 'node-a', 'hosts': []}, separators=(',', ':')))
         self.config()
         self.runner = self.base / 'runner.sh'
@@ -102,6 +105,11 @@ rotate_log() { :; }
 _conf_pid_stamp() { echo fixture; }
 _conf_owner_alive() { kill -0 "${1%%:*}" 2>/dev/null; }
 dns_pids() { :; }
+# tailscaled liveness is separate from the foxydns listener (`alive`): the
+# helper is stopped before pref_restore runs, so keying the daemon check to
+# the helper marker would make every clean stop look daemon-down.
+pids_of_path() { [ -f "$TEST_DIR/tailscaled-alive" ] && echo 100; return 0; }
+TS_DAEMON_CMD=tailscaled
 redirect_teardown() { return 0; }
 redirect6_teardown() { return 0; }
 current_dns_context() { cat "$TEST_DIR/context.json"; }
@@ -155,6 +163,16 @@ load_conf
         path = self.base / 'sets'
         return path.read_text().splitlines() if path.exists() else []
 
+    def daemon_up(self):
+        # tailscaled is assumed to be running by default; individual tests
+        # stop it via daemon_down to exercise the daemon-down restore path.
+        (self.base / 'tailscaled-alive').touch()
+
+    def daemon_down(self):
+        marker = self.base / 'tailscaled-alive'
+        if marker.exists():
+            marker.unlink()
+
     def kernel(self):
         return json.loads((self.base / 'kernel.json').read_text())
 
@@ -205,6 +223,31 @@ load_conf
         self.run_script('modern_dns_start'); self.run_script('modern_dns_stop')
         self.assertEqual(self.sets(), [])
         self.assertFalse(json.loads((self.base / 'profile.json').read_text())['acceptDns'])
+
+    def test_daemon_down_stop_preserves_restore_journal_without_blocking(self):
+        # Service stop kills tailscaled before DNS cleanup runs; the stop must
+        # still succeed and leave a restore-pending marker so the next daemon
+        # start finishes the accept-dns rollback.
+        self.run_script('modern_dns_start')
+        self.assertEqual(self.sets(), ['--accept-dns=false'])
+        self.daemon_down()
+        self.run_script('modern_dns_stop')
+        # No rollback attempt while the daemon is gone.
+        self.assertEqual(self.sets(), ['--accept-dns=false'])
+        entries = json.loads((self.base / 'state/foxydns-preferences.json').read_text())['entries']
+        self.assertEqual(len(entries), 1)
+        self.assertEqual(entries[0]['phase'], 'owned')
+        status = self.status()
+        self.assertEqual(status['reason'], 'restore-pending')
+        self.assertTrue(status['repairNeeded'])
+        # When the daemon returns, reconcile finishes the restore.
+        self.daemon_up()
+        self.run_script('modern_dns_stop')
+        self.assertEqual(self.sets(), ['--accept-dns=false', '--accept-dns=true'])
+        entries = json.loads((self.base / 'state/foxydns-preferences.json').read_text())['entries']
+        self.assertEqual(entries, [])
+        # Successful restore clears the pending marker; final state is stopped.
+        self.assertEqual(self.status()['reason'], 'stopped')
 
     def test_initializing_profile_without_self_retains_restore_journal(self):
         self.run_script('modern_dns_start')
@@ -453,7 +496,7 @@ load_conf
                                         'prefs': {'private': 'must-not-persist'}, 'queries': ['private.example']}))
         self.run_script('modern_dns_start')
         path = self.base / 'run/foxydns.capabilities.json'
-        expected = {'ok': False, 'error': 'INET_DIAG unavailable not supported'}
+        expected = {'ok': False, 'error': 'INET_DIAG unavailable not supported', 'bootId': 'test-boot-1'}
         self.assertEqual(json.loads(path.read_text()), expected)
         self.assertEqual(path.stat().st_mode & 0o777, 0o600)
         stamp = path.stat().st_mtime_ns
@@ -466,7 +509,7 @@ load_conf
         self.assertEqual((self.base / 'service-log').read_text(), log)
         response.unlink()
         self.run_script('modern_dns_start')
-        self.assertEqual(json.loads(path.read_text()), {'ok': True})
+        self.assertEqual(json.loads(path.read_text()), {'ok': True, 'bootId': 'test-boot-1'})
         self.assertIsNone(self.status()['capabilityError'])
 
     def test_malformed_or_failed_probe_cannot_persist_a_success_claim(self):
@@ -478,7 +521,61 @@ load_conf
                 self.run_script('modern_probe_capabilities', ok=False)
                 saved = json.loads((self.base / 'run/foxydns.capabilities.json').read_text())
                 self.assertFalse(saved['ok']); self.assertTrue(saved['error'])
-                self.assertEqual(set(saved), {'ok', 'error'})
+                self.assertEqual(set(saved), {'ok', 'error', 'bootId'})
+
+    def test_capabilities_cache_is_scoped_to_the_boot_that_recorded_it(self):
+        # Kernel reflashes must invalidate the cached verdict: a "not
+        # supported" written under boot N must not survive into boot N+1.
+        response = self.base / 'probe-response.json'
+        response.write_text(json.dumps({'ok': False, 'error': 'INET_DIAG unavailable'}))
+        self.run_script('modern_probe_capabilities', ok=False)
+        self.assertEqual(self.status()['transparentAvailable'], False)
+        self.assertEqual(self.status()['transparentUnavailableReason'], 'INET_DIAG unavailable')
+        # Simulate a kernel reflash: same cache file, different boot id.
+        self.env['FOXY_BOOT_ID'] = 'test-boot-2'
+        status = json.loads(self.run_script('modern_dns_status', '--json'))
+        self.assertIsNone(status['transparentAvailable'])
+        self.assertIsNone(status['transparentUnavailableReason'])
+        # A fresh probe under the new boot records a new verdict.
+        self.env['PROBE_EXIT'] = '0'
+        response.write_text(json.dumps({'ok': True, 'queue': True, 'conntrack': True, 'socketContext': True}))
+        self.run_script('modern_probe_capabilities')
+        saved = json.loads((self.base / 'run/foxydns.capabilities.json').read_text())
+        self.assertEqual(saved, {'ok': True, 'bootId': 'test-boot-2'})
+        self.assertEqual(json.loads(self.run_script('modern_dns_status', '--json'))['transparentAvailable'], True)
+
+    def test_capture_mark_conflict_turns_a_passing_probe_into_a_no_verdict(self):
+        # A passing helper probe is not sufficient when an existing rule can
+        # erase the capture mark — e.g. the OEM wide mark masks documented
+        # for PLR-110. The cached verdict must say "not supported" so the UI
+        # keeps the transparent option greyed out.
+        self.env['PROBE_EXIT'] = '0'
+        response = self.base / 'probe-response.json'
+        response.write_text(json.dumps({'ok': True, 'queue': True, 'conntrack': True, 'socketContext': True}))
+        state = self.kernel()
+        state['chains'].setdefault('iptables:mangle', {})['OUTPUT'] = [
+            ['-p', 'tcp', '-m', 'mark', '--mark', '0x20000000/0xff000000', '-j', 'ACCEPT']]
+        (self.base / 'kernel.json').write_text(json.dumps(state))
+        self.run_script('modern_probe_capabilities', ok=False)
+        saved = json.loads((self.base / 'run/foxydns.capabilities.json').read_text())
+        self.assertFalse(saved['ok'])
+        self.assertIn('0x20000000', saved['error'])
+        self.assertEqual(saved['bootId'], 'test-boot-1')
+
+    def test_queue_ready_short_circuits_the_probe(self):
+        # When our own queue is already owned and ready, probing would
+        # falsely fail (the queue number is taken). The verdict must be
+        # "supported" without ever invoking the helper probe.
+        (self.base / 'probe-response.json').write_text(json.dumps({'ok': False, 'error': 'must-not-be-called'}))
+        # Simulate an active transparent install: helper alive, queue owned.
+        (self.base / 'alive').touch()
+        (self.base / 'run/foxydns.state.json').write_text(json.dumps({
+            'ready': True, 'queueReady': True, 'pid': 100,
+            'instance': 'fixture-instance', 'port': 1054, 'updatedAt': 1}))
+        (self.base / 'run/foxydns.json').write_text('{"listen":"127.0.0.1:1054","mode":"transparent"}')
+        self.run_script('modern_probe_capabilities')
+        saved = json.loads((self.base / 'run/foxydns.capabilities.json').read_text())
+        self.assertEqual(saved, {'ok': True, 'reason': 'queue-active', 'bootId': 'test-boot-1'})
 
 
 if __name__ == '__main__':
