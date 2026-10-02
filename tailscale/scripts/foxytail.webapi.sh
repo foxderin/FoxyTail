@@ -34,11 +34,11 @@ if [ "$1" = --request-id ]; then
 fi
 case "$1:$2" in
   logs:* | control:stop | restore:* | cancel:* | diag-check:* | trial-status:* | trial-confirm:* | trial-revert:* | backup-list:* | restore-preview:*) ;;
-  status:* | tun:* | dns:*) load_runtime_conf || jerr 'invalid runtime configuration; inspect the service log' ;;
+  status:* | tun:* | dns:* | dns-probe:*) load_runtime_conf || jerr 'invalid runtime configuration; inspect the service log' ;;
   *) load_conf || jerr 'invalid configuration; inspect the service log' ;;
 esac
 case "$1" in
-  control | mode-set | exitnode-set | exitnode-clear | login | login-authkey | logout | switch | serve-set | serve-del | funnel-set | funnel-del | routes-set | subnet-routes-set | settings-set | context-set | file-send | file-receive | restore | trial-start | trial-confirm | trial-revert)
+  control | mode-set | exitnode-set | exitnode-clear | login | login-authkey | logout | switch | serve-set | serve-del | funnel-set | funnel-del | routes-set | subnet-routes-set | settings-set | context-set | file-send | file-receive | restore | trial-start | trial-confirm | trial-revert | dns-probe)
     [ ! -f "${TS_DIR}/.installing" ] || jerr 'an upgrade is in progress; retry after it completes' ;;
 esac
 
@@ -56,6 +56,7 @@ case "$1" in
   exitnode-clear) cmd_exitnode_clear ;;
   tun) cmd_tun ;;
   dns) cmd_dns ;;
+  dns-probe) cmd_dns_probe ;;
   login) shift; cmd_login "$@" ;;
   login-authkey) shift; cmd_login_authkey "$1" ;;
   logout) cmd_logout ;;

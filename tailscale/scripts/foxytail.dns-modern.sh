@@ -57,7 +57,45 @@ modern_record_capabilities() {
   [ -z "${_rc_error}" ] || log Warning "MagicDNS transparent capability unavailable: ${_rc_error}"
 }
 
+# Read /proc boot_id so a cached verdict dies with the kernel that produced
+# it. A reflashed or otherwise replaced kernel resets this value; without it
+# a "not supported" verdict would outlive the very patch that fixes it.
+modern_boot_id() {
+  # Tests inject FOXY_BOOT_ID to simulate kernel changes; production reads
+  # the kernel's own boot identifier.
+  if [ -n "${FOXY_BOOT_ID:-}" ]; then printf '%s\n' "${FOXY_BOOT_ID}"; else cat /proc/sys/kernel/random/boot_id 2>/dev/null; fi
+}
+
+# Cache reader shared by modern_dns_status and the legacy passthrough. Prints
+# `{ok,error?}` when the cached verdict was recorded under the current boot,
+# nothing otherwise. Callers distinguish "no verdict" (probe again) from
+# "verdict is no" (grey out the option).
+modern_cached_capabilities() {
+  [ -e "${MODERN_CAPABILITIES}" ] || return 1
+  _mc_boot=$(modern_boot_id)
+  [ -n "${_mc_boot}" ] || return 1
+  jqr -c --arg boot "${_mc_boot}" '
+    select(.bootId == $boot and (.ok | type == "boolean"))
+    | {ok:.ok, error:(.error // ""), reason:(.reason // "")}' \
+    "${MODERN_CAPABILITIES}" 2>/dev/null
+}
+
+# Full verdict for transparent mode. Gates (in order):
+#   1. An owned, ready queue already proves the kernel path works — skip the
+#      probe, which would falsely fail against a live queue.
+#   2. foxydns probe verifies NFQUEUE/conntrack/socketContext.
+#   3. modern_capture_safe verifies no foreign rule can clobber the capture
+#      mark (e.g. OEM wide mark masks that cover 0x20000000).
+#   4. modern_packet_policy_safe verifies OUTPUT policies are ACCEPT.
+# The persisted verdict carries the boot id so kernel changes invalidate it.
 modern_probe_capabilities() {
+  _pc_boot=$(modern_boot_id)
+  [ -n "${_pc_boot}" ] || return 1
+  if modern_queue_ready; then
+    _pc_result=$(jqr -n -c --arg boot "${_pc_boot}" '{ok:true,reason:"queue-active",bootId:$boot}') || return 1
+    modern_record_capabilities "${_pc_result}" || return 1
+    return 0
+  fi
   _pc_output=$(tmo 5 "${MODERN_BIN}" probe --queue "${MODERN_QUEUE}" 2>/dev/null)
   _pc_rc=$?
   _pc_result=$(printf '%s' "${_pc_output}" | jqr -e -c -s --argjson rc "${_pc_rc}" '
@@ -72,6 +110,16 @@ modern_probe_capabilities() {
     [ "${_pc_rc}" != 124 ] || _pc_error='DNS capability probe timed out'
     _pc_result=$(jqr -n -c --arg error "${_pc_error}" '{ok:false,error:$error}') || return 1
   fi
+  # A passing helper probe is not sufficient: the capture mark and the OUTPUT
+  # packet policy must also be compatible with this device's actual rules.
+  if [ "$(printf '%s' "${_pc_result}" | jqr -r '.ok')" = true ]; then
+    if ! modern_capture_safe; then
+      _pc_result=$(jqr -n -c '{ok:false,error:"capture mark 0x20000000 conflicts with an existing rule or mask"}') || return 1
+    elif ! modern_packet_policy_safe; then
+      _pc_result=$(jqr -n -c '{ok:false,error:"OUTPUT chain default policy is not ACCEPT"}') || return 1
+    fi
+  fi
+  _pc_result=$(printf '%s' "${_pc_result}" | jqr -c --arg boot "${_pc_boot}" '. + {bootId:$boot}') || return 1
   modern_record_capabilities "${_pc_result}" || return 1
   printf '%s' "${_pc_result}" | jqr -e '.ok == true' >/dev/null 2>&1
 }
@@ -314,7 +362,17 @@ modern_dns_stop() (
   # A listener must remain while an owned REDIRECT still exists.
   if [ "${_md_rc}" = 0 ]; then modern_stop_process || _md_rc=1; fi
   modern_pref_restore || _md_rc=1
-  if [ "${_md_rc}" = 0 ]; then modern_reason stopped restored; rm -f "${MODERN_MODE}"; fi
+  if [ "${_md_rc}" = 0 ]; then
+    # A pending restore (daemon-down) must survive the stop so the next
+    # reconcile can finish flipping accept-dns back. All other outcomes are
+    # final and safe to forget.
+    if [ "$(cat "${MODERN_REASON}" 2>/dev/null)" = restore-pending ]; then
+      rm -f "${MODERN_MODE}"
+    else
+      modern_reason stopped restored
+      rm -f "${MODERN_MODE}"
+    fi
+  fi
   return "${_md_rc}"
 )
 
@@ -360,7 +418,7 @@ modern_dns_start() (
     elif ! modern_capture_safe; then
       _mn_degraded_reason=capture-mark-conflict
     elif modern_queue_ready; then
-      modern_record_capabilities '{"ok":true}' || return 1
+      modern_record_capabilities "$(jqr -n -c --arg boot "$(modern_boot_id)" '{ok:true,reason:"queue-active",bootId:$boot}')" || return 1
       _mn_mode=transparent
     elif modern_probe_capabilities; then
       _mn_mode=transparent
@@ -528,6 +586,20 @@ modern_dns_status() {
         "${MODERN_CAPABILITIES}" 2>/dev/null)
     fi
   fi
+  # Surface the cached transparent-mode capability independently of the
+  # currently configured mode, so the settings page can grey out the
+  # transparent choice before the user commits to it. `null` means we have
+  # no verdict for the current boot; the caller decides whether to probe.
+  _mo_ta=null; _mo_ta_reason=
+  _mo_ta_cache=$(modern_cached_capabilities)
+  if [ -n "${_mo_ta_cache}" ]; then
+    if [ "$(printf '%s' "${_mo_ta_cache}" | jqr -r '.ok')" = true ]; then
+      _mo_ta=true
+    else
+      _mo_ta=false
+      _mo_ta_reason=$(printf '%s' "${_mo_ta_cache}" | jqr -r '.error | select(type == "string" and length > 0) | gsub("[[:cntrl:]]";" ") | .[0:512]' 2>/dev/null)
+    fi
+  fi
   if [ "${1:-}" = --json ]; then
     jqr -n -c --arg state "${_mo_state}" --arg mode "${_mo_mode}" --arg configured "${DNS_MODE}" --argjson pending "${_mo_pending}" \
       --arg reason "${_mo_reason}" --arg policy "${_mo_policy:-unknown}" \
@@ -535,9 +607,11 @@ modern_dns_status() {
       --argjson ready "${_mo_ready}" --argjson v4 "${_mo_v4}" --argjson v6 "${_mo_v6}" --argjson repair "${_mo_repair}" \
       --argjson native "${_mo_native}" --arg module "$(ipv6_module_status)" --arg ipv6 "${IPV6}" \
       --arg capabilityError "${_mo_capability_error}" \
+      --argjson ta "${_mo_ta}" --arg taReason "${_mo_ta_reason}" \
       '{state:$state,mode:$mode,configuredMode:$configured,pendingMode:$pending,reason:$reason,policyState:$policy,suffix:$suffix,port:$port,binary:$binary,
         enabled:($enabled=="on"),listenerReady:$ready,interception4:$v4,interception6:$v6,repairNeeded:$repair,
         upstreamNative:$native,ipv6ModuleStatus:$module,capabilityError:(if $capabilityError=="" then null else $capabilityError end),
+        transparentAvailable:$ta,transparentUnavailableReason:(if $taReason=="" then null else $taReason end),
         ipv6DnsInterception:(if $v6 then "available" elif $ipv6!="on" then "disabled" else "fallback" end)}'
   else
     printf 'MagicDNS: %s (%s), 127.0.0.1:%s; %s\n' "${_mo_state}" "${_mo_mode}" "${_mo_port}" "${_mo_reason}"

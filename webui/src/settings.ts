@@ -7,7 +7,7 @@ export type Field = {
   range?: [number, number];
   bool?: boolean;
   defaultValue?: string;
-  choices?: { value: string; label: I18nKey; hint: I18nKey }[];
+  choices?: { value: string; label: I18nKey; hint: I18nKey; disabled?: boolean; disabledHint?: I18nKey }[];
 };
 export const NETWORK: Field[] = [
   { key: 'MAGIC_DNS', label: 'tools_magicdns', hint: 'tools_magicdns_desc', bool: true },

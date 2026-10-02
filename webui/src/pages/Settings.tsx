@@ -24,6 +24,10 @@ export default function Settings(): JSX.Element {
   const [trialActive, setTrialActive] = createSignal(false);
   const [saving, setSaving] = createSignal<string | null>(null);
   const [restoreBusy, setRestoreBusy] = createSignal(false);
+  // `null` = never probed; `false` = kernel lacks transparent capture; `true`
+  // = cached probe confirms the kernel can run transparent split DNS.
+  const [transparentAvailable, setTransparentAvailable] = createSignal<boolean | null>(null);
+  const [transparentReason, setTransparentReason] = createSignal<string | null>(null);
   const backupBusy = () => getTask(BACKUP_TASK)?.status === 'running';
   const locked = () => !hasRoot || Boolean(saving()) || restartBusy() || restoreBusy() || backupBusy();
 
@@ -39,6 +43,27 @@ export default function Settings(): JSX.Element {
     const pending = res.restartRequired === true;
     setRestartRequired(pending);
     return pending;
+  }
+  async function loadTransparentCapability() {
+    const res = await scope.api('dns');
+    if (res.cancelled) return;
+    if (res.ok) {
+      const available = res.transparentAvailable;
+      if (available === true || available === false) {
+        setTransparentAvailable(available);
+        setTransparentReason(typeof res.transparentUnavailableReason === 'string' ? res.transparentUnavailableReason : null);
+        return;
+      }
+    }
+    // No cached verdict: run the kernel probe once so the choice reflects the
+    // actual device rather than a stale or absent cache. Probe is fast and
+    // idempotent; failures still record a verdict in the backend cache.
+    const probe = await scope.api('dns-probe');
+    if (probe.cancelled) return;
+    if (probe.ok) {
+      setTransparentAvailable(probe.transparentAvailable === true);
+      setTransparentReason(typeof probe.transparentUnavailableReason === 'string' ? probe.transparentUnavailableReason : null);
+    }
   }
   async function saveKey(field: Field, value: string, el?: HTMLInputElement | HTMLSelectElement) {
     const previous = settings()?.[field.key] ?? field.defaultValue ?? '';
@@ -96,10 +121,27 @@ export default function Settings(): JSX.Element {
     }
     setRestartBusy(false);
   }
-  onMount(() => void loadSettings());
+  onMount(() => {
+    void loadSettings();
+    void loadTransparentCapability();
+  });
   function fieldRow(field: Field): JSX.Element {
     const value = () => settings()?.[field.key] ?? field.defaultValue ?? '';
-    const hint = () => field.choices?.find(choice => choice.value === value())?.hint ?? field.hint;
+    // When the kernel probe reports transparent capture is impossible, pin
+    // the transparent choice as disabled and replace its hint with the
+    // reason. Doing it per-row keeps the change scoped to DNS_MODE without
+    // touching the shared schema.
+    const choices = () => {
+      if (field.key !== 'DNS_MODE' || !field.choices) return field.choices;
+      return field.choices.map((choice) => {
+        if (choice.value !== 'transparent') return choice;
+        if (transparentAvailable() === false) {
+          return { ...choice, disabled: true, hint: 'tools_dns_mode_transparent_unavailable' as const };
+        }
+        return choice;
+      });
+    };
+    const hint = () => choices()?.find(choice => choice.value === value())?.hint ?? field.hint;
     return (
       <div class="tool-setting" style={field.choices ? { 'grid-template-columns': 'minmax(0, 1fr)' } : undefined} data-setting={field.key}>
         <div class="tool-setting-copy">
@@ -117,6 +159,9 @@ export default function Settings(): JSX.Element {
             <span class="tool-hint" role="status">
               {t('tools_saving')}
             </span>
+          </Show>
+          <Show when={field.key === 'DNS_MODE' && transparentAvailable() === false && transparentReason()}>
+            <span class="tool-hint" data-testid="dns-transparent-unavailable">{transparentReason()}</span>
           </Show>
         </div>
         <Show
@@ -141,7 +186,7 @@ export default function Settings(): JSX.Element {
                   const el = e.target as HTMLSelectElement;
                   void saveKey(field, el.value, el);
                 }}>
-                <For each={field.choices}>{(choice) => <option value={choice.value}>{t(choice.label)}</option>}</For>
+                <For each={choices()}>{(choice) => <option value={choice.value} disabled={choice.disabled}>{t(choice.label)}</option>}</For>
               </Select>
             </Show>
           }

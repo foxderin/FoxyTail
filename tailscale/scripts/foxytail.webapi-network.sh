@@ -217,6 +217,8 @@ cmd_dns() {
       listenerReady:(.listenerReady // false),interception4:(.interception4 // false),
       interception6:(.interception6 // false),repairNeeded:.repairNeeded,policyState:.policyState,
       capabilityError:.capabilityError,
+      transparentAvailable:(if .transparentAvailable == null then null else .transparentAvailable end),
+      transparentUnavailableReason:(if .transparentUnavailableReason == null then null else .transparentUnavailableReason end),
       enabled:(.enabled // false),reason:(.reason // ""),binary:(.binary // null),
       upstreamNative:(.upstreamNative // false),
       ipv6DnsInterception:(.ipv6DnsInterception // null),
@@ -225,6 +227,24 @@ cmd_dns() {
     jqr -n -c --argjson p "${DNS_PORT}" --arg enabled "${MAGIC_DNS}" \
       '{ok:true,state:"stopped",suffix:"",port:$p,enabled:($enabled=="on"),
         reason:"DNS status is unavailable",binary:null,upstreamNative:false}'
+  fi
+}
+
+# Force a fresh transparent-mode capability probe. Unlike the dns status
+# passthrough, this runs the kernel probe even when MagicDNS has never been
+# started, so the settings page can decide whether to grey out the
+# transparent choice. The result is cached in foxydns.capabilities.json;
+# callers should re-read dns status afterwards for the reflected state.
+cmd_dns_probe() {
+  [ -x "${TS_SCRIPTS_DIR}/foxytail.dns" ] || jerr 'DNS controller not found'
+  _cdp_out=$("${TS_SCRIPTS_DIR}/foxytail.dns" probe-transparent 2>&1)
+  _cdp_rc=$?
+  if [ "${_cdp_rc}" = 0 ]; then
+    jqr -n -c '{ok:true,transparentAvailable:true}'
+  else
+    _cdp_reason=$(jqr -r '.error // empty' "${TS_RUN_DIR}/foxydns.capabilities.json" 2>/dev/null)
+    [ -n "${_cdp_reason}" ] || _cdp_reason="${_cdp_out:-probe failed}"
+    jqr -n -c --arg r "${_cdp_reason}" '{ok:true,transparentAvailable:false,transparentUnavailableReason:$r}'
   fi
 }
 

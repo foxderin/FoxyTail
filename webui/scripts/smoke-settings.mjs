@@ -93,6 +93,29 @@ export async function checkSettings() {
   await flush();
   assert(dnsModeSelect().value === 'legacy' && !commandLog.slice(beforeInvalidDnsMode).some(entry => entry.sub === 'settings-set'), 'invalid DNS mode values are restored without a backend mutation');
 
+  console.log('transparent mode greys out when the kernel probe denies it');
+  const savedDnsForGrey = canned.dns;
+  canned.dns = { ok: true, mode: 'local', enabled: true, state: 'running', reason: 'local',
+    listenerReady: true, interception4: false, interception6: false, repairNeeded: false,
+    policyState: 'owned', suffix: 'fox.ts.net', port: 1053,
+    transparentAvailable: false, transparentUnavailableReason: 'NFQUEUE kernel does not support required conntrack queue metadata' };
+  nav('dashboard');
+  await flush();
+  nav('settings');
+  await flush();
+  const transparentOption = () => [...(dnsModeSelect()?.options ?? [])].find(opt => opt.value === 'transparent');
+  assert(transparentOption()?.disabled === true, 'a denied transparent probe disables the kernel-dependent choice');
+  const dnsModeCard = () => window.document.querySelector('[data-setting="DNS_MODE"]');
+  canned['settings-get'].settings.DNS_MODE = 'transparent';
+  nav('dashboard');
+  await flush();
+  nav('settings');
+  await flush();
+  assert(/kernel lacks|缺少透明分流能力/.test(dnsModeCard()?.textContent || ''), 'the transparent current value explains the kernel limitation');
+  canned['settings-get'].settings.DNS_MODE = 'legacy';
+  assert(/NFQUEUE kernel/.test(window.document.querySelector('[data-testid="dns-transparent-unavailable"]')?.textContent || ''), 'the actual probe reason surfaces beside the DNS mode setting');
+  canned.dns = savedDnsForGrey;
+
   holdNext.add('settings-set');
   const heldModeIndex = heldReplies.length;
   const beforeLocalMode = commandLog.length;
