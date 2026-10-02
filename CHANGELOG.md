@@ -1,5 +1,11 @@
 # Changelog
 
+## v1.3.7
+
+- 修复 MagicDNS 在 tailscaled 停止时无法清理的死锁：服务 stop 阶段 daemon 已退出时，accept-dns 恢复会被推迟到下次 reconcile，cleanup 不再因此卡死并阻断服务重启；daemon 存活判断改用进程本身，避免异常退出留下的 stale socket 再次阻断 stop。
+- 透明 DNS 模式在内核能力不足或规则冲突时在设置页置灰，不再允许选中一个必失败的配置；能力判定扩展到完整启动门槛（helper probe + capture mark 冲突 + OUTPUT 策略），判定结果按内核 boot_id 缓存，内核重刷后自动失效重判；已运行的 transparent 实例跳过探测直报支持。
+
+
 ## v1.3.6 — 2026-09-21
 
 - 设备页拓扑图改为按实际连接路径绘制：实线表示已建立的直连（提示含对端地址），虚线经对应 DERP 区域中继节点，点线为离线成员；当前使用的出口节点高亮描边。
