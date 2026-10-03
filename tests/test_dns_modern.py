@@ -525,24 +525,58 @@ load_conf
 
     def test_capabilities_cache_is_scoped_to_the_boot_that_recorded_it(self):
         # Kernel reflashes must invalidate the cached verdict: a "not
-        # supported" written under boot N must not survive into boot N+1.
+        # supported" written under boot N must not survive into boot N+1,
+        # and capabilityError must not surface the stale boot's reason
+        # alongside the now-null transparentAvailable.
         response = self.base / 'probe-response.json'
         response.write_text(json.dumps({'ok': False, 'error': 'INET_DIAG unavailable'}))
         self.run_script('modern_probe_capabilities', ok=False)
-        self.assertEqual(self.status()['transparentAvailable'], False)
-        self.assertEqual(self.status()['transparentUnavailableReason'], 'INET_DIAG unavailable')
+        status = self.status()
+        self.assertEqual(status['transparentAvailable'], False)
+        self.assertEqual(status['transparentUnavailableReason'], 'INET_DIAG unavailable')
         # Simulate a kernel reflash: same cache file, different boot id.
         self.env['FOXY_BOOT_ID'] = 'test-boot-2'
         status = json.loads(self.run_script('modern_dns_status', '--json'))
         self.assertIsNone(status['transparentAvailable'])
         self.assertIsNone(status['transparentUnavailableReason'])
+        # capabilityError must come from the same boot-filtered source; the
+        # stale boot's error text must not leak through any status field.
+        self.assertIsNone(status['capabilityError'])
         # A fresh probe under the new boot records a new verdict.
         self.env['PROBE_EXIT'] = '0'
         response.write_text(json.dumps({'ok': True, 'queue': True, 'conntrack': True, 'socketContext': True}))
         self.run_script('modern_probe_capabilities')
         saved = json.loads((self.base / 'run/foxydns.capabilities.json').read_text())
         self.assertEqual(saved, {'ok': True, 'bootId': 'test-boot-2'})
-        self.assertEqual(json.loads(self.run_script('modern_dns_status', '--json'))['transparentAvailable'], True)
+        status = json.loads(self.run_script('modern_dns_status', '--json'))
+        self.assertEqual(status['transparentAvailable'], True)
+        self.assertIsNone(status['capabilityError'])
+
+    def test_capability_error_never_leaks_a_stale_boot_reason(self):
+        # Regression for the L585 fix: when DNS_MODE=transparent and the
+        # persisted reason is transparent-unavailable, capabilityError must
+        # come from the boot-filtered cache — not from a raw read of the
+        # cache file that would leak the previous boot's error text.
+        # Simulate a prior transparent start that failed capability probing
+        # under the current boot, leaving the persistent reason behind.
+        self.config(mode='transparent')
+        (self.base / 'run/foxydns.reason').write_text('transparent-unavailable')
+        response = self.base / 'probe-response.json'
+        response.write_text(json.dumps({'ok': False, 'error': 'INET_DIAG unavailable'}))
+        self.run_script('modern_probe_capabilities', ok=False)
+        status = json.loads(self.run_script('modern_dns_status', '--json'))
+        self.assertEqual(status['reason'], 'transparent-unavailable')
+        self.assertEqual(status['capabilityError'], 'INET_DIAG unavailable')
+        self.assertEqual(status['transparentAvailable'], False)
+        # Reflash the kernel: the verdict is now stale. Pre-fix this status
+        # reported transparentAvailable:null alongside the old boot's error;
+        # post-fix capabilityError follows the same boot-filtered source.
+        self.env['FOXY_BOOT_ID'] = 'test-boot-2'
+        status = json.loads(self.run_script('modern_dns_status', '--json'))
+        self.assertEqual(status['reason'], 'transparent-unavailable')
+        self.assertIsNone(status['transparentAvailable'])
+        self.assertIsNone(status['transparentUnavailableReason'])
+        self.assertIsNone(status['capabilityError'])
 
     def test_capture_mark_conflict_turns_a_passing_probe_into_a_no_verdict(self):
         # A passing helper probe is not sufficient when an existing rule can

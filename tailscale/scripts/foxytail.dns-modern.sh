@@ -579,17 +579,6 @@ modern_dns_status() {
     _mo_v4=false; _mo_v6=false
   fi
   _mo_capability_error=
-  if [ "${_mo_mode}" = transparent ]; then
-    _mo_capability_error=$(printf '%s' "${_ml_state:-}" | jqr -r '(.error // "") | select(type == "string") | gsub("[[:cntrl:]]";" ") | .[0:512]' 2>/dev/null)
-    if [ -z "${_mo_capability_error}" ] && [ "${_mo_reason}" = transparent-unavailable ]; then
-      _mo_capability_error=$(jqr -r 'select(.ok == false) | (.error // "") | select(type == "string") | .[0:512]' \
-        "${MODERN_CAPABILITIES}" 2>/dev/null)
-    fi
-  fi
-  # Surface the cached transparent-mode capability independently of the
-  # currently configured mode, so the settings page can grey out the
-  # transparent choice before the user commits to it. `null` means we have
-  # no verdict for the current boot; the caller decides whether to probe.
   _mo_ta=null; _mo_ta_reason=
   _mo_ta_cache=$(modern_cached_capabilities)
   if [ -n "${_mo_ta_cache}" ]; then
@@ -600,6 +589,13 @@ modern_dns_status() {
       _mo_ta_reason=$(printf '%s' "${_mo_ta_cache}" | jqr -r '.error | select(type == "string" and length > 0) | gsub("[[:cntrl:]]";" ") | .[0:512]' 2>/dev/null)
     fi
   fi
+  if [ "${_mo_mode}" = transparent ]; then
+    _mo_capability_error=$(printf '%s' "${_ml_state:-}" | jqr -r '(.error // "") | select(type == "string") | gsub("[[:cntrl:]]";" ") | .[0:512]' 2>/dev/null)
+    if [ -z "${_mo_capability_error}" ] && [ "${_mo_reason}" = transparent-unavailable ]; then
+      _mo_capability_error=${_mo_ta_reason}
+    fi
+  fi
+
   if [ "${1:-}" = --json ]; then
     jqr -n -c --arg state "${_mo_state}" --arg mode "${_mo_mode}" --arg configured "${DNS_MODE}" --argjson pending "${_mo_pending}" \
       --arg reason "${_mo_reason}" --arg policy "${_mo_policy:-unknown}" \
