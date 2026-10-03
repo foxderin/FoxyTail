@@ -38,7 +38,7 @@ case "$1:$2" in
   *) load_conf || jerr 'invalid configuration; inspect the service log' ;;
 esac
 case "$1" in
-  control | mode-set | exitnode-set | exitnode-clear | login | login-authkey | logout | switch | serve-set | serve-del | funnel-set | funnel-del | routes-set | subnet-routes-set | settings-set | context-set | file-send | file-receive | restore | trial-start | trial-confirm | trial-revert | dns-probe)
+  control | mode-set | exitnode-set | exitnode-clear | login | login-authkey | logout | switch | serve-set | serve-del | funnel-set | funnel-del | routes-set | subnet-routes-set | settings-set | context-set | file-send | file-receive | file-delete | file-clear | file-export | restore | trial-start | trial-confirm | trial-revert | dns-probe)
     [ ! -f "${TS_DIR}/.installing" ] || jerr 'an upgrade is in progress; retry after it completes' ;;
 esac
 
@@ -86,6 +86,10 @@ case "$1" in
   files-inbox) cmd_files_inbox ;;
   file-send) shift; cmd_file_send "$1" "$2" ;;
   file-receive) cmd_file_receive ;;
+  file-delete) shift; cmd_file_delete "$1" ;;
+  file-clear) cmd_file_clear ;;
+  file-export) shift; cmd_file_export "$1" ;;
+  file-download) shift; cmd_file_download "$1" ;;
   backup) cmd_backup ;;
   backup-list) cmd_backup_list ;;
   restore-preview) shift; cmd_restore_preview "$1" ;;

@@ -230,8 +230,10 @@ cmd_file_send() {
     *) jerr "file-send: path must live under /sdcard/" ;;
   esac
   [ -f "${_fs_path}" ] || jerr "file-send: no such file: ${_fs_path}"
+  # Peer accepts a hostname (letters, digits, dots, dashes) or a Tailscale
+  # IP (v4 dotted quad or v6 colon-hex). The CLI validates membership.
   case "$2" in
-    *[!A-Za-z0-9._-]*) jerr "file-send: invalid peer name" ;;
+    *[!A-Za-z0-9._:-]*) jerr "file-send: invalid peer name" ;;
   esac
   _fs_out=$(ts_cli 300 file cp "${_fs_path}" "$2:" 2>&1)
   if [ $? -eq 0 ]; then
@@ -242,8 +244,94 @@ cmd_file_send() {
 }
 
 cmd_file_receive() {
+  # --wait blocks until a new file arrives, so this call returns as soon as
+  # something was fetched. 60s covers slow uplinks; the CLI exits earlier
+  # when the transfer finishes.
   mkdir -p "${FILES_DIR}" 2>/dev/null
-  _fr_out=$(ts_cli 60 file get --wait=false "${FILES_DIR}/" 2>&1) ||
+  _fr_before=$(ls -A "${FILES_DIR}" 2>/dev/null | sort)
+  _fr_out=$(ts_cli 60 file get --wait "${FILES_DIR}/" 2>&1) ||
     jerr "file-receive failed: ${_fr_out:-timeout}"
+  _fr_new=$(ls -A "${FILES_DIR}" 2>/dev/null | sort)
+  # Identify newly-appeared names and best-effort copy them to the public
+  # Download directory; failure leaves the copy in the inbox, never aborts.
+  _fr_exported=0
+  for _fr_name in ${_fr_new}; do
+    case " ${_fr_before} " in *" ${_fr_name} "*) continue ;; esac
+    _fr_src="${FILES_DIR}/${_fr_name}"
+    [ -f "${_fr_src}" ] || continue
+    _fr_dst="/sdcard/Download/${_fr_name}"
+    if cp "${_fr_src}" "${_fr_dst}" 2>/dev/null; then
+      _fr_exported=$((_fr_exported + 1))
+      am broadcast -a android.intent.action.MEDIA_SCANNER_SCAN_FILE \
+        -d "file://${_fr_dst}" >/dev/null 2>&1 || true
+    fi
+  done
+  _fr_count=$(printf '%s\n' "${_fr_new}" | grep -c . 2>/dev/null || echo 0)
+  jqr -n -c --argjson count "${_fr_count}" --argjson exported "${_fr_exported}" \
+    '{ok:true,received:$count,exported:$exported}'
+}
+
+# Inbox item operations: delete one, clear all, export one to Download, or
+# print one for the webapi caller to download. Names are validated to live
+# strictly inside the inbox directory.
+_file_inbox_path() {
+  case "$1" in
+    '' | *..* | */* | *\\*) return 1 ;;
+  esac
+  printf '%s/%s' "${FILES_DIR}" "$1"
+}
+
+cmd_file_delete() {
+  [ -n "$1" ] || jerr "file-delete: expected <name>"
+  _fd_path=$(_file_inbox_path "$1") || jerr "file-delete: invalid name"
+  [ -f "${_fd_path}" ] || jerr "file-delete: no such file: $1"
+  rm -f "${_fd_path}" || jerr "file-delete failed"
   echo '{"ok":true}'
+}
+
+cmd_file_clear() {
+  mkdir -p "${FILES_DIR}" 2>/dev/null
+  _fc_removed=0
+  for _fc_path in "${FILES_DIR}"/*; do
+    [ -f "${_fc_path}" ] || continue
+    rm -f "${_fc_path}" && _fc_removed=$((_fc_removed + 1))
+  done
+  jqr -n -c --argjson r "${_fc_removed}" '{ok:true,removed:$r}'
+}
+
+cmd_file_export() {
+  [ -n "$1" ] || jerr "file-export: expected <name>"
+  _fe_path=$(_file_inbox_path "$1") || jerr "file-export: invalid name"
+  [ -f "${_fe_path}" ] || jerr "file-export: no such file: $1"
+  _fe_dst="/sdcard/Download/$1"
+  # Number-suffix collisions so exports never silently overwrite.
+  _fe_base="${1%.*}"; _fe_ext="${1##*.}"
+  [ "${_fe_base}" = "${_fe_ext}" ] && _fe_ext=
+  _fe_n=1
+  while [ -e "${_fe_dst}" ] && [ ${_fe_n} -lt 100 ]; do
+    if [ -n "${_fe_ext}" ] && [ "${_fe_ext}" != "$1" ]; then
+      _fe_dst="/sdcard/Download/${_fe_base}-${_fe_n}.${_fe_ext}"
+    else
+      _fe_dst="/sdcard/Download/${1}-${_fe_n}"
+    fi
+    _fe_n=$((_fe_n + 1))
+  done
+  cp "${_fe_path}" "${_fe_dst}" 2>/dev/null || jerr "file-export: cannot write ${_fe_dst}"
+  am broadcast -a android.intent.action.MEDIA_SCANNER_SCAN_FILE \
+    -d "file://${_fe_dst}" >/dev/null 2>&1 || true
+  jqr -n -c --arg p "${_fe_dst}" '{ok:true,path:$p}'
+}
+
+cmd_file_download() {
+  [ -n "$1" ] || jerr "file-download: expected <name>"
+  _fdl_path=$(_file_inbox_path "$1") || jerr "file-download: invalid name"
+  [ -f "${_fdl_path}" ] || jerr "file-download: no such file: $1"
+  _fdl_size=$(stat -c %s "${_fdl_path}" 2>/dev/null)
+  case "${_fdl_size}" in '' | *[!0-9]*) _fdl_size=0 ;; esac
+  # Encode as base64 for JSON transport; the webapi framing cannot carry raw
+  # bytes today. 8 MiB cap keeps a single response within shell memory.
+  [ "${_fdl_size}" -le 8388608 ] || jerr "file-download: file too large for inline download (>${_fdl_size} bytes)"
+  _fdl_b64=$(base64 -w0 <"${_fdl_path}" 2>/dev/null) || jerr "file-download: cannot read file"
+  jqr -n -c --arg n "$1" --argjson s "${_fdl_size}" --arg d "${_fdl_b64}" \
+    '{ok:true,name:$n,size:$s,data:$d}'
 }

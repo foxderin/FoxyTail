@@ -186,7 +186,73 @@ cmd_file_receive''', ok=False)
         self.assertNotEqual(result.returncode, 0)
         self.assertIn('disk full', json.loads(result.stdout)['error'])
         self.assertEqual((self.run / 'receive-calls').read_text().splitlines(),
-                         ['60 file get --wait=false ' + str(self.base / 'files') + '/'])
+                         ['60 file get --wait ' + str(self.base / 'files') + '/'])
+
+    def test_file_send_accepts_tailscale_ip_as_peer(self):
+        target = self.sdcard / 'hello.txt'
+        target.write_text('hi')
+        result = self.shell('''ts_cli() {
+  echo "$*" >>"$TS_RUN_DIR/send-calls"
+}
+cmd_file_send ''' + shlex.quote(str(target)) + ''' 100.96.0.31''')
+        self.assertTrue(json.loads(result.stdout)['ok'])
+        self.assertIn('100.96.0.31:', (self.run / 'send-calls').read_text())
+
+    def test_file_send_rejects_peer_with_shell_metachars(self):
+        target = self.sdcard / 'hello.txt'
+        target.write_text('hi')
+        result = self.shell('cmd_file_send ' + shlex.quote(str(target)) + ' "bad;rm -rf /"', ok=False)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('invalid peer', json.loads(result.stdout)['error'])
+
+    def test_file_delete_clear_export_download_lifecycle(self):
+        inbox = self.base / 'files'
+        inbox.mkdir(parents=True, exist_ok=True)
+        (inbox / 'a.txt').write_text('alpha')
+        (inbox / 'b.txt').write_text('beta-content')
+        # export copies to Download, leaving the inbox copy alone
+        result = json.loads(self.shell("cmd_file_export a.txt").stdout)
+        self.assertTrue(result['ok'])
+        self.assertEqual(result['path'], str(self.sdcard / 'Download' / 'a.txt'))
+        exported = self.sdcard / 'Download' / 'a.txt'
+        self.assertEqual(exported.read_text(), 'alpha')
+        self.assertTrue((inbox / 'a.txt').exists())
+        # a second export of the same name must number-suffix, never overwrite
+        result = json.loads(self.shell("cmd_file_export a.txt").stdout)
+        self.assertTrue(result['ok'])
+        self.assertNotEqual(result['path'], str(self.sdcard / 'Download' / 'a.txt'))
+        self.assertEqual((self.sdcard / 'Download' / 'a-1.txt').read_text(), 'alpha')
+        # download returns base64 content
+        result = json.loads(self.shell("cmd_file_download b.txt").stdout)
+        self.assertTrue(result['ok'])
+        import base64
+        self.assertEqual(base64.b64decode(result['data']).decode(), 'beta-content')
+        # delete removes one file
+        result = json.loads(self.shell("cmd_file_delete b.txt").stdout)
+        self.assertTrue(result['ok'])
+        self.assertFalse((inbox / 'b.txt').exists())
+        self.assertTrue((inbox / 'a.txt').exists())
+        # clear removes the rest
+        result = json.loads(self.shell('cmd_file_clear').stdout)
+        self.assertTrue(result['ok'])
+        self.assertEqual(result['removed'], 1)
+        self.assertEqual(list(inbox.iterdir()), [])
+
+    def test_file_ops_reject_path_escape(self):
+        inbox = self.base / 'files'
+        inbox.mkdir(parents=True, exist_ok=True)
+        outside = self.base / 'outside.txt'
+        outside.write_text('secret')
+        for cmd in ("cmd_file_delete '../outside.txt'",
+                    "cmd_file_download '../outside.txt'",
+                    "cmd_file_export '../outside.txt'",
+                    "cmd_file_delete 'a/b'",
+                    "cmd_file_download '..'",
+                    "cmd_file_delete ''"):
+            with self.subTest(cmd=cmd):
+                result = self.shell(cmd, ok=False)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertTrue(outside.exists(), cmd)
 
 
 if __name__ == '__main__':

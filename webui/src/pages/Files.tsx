@@ -61,6 +61,53 @@ export default function Files(): JSX.Element {
     setPeers(list);
     if (!list.some((node) => node.hostname === peer())) setPeer(list[0]?.hostname ?? '');
   }
+  async function downloadFile(name: string) {
+    const res = await scope.api('file-download', name);
+    if (!res.ok) {
+      showToast(res.error || t('error'), 'err');
+      return;
+    }
+    // Decode base64 → blob → anchor download.
+    const b64 = (res.data as string) || '';
+    const bin = atob(b64);
+    const bytes = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+    const blob = new Blob([bytes], { type: 'application/octet-stream' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = name;
+    a.click();
+    URL.revokeObjectURL(url);
+    showToast(t('files_download_started'), 'ok');
+  }
+  async function exportFile(name: string) {
+    const res = await scope.api('file-export', name);
+    if (!res.ok) {
+      showToast(res.error || t('error'), 'err');
+      return;
+    }
+    showToast(t('files_exported_to') + ' ' + ((res.path as string) || ''), 'ok');
+  }
+  async function deleteFile(name: string) {
+    const res = await scope.api('file-delete', name);
+    if (!res.ok) {
+      showToast(res.error || t('error'), 'err');
+      return;
+    }
+    showToast(t('files_deleted'), 'ok');
+    void loadInbox();
+  }
+  async function clearInbox() {
+    const res = await scope.api('file-clear');
+    if (!res.ok) {
+      showToast(res.error || t('error'), 'err');
+      return;
+    }
+    showToast(t('files_cleared') + ' (' + String(res.removed ?? 0) + ')', 'ok');
+    void loadInbox();
+  }
+
   onMount(() => {
     void loadInbox();
     void loadPeers();
@@ -117,13 +164,26 @@ export default function Files(): JSX.Element {
             fallback={<ErrorState text={loadError()!} onRetry={() => void loadInbox()} />}
           >
             <Show when={(files()?.length ?? 0) > 0}>
-              <TextField
-                label={t('tools_file_search')}
-                aria-label={t('tools_file_search')}
-                value={filter()}
-                onInput={(e) => setFilter((e.target as HTMLInputElement).value)}
-                leading-icon={<MdIcon name="search" size={18} />}
-              />
+              <div class="tool-row-wrap" style="display:flex;gap:8px;align-items:flex-end;">
+                <div style="flex:1">
+                  <TextField
+                    label={t('tools_file_search')}
+                    aria-label={t('tools_file_search')}
+                    value={filter()}
+                    onInput={(e) => setFilter((e.target as HTMLInputElement).value)}
+                    leading-icon={<MdIcon name="search" size={18} />}
+                  />
+                </div>
+                <Button
+                  variant="text"
+                  disabled={!hasRoot}
+                  onClick={() => void clearInbox()}
+                  aria-label={t('files_clear')}
+                >
+                  <MdIcon name="delete" size={18} />
+                  {t('files_clear')}
+                </Button>
+              </div>
             </Show>
             <Show
               when={visibleFiles().length}
@@ -144,6 +204,27 @@ export default function Files(): JSX.Element {
                       onClick={() => copyWithToast(DATA_DIR + '/files/' + file.name, 'info')}
                     >
                       <MdIcon name="content_copy" size={18} />
+                    </IconButton>
+                    <IconButton
+                      aria-label={t('files_download') + ' ' + file.name}
+                      disabled={!hasRoot}
+                      onClick={() => void downloadFile(file.name)}
+                    >
+                      <MdIcon name="download" size={18} />
+                    </IconButton>
+                    <IconButton
+                      aria-label={t('files_export') + ' ' + file.name}
+                      disabled={!hasRoot}
+                      onClick={() => void exportFile(file.name)}
+                    >
+                      <MdIcon name="open_in_new" size={18} />
+                    </IconButton>
+                    <IconButton
+                      aria-label={t('files_delete') + ' ' + file.name}
+                      disabled={!hasRoot}
+                      onClick={() => void deleteFile(file.name)}
+                    >
+                      <MdIcon name="delete" size={18} />
                     </IconButton>
                   </div>
                 )}

@@ -97,8 +97,10 @@ const zh = {
 
   files_title: '文件', files_inbox: '收件箱', files_empty: '收件箱为空',
   files_send: '发送文件', files_path: '/sdcard 下的文件路径', files_path_hint: '/sdcard/Download/example.zip',
-  files_peer: '目标节点', files_send_btn: '发送', files_receive: '拉取待接收文件',
+  files_peer: '目标节点', files_peer_hint: '主机名或 Tailscale IP', files_send_btn: '发送', files_receive: '拉取待接收文件',
   files_sent: '发送完成', files_received: '拉取完成',
+  files_download: '下载', files_export: '导出到 Download', files_delete: '删除', files_clear: '清空收件箱',
+  files_deleted: '已删除', files_cleared: '已清空', files_exported_to: '已导出到', files_download_started: '已开始下载',
 
   logs_title: '日志', logs_daemon: '守护进程', logs_service: '服务脚本',
   logs_follow: '跟随滚动', logs_empty: '日志为空',
@@ -228,8 +230,10 @@ const en: Record<I18nKey, string> = {
 
   files_title: 'Files', files_inbox: 'Inbox', files_empty: 'Inbox is empty',
   files_send: 'Send file', files_path: 'File path under /sdcard', files_path_hint: '/sdcard/Download/example.zip',
-  files_peer: 'Target peer', files_send_btn: 'Send', files_receive: 'Fetch waiting files',
+  files_peer: 'Target peer', files_peer_hint: 'Hostname or Tailscale IP', files_send_btn: 'Send', files_receive: 'Fetch waiting files',
   files_sent: 'File sent', files_received: 'Fetch done',
+  files_download: 'Download', files_export: 'Export to Downloads', files_delete: 'Delete', files_clear: 'Clear inbox',
+  files_deleted: 'Deleted', files_cleared: 'Cleared', files_exported_to: 'Exported to', files_download_started: 'Download started',
 
   logs_title: 'Logs', logs_daemon: 'Daemon', logs_service: 'Service',
   logs_follow: 'Follow', logs_empty: 'Log is empty',
