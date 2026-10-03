@@ -1,5 +1,11 @@
 # Changelog
 
+## v1.3.8
+
+- 修复透明 DNS 状态在内核重刷后的自相矛盾：`transparentAvailable` 与 `capabilityError` 现共用同一份按 boot_id 过滤的缓存，旧内核的失败原因不会再漏到新内核的状态输出。
+- Taildrop 收件闭环：拉取改为阻塞等待新文件，收到后自动复制到 `/sdcard/Download` 并触发媒体扫描；收件箱新增下载/导出/删除单个与清空全部操作；发送接受 Tailscale IP 作为目标。发送进度、浏览器直传、Android 分享接入延后到后续版本（见 `docs/plans/2026-10-03-taildrop-overhaul.zh-CN.md`）。
+
+
 ## v1.3.7
 
 - 修复 MagicDNS 在 tailscaled 停止时无法清理的死锁：服务 stop 阶段 daemon 已退出时，accept-dns 恢复会被推迟到下次 reconcile，cleanup 不再因此卡死并阻断服务重启；daemon 存活判断改用进程本身，避免异常退出留下的 stale socket 再次阻断 stop。
