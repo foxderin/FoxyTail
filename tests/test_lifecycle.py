@@ -20,7 +20,7 @@ class LifecycleTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
-        self.dir = Path(self.tmp.name)
+        self.dir = Path(self.tmp.name).resolve()
 
     def service_functions(self):
         source = (ROOT / 'tailscale/scripts/foxytail.service').read_text()
@@ -134,8 +134,10 @@ mv() {
   if [ "$1" = "$CANDIDATE/scripts" ]; then return 1; fi
   command mv "$@"
 }
+begin_install || exit 6
 switch_install && exit 7
 rollback_install
+_INSTALL_SWITCH_ACTIVE=0
 ''', self.dir)
         for part in ['bin', 'scripts', 'conf']:
             self.assertEqual((self.dir / part / 'value').read_text(), 'old-' + part)
@@ -203,11 +205,13 @@ installed_pids
                     (directory / 'bin/foxydns').write_text('old-helper')
                 run_sh(functions + '''
 TS_DIR="$PWD"; CANDIDATE="$PWD/candidate"; BACKUP="$PWD/backups/unique"
+begin_install || exit 6
 switch_install || exit 7
 test "$(cat "$TS_DIR/bin/foxydns")" = new-helper || exit 8
 test "$(cat "$TS_DIR/native-checksums.txt")" = new-native-manifest || exit 9
 # A later permission failure must roll back every part of the switched tree.
 rollback_install
+_INSTALL_SWITCH_ACTIVE=0
 ''', directory)
                 if had_native:
                     self.assertEqual((directory / 'native-checksums.txt').read_text(), 'old-native-manifest')
@@ -236,6 +240,130 @@ test -f "$TS_DIR/.installing"
         self.assertEqual((self.dir / 'bin/version').read_text(), 'new')
         self.assertEqual((self.dir / 'backups/old/bin/version').read_text(), 'old')
         self.assertFalse((self.dir / 'bin/bin').exists())
+
+    def installer_transaction_fixture(self, directory):
+        for part in ['bin', 'scripts', 'conf']:
+            (directory / part).mkdir(parents=True)
+            (directory / part / 'value').write_text('old-' + part)
+            (directory / 'candidate' / part).mkdir(parents=True)
+            (directory / 'candidate' / part / 'value').write_text('new-' + part)
+        for part in ['settings.sh', 'VERSIONS', 'checksums.txt', 'native-checksums.txt']:
+            (directory / part).write_text('old-' + part)
+            (directory / 'candidate' / part).write_text('new-' + part)
+        for relative in ['state/tailscaled.state', 'files/received', 'backups/retained/bin/user']:
+            path = directory / relative
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text('preserved-' + relative)
+        source = (ROOT / 'customize.sh').read_text()
+        functions = source[source.index('rollback_install() {'):source.index('# Recover an interrupted earlier switch')]
+        recovery = source[source.index('# Recover an interrupted earlier switch'):source.index('mkdir -p "${CANDIDATE}/bin"')]
+        prelude = '''
+TS_DIR="$PWD"; CANDIDATE="$PWD/candidate"; BACKUP="$PWD/backups/42-interrupted"
+ui_print() { :; }
+abort() { echo "$*" >&2; exit 1; }
+'''
+        return prelude + functions, recovery
+
+    def assert_installed_tree_preserved(self, directory):
+        for part in ['bin', 'scripts', 'conf']:
+            self.assertEqual((directory / part / 'value').read_text(), 'old-' + part)
+        for part in ['settings.sh', 'VERSIONS', 'checksums.txt', 'native-checksums.txt']:
+            self.assertEqual((directory / part).read_text(), 'old-' + part)
+        for relative in ['state/tailscaled.state', 'files/received', 'backups/retained/bin/user']:
+            self.assertEqual((directory / relative).read_text(), 'preserved-' + relative)
+        self.assertFalse((directory / '.installing').exists())
+        self.assertFalse((directory / '.install-transaction').exists())
+
+    def test_killed_switch_recovers_journal_and_first_directory_boundaries(self):
+        for boundary in ['journal-before', 'journal-after', 'old-bin-before', 'old-bin-after', 'new-bin-after']:
+            with self.subTest(boundary=boundary):
+                directory = self.dir / boundary
+                functions, recovery = self.installer_transaction_fixture(directory)
+                result = subprocess.run(['sh', '-c', functions + '''
+mv() {
+  boundary=
+  if [ "$2" = "$TS_DIR/.install-transaction" ]; then boundary=journal; fi
+  if [ "$1" = "$TS_DIR/bin" ]; then boundary=old-bin; fi
+  if [ "$1" = "$CANDIDATE/bin" ]; then boundary=new-bin; fi
+  [ "$FAULT" != "$boundary-before" ] || kill -KILL "$$"
+  command mv "$@" || return 1
+  [ "$FAULT" != "$boundary-after" ] || kill -KILL "$$"
+  return 0
+}
+begin_install || exit 2
+: >"$TS_DIR/.installing"
+switch_install || exit 3
+exit 4
+'''], cwd=directory, env={**os.environ, 'FAULT': boundary}, text=True, capture_output=True, timeout=10)
+                self.assertEqual(result.returncode, -9, result.stdout + result.stderr)
+                self.assertTrue((directory / 'backups/42-interrupted').is_dir())
+                journal = directory / '.install-transaction'
+                if boundary != 'journal-before':
+                    self.assertEqual(journal.read_text().strip(), str(directory / 'backups/42-interrupted'))
+                    self.assertEqual(journal.stat().st_mode & 0o777, 0o600)
+                else:
+                    self.assertFalse(journal.exists())
+                    self.assertFalse((directory / '.installing').exists())
+                run_sh(functions + recovery, directory)
+                self.assert_installed_tree_preserved(directory)
+
+    def test_interrupted_journal_publication_cleans_gate_and_private_temporary(self):
+        for boundary in ['before', 'after']:
+            with self.subTest(boundary=boundary):
+                directory = self.dir / boundary
+                functions, _ = self.installer_transaction_fixture(directory)
+                result = subprocess.run(['sh', '-c', functions + '''
+mv() {
+  if [ "$2" = "$TS_DIR/.install-transaction" ]; then
+    [ "$FAULT" != before ] || kill -TERM "$$"
+    command mv "$@" || return 1
+    kill -TERM "$$"
+  fi
+  command mv "$@"
+}
+begin_install || install_abort journal
+'''], cwd=directory, env={**os.environ, 'FAULT': boundary}, text=True, capture_output=True, timeout=10)
+                self.assertNotEqual(result.returncode, 0)
+                self.assert_installed_tree_preserved(directory)
+                self.assertEqual(list(directory.glob('.install-transaction-*')), [])
+                self.assertTrue((directory / 'backups/42-interrupted').is_dir())
+
+    def test_legacy_preswitch_journal_without_backup_recovers_without_data_loss(self):
+        functions, recovery = self.installer_transaction_fixture(self.dir)
+        (self.dir / '.install-transaction').write_text(str(self.dir / 'backups/legacy-interrupted') + '\n')
+        (self.dir / '.installing').touch()
+        run_sh(functions + recovery, self.dir)
+        self.assert_installed_tree_preserved(self.dir)
+        # The recovered installation remains upgradeable, with a distinct
+        # versioned snapshot rather than overwriting an earlier backup.
+        run_sh(functions + '''
+begin_install || exit 2
+switch_install || exit 3
+_INSTALL_SWITCH_ACTIVE=0
+''', self.dir)
+        self.assertEqual((self.dir / 'bin/value').read_text(), 'new-bin')
+        self.assertEqual((self.dir / 'backups/42-interrupted/bin/value').read_text(), 'old-bin')
+        self.assertEqual((self.dir / 'backups/retained/bin/user').read_text(), 'preserved-backups/retained/bin/user')
+
+    def test_backup_creation_and_journal_publish_failures_leave_old_tree_usable(self):
+        for fault in ('mkdir', 'publish'):
+            with self.subTest(fault=fault):
+                directory = self.dir / fault
+                functions, _ = self.installer_transaction_fixture(directory)
+                result = subprocess.run(['sh', '-c', functions + '''
+mkdir() {
+  if [ "$FAULT" = mkdir ] && [ "$2" = "$BACKUP" ]; then return 1; fi
+  command mkdir "$@"
+}
+mv() {
+  if [ "$FAULT" = publish ] && [ "$2" = "$TS_DIR/.install-transaction" ]; then return 1; fi
+  command mv "$@"
+}
+begin_install || install_abort preparation
+'''], cwd=directory, env={**os.environ, 'FAULT': fault}, text=True, capture_output=True, timeout=10)
+                self.assertNotEqual(result.returncode, 0)
+                self.assert_installed_tree_preserved(directory)
+                self.assertEqual(list(directory.glob('.install-transaction-*')), [])
 
     def test_copytruncate_keeps_existing_writer_on_active_inode(self):
         settings = (ROOT / 'tailscale/settings.sh').read_text()

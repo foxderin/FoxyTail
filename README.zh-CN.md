@@ -86,6 +86,8 @@ WebUI 已内置：位于 `webroot/`（纯静态零构建，后端为 `foxytail.w
 - 共 12 页（底部导航 +「更多」分组）：Dashboard · Peers（列表 + 拓扑图：直连/中继路径）· Exit Nodes · Account · Tunnel · Routing · Traffic · Serve · Files（Taildrop）· Logs · Settings · Diagnostics。
 - 无第三方依赖；中/英 i18n 与深浅色主题。
 
+Taildrop 接收数量只统计本次新增文件。自动与手动导出都保留 Download 中已有文件，依次尝试编号至 `-99`，无可用目标时失败但不删除收件箱副本；文件名中的空格保持原样。清空包含隐藏文件，但保留目录。内联下载支持不超过 8 MiB 的文件，更大的文件请导出；编码使用私有临时文件，正常完成或失败退出时清理，不把文件内容放进命令行参数。
+
 <!-- 截图占位：docs/screenshots/*.png（待补充，见 Roadmap） -->
 
 ## WebUI 开发
@@ -109,7 +111,11 @@ WebUI 源码位于 `webui/`（Vite + SolidJS + Material Web 3 组件 + `kernelsu
 
 设置保存后以 WebUI 的“重启应用”或 `/data/adb/foxytail/scripts/start.sh reload` 刷新主服务和驻留组件。`foxytail.service restart` 仅重启网络服务层。升级保留接收文件、自备 dnsmasq、配置和身份；切换前停止旧组件，失败保留回滚记录。
 
+服务启动同时验证所属 daemon 和 LocalAPI 响应，残留 socket 不算就绪，`NeedsLogin` 则是有效的就绪状态。自动重启失败后仍允许看门狗恢复，显式停止继续阻止自动拉起。安装先准备回滚目录再发布事务日志；身份与 DNS 偏好文件先私有暂存再原子发布，身份最后发布，复制失败后仍可重试。
+
 设置页也可选择 **限时试用配置**：以已保存配置为候选，可单独选择运行模式；启动检查通过后，在 30–300 秒内确认保留，否则恢复之前的运行配置。计时由后台进程负责，关闭 WebUI 不影响回退；试用期间后续保存的配置不会被覆盖。检查只确认本机组件状态，仍需自行测试实际目标连通性。备份恢复先从 Download 选择文件并预览差异，恢复时校验相同文件内容；钩子仍只停放供审阅。
+
+配置恢复在切换目录前记录事务。进程中断后，下次获取配置锁时先恢复：未提交的事务恢复旧配置，已提交的事务保留完整候选。恢复失败时阻止配置读写并保留记录供重试，不会把配置目录缺失当成默认设置；已应用运行快照保持独立。
 
 ## 配置
 
@@ -234,6 +240,8 @@ FoxyTail 从不动其他模块的链，开机时自动探测邻居（`foxytail.c
 Android 16 + FlClash 测试机已通过本地 UDP/TCP 与 IPv6 DNS 验证，但缺少 `CONFIG_NETFILTER_NETLINK_GLUE_CT`，现有 OEM mark 规则也阻止透明接管；单独支持 NFQUEUE 和 conntrack 并不足够。这台设备使用本地模式，仍需使用端配置 Tailnet 分域 DNS，未实现免配置的透明共存。完整透明路径通过的是独立的严格 Linux 内核测试。
 
 旧模式依次使用 `/data/adb/foxytail/bin/dnsmasq`、`/system/bin/dnsmasq`、`/vendor/bin/dnsmasq`；三者都不存在时仍需用户提供可信二进制。其公网兜底策略保持原样，以上“无公共兜底”约束针对两个新模式。
+
+旧模式的短名与完整名使用精确 hosts 记录，名为 `dev` 的节点不会接管无关的 `*.dev` 域名。为兼容系统 dnsmasq 2.51 降权后的读取，只将节点名称/IP 映射放在 `/dev/foxytail-dns/hosts`：目录由 root 持有、权限 `0755`，映射文件 `0644`、本机其他用户可读；不放宽 `/data/adb` 权限。成功停止后删除映射，目录为空时一并删除。任一地址族的重定向规则清理失败时保留解析器和映射，报告降级，等待重试清理。
 
 ## IPv6
 

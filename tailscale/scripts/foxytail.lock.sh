@@ -115,6 +115,13 @@ conf_lock_acquire() {
     echo 'configuration is busy; retry' >&2; return 1;
   }
   _CONF_LOCK_HELD=1
+  # The lock module is also usable on its own; settings.sh loads the config
+  # recovery implementation before any configuration operation acquires it.
+  if command -v conf_recover_restore >/dev/null 2>&1 && ! conf_recover_restore; then
+    conf_lock_release
+    echo 'configuration restore recovery failed; retry after correcting storage errors' >&2
+    return 1
+  fi
 }
 
 conf_lock_release() {

@@ -208,7 +208,7 @@ fi
         # replace only process discovery/socket readiness and the daemon binary.
         service = (ROOT / 'tailscale/scripts/foxytail.service').read_text()
         service = service.replace('\ncase "$1" in', '''
-daemon_pids() { :; }
+daemon_pids() { [ ! -f "$TS_TEST_DIR/daemon-args" ] || printf '%s\\n' 123; }
 wait_socket() { wait "$!"; }
 
 case "$1" in''', 1)

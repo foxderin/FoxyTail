@@ -175,6 +175,50 @@ _conf_file_error() {
   { _conf_parse_file "$1" "${2:-${1##*/}}" >/dev/null; } 2>&1
 }
 
+# Called by the configuration lock before any reader or writer can observe a
+# directory swap. The journal lives beside conf, not in volatile runtime state.
+# An uncommitted swap rolls back; a committed one keeps the complete candidate.
+# Every recovery step is repeatable after an untrappable controller exit.
+conf_recover_restore() (
+  _cr_journal="${TS_DIR}/.restore-transaction"
+  [ -e "${_cr_journal}" ] || [ -L "${_cr_journal}" ] || exit 0
+  [ -d "${_cr_journal}" ] && [ ! -L "${_cr_journal}" ] || exit 1
+  for _cr_file in previous staging had-previous; do
+    [ -f "${_cr_journal}/${_cr_file}" ] && [ ! -L "${_cr_journal}/${_cr_file}" ] || exit 1
+  done
+  IFS= read -r _cr_previous <"${_cr_journal}/previous" || exit 1
+  IFS= read -r _cr_staging <"${_cr_journal}/staging" || exit 1
+  IFS= read -r _cr_had_previous <"${_cr_journal}/had-previous" || exit 1
+  case "${_cr_previous}" in conf.bak-?*) ;; *) exit 1 ;; esac
+  case "${_cr_staging}" in .restore.?*) ;; *) exit 1 ;; esac
+  case "${_cr_previous}:${_cr_staging}" in *[!A-Za-z0-9._:-]*|*..*) exit 1 ;; esac
+  case "${_cr_had_previous}" in 0|1) ;; *) exit 1 ;; esac
+  _cr_old="${TS_DIR}/${_cr_previous}"
+  _cr_stage="${TS_DIR}/${_cr_staging}"
+  [ -d "${_cr_stage}" ] && [ ! -L "${_cr_stage}" ] || exit 1
+  if [ -f "${_cr_journal}/committed" ] && [ ! -L "${_cr_journal}/committed" ]; then
+    [ -d "${TS_DIR}/conf" ] && [ ! -L "${TS_DIR}/conf" ] || exit 1
+  elif [ "${_cr_had_previous}" = 1 ]; then
+    if [ -d "${_cr_old}" ] && [ ! -L "${_cr_old}" ]; then
+      if ! rm -rf "${TS_DIR}/conf" || [ -e "${TS_DIR}/conf" ] || [ -L "${TS_DIR}/conf" ]; then
+        echo "restore rollback failed: previous configuration retained at ${_cr_old}" >&2
+        exit 1
+      fi
+      mv "${_cr_old}" "${TS_DIR}/conf" || exit 1
+    else
+      # Either the first rename never happened or rollback already completed.
+      [ ! -e "${_cr_old}" ] && [ ! -L "${_cr_old}" ] &&
+        [ -d "${TS_DIR}/conf" ] && [ ! -L "${TS_DIR}/conf" ] || exit 1
+    fi
+  else
+    rm -rf "${TS_DIR}/conf" || exit 1
+  fi
+  # Retire atomically before removing metadata; a kill during recursive cleanup
+  # must not leave a partially deleted journal blocking the recovered config.
+  mv "${_cr_journal}" "${_cr_stage}/finished" || exit 1
+  rm -rf "${_cr_stage}"
+)
+
 # Must be called under conf_lock_acquire. A restart clears only the revision it
 # captured in its candidate snapshot, so later writes retain their pending marker.
 conf_mark_pending() {

@@ -53,19 +53,11 @@ _restore_archive_safe() {
 }
 
 _restore_cleanup() {
-  if [ "${_rt_committed:-0}" != 1 ] && [ "${_rt_swapped:-0}" = 1 ]; then
-    if rm -rf "${TS_CONF_DIR}" && [ ! -e "${TS_CONF_DIR}" ] && [ ! -L "${TS_CONF_DIR}" ]; then
-      if [ "${_rt_moved:-0}" = 1 ]; then
-        mv "${_rt_old}" "${TS_CONF_DIR}" || echo "restore rollback failed: previous configuration retained at ${_rt_old}" >&2
-      fi
-    else
-      echo "restore rollback could not remove the replacement; previous configuration retained at ${_rt_old}" >&2
-    fi
-  elif [ "${_rt_committed:-0}" != 1 ] && [ "${_rt_moved:-0}" = 1 ]; then
-    if [ ! -e "${TS_CONF_DIR}" ] && [ ! -L "${TS_CONF_DIR}" ]; then
-      mv "${_rt_old}" "${TS_CONF_DIR}" || echo "restore rollback failed: previous configuration retained at ${_rt_old}" >&2
-    else
-      echo "restore rollback destination is occupied; previous configuration retained at ${_rt_old}" >&2
+  if [ "${_rt_journal_owned:-0}" = 1 ]; then
+    if ! conf_recover_restore; then
+      echo "restore recovery pending: previous configuration retained at ${_rt_old}" >&2
+      conf_lock_release
+      return 1
     fi
   fi
   [ "${_rt_committed:-0}" = 1 ] || [ -z "${_rt_parked:-}" ] || rm -rf "${_rt_parked}"
@@ -133,7 +125,7 @@ cmd_restore() (
   conf_lock_acquire || jerr 'restore: configuration is busy'
   [ ! -f "${TS_DIR}/.installing" ] || jerr 'restore: an upgrade is in progress'
   _restore_prepare_next
-  _rt_ts="$(date +%Y%m%d-%H%M%S)-$$"
+  _rt_ts="$(date +%Y%m%d-%H%M%S)-${_rt_tmp##*.}"
   _rt_old="${TS_DIR}/conf.bak-${_rt_ts}"
   _rt_note=''
   # Restored hooks stay in a separate review directory, never executable and
@@ -146,14 +138,28 @@ cmd_restore() (
       _rt_note="hooks parked for review in ${_rt_parked}"
     fi
   done
-  if [ -d "${TS_CONF_DIR}" ]; then
+  # Publish complete recovery metadata before the first live rename. It is
+  # outside run/ so fresh loaders recover even after runtime state is cleared.
+  mkdir "${_rt_tmp}/journal" || jerr 'restore: cannot prepare transaction'
+  _rt_had_previous=0
+  if [ -e "${TS_CONF_DIR}" ] || [ -L "${TS_CONF_DIR}" ]; then
+    [ -d "${TS_CONF_DIR}" ] && [ ! -L "${TS_CONF_DIR}" ] || jerr 'restore: invalid configuration directory'
+    _rt_had_previous=1
+  fi
+  printf '%s\n' "${_rt_old##*/}" >"${_rt_tmp}/journal/previous" &&
+    printf '%s\n' "${_rt_tmp##*/}" >"${_rt_tmp}/journal/staging" &&
+    printf '%s\n' "${_rt_had_previous}" >"${_rt_tmp}/journal/had-previous" || jerr 'restore: cannot write transaction'
+  _rt_journal_owned=1
+  mv "${_rt_tmp}/journal" "${TS_DIR}/.restore-transaction" || jerr 'restore: cannot publish transaction'
+  if [ "${_rt_had_previous}" = 1 ]; then
     mv "${TS_CONF_DIR}" "${_rt_old}" || jerr 'restore: cannot retain previous configuration'
-    _rt_moved=1
   fi
   mv "${_rt_tmp}/next" "${TS_CONF_DIR}" || jerr 'restore: cannot activate configuration; rolling back'
-  _rt_swapped=1
   conf_mark_pending || jerr 'restore: cannot record pending configuration; rolling back'
+  : >"${_rt_tmp}/commit" && mv "${_rt_tmp}/commit" "${TS_DIR}/.restore-transaction/committed" || jerr 'restore: cannot commit configuration; rolling back'
   _rt_committed=1
+  conf_recover_restore || jerr 'restore: cannot finish committed transaction; retry'
+  _rt_journal_owned=0
   conf_lock_release
   jqr -n -c --arg b "${_rt_old}" --arg n "${_rt_note}" '{ok:true,previous:$b,saved:true,applied:false,restartRequired:true,note:(if $n=="" then null else $n end)}'
 )

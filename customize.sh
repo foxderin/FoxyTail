@@ -263,7 +263,7 @@ rollback_install() {
     fi
   done
   if [ "$_ri_ok" = 0 ]; then
-    rm -f "${TS_DIR}/.installing" "${TS_DIR}/.install-transaction"
+    rm -f "${TS_DIR}/.installing" "${TS_DIR}/.install-transaction" "${TS_DIR}/.install-transaction-$$"
   fi
   return "$_ri_ok"
 }
@@ -279,8 +279,26 @@ install_abort() {
   abort "! Installation failed; not reporting success"
 }
 
-switch_install() {
+install_interrupted() {
+  if [ "${_INSTALL_SWITCH_ACTIVE:-0}" = 1 ]; then
+    _INSTALL_SWITCH_ACTIVE=0
+    ui_print "! Interrupted install; restoring previous software"
+    rollback_install || ui_print "! Recovery incomplete; retained journal for the next installation"
+  fi
+}
+
+begin_install() {
+  # The journal must never advertise a rollback directory that does not exist.
+  # Arm cleanup before publishing it or creating the controller gate.
   mkdir -p "$BACKUP" || return 1
+  _INSTALL_SWITCH_ACTIVE=1
+  trap 'install_interrupted' 0
+  trap 'exit 1' HUP INT TERM
+  (umask 077; printf '%s\n' "$BACKUP" >"${TS_DIR}/.install-transaction-$$") &&
+    mv "${TS_DIR}/.install-transaction-$$" "${TS_DIR}/.install-transaction"
+}
+
+switch_install() {
   for _sw_part in bin scripts conf settings.sh VERSIONS checksums.txt native-checksums.txt; do
     # Record absence as well, so rollback removes a newly installed entry.
     if [ -e "${TS_DIR}/${_sw_part}" ]; then
@@ -306,17 +324,15 @@ if [ -f "${TS_DIR}/.install-transaction" ]; then
   esac
   _NEXT_BACKUP=$BACKUP
   BACKUP=$_RECOVERY_BACKUP
-  [ -d "$BACKUP" ] && rollback_install || abort "! Unable to recover previous interrupted installation"
+  # Older installers published the journal before mkdir. A missing backup at
+  # this boundary means no old entry could have been moved; leave data intact.
+  if [ -e "$BACKUP" ] && [ ! -d "$BACKUP" ]; then
+    abort "! Invalid installation backup"
+  fi
+  rollback_install || abort "! Unable to recover previous interrupted installation"
   BACKUP=$_NEXT_BACKUP
 fi
 
-install_interrupted() {
-  if [ "${_INSTALL_SWITCH_ACTIVE:-0}" = 1 ]; then
-    _INSTALL_SWITCH_ACTIVE=0
-    ui_print "! Interrupted install; restoring previous software"
-    rollback_install || ui_print "! Recovery incomplete; retained journal for the next installation"
-  fi
-}
 
 mkdir -p "${CANDIDATE}/bin" "${CANDIDATE}/scripts" "${CANDIDATE}/conf" ||
   abort "! Unable to create installation staging directory"
@@ -403,38 +419,47 @@ quiesce_installed() {
 if ! sh -c 'DIR=$2; . "$1"; load_conf' sh "${STAGE}/root/settings.sh" "${STAGE}/scripts"; then
   abort "! Existing configuration is invalid; refusing to execute the old controller"
 fi
+begin_install || install_abort "cannot prepare installation journal"
 ui_print "- Stopping and verifying the previous installation"
 if ! quiesce_installed; then
-  rm -f "${TS_DIR}/.installing"
-  abort "! Old processes did not stop; old files remain in place"
+  install_abort "old processes did not stop; old files remain in place"
 fi
 if [ -d "$TS_CONF_DIR" ]; then
   cp -a "${TS_CONF_DIR}/." "${CANDIDATE}/conf/" || install_abort "latest configuration snapshot failed"
 fi
 ui_print "- Switching software; backup: ${BACKUP}"
-printf '%s\n' "$BACKUP" >"${TS_DIR}/.install-transaction" || install_abort "cannot record installation journal"
-_INSTALL_SWITCH_ACTIVE=1
-trap 'install_interrupted' 0
-trap 'exit 1' HUP INT TERM
 switch_install || install_abort "file replacement failed"
 rmdir "$CANDIDATE" 2>/dev/null
 
 # Restore identity from an earlier uninstall, only when no active identity exists.
 STATE_BACKUP="/data/adb/foxytail-state.backup"
-if [ -f "$STATE_BACKUP" ] &&
-  [ ! -f "${TS_DIR}/state/tailscaled.state" ] &&
-  [ ! -f "${TS_DIR}/tailscaled.state" ]; then
-  mkdir -p "${TS_DIR}/state" &&
-    cp "$STATE_BACKUP" "${TS_DIR}/state/tailscaled.state" || install_abort "state restore failed"
-  # A DNS preference journal belongs to the identity that created it. Restore
-  # it only alongside that identity; never attach an old journal to a current
-  # account or overwrite a journal retained by an ordinary module upgrade.
+restore_identity() (
+  # Publish the identity last: a failed journal restore must leave the next
+  # install eligible to retry both files. Killed copies remain private staging
+  # files, never active identities, and are ignored on the next attempt.
+  umask 077
+  mkdir -p "${TS_DIR}/state" && chmod 0700 "${TS_DIR}/state" || exit 1
+  _RESTORE_STAGE=$(mktemp -d "${TS_DIR}/state/.restore-XXXXXX") || exit 1
+  trap 'rm -rf "$_RESTORE_STAGE"' 0
+  trap 'exit 1' HUP INT TERM
+  cp "$STATE_BACKUP" "${_RESTORE_STAGE}/tailscaled.state" &&
+    chmod 0600 "${_RESTORE_STAGE}/tailscaled.state" || exit 1
+  # Never attach an old journal to a current identity or overwrite an existing
+  # journal retained by an ordinary module upgrade.
   DNS_PREF_BACKUP="/data/adb/foxytail-dns-preferences.backup"
   DNS_PREF_JOURNAL="${TS_DIR}/state/foxydns-preferences.json"
   if [ -f "$DNS_PREF_BACKUP" ] && [ ! -e "$DNS_PREF_JOURNAL" ] && [ ! -L "$DNS_PREF_JOURNAL" ]; then
-    (umask 077; cp "$DNS_PREF_BACKUP" "$DNS_PREF_JOURNAL" && chmod 0600 "$DNS_PREF_JOURNAL") ||
-      install_abort "DNS preference journal restore failed"
+    cp "$DNS_PREF_BACKUP" "${_RESTORE_STAGE}/foxydns-preferences.json" &&
+      chmod 0600 "${_RESTORE_STAGE}/foxydns-preferences.json" &&
+      mv "${_RESTORE_STAGE}/foxydns-preferences.json" "$DNS_PREF_JOURNAL" || exit 1
   fi
+  mv "${_RESTORE_STAGE}/tailscaled.state" "${TS_DIR}/state/tailscaled.state"
+)
+
+if [ -f "$STATE_BACKUP" ] &&
+  [ ! -f "${TS_DIR}/state/tailscaled.state" ] &&
+  [ ! -f "${TS_DIR}/tailscaled.state" ]; then
+  restore_identity || install_abort "identity and DNS preference restore failed"
   ui_print "- Restored tailscaled identity from a previous install"
 fi
 

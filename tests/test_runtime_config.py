@@ -9,6 +9,8 @@ import shutil
 import json
 import signal
 import time
+import socket
+import sys
 
 from runtime_fixture import install_settings
 
@@ -106,7 +108,7 @@ test "$?" = 7
 TS_DAEMON_CMD=true
 PID_FILE="$TS_RUN_DIR/daemon.pid"
 is_running() { return 1; }
-daemon_pids() { :; }
+daemon_pids() { echo 42; }
 wait_socket() { return 0; }
 update_mod_desc() { :; }
 sleep() { :; }
@@ -201,6 +203,194 @@ conf_activate_runtime && load_runtime_conf && test "$WATCHDOG" = off
         (self.run / 'applied-config').mkdir()
         self.shell('! conf_apply_runtime routes.conf && ! conf_activate_runtime')
         self.assertEqual(list((self.run / 'applied-config').iterdir()), [])
+
+
+    def test_start_rejects_daemon_disappearing_after_socket_readiness(self):
+        self.main.write_text('TS_MODE=proxy\nMAGIC_DNS=off\n')
+        self.shell('conf_activate_runtime')
+        self.shell(self.service_functions() + '''
+_SERVICE_RECOVERY=1
+TS_DAEMON_CMD=true
+PID_FILE="$TS_RUN_DIR/daemon.pid"
+is_running() { return 1; }
+daemon_pids() { :; }
+wait_socket() { return 0; }
+update_mod_desc() { echo "$1" >"$TS_RUN_DIR/description-state"; }
+start_service && exit 1
+test ! -f "$PID_FILE" || exit 2
+test "$(cat "$TS_RUN_DIR/description-state")" = stopped
+''')
+
+
+class ServiceRecoveryTests(unittest.TestCase):
+    """Real service command transitions with private daemon/LocalAPI boundaries."""
+
+    shell = RuntimeConfigTests.shell
+
+    def setUp(self):
+        RuntimeConfigTests.setUp(self)
+        self.main.write_text('TS_MODE=proxy\nMAGIC_DNS=off\n')
+        self.binary = self.base / 'bin'
+        self.binary.mkdir()
+        self.service = self.scripts / 'foxytail.service'
+        self.service.write_text((ROOT / 'tailscale/scripts/foxytail.service').read_text().replace(
+            '#!/system/bin/sh', '#!/bin/sh', 1))
+        self.service.chmod(0o755)
+        watchdog = self.scripts / 'foxytail.watchdog'
+        watchdog.write_text(watchdog.read_text().replace('"$SERVICE" recover', 'sh "$SERVICE" recover'))
+        self.env = {**os.environ, 'MODPATH': str(self.base)}
+        # Host process discovery differs from Android /proc. Keep real process
+        # liveness, launch, socket I/O, locks, and service dispatch intact.
+        with self.settings.open('a') as settings:
+            settings.write('''
+_fixture_daemon_alive() {
+  case "$1" in ''|*[!0-9]*|0|1) return 1 ;; esac
+  _fixture_process=$(ps -p "$1" -o stat= -o command= 2>/dev/null) || return 1
+  case "$_fixture_process" in *"$TS_BIN_DIR/tailscaled"*) ;; *) return 1 ;; esac
+  case "${_fixture_process%% *}" in *Z*) return 1 ;; esac
+  kill -0 "$1" 2>/dev/null
+}
+pids_of_path() {
+  case "$1" in */tailscaled)
+    _fixture_pid=$(cat "$TS_RUN_DIR/owned-daemon.pid" 2>/dev/null)
+    _fixture_daemon_alive "$_fixture_pid" && echo "$_fixture_pid"
+    ;;
+  esac
+}
+_pids_alive() {
+  for _fixture_pid in $1; do
+    _fixture_daemon_alive "$_fixture_pid" && printf '%s ' "$_fixture_pid"
+  done
+}
+''')
+        self.daemon = self.binary / 'tailscaled'
+        self.daemon.write_text('#!' + sys.executable + '\n' + '''
+import json, os, pathlib, socket, sys
+path = pathlib.Path(next(arg.split('=', 1)[1] for arg in sys.argv if arg.startswith('--socket=')))
+run = path.parent
+owned = run / 'owned-daemon.pid'
+owned.write_text(str(os.getpid()))
+if path.exists(): path.unlink()
+server = socket.socket(socket.AF_UNIX)
+os.chdir(run)
+server.bind(path.name)
+server.listen()
+while True:
+    conn, _ = server.accept()
+    if not (run / 'api-unavailable').exists():
+        conn.sendall(json.dumps({'BackendState': 'NeedsLogin'}).encode())
+    conn.close()
+''')
+        self.daemon.chmod(0o755)
+        cli = self.binary / 'tailscale'
+        cli.write_text('#!' + sys.executable + '\n' + '''
+import os, pathlib, socket, sys
+path = pathlib.Path(next(arg.split('=', 1)[1] for arg in sys.argv if arg.startswith('--socket=')))
+client = socket.socket(socket.AF_UNIX)
+client.settimeout(0.5)
+os.chdir(path.parent)
+client.connect(path.name)
+data = client.recv(4096)
+if not data: sys.exit(1)
+print(data.decode())
+''')
+        cli.chmod(0o755)
+        if not shutil.which('timeout'):
+            timeout = self.binary / 'timeout'
+            timeout.write_text('#!' + sys.executable + '\n' + '''
+import subprocess, sys
+try:
+    sys.exit(subprocess.call(sys.argv[2:], timeout=float(sys.argv[1])))
+except subprocess.TimeoutExpired:
+    sys.exit(124)
+''')
+            timeout.chmod(0o755)
+        dns = self.scripts / 'foxytail.dns'
+        dns.write_text('#!/bin/sh\ntest ! -f ' + shlex.quote(str(self.run / 'dns-failure')) + '\n')
+        dns.chmod(0o755)
+        self.addCleanup(self.stop_private_daemon)
+
+    def stop_private_daemon(self):
+        owned = self.run / 'owned-daemon.pid'
+        if owned.exists():
+            pid = int(owned.read_text())
+            process = subprocess.run(['ps', '-p', str(pid), '-o', 'command='],
+                                     text=True, capture_output=True)
+            if str(self.daemon) in process.stdout:
+                try:
+                    os.kill(pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+
+    def control(self, *args, ok=True):
+        result = subprocess.run(['sh', str(self.service), *args], cwd=self.base, env=self.env,
+                                text=True, capture_output=True, timeout=20, start_new_session=True)
+        if ok:
+            logs = ''.join(path.read_text() for path in self.run.glob('*.log'))
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr + logs)
+        return result
+
+    def watchdog_round(self):
+        result = subprocess.run(['sh', str(self.scripts / 'foxytail.watchdog'), 'check-once'],
+                                cwd=self.base, env=self.env, text=True, capture_output=True, timeout=20,
+                                start_new_session=True)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    def test_failed_recovery_teardown_remains_retryable_and_stop_is_respected(self):
+        self.control('start')
+        (self.run / 'dns-failure').touch()
+        self.assertNotEqual(self.control('recover', 'restart', ok=False).returncode, 0)
+        self.assertFalse((self.run / 'manual-stop').exists())
+        self.assertFalse((self.run / 'pids/tailscaled.pid').exists())
+        (self.run / 'dns-failure').unlink()
+        self.watchdog_round()
+        self.assertTrue((self.run / 'pids/tailscaled.pid').read_text().strip().isdigit())
+        (self.run / 'dns-failure').touch()
+        self.assertNotEqual(self.control('stop', ok=False).returncode, 0)
+        (self.run / 'dns-failure').unlink()
+        marker = (self.run / 'manual-stop').read_bytes()
+        self.control('recover', 'restart')
+        self.watchdog_round()
+        self.assertEqual((self.run / 'manual-stop').read_bytes(), marker)
+        self.assertFalse((self.run / 'pids/tailscaled.pid').exists())
+
+    def test_failed_launch_cannot_use_stale_socket_to_report_running(self):
+        stale = socket.socket(socket.AF_UNIX)
+        stale.bind(str(self.run / 'tailscaled.sock'))
+        stale.close()
+        self.daemon.write_text('#!/bin/sh\nexit 1\n')
+        result = self.control('start', ok=False)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertFalse((self.run / 'pids/tailscaled.pid').exists())
+
+    def test_live_daemon_requires_working_local_api_but_not_login(self):
+        (self.run / 'api-unavailable').touch()
+        self.assertNotEqual(self.control('start', ok=False).returncode, 0)
+        self.control('stop')
+        (self.run / 'api-unavailable').unlink()
+        self.control('start')
+        self.assertTrue((self.run / 'pids/tailscaled.pid').read_text().strip().isdigit())
+
+    def test_start_without_optional_timeout_accepts_answering_local_api(self):
+        # Expose real host commands, but omit timeout even when the host has it.
+        for name in ('awk', 'basename', 'cat', 'chmod', 'cksum', 'cmp', 'cp', 'cut',
+                     'date', 'dirname', 'grep', 'id', 'jq', 'ln', 'mkdir', 'mktemp',
+                     'mv', 'nohup', 'ps', 'readlink', 'realpath', 'rm', 'rmdir',
+                     'sed', 'sh', 'sleep', 'sort', 'stat', 'touch', 'tr', 'wc'):
+            target = shutil.which(name)
+            self.assertIsNotNone(target, name)
+            (self.binary / name).symlink_to(target)
+        (self.binary / 'timeout').unlink(missing_ok=True)
+        self.env['PATH'] = str(self.binary)
+        with self.settings.open('a') as settings:
+            settings.write('\nexport PATH="$TS_BIN_DIR:$TS_SCRIPTS_DIR"\n')
+        self.assertIsNone(shutil.which('timeout', path=self.env['PATH']))
+
+        self.control('start')
+        self.assertEqual((self.run / 'pids/tailscaled.pid').read_text().strip(),
+                         (self.run / 'owned-daemon.pid').read_text().strip())
+        self.control('stop')
+        self.assertFalse((self.run / 'pids/tailscaled.pid').exists())
 
 
 class ConfigurationTrialTests(unittest.TestCase):

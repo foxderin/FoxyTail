@@ -248,25 +248,30 @@ cmd_file_receive() {
   # something was fetched. 60s covers slow uplinks; the CLI exits earlier
   # when the transfer finishes.
   mkdir -p "${FILES_DIR}" 2>/dev/null
-  _fr_before=$(ls -A "${FILES_DIR}" 2>/dev/null | sort)
+  # Keep names as individual shell arguments, never whitespace-delimited text.
+  set --
+  for _fr_src in "${FILES_DIR}"/* "${FILES_DIR}"/.[!.]* "${FILES_DIR}"/..?*; do
+    [ -e "${_fr_src}" ] || [ -L "${_fr_src}" ] || continue
+    set -- "$@" "${_fr_src}"
+  done
   _fr_out=$(ts_cli 60 file get --wait "${FILES_DIR}/" 2>&1) ||
     jerr "file-receive failed: ${_fr_out:-timeout}"
-  _fr_new=$(ls -A "${FILES_DIR}" 2>/dev/null | sort)
-  # Identify newly-appeared names and best-effort copy them to the public
-  # Download directory; failure leaves the copy in the inbox, never aborts.
+  # Only newly-appeared regular files count. Export is best-effort and never
+  # removes the inbox copy, including when Download is full or unavailable.
+  _fr_count=0
   _fr_exported=0
-  for _fr_name in ${_fr_new}; do
-    case " ${_fr_before} " in *" ${_fr_name} "*) continue ;; esac
-    _fr_src="${FILES_DIR}/${_fr_name}"
+  for _fr_src in "${FILES_DIR}"/* "${FILES_DIR}"/.[!.]* "${FILES_DIR}"/..?*; do
     [ -f "${_fr_src}" ] || continue
-    _fr_dst="/sdcard/Download/${_fr_name}"
-    if cp "${_fr_src}" "${_fr_dst}" 2>/dev/null; then
+    _fr_seen=0
+    for _fr_old in "$@"; do
+      [ "${_fr_src}" != "${_fr_old}" ] || { _fr_seen=1; break; }
+    done
+    [ "${_fr_seen}" -eq 0 ] || continue
+    _fr_count=$((_fr_count + 1))
+    if _file_export_to_download "${_fr_src}" "${_fr_src##*/}"; then
       _fr_exported=$((_fr_exported + 1))
-      am broadcast -a android.intent.action.MEDIA_SCANNER_SCAN_FILE \
-        -d "file://${_fr_dst}" >/dev/null 2>&1 || true
     fi
   done
-  _fr_count=$(printf '%s\n' "${_fr_new}" | grep -c . 2>/dev/null || echo 0)
   jqr -n -c --argjson count "${_fr_count}" --argjson exported "${_fr_exported}" \
     '{ok:true,received:$count,exported:$exported}'
 }
@@ -292,46 +297,72 @@ cmd_file_delete() {
 cmd_file_clear() {
   mkdir -p "${FILES_DIR}" 2>/dev/null
   _fc_removed=0
-  for _fc_path in "${FILES_DIR}"/*; do
+  for _fc_path in "${FILES_DIR}"/* "${FILES_DIR}"/.[!.]* "${FILES_DIR}"/..?*; do
     [ -f "${_fc_path}" ] || continue
     rm -f "${_fc_path}" && _fc_removed=$((_fc_removed + 1))
   done
   jqr -n -c --argjson r "${_fc_removed}" '{ok:true,removed:$r}'
 }
 
+# Both automatic and manual exports use exclusive creation. The destination
+# stays open for the entire copy: a concurrent exporter cannot truncate it.
+_file_export_to_download() {
+  _fx_base="${2%.*}"; _fx_ext="${2##*.}"
+  [ "${_fx_base}" != "${_fx_ext}" ] || _fx_ext=
+  _fx_n=0
+  while [ "${_fx_n}" -lt 100 ]; do
+    if [ "${_fx_n}" -eq 0 ]; then
+      _fx_dst="/sdcard/Download/$2"
+    elif [ -n "${_fx_ext}" ] && [ "${_fx_ext}" != "$2" ]; then
+      _fx_dst="/sdcard/Download/${_fx_base}-${_fx_n}.${_fx_ext}"
+    else
+      _fx_dst="/sdcard/Download/${2}-${_fx_n}"
+    fi
+    _fx_n=$((_fx_n + 1))
+    [ ! -e "${_fx_dst}" ] && [ ! -L "${_fx_dst}" ] || continue
+    (
+      set -C
+      if { cat "$1" || { rm -f "${_fx_dst}"; exit 2; }; } >"${_fx_dst}"; then
+        exit 0
+      fi
+      exit 3
+    ) 2>/dev/null
+    _fx_rc=$?
+    case "${_fx_rc}" in
+      0)
+        am broadcast -a android.intent.action.MEDIA_SCANNER_SCAN_FILE \
+          -d "file://${_fx_dst}" >/dev/null 2>&1 || true
+        return 0 ;;
+      2) return 1 ;;
+    esac
+    # Exclusive creation can lose a race; only a collision warrants another
+    # candidate. Permission/storage errors fail without touching the inbox.
+    [ -e "${_fx_dst}" ] || [ -L "${_fx_dst}" ] || return 1
+  done
+  return 1
+}
+
 cmd_file_export() {
   [ -n "$1" ] || jerr "file-export: expected <name>"
   _fe_path=$(_file_inbox_path "$1") || jerr "file-export: invalid name"
   [ -f "${_fe_path}" ] || jerr "file-export: no such file: $1"
-  _fe_dst="/sdcard/Download/$1"
-  # Number-suffix collisions so exports never silently overwrite.
-  _fe_base="${1%.*}"; _fe_ext="${1##*.}"
-  [ "${_fe_base}" = "${_fe_ext}" ] && _fe_ext=
-  _fe_n=1
-  while [ -e "${_fe_dst}" ] && [ ${_fe_n} -lt 100 ]; do
-    if [ -n "${_fe_ext}" ] && [ "${_fe_ext}" != "$1" ]; then
-      _fe_dst="/sdcard/Download/${_fe_base}-${_fe_n}.${_fe_ext}"
-    else
-      _fe_dst="/sdcard/Download/${1}-${_fe_n}"
-    fi
-    _fe_n=$((_fe_n + 1))
-  done
-  cp "${_fe_path}" "${_fe_dst}" 2>/dev/null || jerr "file-export: cannot write ${_fe_dst}"
-  am broadcast -a android.intent.action.MEDIA_SCANNER_SCAN_FILE \
-    -d "file://${_fe_dst}" >/dev/null 2>&1 || true
-  jqr -n -c --arg p "${_fe_dst}" '{ok:true,path:$p}'
+  _file_export_to_download "${_fe_path}" "$1" || jerr 'file-export: cannot create an unused file in Download'
+  jqr -n -c --arg p "${_fx_dst}" '{ok:true,path:$p}'
 }
 
-cmd_file_download() {
+cmd_file_download() (
   [ -n "$1" ] || jerr "file-download: expected <name>"
   _fdl_path=$(_file_inbox_path "$1") || jerr "file-download: invalid name"
   [ -f "${_fdl_path}" ] || jerr "file-download: no such file: $1"
-  _fdl_size=$(stat -c %s "${_fdl_path}" 2>/dev/null)
-  case "${_fdl_size}" in '' | *[!0-9]*) _fdl_size=0 ;; esac
-  # Encode as base64 for JSON transport; the webapi framing cannot carry raw
-  # bytes today. 8 MiB cap keeps a single response within shell memory.
+  _fdl_size=$(stat -c %s "${_fdl_path}" 2>/dev/null) || jerr 'file-download: cannot read file size'
+  case "${_fdl_size}" in '' | *[!0-9]*) jerr 'file-download: cannot read file size' ;; esac
+  # Encode as base64 for JSON transport; bound the private staging file and
+  # response size without passing file contents through any exec argument.
   [ "${_fdl_size}" -le 8388608 ] || jerr "file-download: file too large for inline download (>${_fdl_size} bytes)"
-  _fdl_b64=$(base64 -w0 <"${_fdl_path}" 2>/dev/null) || jerr "file-download: cannot read file"
-  jqr -n -c --arg n "$1" --argjson s "${_fdl_size}" --arg d "${_fdl_b64}" \
+  _fdl_tmp=$(mktemp "${TS_RUN_DIR}/.file-download.XXXXXX") || jerr 'file-download: cannot stage file'
+  trap 'rm -f "${_fdl_tmp}"' 0
+  trap 'exit 1' HUP INT TERM
+  base64 -w0 <"${_fdl_path}" >"${_fdl_tmp}" 2>/dev/null || jerr 'file-download: cannot read file'
+  jqr -n -c --arg n "$1" --argjson s "${_fdl_size}" --rawfile d "${_fdl_tmp}" \
     '{ok:true,name:$n,size:$s,data:$d}'
-}
+)

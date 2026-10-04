@@ -3,6 +3,7 @@ import io
 from pathlib import Path
 import shlex
 import subprocess
+import sys
 import tarfile
 import tempfile
 import unittest
@@ -39,10 +40,25 @@ class ApiTestCase(unittest.TestCase):
         source = (self.scripts / 'foxytail.webapi.sh').read_text()
         helpers = source[source.index('# --- Helpers'):source.index('# --- dispatch')]
         self.lib = self.base / 'helpers.sh'
+        platform = ''
+        if sys.platform == 'darwin':
+            # Preserve Android byte/size semantics using real host readers.
+            encoder = shlex.quote(sys.executable) + " -c 'import base64,sys; sys.stdout.buffer.write(base64.b64encode(sys.stdin.buffer.read()))'"
+            platform = '''stat() {
+  case "$1:$2" in
+    -c:%s) shift 2; /usr/bin/stat -f %z "$@" ;;
+    -c:%Y) shift 2; /usr/bin/stat -f %m "$@" ;;
+    *) /usr/bin/stat "$@" ;;
+  esac
+}
+base64() {
+  case "$1" in -w0) ''' + encoder + ''' ;; *) /usr/bin/base64 "$@" ;; esac
+}
+'''
         self.lib.write_text(
             'DIR=' + shlex.quote(str(self.scripts)) + '\n' +
             '. ' + shlex.quote(str(self.base / 'settings.sh')) + '\n' +
-            'mkdir -p "$TS_PID_DIR"\n' + helpers + '\n'
+            'mkdir -p "$TS_PID_DIR"\n' + platform + helpers + '\n'
         )
 
     def tearDown(self):

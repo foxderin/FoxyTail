@@ -31,6 +31,8 @@ DNS_LOG="${TS_RUN_DIR}/dnsmasq.log"
 DNS_STATE_FILE="${TS_RUN_DIR}/dnsmasq.state"
 DNS_REASON_FILE="${TS_RUN_DIR}/dnsmasq.reason"
 DNS_CONTEXT_FILE="${TS_RUN_DIR}/dnsmasq.context.json"
+DNS_HOSTS_DIR="/dev/foxytail-dns"
+DNS_HOSTS="${DNS_HOSTS_DIR}/hosts"
 CHAIN_DNS="FOXY_DNS"
 
 # New modes are opt-in. Older installs keep the existing dnsmasq behavior.
@@ -293,13 +295,59 @@ dns_context_matches() {
   [ -f "${DNS_CONTEXT_FILE}" ] &&
     [ "$(cat "${DNS_CONTEXT_FILE}" 2>/dev/null)" = "$1" ] &&
     [ "$(awk -F/ '/^server=\// {print $2; exit}' "${DNS_CONF}" 2>/dev/null)" = "$(printf '%s' "$1" | jqr -r '.suffix')" ] &&
-    [ "$(sed -n '/^address=/p' "${DNS_CONF}" 2>/dev/null)" = "$(dns_alias_lines "$1")" ]
+    ! grep -q '^address=' "${DNS_CONF}" 2>/dev/null &&
+    [ "$(sed -n 's/^addn-hosts=//p' "${DNS_CONF}" 2>/dev/null)" = "${DNS_HOSTS}" ] &&
+    dns_hosts_dir_safe && [ -f "${DNS_HOSTS}" ] && [ ! -L "${DNS_HOSTS}" ] &&
+    [ "$(stat -c '%u:%a' "${DNS_HOSTS}" 2>/dev/null)" = "$(id -u):644" ] &&
+    [ "$(cat "${DNS_HOSTS}" 2>/dev/null)" = "$(dns_alias_lines "$1")" ]
 }
 
 dns_alias_lines() {
   # Some Android tailscaled builds omit AAAA answers for otherwise reachable
-  # peers. Use the current authoritative node addresses for both name forms.
-  printf '%s' "$1" | jqr -r '.hosts[] | "address=/\(.short)/\(.ip)", "address=/\(.name)/\(.ip)"'
+  # peers. Hosts-file records match exact names, unlike address= suffix rules.
+  printf '%s' "$1" | jqr -r '.hosts[] | "\(.ip) \(.short) \(.name)"'
+}
+
+# Android dnsmasq 2.51 supports addn-hosts, but reads it after dropping root.
+# Keep only these mappings outside /data/adb; never relax its mode.
+dns_hosts_dir_safe() {
+  [ ! -L "${DNS_HOSTS_DIR}" ] && [ -d "${DNS_HOSTS_DIR}" ] &&
+    [ "$(stat -c '%u:%a' "${DNS_HOSTS_DIR}" 2>/dev/null)" = "$(id -u):755" ]
+}
+
+write_dns_hosts() {
+  if [ ! -e "${DNS_HOSTS_DIR}" ] && [ ! -L "${DNS_HOSTS_DIR}" ]; then
+    (umask 022; mkdir "${DNS_HOSTS_DIR}") || return 1
+  fi
+  dns_hosts_dir_safe || return 1
+  [ ! -L "${DNS_HOSTS}" ] || return 1
+  [ ! -e "${DNS_HOSTS}" ] || [ -f "${DNS_HOSTS}" ] || return 1
+  _dh_next=$(mktemp "${DNS_HOSTS_DIR}/.hosts.XXXXXX") || return 1
+  if dns_alias_lines "$1" >"${_dh_next}" && chmod 0644 "${_dh_next}" &&
+    mv -f "${_dh_next}" "${DNS_HOSTS}"; then
+    return 0
+  fi
+  rm -f "${_dh_next}"
+  return 1
+}
+
+remove_dns_hosts() {
+  [ -e "${DNS_HOSTS_DIR}" ] || [ -L "${DNS_HOSTS_DIR}" ] || return 0
+  dns_hosts_dir_safe || return 1
+  [ ! -L "${DNS_HOSTS}" ] || return 1
+  [ ! -e "${DNS_HOSTS}" ] || [ -f "${DNS_HOSTS}" ] || return 1
+  rm -f "${DNS_HOSTS}" || return 1
+  # A killed publisher may leave its private mktemp file behind. Only remove
+  # regular files matching our staging name, owner and creation/public mode.
+  for _dh_stale in "${DNS_HOSTS_DIR}"/.hosts.??????; do
+    [ ! -L "${_dh_stale}" ] && [ -f "${_dh_stale}" ] || continue
+    case "$(stat -c '%u:%a' "${_dh_stale}" 2>/dev/null)" in
+      "$(id -u):600"|"$(id -u):644") rm -f "${_dh_stale}" || return 1 ;;
+    esac
+  done
+  # Unrelated entries must remain untouched, but an unused directory cannot
+  # make successful listener/rule cleanup permanently fail.
+  rmdir "${DNS_HOSTS_DIR}" 2>/dev/null || :
 }
 
 # Android caches NXDOMAIN independently of dnsmasq. A newly enabled resolver
@@ -403,6 +451,7 @@ dns_start() {
 
   _ds_default_dns=$(getprop net.dns1 2>/dev/null)
   [ -z "${_ds_default_dns}" ] && _ds_default_dns="1.1.1.1"
+  write_dns_hosts "${_ds_context}" || { set_state degraded hosts-failed; return 1; }
 
   {
     echo "port=${DNS_PORT}"
@@ -411,11 +460,9 @@ dns_start() {
     echo "bind-interfaces"
     echo "no-resolv"
     echo "cache-size=512"
-    # Android ignores DNS search domains. Inline node-name mappings are read
-    # before dnsmasq drops privileges; addn-hosts is read afterwards and fails
-    # beneath /data/adb (0700 root) on the system dnsmasq shipped by Android.
-    # Use address=, supported by its older 2.51 build, instead of host-record=.
-    dns_alias_lines "${_ds_context}"
+    # Exact records remain readable after dnsmasq drops to nobody, including
+    # on Android's older 2.51 build which does not support host-record=.
+    echo "addn-hosts=${DNS_HOSTS}"
     echo "server=/${_ds_suffix}/100.100.100.100"
     echo "server=${_ds_default_dns}"
   } >"${DNS_CONF}"
@@ -453,14 +500,21 @@ dns_stop() {
   if command -v modern_dns_stop >/dev/null 2>&1; then
     modern_dns_stop || _dt_rc=1
   fi
-  redirect_teardown || _dt_rc=1
-  redirect6_teardown || _dt_rc=1
-  _dt_pids=$(dns_pids)
-  if [ -n "${_dt_pids}" ]; then
-    stop_by_pids dnsmasq "${_dt_pids}" || _dt_rc=1
+  # Only the legacy redirects decide whether it is safe to stop this listener.
+  # An unrelated modern cleanup failure must not keep legacy dnsmasq alive.
+  _dt_legacy_rc=0
+  redirect_teardown || _dt_legacy_rc=1
+  redirect6_teardown || _dt_legacy_rc=1
+  if [ "${_dt_legacy_rc}" = 0 ]; then
+    _dt_pids=$(dns_pids)
+    if [ -n "${_dt_pids}" ]; then
+      stop_by_pids dnsmasq "${_dt_pids}" || _dt_rc=1
+    fi
+    [ -z "$(dns_pids)" ] || _dt_rc=1
+  else
+    _dt_rc=1
   fi
-
-  [ -z "$(dns_pids)" ] || _dt_rc=1
+  if [ "${_dt_rc}" = 0 ]; then remove_dns_hosts || _dt_rc=1; fi
   if [ "${_dt_rc}" = 0 ]; then
     rm -f "${DNS_CONTEXT_FILE}"
     set_state stopped

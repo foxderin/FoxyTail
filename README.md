@@ -88,6 +88,8 @@ The WebUI is built in: it lives in `webroot/` (zero-build static HTML/JS, backed
 
 For Funnel, choose a supported public listener: HTTPS, TCP or TLS-terminated TCP on port 443, 8443 or 10000. A local HTTP service such as `http://localhost:3000` normally uses a public **HTTPS** listener; the target's protocol and port are independent of the public listener. Plain HTTP listeners remain available for private Serve mappings.
 
+Taildrop reception counts only newly received files. Automatic and manual exports preserve existing Download files, try numbered names through `-99`, and fail without removing the inbox copy when no safe destination is available. Filenames containing spaces are preserved. Clearing the inbox includes hidden files but leaves directories intact. Inline downloads support files up to and including 8 MiB; larger files must be exported. Download encoding uses a private temporary file, removed on ordinary completion or failure, rather than command-line payload arguments.
+
 <!-- Screenshots: docs/screenshots/*.png (to be added, see Roadmap) -->
 
 ## WebUI development
@@ -113,7 +115,11 @@ An explicit `bash .github/tools/build.sh --update-checksums` creates a candidate
 
 Apply saved settings through the WebUI restart action or `/data/adb/foxytail/scripts/start.sh reload`, which refreshes resident helpers as well as the network service. `foxytail.service restart` affects the network service only. Upgrades preserve received files, supplied dnsmasq, configuration and identity, stop the old components before switching, and retain rollback journals on failure.
 
+Startup requires both an owned daemon and an answering LocalAPI; a leftover socket is insufficient, while `NeedsLogin` is a valid ready state. A failed automatic restart remains watchdog-recoverable; an explicit Stop continues to suppress recovery. Installation publishes its journal only after preparing the rollback directory. Restored identity and DNS ownership files are staged privately and published only after complete copies, with identity last so failures remain retryable.
+
 Settings also offers a **timed configuration trial** using saved settings with an optional mode override. After startup checks pass, confirm within 30–300 seconds or the previous runtime configuration is restored. The backend timer survives closing the WebUI and preserves settings saved afterward. These checks cover local components; test actual destinations before confirming. Backup restore now selects a file from Download, previews configuration changes and verifies the same archive contents before restoring. Hooks remain parked for review.
+
+Configuration restore journals directory replacement before changing live files. After an interrupted process, the next configuration-lock acquisition restores the prior set if uncommitted, or keeps the complete candidate if committed. Recovery errors block configuration access for retry instead of treating missing configuration as defaults; already-applied runtime snapshots remain separate.
 
 ## Configuration
 
@@ -246,6 +252,8 @@ Transparent mode requires root, NFQUEUE, conntrack, INET_DIAG, strict route quer
 The Android 16 / FlClash test device passed local UDP/TCP and IPv6 DNS checks, but its kernel lacks `CONFIG_NETFILTER_NETLINK_GLUE_CT` and existing OEM mark rules also prevent transparent capture. NFQUEUE and standalone conntrack support alone are insufficient. This device uses local mode and still needs Tailnet split-DNS configuration in the consuming resolver; automatic transparent coexistence was not established. The full transparent path passed a separate strict Linux kernel test.
 
 Legacy mode selects `/data/adb/foxytail/bin/dnsmasq`, `/system/bin/dnsmasq`, then `/vendor/bin/dnsmasq`; supply a trusted binary if none is available. Its previous public fallback behavior is unchanged.
+
+Legacy aliases use exact hosts records, so a peer named `dev` does not intercept unrelated `*.dev` names. To support system dnsmasq 2.51 after its privilege drop, only the peer-name/address mappings are stored at `/dev/foxytail-dns/hosts`: a root-owned `0755` directory and world-readable `0644` file. No `/data/adb` permissions are widened. Successful cleanup removes the mappings and the directory when empty. If either family's redirect removal fails, the listener and mappings remain available in degraded state until cleanup can be retried.
 
 ## IPv6
 

@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Run shell network controllers against a stateful fake kernel, never host iptables."""
+import ipaddress
 import json
 import os
 from pathlib import Path
@@ -27,7 +28,7 @@ if cmd in ('iptables','ip6tables'):
  if op in ('-N','-A','-I','-D','-F','-X') and os.environ.get('MOCK_XTABLES_REQUIRE_WAIT')=='1' and not waited:rc=4
  elif op=='-A' and os.environ.get('MOCK_XTABLES_TIMEOUT_ONCE')=='1' and not s.get('xtablesTimedOut'):
   s['xtablesTimedOut']=True;rc=4
- elif op in ('-D','-F','-X') and os.environ.get('MOCK_FAIL_IPTABLES_DELETE')=='1':rc=1
+ elif op in ('-D','-F','-X') and os.environ.get('MOCK_FAIL_IPTABLES_DELETE') in ('1',cmd):rc=1
  elif op=='-N':
   if ch in chains:rc=1
   else:chains[ch]=[]
@@ -285,6 +286,9 @@ esac
 
  def setup_dns_runtime(self):
   self.setup_binder()
+  # Android stat uses the GNU-style format; keep these fixtures portable.
+  stat=self.dir/'bin/stat'
+  stat.write_text('#!/usr/bin/env python3\nimport os, stat, sys\ns=os.stat(sys.argv[-1],follow_symlinks=False)\nprint(f"{s.st_uid}:{stat.S_IMODE(s.st_mode):o}")\n');stat.chmod(0o755)
   dns=(ROOT/'tailscale/scripts/foxytail.dns').read_text()
   runner=self.dir/'dns-runner.sh'
   runner.write_text(""". "$TEST_DIR/settings.sh"
@@ -293,13 +297,15 @@ DNS_CONF="$TS_RUN_DIR/dnsmasq.conf"
 DNS_STATE_FILE="$TS_RUN_DIR/dnsmasq.state"
 DNS_REASON_FILE="$TS_RUN_DIR/dnsmasq.reason"
 DNS_CONTEXT_FILE="$TS_RUN_DIR/dnsmasq.context.json"
+DNS_HOSTS_DIR="$TEST_DIR/dns-hosts"
+DNS_HOSTS="$DNS_HOSTS_DIR/hosts"
 DNS_BIN="$TS_BIN_DIR/dnsmasq"
 DNS_LOG="$TS_RUN_DIR/dnsmasq.log"
 TS_SOCKET="$TS_RUN_DIR/tailscaled.sock"
 CHAIN_DNS=FOXY_DNS
 """+dns[dns.index('set_state() {'):dns.index('\ncase "$1" in')]+ '\ndns_pids() { [ -f "$TEST_DIR/alive" ] && echo 123; }\nstop_by_pids() { [ "$FAIL_STOP" != 1 ] && rm -f "$TEST_DIR/alive"; }\ntmo() { cat "$TEST_DIR/current.json"; }\nipv6_module_boot() { echo test-boot; }\nipv6_nat_module_dirs() { :; }\ngetprop() { echo 1.1.1.1; }\nrotate_log() { :; }\n"$@"\n')
   wrapper=self.dir/'bin/foxytail.compat';wrapper.write_text('#!/bin/sh\nexec sh "$TEST_DIR/scripts/foxytail.compat" "$@"\n');wrapper.chmod(0o755)
-  daemon=self.dir/'bin/dnsmasq';daemon.write_text('#!/bin/sh\ntouch "$TEST_DIR/alive"\n');daemon.chmod(0o755)
+  daemon=self.dir/'bin/dnsmasq';daemon.write_text('#!/bin/sh\nprintf "start\\n" >>"$TEST_DIR/dns-starts"\ntouch "$TEST_DIR/alive"\n');daemon.chmod(0o755)
   (self.dir/'alive').touch()
   current={'MagicDNSSuffix':'example.ts.net','CurrentTailnet':{'Name':'example','MagicDNSEnabled':True},'Self':{'ID':'device1','DNSName':'phone.example.ts.net.','TailscaleIPs':['100.64.0.1']},'Peer':{'peer1':{'DNSName':'Laptop.example.ts.net.','TailscaleIPs':['100.64.0.2'],'Online':True}}}
   (self.dir/'current.json').write_text(json.dumps(current))
@@ -311,6 +317,136 @@ CHAIN_DNS=FOXY_DNS
    else:self.assertNotEqual(r.returncode,0,r.stdout+r.stderr)
    return r.stdout
   return run,current
+
+ def dns_records(self):
+  """Consume the generated hosts database as exact DNS names, not suffixes."""
+  records={}
+  conf=(self.dir/'run/dnsmasq.conf').read_text().splitlines()
+  sources=[line.split('=',1)[1] for line in conf if line.startswith('addn-hosts=')]
+  self.assertTrue(sources,'resolver must load the exact host database')
+  for source in sources:
+   for line in Path(source).read_text().splitlines():
+    fields=line.split('#',1)[0].split()
+    if not fields:continue
+    address=str(ipaddress.ip_address(fields[0]))
+    for name in fields[1:]:records.setdefault(name.lower().rstrip('.'),set()).add(address)
+  return records
+
+ def test_dns_exact_aliases_migrate_wildcards_and_reconcile_hosts(self):
+  run,current=self.setup_dns_runtime()
+  current['Peer']['peer1'].update(DNSName='Dev.example.ts.net.',TailscaleIPs=['100.64.0.2','fd7a:115c:a1e0::2'])
+  (self.dir/'current.json').write_text(json.dumps(current))
+  run('dns_start')
+  records=self.dns_records()
+  for name in ('dev','dev.example.ts.net'):
+   self.assertEqual(records[name],{'100.64.0.2','fd7a:115c:a1e0::2'})
+  for name in ('unrelated.example.dev','child.dev.example.ts.net','other.example.ts.net'):
+   self.assertNotIn(name,records)
+  # A still-live old wildcard configuration is never considered ready, even
+  # with the same account/peer context and an otherwise valid host database.
+  conf=self.dir/'run/dnsmasq.conf'
+  with conf.open('a') as f:f.write('address=/dev/100.64.0.2\n')
+  self.assertEqual(json.loads(run('dns_status','--json'))['state'],'degraded')
+  starts=(self.dir/'dns-starts').read_text()
+  run('dns_start')
+  self.assertEqual((self.dir/'dns-starts').read_text(),starts+'start\n')
+  self.assertEqual(json.loads(run('dns_status','--json'))['state'],'running')
+  self.assertEqual(self.dns_records(),records)
+  # A missing/corrupted external mapping must also trigger a real restart.
+  for content in (None,'100.64.0.9 dev dev.example.ts.net\n'):
+   hosts=self.dir/'dns-hosts/hosts'
+   if content is None:hosts.unlink()
+   else:hosts.write_text(content)
+   self.assertEqual(json.loads(run('dns_status','--json'))['state'],'degraded')
+   starts=(self.dir/'dns-starts').read_text();run('dns_start')
+   self.assertEqual((self.dir/'dns-starts').read_text(),starts+'start\n')
+   self.assertEqual(self.dns_records(),records)
+  hosts=self.dir/'dns-hosts/hosts';hosts.chmod(0o600)
+  self.assertEqual(json.loads(run('dns_status','--json'))['state'],'degraded')
+  run('dns_start');self.assertEqual(hosts.stat().st_mode & 0o777,0o644)
+  self.assertEqual(json.loads(run('dns_status','--json'))['state'],'running')
+
+ def test_dns_cleanup_failure_preserves_listener_until_both_families_removed(self):
+  run,_=self.setup_dns_runtime()
+  for failed in ('1','iptables','ip6tables'):
+   with self.subTest(failed=failed):
+    run('dns_start');before=self.dns_records()
+    self.env['MOCK_FAIL_IPTABLES_DELETE']=failed
+    run('dns_stop',ok=False)
+    status=json.loads(run('dns_status','--json'))
+    self.assertEqual(status['state'],'degraded');self.assertEqual(status['pid'],123)
+    self.assertTrue((self.dir/'alive').exists());self.assertEqual(self.dns_records(),before)
+    for family in ('iptables','ip6tables'):
+     chains=self.read()['chains'][family+':nat']
+     if failed in ('1',family):
+      self.assertIn(['-j','FOXY_DNS'],chains['OUTPUT'])
+      for proto in ('udp','tcp'):
+       self.assertIn(['-p',proto,'--dport','53','-j','REDIRECT','--to-ports','1053'],chains['FOXY_DNS'])
+     else:self.assertNotIn('FOXY_DNS',chains)
+    self.env.pop('MOCK_FAIL_IPTABLES_DELETE');run('dns_stop')
+    status=json.loads(run('dns_status','--json'))
+    self.assertEqual(status['state'],'stopped');self.assertIsNone(status['pid'])
+    self.assertFalse((self.dir/'alive').exists());self.assertFalse((self.dir/'dns-hosts').exists())
+    for family in ('iptables','ip6tables'):
+     chains=self.read()['chains'][family+':nat']
+     self.assertNotIn(['-j','FOXY_DNS'],chains['OUTPUT']);self.assertNotIn('FOXY_DNS',chains)
+
+ def test_modern_cleanup_failure_does_not_retain_legacy_listener(self):
+  run,_=self.setup_dns_runtime();run('dns_start')
+  runner=self.dir/'dns-runner.sh'
+  runner.write_text(runner.read_text().replace('\n"$@"\n','\nmodern_dns_stop() { return 1; }\n"$@"\n'))
+  run('dns_stop',ok=False)
+  self.assertFalse((self.dir/'alive').exists())
+  self.assertEqual((self.dir/'run/dnsmasq.state').read_text().strip(),'degraded')
+  for family in ('iptables','ip6tables'):
+   self.assertNotIn('FOXY_DNS',self.read()['chains'][family+':nat'])
+  self.assertTrue((self.dir/'dns-hosts/hosts').exists())
+  runner.write_text(runner.read_text().replace('modern_dns_stop() { return 1; }','modern_dns_stop() { return 0; }'))
+  run('dns_stop');self.assertFalse((self.dir/'dns-hosts').exists())
+
+ def test_dns_hosts_reject_symlinks_and_writable_directories(self):
+  run,_=self.setup_dns_runtime();run('dns_stop')
+  outside=self.dir/'outside';outside.mkdir();outside.chmod(0o700)
+  sentinel=outside/'hosts';sentinel.write_text('unrelated data\n')
+  hosts_dir=self.dir/'dns-hosts';hosts_dir.symlink_to(outside,target_is_directory=True)
+  run('dns_start',ok=False)
+  self.assertEqual(sentinel.read_text(),'unrelated data\n')
+  self.assertEqual(outside.stat().st_mode & 0o777,0o700)
+  self.assertFalse((self.dir/'alive').exists())
+  hosts_dir.unlink();hosts_dir.mkdir();hosts_dir.chmod(0o777)
+  run('dns_start',ok=False)
+  self.assertEqual(hosts_dir.stat().st_mode & 0o777,0o777)
+  hosts_dir.chmod(0o755);hosts=hosts_dir/'hosts';hosts.symlink_to(sentinel)
+  run('dns_start',ok=False)
+  self.assertTrue(hosts.is_symlink());self.assertEqual(sentinel.read_text(),'unrelated data\n')
+  run('dns_stop',ok=False)
+  self.assertTrue(hosts.is_symlink());self.assertEqual(sentinel.read_text(),'unrelated data\n')
+  hosts.unlink();run('dns_start')
+  self.assertEqual(json.loads(run('dns_status','--json'))['state'],'running')
+  self.assertEqual(hosts.stat().st_mode & 0o777,0o644)
+
+ def test_dns_stop_recovers_interrupted_hosts_publication_without_deleting_unrelated_data(self):
+  run,_=self.setup_dns_runtime();run('dns_start')
+  hosts_dir=self.dir/'dns-hosts'
+  for mode in (0o600,0o644):
+   stale=hosts_dir/f'.hosts.{mode:06o}'
+   stale.write_text('interrupted staging data\n');stale.chmod(mode)
+  # The retry removes both pre-chmod and post-chmod staging leftovers.
+  run('dns_stop')
+  self.assertFalse(hosts_dir.exists())
+  self.assertEqual(json.loads(run('dns_status','--json'))['state'],'stopped')
+  run('dns_start')
+  outside=self.dir/'unrelated';outside.write_text('keep\n')
+  link=hosts_dir/'.hosts.abcdef';link.symlink_to(outside)
+  unrelated=hosts_dir/'unrelated';unrelated.write_text('keep too\n')
+  nested=hosts_dir/'.hosts.ghijkl';nested.mkdir()
+  run('dns_stop')
+  self.assertEqual(json.loads(run('dns_status','--json'))['state'],'stopped')
+  self.assertFalse((self.dir/'alive').exists());self.assertFalse((hosts_dir/'hosts').exists())
+  self.assertTrue(link.is_symlink());self.assertTrue(nested.is_dir())
+  self.assertEqual(outside.read_text(),'keep\n');self.assertEqual(unrelated.read_text(),'keep too\n')
+  run('dns_start');self.assertEqual(json.loads(run('dns_status','--json'))['state'],'running')
+  run('dns_stop');self.assertEqual(outside.read_text(),'keep\n')
 
  def test_dns_missing_ipv6_nat_retains_ipv4_and_recovers_when_available(self):
   run,_=self.setup_dns_runtime()
@@ -354,15 +490,11 @@ CHAIN_DNS=FOXY_DNS
   self.assertEqual(self.read()['chains']['iptables:nat']['OUTPUT'],[['-j','FOXY_DNS'],native])
   calls=self.dir/'service-calls';before=calls.read_text()
   run('dns_start');self.assertEqual(calls.read_text(),before)
-  conf=(self.dir/'run/dnsmasq.conf').read_text()
-  self.assertIn('address=/laptop/100.64.0.2',conf);self.assertIn('address=/phone/100.64.0.1',conf)
-  # Full node names must keep their AAAA answer even when native MagicDNS
-  # returns only A; older Android dnsmasq supports these inline mappings.
+  records=self.dns_records()
   for name in ('laptop','laptop.example.ts.net'):
-   for address in ('100.64.0.2','fd7a:115c:a1e0::2'):
-    self.assertIn(f'address=/{name}/{address}\n',conf)
-  self.assertIn('address=/phone.example.ts.net/100.64.0.1\n',conf)
-  self.assertNotIn('addn-hosts=',conf)
+   self.assertEqual(records[name],{'100.64.0.2','fd7a:115c:a1e0::2'})
+  for name in ('phone','phone.example.ts.net'):
+   self.assertEqual(records[name],{'100.64.0.1'})
   # Online/traffic fluctuations are excluded from the DNS context. Name and
   # address changes are detected and reconciled by the watchdog status check.
   current['Peer']['peer1']['Online']=False;current['Peer']['peer1']['RxBytes']=100
@@ -371,10 +503,9 @@ CHAIN_DNS=FOXY_DNS
   current['Peer']['peer1']['TailscaleIPs']=['100.64.0.3']
   (self.dir/'current.json').write_text(json.dumps(current))
   self.assertEqual(json.loads(run('dns_status','--json'))['state'],'degraded')
-  run('dns_start');conf=(self.dir/'run/dnsmasq.conf').read_text()
-  self.assertIn('address=/laptop/100.64.0.3\n',conf)
-  self.assertIn('address=/laptop.example.ts.net/100.64.0.3\n',conf)
-  self.assertNotIn('100.64.0.2',conf);self.assertNotIn('fd7a:115c:a1e0::2',conf)
+  run('dns_start');records=self.dns_records()
+  for name in ('laptop','laptop.example.ts.net'):
+   self.assertEqual(records[name],{'100.64.0.3'})
   self.assertEqual(calls.read_text()[len(before):].splitlines(),['call dnsresolver 16777215','call dnsresolver 11 i32 101','call dnsresolver 11 i32 102'])
   state=self.read()
   for cmd in ('iptables','ip6tables'):
