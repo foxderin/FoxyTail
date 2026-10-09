@@ -15,7 +15,7 @@ final class CoexistPage extends ControlPage {
     private static final String[] FILTERS = {"", "blacklist", "rule", "redir-host", "whitelist"};
     CoexistPage(ControlActivity activity) {
         super(activity);
-        LinearLayout intro = section(s(R.string.tools_coexist));
+        LinearLayout intro = section();
         label(intro, s(R.string.tools_coexist_readonly));
         button(intro, s(R.string.tools_detect), this::detect);
         inventory = section(s(R.string.tools_environment));

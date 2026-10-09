@@ -11,7 +11,7 @@ final class DiagnosticsPage extends ControlPage {
     private static final String[] REASONS = {"invalid_config", "pending", "applied", "stopped", "connected", "login", "unreachable", "needs_connection", "proxy", "interface_ready", "interface_missing", "managed_routes", "routes_ready", "routes_incomplete", "dns_disabled", "dns_conflict", "dns_limited", "dns_ready", "dns_unavailable"};
     private static final int[] REASON_TEXT = {R.string.tools_diag_invalid_config, R.string.tools_diag_pending, R.string.tools_diag_applied, R.string.tools_diag_stopped, R.string.tools_diag_connected, R.string.tools_diag_login, R.string.tools_diag_unreachable, R.string.tools_diag_needs_connection, R.string.tools_diag_proxy, R.string.tools_diag_interface_ready, R.string.tools_diag_interface_missing, R.string.tools_diag_managed_routes, R.string.tools_diag_routes_ready, R.string.tools_diag_routes_incomplete, R.string.tools_diag_dns_disabled, R.string.tools_diag_dns_conflict, R.string.tools_diag_dns_limited, R.string.tools_diag_dns_ready, R.string.tools_diag_dns_unavailable};
     DiagnosticsPage(ControlActivity activity) {
-        super(activity); LinearLayout checks = section(s(R.string.tools_diagnostics));
+        super(activity); LinearLayout checks = section();
         label(checks, s(R.string.tools_diag_explicit)); button(checks, s(R.string.tools_check), () -> probe(s(R.string.tools_diagnostics), result -> {
             if (ToolsUi.success(this, result)) { activity.drafts.putString("diagnostics.checks", result.toString()); renderChecks(result); }
         }, "diag-check"));

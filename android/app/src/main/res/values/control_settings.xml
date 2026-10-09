@@ -23,7 +23,7 @@
     <string name="cs_scope_all">All applications</string>
     <string name="cs_scope_selected">Selected application UIDs only</string>
     <string name="cs_scope_bypass">All except selected application UIDs</string>
-    <string name="cs_scope_hint">Per-UID selection and bypass require bridge mode and the kernel owner match. Apps sharing a UID share the routing policy. Selected with no UIDs routes no apps.</string>
+    <string name="cs_scope_hint">Per-UID selection and bypass require bridge mode and kernel owner match. Apps sharing a UID share the rule.</string>
     <string name="cs_capability">Mode: %1$s · owner match: %2$s\n%3$s</string>
     <string name="cs_owner_required">Read capability first. Selected/bypass requires bridge mode and owner support.</string>
     <string name="cs_subnets">Destination CIDRs, separated by newline or comma</string>
@@ -54,7 +54,7 @@
     <string name="cs_stats">Traffic statistics</string>
     <string name="cs_context_enabled">Network scenario watcher</string>
     <string name="cs_auto_refresh">Automatically refresh app status</string>
-    <string name="cs_auto_refresh_hint">Uses the existing WEBUI_AUTO_REFRESH module setting. Active trials continue polling even when ordinary refresh is off.</string>
+    <string name="cs_auto_refresh_hint">Active trials keep polling regardless of this setting.</string>
     <string name="cs_watchdog_interval">Watchdog interval (5–300 seconds)</string>
     <string name="cs_stats_interval">Statistics interval (10–3600 seconds)</string>
     <string name="cs_log_limit">Log limit (64–10240 KiB)</string>
@@ -67,7 +67,7 @@
     <string name="cs_dns_probe">Explicitly probe DNS capability</string>
     <string name="cs_dns_unavailable">Transparent DNS is not supported by the current capability report. Run an explicit probe or use another DNS mode.</string>
     <string name="cs_status">Authoritative module state</string>
-    <string name="cs_context_hint">Rules run in file order; repeated actions are retained. Comments, unknown syntax, line endings and the final newline are preserved by visual edits. Saving validates with the module.</string>
+    <string name="cs_context_hint">Rules run in file order. The visual editor preserves comments and unknown syntax; the module validates on save.</string>
     <string name="cs_visual">Visual editor</string>
     <string name="cs_raw">Original text editor</string>
     <string name="cs_rules">Scenario rules</string>
@@ -92,7 +92,7 @@
     <string name="cs_rule_draft_open">Apply or cancel the rule editor before saving or switching modes.</string>
     <string name="cs_hooks">Lifecycle hooks (read only, never executed here)</string>
     <string name="cs_hook_missing">Missing</string>
-    <string name="cs_trial_hint">The module owns the countdown and automatic rollback. Leaving the app does not revert the trial. Reopen this page to take over an existing trial; confirm only after verifying connectivity. Saving during a trial is allowed; restarting is restricted.</string>
+    <string name="cs_trial_hint">The module owns the countdown and automatic rollback; leaving the app does not revert the trial. Reopen this page to take over an active trial. Verify real connectivity before confirming.</string>
     <string name="cs_candidate">Candidate configuration</string>
     <string name="cs_trial_saved">Saved configuration</string>
     <string name="cs_duration">Duration, 30–300 seconds</string>

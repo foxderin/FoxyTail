@@ -42,7 +42,7 @@
     <string name="network_all">All devices</string>
     <string name="network_list">List</string>
     <string name="network_topology">Topology</string>
-    <string name="network_topology_hint">Observed paths, not reachability guarantees. Tap a device for details and an explicit ping.</string>
+    <string name="network_topology_hint">Observed paths, not reachability guarantees. Tap a device to ping it.</string>
     <string name="network_empty">No matching devices</string>
     <string name="network_os">Operating system</string>
     <string name="network_region">Relay region</string>
@@ -74,7 +74,7 @@
     <string name="network_exit_draft">Draft selection: %1$s</string>
     <string name="network_choose">Choose</string>
     <string name="network_apply_exit">Apply selected exit</string>
-    <string name="network_exit_hint">Choosing a device only edits the draft. Apply changes the module. Selected preference does not prove traffic uses that exit.</string>
+    <string name="network_exit_hint">Choosing a device only edits the draft; Apply writes the module.</string>
     <string name="network_exit_none">No exit routing selected</string>
     <string name="network_exit_proxy">Only applications explicitly using the SOCKS proxy use this exit</string>
     <string name="network_exit_daemon">Routing owned by the Tailscale daemon</string>
@@ -123,7 +123,7 @@
     <string name="network_dns_transparent">Transparent capability available</string>
     <string name="network_dns_module">IPv6 module status</string>
     <string name="network_dns_path">IPv6 DNS path</string>
-    <string name="network_dns_limit">Transparent DNS only covers module-owned eligible traffic; encrypted DNS and other VPN/proxy traffic may bypass it.</string>
+    <string name="network_dns_limit">Encrypted DNS and other VPN/proxy traffic may bypass transparent DNS.</string>
     <string name="network_copy_login">Copy login URL (sensitive)</string>
     <string name="network_draft_chosen">Chosen in draft</string>
 </resources>

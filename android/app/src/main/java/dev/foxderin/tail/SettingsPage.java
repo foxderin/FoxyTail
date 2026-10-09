@@ -22,7 +22,7 @@ final class SettingsPage extends ControlPage {
 
     SettingsPage(ControlActivity activity) {
         super(activity);
-        LinearLayout top = section(s(R.string.cs_settings));
+        LinearLayout top = section();
         savedState = label(top, s(R.string.cs_unknown));
         button(top, s(R.string.cs_refresh), this::load);
         button(top, s(R.string.cs_trial), () -> activity.navigate("trial"));

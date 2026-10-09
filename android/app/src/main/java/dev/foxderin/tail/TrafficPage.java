@@ -13,7 +13,7 @@ final class TrafficPage extends ControlPage {
     private final Map<String, String> peerNames = new HashMap<>(), appNames = new HashMap<>();
     TrafficPage(ControlActivity activity) {
         super(activity); daily = activity.drafts.getBoolean("traffic.daily", false);
-        LinearLayout controls = section(s(R.string.tools_traffic));
+        LinearLayout controls = section();
         choice(controls, new String[]{s(R.string.tools_hourly), s(R.string.tools_daily)}, daily ? 1 : 0, index -> { daily = index == 1; activity.drafts.putBoolean("traffic.daily", daily); renderChart(); });
         button(controls, s(R.string.tools_refresh), this::load);
         chartRows = section(s(R.string.tools_traffic_chart)); peerRows = section(s(R.string.tools_peer_ranking)); uidRows = section(s(R.string.tools_uid_ranking));

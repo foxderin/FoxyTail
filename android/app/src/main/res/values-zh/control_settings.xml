@@ -23,7 +23,7 @@
     <string name="cs_scope_all">全部应用</string>
     <string name="cs_scope_selected">仅选中的应用 UID</string>
     <string name="cs_scope_bypass">绕过选中的应用 UID</string>
-    <string name="cs_scope_hint">按 UID 选择及绕过需要 bridge 模式与内核 owner 匹配支持。共用 UID 的应用共用路由规则。“仅选中”未选 UID 时不会代理任何应用。</string>
+    <string name="cs_scope_hint">按 UID 选择及绕过需要 bridge 模式与内核 owner 支持；共用 UID 的应用共用规则。</string>
     <string name="cs_capability">模式：%1$s · owner 支持：%2$s\n%3$s</string>
     <string name="cs_owner_required">请先读取能力；selected/bypass 需要 bridge 模式和 owner 支持。</string>
     <string name="cs_subnets">目标 CIDR，换行或逗号分隔</string>
@@ -54,7 +54,7 @@
     <string name="cs_stats">流量统计</string>
     <string name="cs_context_enabled">网络场景监听</string>
     <string name="cs_auto_refresh">自动刷新 App 状态</string>
-    <string name="cs_auto_refresh_hint">继续使用模块的 WEBUI_AUTO_REFRESH 磁盘配置。关闭普通刷新后，活动试运行仍会持续读取状态。</string>
+    <string name="cs_auto_refresh_hint">活动试运行不受此开关影响，仍会持续读取状态。</string>
     <string name="cs_watchdog_interval">看门狗间隔（5–300 秒）</string>
     <string name="cs_stats_interval">统计间隔（10–3600 秒）</string>
     <string name="cs_log_limit">日志上限（64–10240 KiB）</string>
@@ -67,7 +67,7 @@
     <string name="cs_dns_probe">显式探测 DNS 能力</string>
     <string name="cs_dns_unavailable">当前能力报告不支持透明 DNS，请显式探测或使用其他 DNS 模式。</string>
     <string name="cs_status">模块实际状态</string>
-    <string name="cs_context_hint">规则按文件顺序执行，允许重复动作。可视编辑保留注释、未知语法、原换行格式及尾换行；保存时由模块验证。</string>
+    <string name="cs_context_hint">规则按文件顺序执行；可视编辑保留注释与未知语法，保存时由模块验证。</string>
     <string name="cs_visual">可视编辑</string>
     <string name="cs_raw">原文编辑</string>
     <string name="cs_rules">场景规则</string>
@@ -92,7 +92,7 @@
     <string name="cs_rule_draft_open">请先应用或取消当前规则编辑，再保存或切换模式。</string>
     <string name="cs_hooks">生命周期钩子（只读，不在此执行）</string>
     <string name="cs_hook_missing">文件缺失</string>
-    <string name="cs_trial_hint">倒计时和自动回退由模块负责，离开 App 不会触发回退。重新打开本页即可接管已有试运行；核验真实连通性后再确认。试运行期间仍可保存设置，但限制重启。</string>
+    <string name="cs_trial_hint">倒计时和自动回退由模块负责，离开 App 不会触发回退；重新打开本页即可接管已有试运行。核验真实连通性后再确认。</string>
     <string name="cs_candidate">候选配置</string>
     <string name="cs_trial_saved">已保存配置</string>
     <string name="cs_duration">时长：30–300 秒</string>

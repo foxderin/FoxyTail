@@ -13,7 +13,7 @@ final class BackupPage extends ControlPage {
     private final Runnable operationChanged = () -> { if (activity.client.busy()) invalidatePreview(); };
     BackupPage(ControlActivity activity) {
         super(activity);
-        LinearLayout actions = section(s(R.string.tools_backup)); label(actions, s(R.string.tools_backup_scope));
+        LinearLayout actions = section(); label(actions, s(R.string.tools_backup_scope));
         button(actions, s(R.string.tools_create_backup), () -> {
             invalidatePreview(); mutate(s(R.string.tools_create_backup), result -> {
                 if (ToolsUi.success(this, result)) { activity.drafts.putString("backup.latest", result.toString()); renderArtifact(result); refreshList(); }

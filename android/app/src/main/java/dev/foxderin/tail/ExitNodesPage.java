@@ -23,7 +23,7 @@ final class ExitNodesPage extends ControlPage {
 
     ExitNodesPage(ControlActivity activity) {
         super(activity);
-        LinearLayout header = section(s(R.string.network_exits));
+        LinearLayout header = section();
         state = label(header, s(R.string.network_unknown));
         feedback = label(header, "");
         label(header, s(R.string.network_exit_hint));

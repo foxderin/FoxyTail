@@ -20,7 +20,7 @@ final class TrialPage extends ControlPage {
 
     TrialPage(ControlActivity activity) {
         super(activity);
-        LinearLayout box = section(s(R.string.cs_trial));
+        LinearLayout box = section();
         label(box, s(R.string.cs_trial_hint));
         state = mono(box, s(R.string.cs_unknown));
         button(box, s(R.string.cs_refresh), this::load);

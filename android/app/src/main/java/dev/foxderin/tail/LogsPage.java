@@ -21,7 +21,7 @@ final class LogsPage extends ControlPage {
         super(activity);
         source = activity.drafts.getString("logs.source", "daemon"); limit = activity.drafts.getInt("logs.limit", 200);
         live = activity.drafts.getBoolean("logs.live", true); follow = activity.drafts.getBoolean("logs.follow", true); wrap = activity.drafts.getBoolean("logs.wrap", true); matchCase = activity.drafts.getBoolean("logs.case", false);
-        LinearLayout controls = section(s(R.string.tools_logs)); label(controls, s(R.string.tools_logs_scope));
+        LinearLayout controls = section(); label(controls, s(R.string.tools_logs_scope));
         choice(controls, new String[]{s(R.string.tools_daemon_logs), s(R.string.tools_service_logs)}, source.equals("service") ? 1 : 0, index -> { source = index == 1 ? "service" : "daemon"; activity.drafts.putString("logs.source", source); lines = null; render(); load(); });
         String[] limits = {"100", "200", "500", "1000"}; int selected = 1; for (int i = 0; i < limits.length; i++) if (limits[i].equals(String.valueOf(limit))) selected = i;
         label(controls, s(R.string.tools_line_count)); choice(controls, limits, selected, index -> { limit = Integer.parseInt(limits[index]); activity.drafts.putInt("logs.limit", limit); load(); });

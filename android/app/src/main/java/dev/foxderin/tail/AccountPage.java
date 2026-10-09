@@ -22,7 +22,7 @@ final class AccountPage extends ControlPage {
 
     AccountPage(ControlActivity activity) {
         super(activity);
-        LinearLayout status = section(s(R.string.network_account));
+        LinearLayout status = section();
         state = label(status, s(R.string.network_unknown));
         button(status, s(R.string.network_refresh), this::load);
         accountState = label(status, s(R.string.network_unknown));

@@ -42,7 +42,7 @@
     <string name="network_all">全部设备</string>
     <string name="network_list">列表</string>
     <string name="network_topology">拓扑</string>
-    <string name="network_topology_hint">显示已观察到的路径，不保证可达性。点击设备查看详情并手动 ping。</string>
+    <string name="network_topology_hint">观测路径不代表可达性；点按设备可测试 ping。</string>
     <string name="network_empty">没有匹配的设备</string>
     <string name="network_os">操作系统</string>
     <string name="network_region">中继区域</string>
@@ -74,7 +74,7 @@
     <string name="network_exit_draft">草稿选择：%1$s</string>
     <string name="network_choose">选择</string>
     <string name="network_apply_exit">应用所选出口</string>
-    <string name="network_exit_hint">选择设备只会修改草稿，点击应用才会更改模块。已选偏好不代表流量实际经过该出口。</string>
+    <string name="network_exit_hint">选择只修改草稿，应用才写入模块。</string>
     <string name="network_exit_none">未选择出口路由</string>
     <string name="network_exit_proxy">仅主动使用 SOCKS 代理的应用会经过此出口</string>
     <string name="network_exit_daemon">由 Tailscale 守护进程负责路由</string>
@@ -123,7 +123,7 @@
     <string name="network_dns_transparent">透明能力可用</string>
     <string name="network_dns_module">IPv6 模块状态</string>
     <string name="network_dns_path">IPv6 DNS 路径</string>
-    <string name="network_dns_limit">透明 DNS 仅覆盖模块拥有的符合条件的流量；加密 DNS 和其他 VPN 或代理流量可能绕过它。</string>
+    <string name="network_dns_limit">加密 DNS 和其他 VPN 或代理流量可能绕过透明 DNS。</string>
     <string name="network_copy_login">复制登录链接（敏感信息）</string>
     <string name="network_draft_chosen">草稿已选择</string>
 </resources>

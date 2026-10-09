@@ -29,7 +29,7 @@ final class ContextPage extends ControlPage {
 
     ContextPage(ControlActivity activity) {
         super(activity);
-        LinearLayout top = section(s(R.string.cs_context));
+        LinearLayout top = section();
         label(top, s(R.string.cs_context_hint));
         status = mono(top, s(R.string.cs_unknown));
         button(top, s(R.string.cs_refresh), this::load);

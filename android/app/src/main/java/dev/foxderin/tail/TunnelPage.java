@@ -15,11 +15,11 @@ final class TunnelPage extends ControlPage {
 
     TunnelPage(ControlActivity activity) {
         super(activity);
-        LinearLayout actions = section(s(R.string.network_tunnel));
+        LinearLayout actions = section();
         button(actions, s(R.string.network_refresh), R.drawable.ic_refresh, this::refresh);
         button(actions, s(R.string.network_derp_test), R.drawable.ic_speed, this::measureDerp);
         tunState = label(actions, s(R.string.network_unknown));
-        tunBox = section(s(R.string.network_tunnel));
+        tunBox = section();
         socks = button(actions, s(R.string.network_socks_check), R.drawable.ic_network_check, this::checkSocks);
         socks.setEnabled(false);
         socksResult = label(actions, s(R.string.network_unchecked));
