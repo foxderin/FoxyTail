@@ -34,6 +34,7 @@ import {
 } from './tunnel-dns';
 import { createGuardedLoad } from './tools-refresh';
 import type { DerpRelay } from '../types';
+import Coexistence from './Coexistence';
 
 const TASK_KEY = 'derp-speedtest';
 
@@ -268,6 +269,7 @@ export default function Tunnel(): JSX.Element {
           </a>
         </div>
       </Card>
+      <Coexistence />
       <Show when={tun() && ['bridge', 'proxy'].includes(tun()!.mode) && (socksBusy() || socksResult())}>
         <Card title={t('tun_socks_check')} icon="network_check">
           <KvRow k="SOCKS5" v={<code>127.0.0.1:{tun()?.socksPort}</code>} />

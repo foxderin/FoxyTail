@@ -249,6 +249,21 @@ FoxyTail never touches other modules' chains and probes for neighbors at boot (`
 - **AFWall+**: firewall reloads may flush our jumps off the built-in chains. FoxyTail's rules are isolated in `FOXY_*` chains; run `foxytail.compat check` (or `foxytail.route apply`) to detect/restore tampering.
 - **NetGuard / other VPN apps**: FoxyTail does **not** use Android's VpnService, so it occupies zero VPN slots — but a VpnService app with "always-on" can still capture traffic before it reaches our routes.
 
+### WebUI proxy coexistence wizard
+
+Open **Tunnel → Proxy coexistence wizard → Detect environment**. It reads applied settings, the current Tailnet and actual DNS state without changing FoxyTail or another module. A ready FoxyTail-owned `local` / `transparent` DNS listener is required. Disabled, legacy or repair-pending DNS shows prerequisites and a Settings link rather than an unusable snippet. Installed modules/apps do not prove a proxy is running.
+
+1. Confirm the destination is **mihomo / Clash.Meta** with the required fields, and select its existing fake-IP blacklist, rule mode or `redir-host`. Whitelist semantics require reviewing the existing list; the wizard does not silently convert it.
+2. Preview, copy and **merge** into existing `dns.nameserver-policy`, `proxies`, `rules` and applicable `fake-ip-filter` entries. Preserve other entries; prepend routing and rule-mode filter entries before catchalls. Do not replace the complete configuration or use the local endpoint as global DNS.
+3. Only the current full Tailnet suffix and exact self/peer `/32` and `/128` addresses are included, never the whole CGNAT range or every `ts.net` name. Short names, company DNS, subnet and exit routes are not imported. Regenerate after address changes. The `FoxyTail-Tailnet` outbound name must be unique.
+4. `bridge` / `proxy` uses the actual local SOCKS5 port. `tun` uses a direct outbound bound to `tailscale0`, requiring core support and interface permission. Global IPv6 settings remain unchanged; check AAAA support separately.
+5. Select a current peer/address and supply its actual TCP service port. Optionally specify a different proxy DNS listener port on `127.0.0.1`. Verification independently reports exact-address UDP/TCP queries to FoxyTail DNS and optional proxy DNS, plus a numeric-address TCP connection. An omitted resolver is explicitly skipped. Account, address or applied-endpoint changes require detection again.
+
+Probes run as root. TCP uses local tailscaled SOCKS5 in bridge/proxy or system routing in tun, without application payload. Results **do not prove** a third-party app path, proxy interface binding, UDP traffic, application health or that the snippet was merged. Service status and individual probes are not interchangeable evidence.
+
+Field semantics follow [mihomo DNS](https://wiki.metacubex.one/en/config/dns/) and [DIRECT outbound](https://wiki.metacubex.one/en/config/proxies/direct/). Nine mode combinations were parsed by mihomo 1.19.32; isolated runtime checks exercised real split DNS and HTTP over SOCKS. Android device checks exercised an isolated local resolver and successful/refused TCP through the existing tailscaled SOCKS, without changing the existing proxy configuration or establishing third-party app routing.
+
+
 ## MagicDNS
 
 Enable MagicDNS, choose a mode and unused port in Settings, then apply the restart. Upgrades preserve `DNS_MODE=legacy` and the saved port. Both light and full packages include the first-party `foxydns` helper, built with Go 1.27.1.

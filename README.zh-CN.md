@@ -237,6 +237,21 @@ FoxyTail 从不动其他模块的链，开机时自动探测邻居（`foxytail.c
 - **AFWall+**：防火墙重载可能清掉我们在内置链上的跳转。FoxyTail 的规则隔离在 `FOXY_*` 链中；用 `foxytail.compat check` 检测、`foxytail.route apply` 恢复。
 - **NetGuard / 其他 VPN 应用**：FoxyTail **不占用** Android VpnService，零 VPN 槽位冲突——但开启「始终在线」的 VpnService 应用仍可能在我们的路由之前截获流量。
 
+### WebUI 代理共存向导
+
+在 **隧道 → 代理共存向导** 点击“检测环境”。读取已应用配置、当前 Tailnet 和实际 DNS 状态，不自动改动 FoxyTail 或其他模块配置。需要已就绪且归 FoxyTail 管理的 `local` / `transparent` 本地 DNS；MagicDNS 关闭、旧模式或状态待修复时，只显示前提和设置入口，不生成不可用片段。模块/应用清单不代表代理正在运行。
+
+1. 确认目标为支持相关字段的 **mihomo / Clash.Meta**，选择现有 `fake-ip` 黑名单、规则模式或 `redir-host`。白名单语义不同，向导不会未经审阅自动转换。
+2. 预览、复制并**合并**片段到原有 `dns.nameserver-policy`、`proxies`、`rules` 和适用的 `fake-ip-filter` 中；保留其他条目，新路由及规则模式过滤项应置于兜底规则前。不要整段覆盖原配置，也不要将本地端点用作全局 DNS。
+3. 域名分流仅覆盖当前完整 Tailnet 后缀；IP 规则仅覆盖当前本机/节点的精确 `/32`、`/128`，不接管整个 CGNAT 地址段或所有 `ts.net`。不导入短名、公司 DNS、子网或出口路由；节点地址变化后重新生成。`FoxyTail-Tailnet` 出站名称必须唯一。
+4. `bridge` / `proxy` 使用实际本机 SOCKS5 端口；`tun` 使用绑定 `tailscale0` 的 direct 出站，要求目标核心支持且具备接口访问权限。保留目标配置的全局 IPv6 设置，需要 AAAA 时单独确认支持情况。
+5. 选择当前节点及地址，填写实际 TCP 服务端口，可选填另一个 `127.0.0.1` 代理 DNS 监听端口，再点击验证。独立显示 FoxyTail DNS 与可选代理 DNS 的 UDP/TCP 精确地址核验，以及数字地址的 TCP 连接结果。留空代理 DNS 端口明确跳过；检测到账号、地址或已应用端点变化时要求重新检测。
+
+验证由 root 发起，TCP 经本机 tailscaled SOCKS5（bridge/proxy）或系统路由（tun），不发送应用数据。结果**不证明**第三方 App 的选路、代理接口绑定、UDP 业务或应用健康，也不证明片段已合并。进程/服务状态和各项探测不能互相替代。
+
+配置语义参考 [mihomo DNS](https://wiki.metacubex.one/en/config/dns/) 与 [DIRECT 出站](https://wiki.metacubex.one/en/config/proxies/direct/)。已用 mihomo 1.19.32 校验九种模式组合，隔离运行验证实际 DNS 分流和 HTTP 经 SOCKS 转发；Android 真机验证独立本地 DNS 及现有 tailscaled SOCKS 的 TCP 成功/拒绝结果，未改动现有代理配置或验证第三方 App 的实际数据路径。
+
+
 ## MagicDNS 说明
 
 在设置页打开 MagicDNS，选择 DNS 模式和空闲端口，再重启应用。升级沿用 `legacy`，不自动更改现有端口。新模式使用随两种安装包内置的 `foxydns`，无需自备 dnsmasq，也不依赖某个 VPN 应用的名称或私有接口。

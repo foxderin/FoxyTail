@@ -33,6 +33,8 @@ export const LOGIN_REFRESH_DELAY_MS = 1500;
 export const COMMAND_TIMEOUTS: Record<string, number> = {
   'peer-ping': 30000,
   'diag-check': 65000,
+  'coexist-info': 65000,
+  'coexist-check': 90000,
   'trial-start': 120000,
   'trial-revert': 120000,
   'restore-preview': 30000,

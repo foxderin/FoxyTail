@@ -24,6 +24,8 @@ ensure_run_dirs
 . "${DIR}/foxytail.webapi-backup.sh"
 # shellcheck source=foxytail.webapi-tools.sh
 . "${DIR}/foxytail.webapi-tools.sh"
+# shellcheck source=foxytail.webapi-coexist.sh
+. "${DIR}/foxytail.webapi-coexist.sh"
 
 # --- dispatch -------------------------------------------------------------------
 
@@ -34,7 +36,7 @@ if [ "$1" = --request-id ]; then
 fi
 case "$1:$2" in
   logs:* | control:stop | restore:* | cancel:* | diag-check:* | trial-status:* | trial-confirm:* | trial-revert:* | backup-list:* | restore-preview:*) ;;
-  status:* | tun:* | dns:* | dns-probe:*) load_runtime_conf || jerr 'invalid runtime configuration; inspect the service log' ;;
+  status:* | tun:* | dns:* | dns-probe:* | coexist-info:* | coexist-check:*) load_runtime_conf || jerr 'invalid runtime configuration; inspect the service log' ;;
   *) load_conf || jerr 'invalid configuration; inspect the service log' ;;
 esac
 case "$1" in
@@ -57,6 +59,8 @@ case "$1" in
   tun) cmd_tun ;;
   dns) cmd_dns ;;
   dns-probe) cmd_dns_probe ;;
+  coexist-info) cmd_coexist_info ;;
+  coexist-check) shift; cmd_coexist_check "$@" ;;
   login) shift; cmd_login "$@" ;;
   login-authkey) shift; cmd_login_authkey "$1" ;;
   logout) cmd_logout ;;

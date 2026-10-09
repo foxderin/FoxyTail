@@ -1,5 +1,6 @@
 /* Development-only fixture. Vite builds index.html exclusively, so neither
  * this bridge nor its simulated data can enter the shipped WebUI. */
+import type { CoexistCheck, CoexistInfo } from '../src/coexistence';
 const peers = [
   { id: 'studio', hostname: 'studio-mac', ip: '100.74.12.8', ips: ['100.74.12.8', 'fd7a:115c:a1e0::8'], os: 'macOS', relay: '', online: true, rxBytes: 1468203023, txBytes: 346820302, exitNodeOption: false },
   { id: 'nas', hostname: 'home-server', ip: '100.80.42.16', os: 'linux', relay: '', online: true, rxBytes: 3496221452, txBytes: 2102323420, exitNodeOption: true },
@@ -14,14 +15,40 @@ let customRoutes = { scope: 'all', uids: [] as string[], subnets: ['100.64.0.0/1
 let selected: typeof peers[number] | null = null;
 const params = new URLSearchParams(location.search);
 const scenario = params.get('state') || 'ready';
+// Named wizard scenarios: coexist-bridge/proxy/tun/failed/unready/empty/stale/error.
+if (scenario.startsWith('coexist-')) {
+  config.DNS_MODE = 'local';
+  config.TS_MODE = scenario === 'coexist-tun' ? 'tun' : scenario === 'coexist-proxy' ? 'proxy' : 'bridge';
+  config.SOCKS_PORT = '1109';
+  config.DNS_PORT = '1153';
+}
 if (['legacy', 'local', 'transparent'].includes(params.get('dns') || '')) config.DNS_MODE = params.get('dns')!;
 let appliedDns = { mode: config.DNS_MODE, port: Number(config.DNS_PORT), enabled: true, ipv6: false };
 if(params.has('theme')) localStorage.setItem('foxy.theme', params.get('theme')!);
 localStorage.setItem('foxy.lang', params.get('lang') || 'zh');
 const hours = Array.from({length:24},(_,hour)=>({hour,iface:{rx: Math.round((hour<7?8:45+Math.sin(hour*.74)*30+(hour>15?40:0))*1048576),tx:Math.round((hour<7?2:10+Math.sin(hour*.74)*6)*1048576)}}));
 const logs = ['2026-09-09 09:41:00 [Info] tailscaled started successfully','2026-09-09 09:41:01 [Info] Network state: connected','2026-09-09 09:41:01 [Success] Tunnel interface is ready','2026-09-09 09:41:02 [Info] MagicDNS resolver is ready','2026-09-09 09:42:00 [Info] Traffic samples collected','2026-09-09 09:43:00 [Warning] Peer travel-ipad is offline'];
+function coexistInfo(): CoexistInfo {
+  const ready = running && appliedDns.enabled && appliedDns.mode !== 'legacy' && !['coexist-unready', 'dns-port-busy'].includes(scenario);
+  const currentPeers = ['coexist-empty', 'empty'].includes(scenario) ? [] : peers.map(peer => ({
+    id: peer.id, hostname: peer.hostname, dnsName: peer.hostname + '.example.ts.net',
+    ips: peer.ips || [peer.ip], online: peer.online,
+  }));
+  return {
+    ok: true, snapshot: `preview:${config.TS_MODE}:${appliedDns.mode}:${appliedDns.port}:${ready}`,
+    mode: config.TS_MODE as CoexistInfo['mode'], socksPort: Number(config.SOCKS_PORT), ipv6Enabled: appliedDns.ipv6,
+    suffix: 'example.ts.net', dnsReady: ready,
+    dns: { ok: true, mode: appliedDns.mode as CoexistInfo['dns']['mode'], port: appliedDns.port,
+      enabled: appliedDns.enabled, suffix: 'example.ts.net', state: ready ? 'running' : 'degraded',
+      reason: ready ? appliedDns.mode === 'local' ? 'local' : 'running' : 'listener-failed',
+      listenerReady: ready, repairNeeded: false, policyState: ready ? 'owned' : 'restored',
+      interception4: ready && appliedDns.mode === 'transparent', interception6: false },
+    peers: currentPeers, addresses: ['100.69.138.97', 'fd7a:115c:a1e0::873a:6110', ...currentPeers.flatMap(peer => peer.ips)],
+    environment: { modules: [{ name: 'Surfing', kind: 'proxy' }], apps: [{ package: 'com.github.metacubex.clash.meta', kind: 'proxy' }], warnings: [], alert: null },
+  };
+}
 function result(cmd:string,args:string[]) {
-  if(scenario==='error' && ['status','peers','dns','settings-get','traffic','subnet-routes-get'].includes(cmd)) return {ok:false,error:'Preview: service temporarily unavailable'};
+  if(scenario==='error' && ['status','peers','dns','coexist-info','coexist-check','settings-get','traffic','subnet-routes-get'].includes(cmd)) return {ok:false,error:'Preview: service temporarily unavailable'};
   switch(cmd){
     case 'status': return {ok:true,daemon:running?'running':'stopped',backend:scenario==='login'?'NeedsLogin':scenario==='starting'?'NoState':scenario==='approval'?'NeedsMachineAuth':running?'Running':'NoState',mode:config.TS_MODE,self:{hostname:'oneplus-ace',ips:['100.69.138.97','fd7a:115c:a1e0::873a:6110'],relay:''},exitNode:selected?{...selected,rx:selected.rxBytes,tx:selected.txBytes}:null,peers:{online:4,offline:2},magicDns:true,keyExpiry:null,uptime:running?184220:0};
     case 'peers':return {ok:true,peers:scenario==='empty'?[]:peers};
@@ -35,6 +62,28 @@ function result(cmd:string,args:string[]) {
         reason:!appliedDns.enabled?'disabled':!listenerReady?'listener-failed':appliedDns.mode==='local'?'local':interception4?'running':'transparent-unavailable',
         enabled:appliedDns.enabled,suffix:'example.ts.net',port:appliedDns.port,listenerReady,
         interception4,interception6:interception4&&appliedDns.ipv6,repairNeeded:false,policyState:listenerReady?'owned':'restored',upstreamNative:false};
+    }
+    case 'coexist-info': return scenario === 'coexist-error' ? {ok:false,error:'Preview: applied state is unavailable'} : coexistInfo();
+    case 'coexist-check': {
+      const current = coexistInfo();
+      const [snapshot, id, address, port, resolver] = args;
+      const peer = current.peers.find(item => item.id === id);
+      if (scenario === 'coexist-stale' || snapshot !== current.snapshot || !current.dnsReady) return {ok:false,error:'Preview: context changed; detect again'};
+      if (!peer || !peer.ips.includes(address) || !/^\d{1,5}$/.test(port) || Number(port) < 1 || Number(port) > 65535 ||
+        (resolver !== '-' && (!/^\d{1,5}$/.test(resolver) || Number(resolver) < 1 || Number(resolver) > 65535 || Number(resolver) === current.dns.port))) {
+        return {ok:false,error:'Preview: invalid current target or port'};
+      }
+      const failed = scenario === 'coexist-failed';
+      const checks: CoexistCheck['checks'] = [
+        {id:'dns-udp',ok:true,addresses:[address],elapsedMs:3},
+        {id:'dns-tcp',ok:!failed,addresses:failed?['198.18.0.7']:[address],elapsedMs:5,...(failed?{error:'Preview: unexpected DNS address (fake-IP)'}:{})},
+      ];
+      if (resolver !== '-') checks.push(
+        {id:'resolver-udp',ok:!failed,addresses:failed?[]:[address],elapsedMs:failed?2000:6,...(failed?{error:'Preview: DNS request timed out'}:{})},
+        {id:'resolver-tcp',ok:true,addresses:[address],elapsedMs:8},
+      );
+      checks.push({id:'tcp',ok:!failed,elapsedMs:18,...(failed?{error:'Preview: connection refused'}:{})});
+      return {ok:true,snapshot,name:peer.dnsName,address,targetPort:Number(port),path:current.mode==='tun'?'system':'socks5',checks};
     }
     case 'compat':return {ok:true,modules:[],apps:[],warnings:[],alert:null};
     case 'accounts':return {ok:true,accounts:[{name:'alex@example.com',label:'Personal network',current:true}]};
@@ -84,7 +133,7 @@ if(scenario!=='no-root') (window as any).ksu={spawn(command:string,_args:string,
   let sub='',payload:unknown='';
   if(api>=0){args.splice(0,api+1);if(args[0]==='--request-id')args.splice(0,2);sub=args.shift()||'';payload=result(sub,args);}
   else payload=command.startsWith('cat ')?'# Custom hooks may be configured on this device.':'yes';
-  const delay=scenario==='slow'?4000:sub.includes('speedtest')||sub==='diag'?1200:180;
+  const delay=scenario==='slow'?4000:sub.includes('speedtest')||sub==='diag'||sub==='coexist-check'?1200:180;
   setTimeout(()=>{const cb=(window as any)[callback];if(!cb)return;const output=typeof payload==='string'?payload:JSON.stringify(payload);cb.stdout.emit('data',output);cb.emit('exit',(payload as any)?.ok===false?1:0);},delay);
 }};
 await import('../src/main');
