@@ -1,0 +1,26 @@
+<resources>
+    <color name="foxy_primary">#99D3BF</color>
+    <color name="foxy_on_primary">#003829</color>
+    <color name="foxy_primary_container">#165140</color>
+    <color name="foxy_on_primary_container">#B4EFDA</color>
+    <color name="foxy_secondary">#B7CCBF</color>
+    <color name="foxy_on_secondary">#23352C</color>
+    <color name="foxy_secondary_container">#394B41</color>
+    <color name="foxy_on_secondary_container">#D3E8DC</color>
+    <color name="foxy_tertiary">#A4CCDF</color>
+    <color name="foxy_on_tertiary">#073544</color>
+    <color name="foxy_tertiary_container">#244B5B</color>
+    <color name="foxy_on_tertiary_container">#C0E8FC</color>
+    <color name="foxy_surface">#0F1512</color>
+    <color name="foxy_surface_low">#171D19</color>
+    <color name="foxy_surface_container">#1B211D</color>
+    <color name="foxy_surface_high">#252B27</color>
+    <color name="foxy_on_surface">#DFE5DE</color>
+    <color name="foxy_on_surface_variant">#C1C9C1</color>
+    <color name="foxy_outline">#8B948C</color>
+    <color name="foxy_outline_variant">#414943</color>
+    <color name="foxy_error">#FFB4AB</color>
+    <color name="foxy_on_error">#690005</color>
+    <color name="foxy_error_container">#93000A</color>
+    <color name="foxy_on_error_container">#FFDAD6</color>
+</resources>

@@ -6,10 +6,10 @@
 
 ## 已实现范围
 
-- WebUI 共享存储目录浏览、最多 32 文件批量选择；现有收件导入、下载、导出和删除保留。
+- 原生文件页共享存储浏览、最多 32 文件批量选择；收件导入、二进制打开/另存、导出和删除保留。
 - 模块 `foxyfiles` 持久发送任务、真实 daemon 字节进度、逐项错误、取消、历史和仅重试未成功项。
 - `dev.foxderin.tail` 原生 Android 附属应用：系统 SEND/SEND_MULTIPLE、SAF 多选、确认发送、收件浏览/导入/打开/分享/另存、历史及前台活动通知。
-- App 与 WebUI 共用模块能力，不复制 tailscaled 网络栈，不迁移登录、路由、DNS 等其余控制面。
+- 控制面分离已在后续实现完成：登录、路由、DNS 与其余管理功能迁入 Android Material 3 应用，root 模块仍独立托管 tailscaled 网络栈与任务；WebUI 已移除。
 - Android APK 以稳定私有密钥签名，随包置于 `companion/FoxyTail.apk`，开机由包管理器安装到 `/data/app`；不再依赖 `system/app` 挂载可见性，不使用系统特权、共享 UID 或公开签名密钥。
 
 ## 发送与权限契约
@@ -39,12 +39,12 @@
 
 开机记录缺失时，模块请求当前 LocalAPI 打开一个随机保留探测名；仅接受固定 daemon 返回的精确 direct-mode 拒绝，且 PID/启动时间/boot ID 前后相同才恢复记录。不创建、下载或删除探测文件，不用空文件列表猜测模式。若 daemon 实际未进入 direct mode，仍保留错误要求解锁重启。
 
-App 导出通过随机令牌、只读、非 exported 的 ContentProvider 授权单个文件，24 小时后失效；另存使用系统目的地选择器。WebUI 的 base64 内联下载仍限制 8 MiB，Android 使用二进制流，不把大文件装进命令参数。
+App 导出通过随机令牌、只读、非 exported 的 ContentProvider 授权单个文件，24 小时后失效；另存使用系统目的地选择器。文件内容使用二进制流，不放入命令参数；旧 base64 内联下载入口已移除。
 
 ## 验证边界
 
-本地 native race 与 Unix LocalAPI 夹具覆盖并发、精确进度关联、HTTP 失败优先、源文件替换、账号变化、取消/进程中断和 rooted 文件访问；WebUI smoke 覆盖浏览、批次、后台观察与失败项重试。
+本地 native race 与 Unix LocalAPI 夹具覆盖并发、精确进度关联、HTTP 失败优先、源文件替换、账号变化、取消/进程中断和 rooted 文件访问。原 WebUI smoke 随切换移除，其行为验收迁到 Android 逻辑回归及真实界面 smoke。
 
 实际运行使用独立 Android 15 模拟器、真实 Magisk su 与两个固定版本 tailscaled，经隔离 upstream testcontrol/DERP 注册，完成真实批量传输、字节对比、系统多分享、SAF、收件导入/另存、旋转保持、任务接管、真实字节事件与取消。控制服务器为测试环境，但文件数据面是实际 daemon/peerAPI，不是回显假实现。未验证 OEM 真机、KernelSU 授权弹窗、SELinux enforcing 共存及全套后台限制。
 
-浏览器跨设备上传和整个 WebUI 控制面迁移不属于本阶段；文件选择已由共享目录浏览及 Android SAF/系统分享完成。
+浏览器跨设备上传仍不属于本阶段；共享目录浏览与 Android SAF/系统分享负责文件选择。当前完整原生控制面、持久回执、产物令牌及构建/设备验证边界以 README 为准。

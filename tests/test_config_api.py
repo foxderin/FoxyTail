@@ -48,13 +48,30 @@ class ConfigApiTests(ApiTestCase):
             self.assertNotEqual(self.shell('cmd_settings_set DNS_MODE ' + shlex.quote(mode), ok=False).returncode, 0)
 
     def test_schema_rejects_reserved_tables_and_invalid_subnets(self):
-        for table in ['0', '52', '253', '254', '255', '999', '65536']:
+        for table in ['0', '52', '253', '254', '255', '999', '1000', '1053', '65535', '65536']:
             self.assertNotEqual(self.shell('_conf_value_error ROUTE_TABLE ' + table, ok=False).returncode, 0)
         self.shell('_conf_value_error ROUTE_TABLE 1052')
         for cidr in ['300.1.1.1/24', '1.2.3.4/99', 'fd00:::1/64', 'fd00::/129', 'not-a-cidr']:
             self.assertNotEqual(self.shell('_conf_value_error ROUTE_SUBNETS ' + shlex.quote(cidr), ok=False).returncode, 0)
         self.shell("_conf_value_error ROUTE_SUBNETS '100.64.0.0/10 fd7a:115c:a1e0::/48'")
         self.assertNotEqual(self.shell("_conf_value_error UID_LIST '0 10123'", ok=False).returncode, 0)
+
+    def test_old_route_table_fails_without_rewriting_disk(self):
+        path = self.conf / 'foxytail.conf'
+        path.write_text('ROUTE_TABLE=1053\n')
+        before = path.read_bytes()
+        result = self.shell('load_conf', ok=False)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('ROUTE_TABLE', result.stdout + result.stderr)
+        self.assertEqual(path.read_bytes(), before)
+        self.assertNotEqual(self.shell('cmd_settings_set ROUTE_TABLE 1053', ok=False).returncode, 0)
+        self.assertEqual(path.read_bytes(), before)
+
+    def test_auto_refresh_preserves_legacy_disk_key(self):
+        self.shell('cmd_settings_set WEBUI_AUTO_REFRESH off')
+        result = json.loads(self.shell('load_conf && cmd_settings_get').stdout)
+        self.assertEqual(result['settings']['WEBUI_AUTO_REFRESH'], 'off')
+        self.assertIn('WEBUI_AUTO_REFRESH="off"', (self.conf / 'foxytail.conf').read_text())
 
     def test_cidr_normalization_matches_network_semantics_and_preserves_hosts(self):
         rng = random.Random(2452)

@@ -176,14 +176,18 @@ cmd_exitnode_set() {
     *[!A-Za-z0-9._:-]*) jerr "exitnode-set: invalid node identifier" ;;
   esac
   _es_out=$(_op_exec 90 "${TS_SCRIPTS_DIR}/foxytail.exitnode" set "$1")
+  _es_rc=$?
   [ -n "${_es_out}" ] || jerr 'exit controller failed before reporting preference/policy state'
   printf '%s\n' "${_es_out}"
+  return "${_es_rc}"
 }
 
 cmd_exitnode_clear() {
   _ec_out=$(_op_exec 90 "${TS_SCRIPTS_DIR}/foxytail.exitnode" clear)
+  _ec_rc=$?
   [ -n "${_ec_out}" ] || jerr 'exit controller failed before reporting preference/policy state'
   printf '%s\n' "${_ec_out}"
+  return "${_ec_rc}"
 }
 
 # --- tun / dns ----------------------------------------------------------------

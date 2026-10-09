@@ -41,6 +41,10 @@ android {
     }
 }
 
+dependencies {
+    implementation 'com.google.android.material:material:1.14.0'
+}
+
 gradle.taskGraph.whenReady { graph ->
     if (graph.allTasks.any { it.project == project && it.name.toLowerCase().contains('release') } && !hasReleaseSigning) {
         throw new GradleException('Release signing requires FOXYTAIL_KEYSTORE_PATH, FOXYTAIL_KEYSTORE_PASSWORD, FOXYTAIL_KEY_ALIAS and FOXYTAIL_KEY_PASSWORD; unsigned release artifacts are forbidden.')

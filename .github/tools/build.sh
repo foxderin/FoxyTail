@@ -138,7 +138,7 @@ mkdir -p "$PACKAGE_DIR/tailscale/bin"
 mkdir -p "$PACKAGE_DIR/companion"
 cp "$COMPANION_APK" "$PACKAGE_DIR/companion/FoxyTail.apk"
 (cd "$PACKAGE_DIR/companion" && sha256sum FoxyTail.apk | cut -d' ' -f1 >FoxyTail.apk.sha256)
-cp -R META-INF webroot "$PACKAGE_DIR/"
+cp -R META-INF "$PACKAGE_DIR/"
 cp customize.sh service.sh install-recovery.sh install-companion.sh uninstall.sh module.prop update.json LICENSE "$PACKAGE_DIR/"
 cp native/foxydns/THIRD_PARTY_NOTICES.txt "$PACKAGE_DIR/THIRD_PARTY_NOTICES.txt"
 cp -R tailscale/scripts tailscale/conf "$PACKAGE_DIR/tailscale/"

@@ -1,7 +1,36 @@
 <resources>
-    <style name="AppTheme" parent="android:style/Theme.Material.Light.NoActionBar">
+    <style name="AppThemeBase" parent="Theme.Material3.DayNight.NoActionBar">
         <item name="android:fontFamily">sans</item>
-        <item name="android:colorAccent">#316B59</item>
-        <item name="android:windowLightStatusBar">true</item>
+        <item name="colorPrimary">@color/foxy_primary</item>
+        <item name="colorOnPrimary">@color/foxy_on_primary</item>
+        <item name="colorPrimaryContainer">@color/foxy_primary_container</item>
+        <item name="colorOnPrimaryContainer">@color/foxy_on_primary_container</item>
+        <item name="colorSecondary">@color/foxy_secondary</item>
+        <item name="colorOnSecondary">@color/foxy_on_secondary</item>
+        <item name="colorSecondaryContainer">@color/foxy_secondary_container</item>
+        <item name="colorOnSecondaryContainer">@color/foxy_on_secondary_container</item>
+        <item name="colorTertiary">@color/foxy_tertiary</item>
+        <item name="colorOnTertiary">@color/foxy_on_tertiary</item>
+        <item name="colorTertiaryContainer">@color/foxy_tertiary_container</item>
+        <item name="colorOnTertiaryContainer">@color/foxy_on_tertiary_container</item>
+        <item name="colorSurface">@color/foxy_surface</item>
+        <item name="colorSurfaceContainerLow">@color/foxy_surface_low</item>
+        <item name="colorSurfaceContainer">@color/foxy_surface_container</item>
+        <item name="colorSurfaceContainerHigh">@color/foxy_surface_high</item>
+        <item name="colorOnSurface">@color/foxy_on_surface</item>
+        <item name="colorOnSurfaceVariant">@color/foxy_on_surface_variant</item>
+        <item name="colorOutline">@color/foxy_outline</item>
+        <item name="colorOutlineVariant">@color/foxy_outline_variant</item>
+        <item name="colorError">@color/foxy_error</item>
+        <item name="colorOnError">@color/foxy_on_error</item>
+        <item name="colorErrorContainer">@color/foxy_error_container</item>
+        <item name="colorOnErrorContainer">@color/foxy_on_error_container</item>
+        <item name="android:colorBackground">@color/foxy_surface</item>
+        <item name="android:windowBackground">@color/foxy_surface</item>
+        <item name="android:windowLightStatusBar">@bool/foxy_light_bars</item>
+        <item name="android:statusBarColor">@android:color/transparent</item>
+        <item name="android:navigationBarColor">@color/foxy_surface</item>
     </style>
+    <bool name="foxy_light_bars">true</bool>
+    <style name="AppTheme" parent="AppThemeBase" />
 </resources>

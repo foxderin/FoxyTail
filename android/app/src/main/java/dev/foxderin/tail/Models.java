@@ -33,10 +33,12 @@ final class Models {
         if (name.isEmpty() || name.equals(".") || name.equals("..") || name.equals(".taildrop") || name.equals(".outgoing") || name.contains("/") || name.contains("\\") || name.codePoints().anyMatch(Character::isISOControl)) throw new IOException("Invalid file name");
     }
     static boolean sourcePath(String path) {
-        if (!(path.startsWith("/sdcard/") || path.startsWith(STAGED)) || path.contains("\\") || path.codePoints().anyMatch(Character::isISOControl)) return false;
+        if (path == null || !(path.startsWith("/sdcard/") || path.startsWith(STAGED)) || path.length() > 4096 || path.contains("\\") || path.codePoints().anyMatch(Character::isISOControl)) return false;
         for (String part : path.substring(1).split("/", -1)) if (part.isEmpty() || part.equals(".") || part.equals("..")) return false;
         return !path.startsWith(STAGED) || path.substring(STAGED.length()).matches("[a-zA-Z0-9_-]+/[^/]+");
     }
+    static boolean sharedPath(String path) { return sourcePath(path) && path.startsWith("/sdcard/"); }
+    static boolean relativePath(String path) { return path != null && (path.isEmpty() || sharedPath("/sdcard/" + path)); }
     static String safeName(String name) {
         String value = name == null ? "file" : name.replaceAll("[\\p{Cntrl}/\\\\]", "_").trim();
         while (value.getBytes(StandardCharsets.UTF_8).length > 120) value = value.substring(0, value.offsetByCodePoints(value.length(), -1));
@@ -44,8 +46,15 @@ final class Models {
         return value;
     }
     static final class Source {
-        final Uri uri; final String name; final long size;
-        Source(Uri uri, String name, long size) { this.uri = uri; this.name = name; this.size = size; }
+        final Uri uri; final String path, name; final long size;
+        Source(Uri uri, String name, long size) { this.uri = uri; this.path = null; this.name = name; this.size = size; }
+        private Source(String path, String name, long size) { this.uri = null; this.path = path; this.name = name; this.size = size; }
+        static Source shared(String path, long size) throws IOException {
+            if (!sharedPath(path) || size < 0 || size > RootApi.MAX_FILE) throw new IOException("Invalid shared file");
+            String name = path.substring(path.lastIndexOf('/') + 1); requireName(name);
+            return new Source(path, name, size);
+        }
+        String key() { return path == null ? uri.toString() : path; }
         static Source resolve(Context context, Uri uri) throws Exception {
             if (uri == null || !"content".equals(uri.getScheme())) throw new IOException(context.getString(R.string.invalid_uri));
             String name = "file"; long size = -1;

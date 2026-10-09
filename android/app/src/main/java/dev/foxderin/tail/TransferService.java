@@ -86,8 +86,10 @@ public final class TransferService extends Service {
                     if (!prior.peerId.equals(peerId)) throw new IOException(getString(R.string.invalid_response));
                     paths = prior.retryPaths();
                 } else {
+                    paths = sharedSources(intent);
                     ArrayList<Uri> uris = intent.getParcelableArrayListExtra("uris");
-                    if (uris == null || uris.isEmpty() || uris.size() > 32) throw new IOException(getString(R.string.file_limit));
+                    if (uris == null) uris = new ArrayList<>();
+                    if (uris.size() + paths.length() == 0 || uris.size() + paths.length() > 32) throw new IOException(getString(R.string.file_limit));
                     for (Uri uri : uris) {
                         if (cancelRequested || stopping) throw new InterruptedIOException(getString(R.string.cancelled_local));
                         Models.Source source = Models.Source.resolve(this, uri);
@@ -162,6 +164,19 @@ public final class TransferService extends Service {
             requestId = null; currentCall = null; jobId = null;
             main.post(this::finish);
         }
+    }
+    static JSONArray sharedSources(Intent intent) throws IOException {
+        // Only the unexported service accepts these extras; MainActivity never forwards external paths.
+        ArrayList<String> sources = intent.getStringArrayListExtra("paths");
+        JSONArray paths = new JSONArray();
+        if (sources == null) return paths;
+        if (sources.size() > 32) throw new IOException("Too many shared files");
+        Set<String> seen = new HashSet<>();
+        for (String path : sources) {
+            if (!Models.sharedPath(path) || !seen.add(path)) throw new IOException("Invalid shared source");
+            paths.put(path);
+        }
+        return paths;
     }
     private void cleanupInterrupted() throws Exception {
         String request = prefs.getString("request", null);

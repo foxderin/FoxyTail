@@ -12,10 +12,13 @@ import (
 
 func run(args []string) error {
 	if len(args) == 0 {
-		return errors.New("usage: foxydns serve|check|probe|verify|health|watch|quiesce|cleanup [options]")
+		return errors.New("usage: foxydns serve|check|probe|verify|socks-check|health|watch|quiesce|cleanup [options]")
 	}
 	if args[0] == "verify" {
 		return runVerify(args[1:])
+	}
+	if args[0] == "socks-check" {
+		return runSocksCheck(args[1:])
 	}
 	flags := flag.NewFlagSet(args[0], flag.ContinueOnError)
 	config := flags.String("config", "", "absolute JSON configuration path")

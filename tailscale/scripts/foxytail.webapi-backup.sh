@@ -38,8 +38,9 @@ cmd_backup() (
   _op_exec 30 "${TS_BIN_DIR}/foxyfiles" extract "${_bk_tmp}" "${_bk_stage}/verify" >/dev/null 2>"${_bk_err}" || _bk_fail 'archive verification failed'
   _bk_size=$(wc -c <"${_bk_tmp}" 2>"${_bk_err}") || _bk_fail 'cannot read archive size'
   [ "${_bk_size}" -gt 0 ] 2>/dev/null || jerr 'backup: archive is empty'
+  _bk_artifact=$(_artifact_register backup "${_bk_tmp}") || _bk_fail 'cannot retain private export artifact'
   (set -C; { cat "${_bk_tmp}" || { rm -f "${_bk_out}"; exit 1; }; } >"${_bk_out}") 2>"${_bk_err}" || _bk_fail 'cannot publish archive to Download'
-  jqr -n -c --arg p "${_bk_out}" --argjson size "${_bk_size}" '{ok:true,path:$p,size:$size}'
+  jqr -n -c --arg p "${_bk_out}" --arg id "${_bk_artifact}" --argjson size "${_bk_size}" '{ok:true,path:$p,size:$size,artifactId:$id}'
 )
 
 # Hash the complete saved content set, including absent files, under the config lock.
@@ -68,31 +69,50 @@ _restore_cleanup() {
     if ! conf_recover_restore; then
       echo "restore recovery pending: previous configuration retained at ${_rt_old}" >&2
       conf_lock_release
+      [ "${_rt_artifact_pinned:-0}" != 1 ] || exec 8<&-
       return 1
     fi
   fi
   [ "${_rt_committed:-0}" = 1 ] || [ -z "${_rt_parked:-}" ] || rm -rf "${_rt_parked}"
   [ -z "${_rt_tmp:-}" ] || rm -rf "${_rt_tmp}"
   conf_lock_release
+  [ "${_rt_artifact_pinned:-0}" != 1 ] || exec 8<&-
 }
 
 _restore_stage() {
   [ -n "$1" ] || jerr 'restore: missing path'
-  case "$1" in /sdcard/*.tar.gz) ;; *) jerr 'restore: expected .tar.gz under /sdcard/' ;; esac
-  [ ! -L "$1" ] || jerr 'restore: archive must not be a symlink'
-  _rt_path=$(realpath "$1" 2>/dev/null)
-  case "${_rt_path}" in /sdcard/*.tar.gz | /storage/emulated/*.tar.gz) ;; *) jerr 'restore: archive must resolve under shared storage' ;; esac
-  [ -f "${_rt_path}" ] || jerr 'restore: archive does not exist'
+  _rt_artifact=''
+  if _artifact_id_valid "$1"; then
+    _rt_artifact=$1
+  else
+    case "$1" in /sdcard/*.tar.gz) ;; *) jerr 'restore: expected an artifact token or .tar.gz under /sdcard/' ;; esac
+    [ ! -L "$1" ] || jerr 'restore: archive must not be a symlink'
+    _rt_path=$(realpath "$1" 2>/dev/null)
+    case "${_rt_path}" in /sdcard/*.tar.gz | /storage/emulated/*.tar.gz) ;; *) jerr 'restore: archive must resolve under shared storage' ;; esac
+    [ -f "${_rt_path}" ] || jerr 'restore: archive does not exist'
+  fi
   _rt_tmp=$(mktemp -d "${TS_DIR}/.restore.XXXXXX") || jerr 'restore: cannot create staging directory'
   trap '_restore_cleanup' 0
   trap 'exit 1' HUP INT TERM
   mkdir "${_rt_tmp}/next" || jerr 'restore: staging failed'
-  _rt_sha=$(_op_exec 30 "${TS_BIN_DIR}/foxyfiles" extract "$1" "${_rt_tmp}/unpack" 2>"${_rt_tmp}/error") || {
+  _rt_expected=${2:-}
+  if [ -n "${_rt_artifact}" ]; then
+    [ -d "${TS_DIR}/.artifacts" ] && [ ! -L "${TS_DIR}/.artifacts" ] &&
+      [ -d "${TS_DIR}/.artifacts/${_rt_artifact}" ] && [ ! -L "${TS_DIR}/.artifacts/${_rt_artifact}" ] || jerr 'restore: unsafe artifact directory'
+    exec 8<"${TS_DIR}/.artifacts/${_rt_artifact}" || jerr 'restore: artifact is unavailable'
+    _rt_artifact_pinned=1
+    # mksh marks persistent exec descriptors CLOEXEC; explicitly inherit this one.
+    "${TS_BIN_DIR}/foxyfiles" artifact-pin --root "${TS_DIR}" --id "${_rt_artifact}" 8<&8 || jerr 'restore: artifact is unsafe, expired or in use'
+    set -- artifact-extract --root "${TS_DIR}" --id "${_rt_artifact}" --destination "${_rt_tmp}/unpack"
+  else
+    set -- extract "$1" "${_rt_tmp}/unpack"
+  fi
+  _rt_sha=$(_op_exec 30 "${TS_BIN_DIR}/foxyfiles" "$@" 2>"${_rt_tmp}/error") || {
     _rt_error=$(tail -c 2048 "${_rt_tmp}/error" | _sanitize_text)
     jerr "restore: unsafe, oversized, damaged or cancelled archive${_rt_error:+: ${_rt_error}}"
   }
   _restore_hash_valid "${_rt_sha}" || jerr 'restore: invalid archive digest'
-  [ -z "${2:-}" ] || [ "$2" = "${_rt_sha}" ] || jerr 'restore: backup changed after preview; preview it again'
+  [ -z "${_rt_expected}" ] || [ "${_rt_expected}" = "${_rt_sha}" ] || jerr 'restore: backup changed after preview; preview it again'
   _rt_src="${_rt_tmp}/unpack/archive"
   # Validate every incoming entry before touching live configuration.
   for _rt_f in "${_rt_src}/conf/"*; do
@@ -195,7 +215,7 @@ cmd_backup_list() {
 }
 
 cmd_restore_preview() (
-  _backup_selected_path "$1" || jerr 'restore-preview: select a regular FoxyTail backup from Download'
+  _artifact_id_valid "$1" || _backup_selected_path "$1" || jerr 'restore-preview: select a staged artifact or regular FoxyTail backup from Download'
   _restore_stage "$1"
   conf_lock_acquire || jerr 'restore-preview: configuration is busy'
   _rp_baseline=$(_restore_baseline) || jerr 'restore-preview: cannot hash saved configuration'

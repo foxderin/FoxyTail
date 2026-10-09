@@ -42,6 +42,7 @@ _op_gc() {
   for _og_dir in "${TS_RUN_DIR}/operations/"*; do
     [ -d "${_og_dir}" ] && [ ! -L "${_og_dir}" ] || continue
     _og_id=${_og_dir##*/}
+    [ ! -f "${_og_dir}/durable" ] || continue
     _op_valid_id "${_og_id}" || continue
     _og_epoch=${_og_id%%_*}
     [ "${_og_epoch}" -lt $((_og_now - 930)) ] || continue
@@ -60,10 +61,31 @@ _op_starttime() {
 _op_pid_alive() {
   _opa_record="$1"
   [ -f "${_opa_record}" ] || return 1
-  IFS=' ' read -r _opa_pid _opa_start <"${_opa_record}"
+  IFS=' ' read -r _opa_pid _opa_start _opa_boot <"${_opa_record}"
+  [ -z "${_opa_boot}" ] || [ "${_opa_boot}" = "$(boot_identity)" ] || return 1
   case "${_opa_pid}:${_opa_start}" in *[!0-9:]* | :* | *:) return 1 ;; esac
   _opa_now=$(_op_starttime "${_opa_pid}")
   [ -n "${_opa_now}" ] && [ "${_opa_now}" = "${_opa_start}" ] && kill -0 "${_opa_pid}" 2>/dev/null
+}
+
+_op_registry() {
+  umask 077
+  [ ! -L "${TS_RUN_DIR}/operations" ] || return 1
+  mkdir -p "${TS_RUN_DIR}/operations" && chmod 0700 "${TS_RUN_DIR}/operations"
+}
+
+_op_record() {
+  _or_stamp=$(_op_starttime "$2") && _or_boot=$(boot_identity) || return 1
+  [ -n "${_or_stamp}" ] && [ -n "${_or_boot}" ] || return 1
+  printf '%s %s %s\n' "$2" "${_or_stamp}" "${_or_boot}" >"$1.next.$$" && mv -f "$1.next.$$" "$1"
+}
+
+_op_initial_phase() {
+  case "$1" in
+    control | mode-set | routes-set | subnet-routes-set | settings-set | context-set | backup | trial-start | trial-confirm | trial-revert | file-send-start | file-send-cancel | exitnode-set | exitnode-clear | login-authkey | logout | switch | serve-set | serve-del | funnel-set | funnel-del | file-delete | file-clear | file-export | file-receive)
+      _op_commit_begin ;;
+    *) return 0 ;;
+  esac
 }
 
 # Direct descendants from procfs, never process-name or process-group matches.
@@ -93,7 +115,7 @@ _op_signal() (
     kill -STOP "${_ops_pid}" 2>/dev/null || exit 0
     for _ops_child in $(_op_children "${_ops_pid}"); do
       _op_pid_alive "$1" || continue
-      printf '%s %s\n' "${_ops_child%%:*}" "${_ops_child#*:}" >"$1.child.${_ops_child%%:*}"
+      printf '%s %s %s\n' "${_ops_child%%:*}" "${_ops_child#*:}" "$(boot_identity)" >"$1.child.${_ops_child%%:*}"
     done
   fi
   for _ops_record in "$1".child.*; do
@@ -129,7 +151,7 @@ _op_finish() {
       done
     fi
     rm -f "${_OP_DIR}/runner"
-    : >"${_OP_DIR}/done"
+    [ -f "${_OP_DIR}/durable" ] || : >"${_OP_DIR}/done"
   fi
   conf_lock_release
 }
@@ -137,7 +159,7 @@ _op_finish() {
 _op_init() {
   _op_valid_id "$1" || jerr 'invalid request ID'
   _op_recent_id "$1" || jerr 'request ID has expired or is from the future'
-  [ -d "${TS_RUN_DIR}/operations" ] || mkdir -p "${TS_RUN_DIR}/operations" || jerr 'cannot create operation registry'
+  _op_registry || jerr 'cannot create private operation registry'
   _op_gc "${_ori_now}"
   _OP_DIR="${TS_RUN_DIR}/operations/$1"
   # mkdir claims the ID; an existing ID is either a cancellation tombstone or
@@ -145,23 +167,26 @@ _op_init() {
   mkdir "${_OP_DIR}" 2>/dev/null || jerr 'request already exists or was cancelled'
   printf '%s\n' "$2" >"${_OP_DIR}/command"
   printf '%s\n' "${TS_SOCKET}" >"${_OP_DIR}/socket"
-  printf '%s %s\n' "$$" "$(_op_starttime "$$")" >"${_OP_DIR}/runner"
+  _op_record "${_OP_DIR}/runner" "$$" || jerr 'cannot identify request process'
   trap '_op_finish' 0
   trap 'exit 130' HUP INT TERM
   _op_cancelled && jerr 'request was cancelled'
-  case "$2" in
-    control | mode-set | routes-set | subnet-routes-set | settings-set | context-set | backup | trial-start | trial-confirm | trial-revert | file-send-start | file-send-cancel)
-      _op_commit_begin || jerr 'request was cancelled before committing changes' ;;
-  esac
+  _op_initial_phase "$2" || jerr 'request was cancelled before committing changes'
 }
 
 cmd_cancel() {
   _op_valid_id "$1" || jerr 'invalid request ID'
+  _op_registry || jerr 'cannot open private operation registry'
   _oc_dir="${TS_RUN_DIR}/operations/$1"
+  [ ! -L "${_oc_dir}" ] || jerr 'invalid operation directory'
+  _control_lock
+  if [ -f "${_oc_dir}/durable" ]; then _control_unlock; _control_cancel "${_oc_dir}"; return; fi
   if [ ! -d "${_oc_dir}" ] && ! _op_recent_id "$1"; then
+    _control_unlock
     echo '{"ok":true,"cancelled":true,"expired":true}'; return 0
   fi
-  mkdir -p "${_oc_dir}" || jerr 'cannot record cancellation'
+  mkdir -p "${_oc_dir}" || { _control_unlock; jerr 'cannot record cancellation'; }
+  _control_unlock
   _oc_socket=$(cat "${_oc_dir}/socket" 2>/dev/null)
   [ -z "${_oc_socket}" ] || [ "${_oc_socket}" = "${TS_SOCKET}" ] || jerr 'operation socket mismatch'
   if ! ln -s cancelled "${_oc_dir}/phase" 2>/dev/null; then
@@ -169,6 +194,7 @@ cmd_cancel() {
       cancelled) ;;
       committing)
         if _op_pid_alive "${_oc_dir}/runner"; then jerr 'operation is committing changes and cannot be cancelled'; fi
+        [ -f "${_oc_dir}/done" ] || jerr 'operation outcome is unknown; refresh current state'
         echo '{"ok":true,"completed":true}'; return 0 ;;
       *) jerr 'cannot record cancellation' ;;
     esac
@@ -202,7 +228,7 @@ _op_exec() {
   _oe_start=$(_op_starttime "${_oe_pid}")
   _oe_record="${TS_RUN_DIR}/.cli-${_oe_pid}"
   [ -z "${_OP_DIR:-}" ] || _oe_record="${_OP_DIR}/child.${_oe_pid}"
-  printf '%s %s\n' "${_oe_pid}" "${_oe_start}" >"${_oe_record}"
+  printf '%s %s %s\n' "${_oe_pid}" "${_oe_start}" "$(boot_identity)" >"${_oe_record}.next" && mv -f "${_oe_record}.next" "${_oe_record}"
   _oe_timeout="${_oe_record}.timeout"
   _oe_ready="${_oe_record}.ready"
   rm -f "${_oe_ready}"

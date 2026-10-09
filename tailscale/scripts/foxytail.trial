@@ -162,7 +162,7 @@ trial_run() {
   trap 'exit 1' HUP INT TERM
   if [ "${2:-}" = candidate ] && [ "$(cat "${TRIAL_DIR}/status")" = preparing ]; then
     if ! tmo 120 "${TS_SCRIPTS_DIR}/start.sh" reload-trial "$1" candidate >>"${TS_RUN_LOG_FILE}" 2>&1 ||
-       { ! service_stop_held && ! trial_health; }; then
+       { ! service_stop_held && ! trial_health && ! service_stop_held; }; then
       trial_revert "$1" 'candidate startup or health check failed' >/dev/null
       trap - 0
       return
@@ -187,7 +187,7 @@ trial_run() {
     fi
     # Intentional context downtime is not a failed candidate.
     if ! service_stop_held && [ "$(monotonic_seconds)" -ge "${_tr_health_at}" ]; then
-      if ! trial_health; then
+      if ! trial_health && ! service_stop_held; then
         trial_revert "$1" 'candidate health check failed' >/dev/null
         break
       fi

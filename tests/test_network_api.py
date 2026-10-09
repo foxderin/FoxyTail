@@ -15,7 +15,9 @@ class NetworkApiTests(ApiTestCase):
         helper.chmod(0o755)
         prefix = 'load_conf; export TS_DIR; _op_exec() { test "$1" = 90 || return 9; shift; "$@"; }; '
         for command in ('cmd_exitnode_set node-b', 'cmd_exitnode_clear'):
-            result = json.loads(self.shell(prefix + command).stdout)
+            response = self.shell(prefix + command, ok=False)
+            self.assertNotEqual(response.returncode, 0)
+            result = json.loads(response.stdout)
             self.assertFalse(result['ok'])
             self.assertEqual(result['exitRouting']['effective'], 'not-effective')
             self.assertEqual(result['error'], 'route-apply-failed')

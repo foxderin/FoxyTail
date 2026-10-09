@@ -6,7 +6,7 @@
 # are provided by the manager).
 #
 # Layout produced by this installer:
-#   $MODPATH/                  module files (webroot, service.sh, symlinks)
+#   $MODPATH/                  boot scripts, companion APK and symlinks
 #   $MODPATH/system/bin/       symlinks into $TS_DIR (mounted systemlessly)
 #   /data/adb/foxytail/        $TS_DIR: bin/ scripts/ conf/ state/ backups/
 
@@ -475,8 +475,8 @@ set_perm "${TS_DIR}/settings.sh" 0 0 0644 || install_abort "runtime permissions"
 set_perm "$MODPATH/service.sh" 0 0 0755 "u:object_r:system_file:s0"
 set_perm "$MODPATH/install-recovery.sh" 0 0 0755 "u:object_r:system_file:s0"
 set_perm "$MODPATH/uninstall.sh" 0 0 0755 "u:object_r:system_file:s0"
-[ -d "$MODPATH/webroot" ] &&
-  set_perm_recursive "$MODPATH/webroot" 0 0 0755 0644 "u:object_r:system_file:s0"
+# Remove the retired manager UI when upgrading an extracted module in place.
+[ ! -e "$MODPATH/webroot" ] || rm -rf "$MODPATH/webroot" || install_abort 'cannot remove retired WebUI'
 set_perm "$MODPATH/install-companion.sh" 0 0 0755 "u:object_r:system_file:s0"
 set_perm_recursive "$MODPATH/companion" 0 0 0755 0644 "u:object_r:system_file:s0"
 # v1.4.0 mounted the APK where KernelSU could hide it from its own process.

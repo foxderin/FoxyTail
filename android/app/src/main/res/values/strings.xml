@@ -10,7 +10,7 @@
     <string name="empty_history">No transfers yet.</string>
     <string name="pick_files">Choose files</string>
     <string name="choose_target">Choose a Taildrop device</string>
-    <string name="no_targets">No send-capable devices. Check login and Taildrop sharing in the FoxyTail WebUI, then refresh.</string>
+    <string name="no_targets">No send-capable devices. Check Account and Taildrop sharing from the control home, then refresh.</string>
     <string name="targets_failed">Devices could not be loaded. Check the error above, then Refresh.</string>
     <string name="send_hint">Choose up to 32 files (2 GiB each) and a device. Nothing is sent until you confirm. Unused or failed staged copies older than 24 hours are removed on the next Taildrop operation; choose originals again if retry reports expiration.</string>
     <string name="send_confirm">Send %1$d file(s) to %2$s?</string>
@@ -61,4 +61,23 @@
     <string name="staging_failed">Local preparation failed; no send was submitted. %1$s</string>
     <string name="submission_unknown">Send submission could not be confirmed. Check History before retrying; an accepted module job is not stopped by an app connection error. %1$s</string>
     <string name="notifications_hint">Notifications are disabled. Transfer work still runs while active; open FoxyTail to check progress or cancel.</string>
+    <string name="files_control_home">Control home</string>
+    <string name="files_browse">Browse shared storage</string>
+    <string name="files_parent">Parent directory</string>
+    <string name="files_truncated">Only the first 1000 entries are shown. Open a subfolder to narrow the list.</string>
+    <string name="files_empty_directory">This directory is empty.</string>
+    <string name="files_not_loaded">No successful read yet. Refresh to load files.</string>
+    <string name="files_search">Search inbox by name</string>
+    <string name="files_no_matches">No matching files.</string>
+    <string name="files_delete">Delete file</string>
+    <string name="files_delete_confirm">Permanently delete %1$s from the private inbox? Saved and shared copies are not deleted.</string>
+    <string name="files_clear">Clear inbox</string>
+    <string name="files_clear_confirm">Permanently delete all files from the private inbox, including files hidden by search? Saved and shared copies are not deleted.</string>
+    <string name="files_export_download">Export to Download</string>
+    <string name="files_export_confirm">Copy %1$s to shared Download storage? Other apps with storage access may read this copy.</string>
+    <string name="files_exported">Exported to %1$s</string>
+    <string name="files_action_done">Inbox operation completed.</string>
+    <string name="files_copy_path">Copy inbox path</string>
+    <string name="files_copied">Path copied.</string>
+    <string name="files_operation_busy">A control operation is active or its result is unknown. Return to the control home to reconnect before starting another.</string>
 </resources>

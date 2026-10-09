@@ -66,7 +66,11 @@ public final class BridgeInstrumentation extends Instrumentation {
             try { context.getContentResolver().openFileDescriptor(traversal, "r"); throw new AssertionError("Provider path accepted"); } catch (FileNotFoundException | IllegalArgumentException | SecurityException expected) { }
             Uri token = Uri.parse("content://dev.foxderin.tail.files/0123456789abcdef0123456789abcdef");
             try { context.getContentResolver().openFileDescriptor(token, "w"); throw new AssertionError("Provider writable"); } catch (FileNotFoundException | SecurityException expected) { }
-            result.putString("stream", "PASS: root launch and failure classification, target states, quoting, path validation, binary streaming, limits, cancellation, retry, unknown progress and read-only provider\n");
+            ControlChecks.run(context);
+            FilesIntegrationChecks.run(context);
+            NetworkChecks.run();
+            ToolsLogicTests.run();
+            result.putString("stream", "PASS: root control receipts and failures, network and tool contracts, Taildrop boundaries, binary streaming, cancellation and read-only exports\n");
             finish(-1, result);
         } catch (Throwable error) {
             result.putString("stream", "FAIL: " + error + "\n"); finish(1, result);

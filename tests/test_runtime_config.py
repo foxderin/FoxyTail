@@ -490,6 +490,10 @@ class ConfigurationTrialTests(unittest.TestCase):
                               '[ "$1" != +%s ] || { cat ' + shlex.quote(str(self.wall_clock)) + '; exit; }\n'
                               'exec /bin/date "$@"\n')
         self.write_executable(self.binary / 'tailscale', '#!/bin/sh\n'
+                              'if [ -f ' + shlex.quote(str(self.run / 'hold-health')) + ' ] && [ "$(cat ' + shlex.quote(str(self.journal / 'status')) + ' 2>/dev/null)" = running ]; then\n'
+                              '  touch ' + shlex.quote(str(self.run / 'health-entered')) + '\n'
+                              '  while [ -f ' + shlex.quote(str(self.run / 'hold-health')) + ' ]; do sleep 0.02; done\n'
+                              'fi\n'
                               'test ! -f ' + shlex.quote(str(self.run / 'health-failed')) + ' || exit 1\n'
                               'echo \'{"BackendState":"Running"}\'\n')
         self.write_executable(self.binary / 'ip', '#!/bin/sh\nexit 0\n')
@@ -585,10 +589,16 @@ conf_activate_runtime "$next"
         self.assertEqual(self.runtime_mode(), 'bridge')
 
     def test_context_hold_does_not_supersede_trial_or_hide_timeout(self):
+        (self.run / 'hold-health').touch()
         self.begin('proxy')
         self.wait_status('running')
+        deadline = time.monotonic() + 7
+        while not (self.run / 'health-entered').exists() and time.monotonic() < deadline:
+            time.sleep(0.02)
+        self.assertTrue((self.run / 'health-entered').exists())
         (self.run / 'context-stop').touch()
         (self.run / 'health-failed').touch()
+        (self.run / 'hold-health').unlink()
         time.sleep(1.1)
         self.assertEqual((self.journal / 'status').read_text().strip(), 'running')
         self.clock.write_text('131')
@@ -735,7 +745,14 @@ conf_activate_runtime "$next"
         self.wait_status('running')
         calls = (self.run / 'service-calls').read_text()
         (self.base / '.installing').touch()
-        time.sleep(1.1)
+        worker = (self.journal / 'worker').read_text().split()[0]
+        deadline = time.monotonic() + 7
+        while time.monotonic() < deadline:
+            probe = subprocess.run(['sh', '-c', '. "$1"; _proc_starttime "$2"', 'probe', str(self.settings), worker], capture_output=True, text=True)
+            if probe.returncode != 0:
+                break
+            time.sleep(0.05)
+        self.assertNotEqual(probe.returncode, 0, 'installation must wait for the trial worker to exit')
         self.trial('check')
         self.assertEqual((self.run / 'service-calls').read_text(), calls)
         self.assertEqual((self.journal / 'status').read_text().strip(), 'running')

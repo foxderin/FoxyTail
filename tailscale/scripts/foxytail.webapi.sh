@@ -1,5 +1,5 @@
 #!/system/bin/sh
-# JSON-only WebUI backend; diagnostics go to stderr or the service log.
+# JSON-only native control backend; diagnostics go to stderr or the service log.
 # Usage: foxytail.webapi.sh [--request-id <unix-seconds>_<token>] <command> [args]
 # Commands are listed in dispatch below. Errors return {ok:false,error} and exit 1.
 # POSIX sh (Android mksh / busybox); no set -e.
@@ -7,19 +7,29 @@
 DIR=$(dirname "$(realpath "$0")")
 # shellcheck source=../settings.sh
 . "${DIR}/../settings.sh"
-detach_from_app_cgroup || { echo '{"ok":false,"error":"cannot detach backend from the manager app freezer; no configuration lock was acquired"}'; exit 1; }
+detach_from_app_cgroup || {
+  if [ "$1" = artifact-read ] || { [ "$1" = --request-id ] && [ "$3" = artifact-read ]; }; then
+    echo 'cannot detach backend from the manager app freezer' >&2
+  else echo '{"ok":false,"error":"cannot detach backend from the manager app freezer; no configuration lock was acquired"}'; fi
+  exit 1
+}
+umask 077
 ensure_run_dirs
 
 # --- Helpers -----------------------------------------------------------------
 
 # shellcheck source=foxytail.webapi-common.sh
 . "${DIR}/foxytail.webapi-common.sh"
+# shellcheck source=foxytail.webapi-control.sh
+. "${DIR}/foxytail.webapi-control.sh"
 # shellcheck source=foxytail.webapi-account.sh
 . "${DIR}/foxytail.webapi-account.sh"
 # shellcheck source=foxytail.webapi-network.sh
 . "${DIR}/foxytail.webapi-network.sh"
 # shellcheck source=foxytail.webapi-config.sh
 . "${DIR}/foxytail.webapi-config.sh"
+# shellcheck source=foxytail.webapi-artifacts.sh
+. "${DIR}/foxytail.webapi-artifacts.sh"
 # shellcheck source=foxytail.webapi-backup.sh
 . "${DIR}/foxytail.webapi-backup.sh"
 # shellcheck source=foxytail.webapi-tools.sh
@@ -31,23 +41,39 @@ ensure_run_dirs
 
 # --- dispatch -------------------------------------------------------------------
 
-if [ "$1" = --request-id ]; then
-  [ "$#" -ge 3 ] || jerr 'missing request command'
-  _op_init "$2" "$3"
-  shift 2
-fi
+_webapi_dispatch() {
+case "$1" in
+  backend-info|owner-capability|hooks-get)
+    [ "$#" = 1 ] || jerr 'unexpected control arguments' ;;
+  operation-status)
+    [ "$#" = 2 ] || jerr 'operation-status requires one ID' ;;
+  artifact-delete|cancel)
+    [ "$#" = 2 ] || jerr 'command requires one identifier' ;;
+  artifact-read)
+    [ "$#" = 2 ] || { echo 'artifact-read requires one identifier' >&2; return 1; } ;;
+esac
 case "$1:$2" in
+  backend-info:* | operation-start:* | operation-status:* | owner-capability:* | hooks-get:* | artifact-stage:* | artifact-read:* | artifact-delete:*) ;;
   logs:* | control:stop | restore:* | cancel:* | diag-check:* | trial-status:* | trial-confirm:* | trial-revert:* | backup-list:* | restore-preview:*) ;;
   taildrop-targets:* | files-browse:* | file-send-start:* | file-send-status:* | file-send-cancel:* | file-send-history:* | file-stage:* | file-stage-delete:* | file-read:*) ;;
-  status:* | tun:* | dns:* | dns-probe:* | coexist-info:* | coexist-check:*) load_runtime_conf || jerr 'invalid runtime configuration; inspect the service log' ;;
+  status:* | tun:* | dns:* | dns-probe:* | coexist-info:* | coexist-check:* | socks-check:*) load_runtime_conf || jerr 'invalid runtime configuration; inspect the service log' ;;
   *) load_conf || jerr 'invalid configuration; inspect the service log' ;;
 esac
 case "$1" in
   control | mode-set | exitnode-set | exitnode-clear | login | login-authkey | logout | switch | serve-set | serve-del | funnel-set | funnel-del | routes-set | subnet-routes-set | settings-set | context-set | file-send-start | file-stage | file-stage-delete | file-receive | file-delete | file-clear | file-export | restore | trial-start | trial-confirm | trial-revert | dns-probe)
-    [ ! -f "${TS_DIR}/.installing" ] || jerr 'an upgrade is in progress; retry after it completes' ;;
+    [ "$1:$2" = control:stop ] || [ ! -f "${TS_DIR}/.installing" ] || jerr 'an upgrade is in progress; retry after it completes' ;;
 esac
 
 case "$1" in
+  backend-info) cmd_backend_info ;;
+  operation-start) shift; cmd_operation_start "$@" ;;
+  operation-status) shift; cmd_operation_status "$@" ;;
+  owner-capability) cmd_owner_capability ;;
+  socks-check) [ "$#" = 1 ] || jerr 'socks-check takes no arguments'; cmd_socks_check ;;
+  hooks-get) cmd_hooks_get ;;
+  artifact-stage) shift; [ "$#" = 2 ] || jerr 'artifact-stage requires filename and length'; cmd_artifact_stage "$1" "$2" ;;
+  artifact-read) shift; cmd_artifact_read "$1" ;;
+  artifact-delete) shift; cmd_artifact_delete "$1" ;;
   cancel) shift; cmd_cancel "$1" ;;
   status) cmd_status ;;
   peers) cmd_peers ;;
@@ -104,7 +130,6 @@ case "$1" in
   file-delete) shift; cmd_file_delete "$1" ;;
   file-clear) cmd_file_clear ;;
   file-export) shift; cmd_file_export "$1" ;;
-  file-download) shift; cmd_file_download "$1" ;;
   backup) cmd_backup ;;
   backup-list) cmd_backup_list ;;
   restore-preview) shift; cmd_restore_preview "$1" ;;
@@ -118,3 +143,15 @@ case "$1" in
     jerr "usage: foxytail.webapi.sh <cmd> [args]"
     ;;
 esac
+}
+
+if [ "$1" = --request-id ]; then
+  [ "$#" -ge 3 ] || jerr 'missing request command'
+  case "$3" in
+    artifact-read) echo 'artifact-read does not accept a wrapping request ID' >&2; exit 1 ;;
+    operation-start|operation-status|backend-info|artifact-stage) jerr 'command does not accept a wrapping request ID' ;;
+  esac
+  _op_init "$2" "$3"
+  shift 2
+fi
+_webapi_dispatch "$@"

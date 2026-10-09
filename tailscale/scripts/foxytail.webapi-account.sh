@@ -32,6 +32,7 @@ _dns_account_begin() {
   _dac_exit=0
   trap '_dac_exit=$?; _dns_account_finish; _op_finish "${_dac_exit}"' 0
   trap 'exit 130' HUP INT TERM
+  [ "${_CONTROL_DURABLE:-0}" != 1 ] || trap '' HUP
   [ -x "${TS_SCRIPTS_DIR}/foxytail.dns" ] || jerr 'cannot restore DNS policy: DNS controller is missing'
   _op_exec 60 "${TS_SCRIPTS_DIR}/foxytail.dns" stop >>"${TS_RUN_LOG_FILE}" 2>&1 ||
     jerr 'account unchanged: DNS cleanup or preference restoration failed; inspect DNS status'
@@ -50,6 +51,12 @@ _dns_account_finish() {
 }
 
 cmd_login() {
+  [ "$#" -le 1 ] || jerr 'login accepts only an optional login server'
+  if [ "$#" = 1 ]; then
+    [ "${#1}" -le 2048 ] || jerr 'login server is too long'
+    case "$1" in --login-server=http://?*|--login-server=https://?*) ;; *) jerr 'invalid login server option' ;; esac
+    printf '%s' "$1" | jqr -R -s -e 'test("^--login-server=https?://[^\\s\\x00-\\x1f]+$")' >/dev/null 2>&1 || jerr 'invalid login server URL'
+  fi
   if daemon_up; then
     _cl_st=$(ts_status_json ts_cli 10 status --json)
     if [ -n "${_cl_st}" ] && printf '%s' "${_cl_st}" | jqr -e '.BackendState == "Running"' >/dev/null 2>&1; then
@@ -66,6 +73,7 @@ cmd_login() {
     _op_cancelled && jerr "login cancelled"
     _cl_url=$(grep -o 'https://[^ ]*' "${_cl_tmp}" 2>/dev/null | head -n 1)
     if [ -n "${_cl_url}" ]; then
+      rm -f "${_cl_tmp}"
       jqr -n -c --arg u "${_cl_url}" '{ok:true,url:$u}'
       return 0
     fi
@@ -73,37 +81,24 @@ cmd_login() {
     echo '{"ok":true,"already":true}'
     return 0
   fi
-  _cl_err=$(tail -n 3 "${_cl_tmp}" 2>/dev/null | tr '\n' ' ')
   rm -f "${_cl_tmp}"
   # Only this request owns its CLI record.
   if [ -n "${_OP_DIR:-}" ]; then
     for _cl_record in "${_OP_DIR}"/child.*; do _op_signal "${_cl_record}" TERM; done
   fi
-  _cl_hint=""
-  # If the daemon logged a control-plane reachability error, surface it so the
-  # user sees *why* the URL never arrived (common cause: proxy/DNS conflict).
-  if [ -f "${TS_LOG_FILE}" ]; then
-    _cl_last=$(tail -n 1 "${TS_LOG_FILE}" 2>/dev/null)
-    case "${_cl_last}" in
-      *'controlplane.tailscale.com'*|*'connect: connection'*|*'context deadline exceeded'*)
-        _cl_hint=$(printf '%s' "${_cl_last}" | sed 's/^.*Received error: //; s/"$//')
-        ;;
-    esac
-  fi
-  jerr "no login URL within 20s${_cl_err:+: ${_cl_err}}${_cl_hint:+ (${_cl_hint})}"
+  jerr 'no login URL within 20s; check network connectivity and retry'
 }
 
 cmd_login_authkey() {
-  [ -n "$1" ] || jerr "login-authkey: missing key"
+  [ -n "$1" ] && [ "${#1}" -le 512 ] || jerr 'login-authkey: missing or oversized key'
   case "$1" in
     *[!A-Za-z0-9._-]*) jerr "login-authkey: invalid characters in key" ;;
   esac
   _dns_account_begin
-  _la_out=$(ts_cli 60 login --authkey="$1" 2>&1)
-  if [ $? -eq 0 ]; then
+  if ts_cli 60 login --authkey="$1" >/dev/null 2>&1; then
     echo '{"ok":true,"loggedIn":true}'
   else
-    jerr "authkey login failed: ${_la_out:-timeout}"
+    jerr 'authkey login failed; verify the key and network connectivity'
   fi
 }
 

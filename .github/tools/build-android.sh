@@ -18,7 +18,7 @@ if [ "$variant" = release ]; then
   : "${FOXYTAIL_KEY_PASSWORD:?release signing key password is required}"
   tasks=(:app:assembleRelease)
 else
-  tasks=(:app:assembleDebug :app:lintDebug)
+  tasks=(:app:assembleDebug :app:assembleDebugAndroidTest :app:lintDebug)
 fi
 android/gradlew --no-daemon -p android "${tasks[@]}"
 apk="android/app/build/outputs/apk/$variant/app-$variant.apk"

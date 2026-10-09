@@ -222,7 +222,7 @@ cmd_backup''', ok=False)
 
 
 
-    def test_file_delete_clear_export_download_lifecycle(self):
+    def test_file_delete_clear_export_read_lifecycle(self):
         inbox = self.base / 'files'
         inbox.mkdir(parents=True, exist_ok=True)
         (inbox / 'a.txt').write_text('alpha')
@@ -239,11 +239,7 @@ cmd_backup''', ok=False)
         self.assertTrue(result['ok'])
         self.assertNotEqual(result['path'], str(self.sdcard / 'Download' / 'a.txt'))
         self.assertEqual((self.sdcard / 'Download' / 'a-1.txt').read_text(), 'alpha')
-        # download returns base64 content
-        result = json.loads(self.shell("cmd_file_download b.txt").stdout)
-        self.assertTrue(result['ok'])
-        import base64
-        self.assertEqual(base64.b64decode(result['data']).decode(), 'beta-content')
+        self.assertEqual(self.shell("cmd_file_read b.txt").stdout, 'beta-content')
         # delete removes one file
         result = json.loads(self.shell("cmd_file_delete b.txt").stdout)
         self.assertTrue(result['ok'])
@@ -261,10 +257,10 @@ cmd_backup''', ok=False)
         outside = self.base / 'outside.txt'
         outside.write_text('secret')
         for cmd in ("cmd_file_delete '../outside.txt'",
-                    "cmd_file_download '../outside.txt'",
+                    "cmd_file_read '../outside.txt'",
                     "cmd_file_export '../outside.txt'",
                     "cmd_file_delete 'a/b'",
-                    "cmd_file_download '..'",
+                    "cmd_file_read '..'",
                     "cmd_file_delete ''"):
             with self.subTest(cmd=cmd):
                 result = self.shell(cmd, ok=False)

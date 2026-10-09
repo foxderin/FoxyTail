@@ -19,17 +19,27 @@ public final class ExportProvider extends ContentProvider {
         return directory;
     }
     static Uri export(Context context, String name) throws Exception {
+        return cache(context, name, output -> RootApi.readInbox(context, name, output));
+    }
+    static Uri exportArtifact(Context context, String id, String displayName) throws Exception {
+        if (id == null || !id.matches("art-[a-f0-9]{32}")) throw new IOException("Invalid artifact token");
+        return cache(context, displayName, output -> RootApi.readArtifact(context, id, output));
+    }
+    interface Writer { void write(OutputStream output) throws Exception; }
+    static Uri cache(Context context, String name, Writer writer) throws Exception {
         Models.requireName(name);
         File directory = directory(context);
         prune(context);
         String token = UUID.randomUUID().toString().replace("-", "");
         File partial = new File(directory, token + ".partial"), ready = new File(directory, token);
+        boolean published = false;
         try {
-            try (OutputStream output = new FileOutputStream(partial)) { RootApi.readInbox(context, name, output); }
+            try (OutputStream output = new FileOutputStream(partial)) { writer.write(output); }
             if (!partial.renameTo(ready)) throw new IOException(context.getString(R.string.export_failed));
-            context.getSharedPreferences("exports", Context.MODE_PRIVATE).edit().putString(token, name).commit();
+            if (!context.getSharedPreferences("exports", Context.MODE_PRIVATE).edit().putString(token, name).commit()) throw new IOException(context.getString(R.string.export_failed));
+            published = true;
             return new Uri.Builder().scheme("content").authority(AUTHORITY).appendPath(token).build();
-        } finally { partial.delete(); }
+        } finally { partial.delete(); if (!published) ready.delete(); }
     }
     static void prune(Context context) throws IOException {
         File[] files = directory(context).listFiles();

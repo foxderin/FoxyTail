@@ -4,11 +4,6 @@ tailscale/bin/
 *.tmp
 .DS_Store
 
-# WebUI build tooling (the built webroot/ IS committed on purpose)
-webui/node_modules/
-webui/dist/
-webui/.smoke/
-
 # Host regression test bytecode
 __pycache__/
 *.py[cod]

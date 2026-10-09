@@ -115,7 +115,7 @@ _conf_value_error() {
   esac
   case "$1" in
     SOCKS_PORT | DNS_PORT) _num_in_range "$2" 1024 65535 && return 0 ;;
-    ROUTE_TABLE) _num_in_range "$2" 1000 65535 && return 0 ;;
+    ROUTE_TABLE) [ "$2" = 1052 ] && return 0; echo 'ROUTE_TABLE must be 1052; existing configuration was not changed'; return 1 ;;
     WATCHDOG_INTERVAL) _num_in_range "$2" 5 300 && return 0 ;;
     STATS_INTERVAL) _num_in_range "$2" 10 3600 && return 0 ;;
     CONTEXT_INTERVAL) _num_in_range "$2" 5 3600 && return 0 ;;

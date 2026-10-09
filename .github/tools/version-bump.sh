@@ -97,14 +97,12 @@ p = Path('update.json'); d = json.loads(p.read_text())
 d.update(version=version, versionCode=code,
          zipUrl=f'https://github.com/foxderin/FoxyTail/releases/download/{version}/FoxyTail-{version}.zip')
 p.write_text(json.dumps(d, indent=2) + '\n')
-p = Path('webui/package.json'); d = json.loads(p.read_text()); d['version'] = version.removeprefix('v')
-p.write_text(json.dumps(d, indent=2) + '\n')
 PYVERSION
 
 echo "Bumped ${BUMP_TYPE}: ${CURRENT} -> ${NEW_VERSION} (versionCode: ${NEW_VERSION_CODE})"
 echo ""
 echo "Next steps:"
-echo "  git add module.prop update.json webui/package.json CHANGELOG.md"
+echo "  git add module.prop update.json CHANGELOG.md"
 echo "  git commit -m 'Bump version to ${NEW_VERSION}'"
 echo "  git tag ${NEW_VERSION}"
 echo "  git push && git push --tags"

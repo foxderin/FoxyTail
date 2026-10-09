@@ -1,6 +1,8 @@
 """Read-only health summaries and real diagnostic archives in private paths."""
+import io
 import json
 import os
+from pathlib import Path
 import shlex
 import subprocess
 import tarfile
@@ -92,6 +94,22 @@ cmd_diag_check''')
             self.assertIn(alias, shared['tailscaled.log.tail'])
         self.assertEqual(shared['diagnostic-mode.txt'], 'mode=share\n')
         self.assertFalse(list(self.run.glob('diag-*')), 'private redaction inputs survived')
+        helper.chmod(0o755)
+        result = self.shell('export COPYFILE_DISABLE=1\n_op_exec() { shift; case "$1" in */foxytail.diag) shift; sh ' +
+                            shlex.quote(str(helper)) + ' "$@" ;; *) "$@" ;; esac; }\ncmd_diag')
+        exported = json.loads(result.stdout)
+        self.assertEqual(exported['mode'], 'share', 'sharing must default to redaction')
+        self.assertRegex(exported['artifactId'], r'^art-[a-f0-9]{32}$')
+        binary = subprocess.run(['sh', '-c', '. "$1"\ncmd_artifact_read "$2"', 'test',
+                                 str(self.lib), exported['artifactId']], capture_output=True, timeout=15)
+        self.assertEqual(binary.returncode, 0, binary.stderr)
+        self.assertEqual(binary.stdout, Path(exported['path']).read_bytes())
+        with tarfile.open(fileobj=io.BytesIO(binary.stdout), mode='r:gz') as archive:
+            exported_text = '\n'.join(archive.extractfile(member).read().decode()
+                                      for member in archive.getmembers() if member.isfile())
+        self.assertNotIn('owner@example.org', exported_text)
+        self.assertNotIn('tskey-auth-supersecret', exported_text)
+        self.assertIn('mode=share', exported_text)
         local = collect('local')
         self.assertIn('owner@example.org', local['status.json'])
         self.assertEqual(local['diagnostic-mode.txt'], 'mode=local\n')

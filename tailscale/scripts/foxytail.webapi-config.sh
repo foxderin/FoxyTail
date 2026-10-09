@@ -232,6 +232,7 @@ cmd_context_get() {
 
 cmd_context_set() {
   [ "$#" -gt 0 ] || jerr "context-set: missing base64 payload"
+  [ "$#" = 1 ] && [ "${#1}" -le 65536 ] || jerr 'context-set: payload exceeds 48 KiB or has extra arguments'
   conf_lock_acquire || jerr "context-set: configuration is busy"
   _cx_tmp="${TS_CONF_DIR}/.context.conf.$$"
   mkdir -p "${TS_CONF_DIR}"
@@ -240,6 +241,9 @@ cmd_context_set() {
     conf_lock_release
     jerr "context-set: invalid base64"
   fi
+  [ "$(wc -c <"${_cx_tmp}")" -le 49152 ] || {
+    rm -f "${_cx_tmp}"; conf_lock_release; jerr 'context-set: decoded rules exceed 48 KiB';
+  }
   if ! _cx_why=$("${TS_SCRIPTS_DIR}/foxytail.context" validate "${_cx_tmp}" 2>&1); then
     rm -f "${_cx_tmp}"
     conf_lock_release

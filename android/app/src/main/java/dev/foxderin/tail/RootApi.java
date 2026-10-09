@@ -43,12 +43,36 @@ final class RootApi {
         }
         return root ? R.string.backend_failed : R.string.root_failed;
     }
+    static final class Failure extends IOException {
+        final JSONObject result;
+        final int exitCode;
+        Failure(JSONObject result, int exitCode, String message) {
+            super(message); this.result = result; this.exitCode = exitCode;
+        }
+    }
     interface Progress { void copied(long bytes); }
     static final class Call {
         volatile Process process;
         volatile InputStream source;
+        volatile Context context;
+        volatile String request;
+        volatile boolean finished, timedOut;
+        volatile String cancellationError;
         final AtomicBoolean cancelled = new AtomicBoolean();
+        private final AtomicBoolean cancelling = new AtomicBoolean();
         void cancel() {
+            if (finished) return;
+            if (request == null || context == null) { stop(); return; }
+            if (!cancelling.compareAndSet(false, true)) return;
+            IO.execute(() -> {
+                try {
+                    JSONObject result = json(context, null, null, null, 12, new Call(), "cancel", request);
+                    if (result.optBoolean("cancelled") && !finished) stop();
+                } catch (Exception e) { cancellationError = message(e); }
+                finally { cancelling.set(false); }
+            });
+        }
+        private void stop() {
             cancelled.set(true);
             Process p = process;
             if (p != null) p.destroy();
@@ -62,16 +86,29 @@ final class RootApi {
         return json(context, null, null, null, 90, new Call(), args);
     }
     static JSONObject json(Context context, String request, InputStream source, Progress progress, int seconds, Call call, String... args) throws Exception {
+        context = ControlUi.localized(context);
         ByteArrayOutputStream response = new ByteArrayOutputStream();
         execute(context, request, source, response, 4 * 1024 * 1024, progress, seconds, call, args);
+        return decode(context, response, 0);
+    }
+    static JSONObject decode(Context context, ByteArrayOutputStream response, int exitCode) throws IOException {
         try {
             JSONObject value = new JSONObject(response.toString(StandardCharsets.UTF_8.name()));
             if (!value.has("ok") || !(value.get("ok") instanceof Boolean)) throw new IOException(context.getString(R.string.invalid_response));
-            if (!value.getBoolean("ok")) throw new IOException(value.optString("error", context.getString(R.string.invalid_response)));
+            if (exitCode != 0 || !value.getBoolean("ok")) {
+                value.put("ok", false);
+                throw new Failure(value, exitCode, value.optString("error", context.getString(R.string.backend_failed)));
+            }
             return value;
         } catch (org.json.JSONException e) { throw new IOException(context.getString(R.string.invalid_response), e); }
     }
+    static void readArtifact(Context context, String id, OutputStream destination) throws Exception {
+        context = ControlUi.localized(context);
+        if (id == null || !id.matches("art-[a-f0-9]{32}")) throw new IOException(context.getString(R.string.invalid_response));
+        execute(context, null, null, destination, MAX_FILE, null, 1800, new Call(), "artifact-read", id);
+    }
     static void readInbox(Context context, String name, OutputStream destination) throws Exception {
+        context = ControlUi.localized(context);
         Models.requireName(name);
         execute(context, null, null, destination, MAX_FILE, null, 1800, new Call(), "file-read", name);
     }
@@ -82,11 +119,12 @@ final class RootApi {
             if (arg == null || arg.indexOf('\0') >= 0) throw new IOException(context.getString(R.string.invalid_response));
             command.append(' ').append(quote(arg));
         }
+        call.context = context.getApplicationContext(); call.request = request;
+        if (call.cancelled.get()) throw new InterruptedIOException(context.getString(R.string.cancelled));
         Process process = startRoot(context, command.toString(), ProcessBuilder::start);
         call.process = process;
         call.source = input;
-        AtomicBoolean timedOut = new AtomicBoolean();
-        ScheduledFuture<?> timer = CLOCK.schedule(() -> { timedOut.set(true); call.cancel(); process.destroyForcibly(); }, seconds, TimeUnit.SECONDS);
+        ScheduledFuture<?> timer = CLOCK.schedule(() -> { call.timedOut = true; call.cancel(); }, seconds, TimeUnit.SECONDS);
         Future<String> stderr = IO.submit(() -> {
             ByteArrayOutputStream kept = new ByteArrayOutputStream();
             byte[] buf = new byte[8192];
@@ -109,21 +147,18 @@ final class RootApi {
             catch (Exception e) { readFailure = e; process.destroy(); }
             int exit = process.waitFor();
             String errors = stderr.get(5, TimeUnit.SECONDS).trim();
-            if (timedOut.get()) throw new IOException(context.getString(R.string.timeout));
-            if (call.cancelled.get()) throw new InterruptedIOException(context.getString(R.string.cancelled));
+            if (call.cancelled.get()) throw new InterruptedIOException(context.getString(call.timedOut ? R.string.timeout : R.string.cancelled));
             int failure = failureMessage(errors);
             if (exit != 0 || failure != R.string.backend_failed) {
                 if (failure == R.string.backend_failed && output instanceof ByteArrayOutputStream) {
-                    try {
-                        JSONObject error = new JSONObject(((ByteArrayOutputStream) output).toString(StandardCharsets.UTF_8.name()));
-                        if (error.has("error")) throw new IOException(error.getString("error"));
-                    } catch (org.json.JSONException ignored) { }
+                    decode(context, (ByteArrayOutputStream) output, exit);
                 }
                 throw new IOException(context.getString(failure) + (errors.isEmpty() ? "" : "\n" + errors));
             }
             if (readFailure != null) throw readFailure;
             writer.get(5, TimeUnit.SECONDS);
         } finally {
+            call.finished = true;
             timer.cancel(false);
             call.process = null;
             call.source = null;

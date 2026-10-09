@@ -1,5 +1,4 @@
 """Taildrop regressions using the real WebAPI shell and private shared storage."""
-import base64
 import json
 import os
 from pathlib import Path
@@ -25,8 +24,6 @@ class TaildropApiTests(ApiTestCase):
             (incoming / name).write_text(body)
         return json.loads(self.shell(prefix + '\ntaildrop_direct_ready() { return 0; }\ncmd_file_receive').stdout)
 
-    def download(self, name, prefix='', ok=True):
-        return self.shell(prefix + '\ncmd_file_download ' + shlex.quote(name), ok=ok)
 
     def test_receive_counts_only_new_files_and_preserves_existing_exports(self):
         for name in ('a.txt', 'b.txt'):
@@ -192,7 +189,7 @@ cp() { return 1; }
         outside = self.base / 'secret'
         outside.write_text('secret')
         (self.inbox / 'link').symlink_to(outside)
-        for command in ('cmd_file_download', 'cmd_file_delete', 'cmd_file_export'):
+        for command in ('cmd_file_read', 'cmd_file_delete', 'cmd_file_export'):
             for name in ('.taildrop', '.taildrop/receipt', 'link'):
                 result = self.shell(command + ' ' + shlex.quote(name), ok=False)
                 self.assertNotEqual(result.returncode, 0)
@@ -270,49 +267,6 @@ taildrop_confirm_direct
         self.assertTrue(self.base.is_dir())
         self.assertEqual(json.loads(self.shell('cmd_file_clear').stdout), {'ok': True, 'removed': 0})
 
-    def test_download_empty_binary_large_and_inclusive_cap(self):
-        for size in (0, 257, 100 * 1024, 2 * 1024 * 1024, 8 * 1024 * 1024):
-            with self.subTest(size=size):
-                payload = (bytes(range(256)) * ((size + 255) // 256))[:size]
-                name = 'binary data.bin'
-                (self.inbox / name).write_bytes(payload)
-                # Android mksh may resolve printf to toybox, not a builtin.
-                result = json.loads(self.download(name, 'printf() { /usr/bin/printf "$@"; }\n').stdout)
-                self.assertEqual(set(result), {'ok', 'name', 'size', 'data'})
-                self.assertTrue(result['ok'])
-                self.assertEqual(result['name'], name)
-                self.assertEqual(result['size'], size)
-                self.assertEqual(base64.b64decode(result['data'], validate=True), payload)
-                self.assertEqual({p.name for p in self.inbox.iterdir()}, {name})
-                self.assertEqual({p.name for p in self.run.iterdir()}, {'pids'})
-                self.assertEqual(list(self.downloads.iterdir()), [])
-
-    def test_download_rejects_oversize_before_encoding(self):
-        with (self.inbox / 'too-large.bin').open('wb') as file:
-            file.truncate(8 * 1024 * 1024 + 1)
-        result = self.download('too-large.bin', '''base64() {
-  : >"$TS_RUN_DIR/unexpected-encoding"
-  return 1
-}
-''', ok=False)
-        self.assertNotEqual(result.returncode, 0)
-        self.assertFalse(json.loads(result.stdout)['ok'])
-        self.assertIn('too large', json.loads(result.stdout)['error'])
-        self.assertFalse((self.run / 'unexpected-encoding').exists())
-        self.assertEqual((self.inbox / 'too-large.bin').stat().st_size, 8 * 1024 * 1024 + 1)
-
-    def test_download_reports_encoding_and_size_errors_without_success_payload(self):
-        (self.inbox / 'data.bin').write_bytes(b'\x00\xffbinary')
-        for prefix in ("base64() { printf cGFydGlhbA==; return 1; }",
-                       "stat() { return 1; }", "stat() { printf invalid; }"):
-            with self.subTest(prefix=prefix):
-                result = self.download('data.bin', prefix, ok=False)
-                self.assertNotEqual(result.returncode, 0)
-                data = json.loads(result.stdout)
-                self.assertFalse(data['ok'])
-                self.assertNotIn('data', data)
-                self.assertEqual((self.inbox / 'data.bin').read_bytes(), b'\x00\xffbinary')
-                self.assertEqual({p.name for p in self.run.iterdir()}, {'pids'})
 
 
 if __name__ == '__main__':

@@ -193,7 +193,8 @@ cmd_diag() {
   _dg_out=$(_op_exec 120 "${TS_SCRIPTS_DIR}/foxytail.diag" collect /sdcard/Download "$_dg_mode" 2>/dev/null) || jerr 'diag collection failed or cancelled'
   _dg_path=$(printf '%s\n' "${_dg_out}" | tail -n 1 | tr -d ' ')
   if [ -n "${_dg_path}" ] && [ -f "${_dg_path}" ]; then
-    jqr -n -c --arg p "${_dg_path}" --arg mode "$_dg_mode" '{ok:true,path:$p,mode:$mode}'
+    _dg_artifact=$(_artifact_register diagnostic "${_dg_path}") || jerr 'diag: cannot retain private export artifact'
+    jqr -n -c --arg p "${_dg_path}" --arg mode "$_dg_mode" --arg id "${_dg_artifact}" '{ok:true,path:$p,mode:$mode,artifactId:$id}'
   else
     jerr "diag collection failed (see ${TS_RUN_LOG_FILE})"
   fi
@@ -310,20 +311,3 @@ cmd_file_export() {
   _file_export_to_download "${_fe_path}" "$1" || jerr 'file-export: cannot create an unused file in Download'
   jqr -n -c --arg p "${_fx_dst}" '{ok:true,path:$p}'
 }
-
-cmd_file_download() (
-  [ -n "$1" ] || jerr "file-download: expected <name>"
-  _fdl_path=$(_file_inbox_path "$1") || jerr "file-download: invalid name"
-  [ -f "${_fdl_path}" ] || jerr "file-download: no such file: $1"
-  _fdl_size=$(stat -c %s "${_fdl_path}" 2>/dev/null) || jerr 'file-download: cannot read file size'
-  case "${_fdl_size}" in '' | *[!0-9]*) jerr 'file-download: cannot read file size' ;; esac
-  # Encode as base64 for JSON transport; bound the private staging file and
-  # response size without passing file contents through any exec argument.
-  [ "${_fdl_size}" -le 8388608 ] || jerr "file-download: file too large for inline download (>${_fdl_size} bytes)"
-  _fdl_tmp=$(mktemp "${TS_RUN_DIR}/.file-download.XXXXXX") || jerr 'file-download: cannot stage file'
-  trap 'rm -f "${_fdl_tmp}"' 0
-  trap 'exit 1' HUP INT TERM
-  base64 -w0 <"${_fdl_path}" >"${_fdl_tmp}" 2>/dev/null || jerr 'file-download: cannot read file'
-  jqr -n -c --arg n "$1" --argjson s "${_fdl_size}" --rawfile d "${_fdl_tmp}" \
-    '{ok:true,name:$n,size:$s,data:$d}'
-)

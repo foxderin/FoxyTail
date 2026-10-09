@@ -102,6 +102,7 @@ bash .github/tools/build.sh "$@"
             self.assertEqual(archive.read('companion/FoxyTail.apk'), b'signed-companion-fixture\n')
             self.assertEqual(archive.read('companion/FoxyTail.apk.sha256').decode().strip(), hashlib.sha256(b'signed-companion-fixture\n').hexdigest())
             self.assertNotIn('system/app/FoxyTail/FoxyTail.apk', names)
+            self.assertFalse(any(x.startswith('webroot/') or x.startswith('webui/') for x in names))
             self.assertEqual((archive.getinfo('companion/FoxyTail.apk').external_attr >> 16) & 0o777, 0o644)
             self.assertEqual(archive.read('install-companion.sh'), b'fixture\n')
             self.assertFalse(any('unwanted' in x or '.github' in x or 'native/foxydns' in x for x in names))
