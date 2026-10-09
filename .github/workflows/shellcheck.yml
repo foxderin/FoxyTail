@@ -48,6 +48,8 @@ jobs:
           distribution: temurin
           java-version: '21'
       - uses: android-actions/setup-android@v3
+        with:
+          packages: platform-tools
       - run: sdkmanager 'platforms;android-37.0' 'build-tools;36.0.0'
       - run: sudo apt-get update && sudo apt-get install -y shellcheck jq
       - run: pnpm --dir webui install --frozen-lockfile
@@ -82,6 +84,8 @@ jobs:
           distribution: temurin
           java-version: '21'
       - uses: android-actions/setup-android@v3
+        with:
+          packages: platform-tools
       - run: sdkmanager 'platforms;android-37.0' 'build-tools;36.0.0'
       - run: sudo apt-get update && sudo apt-get install -y zip jq
       - name: Build once after both verification gates

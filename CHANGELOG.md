@@ -9,6 +9,7 @@
 - 新增原生 Android 附属应用 `dev.foxderin.tail`：系统单/多文件分享、SAF 文件选择、确认发送、收件导入/浏览/打开/分享/另存与历史；前台服务只负责活动任务，保留 WebUI 的其余控制面。
 - 使用私有 rooted 文件访问、stdin 二进制暂存和精确传输 ID 关联；成功仅以实际上传响应为准，未知进度不估算。发送任务跨 App/页面退出保留，停止/升级等待取消确认，私有暂存按需过期清理。
 - Android APK 使用稳定私有签名并随 light/full 包挂载为普通 system/app 应用，不授予特权；加入 Android 构建/lint、签名和版本校验、原生传输与文件边界回归。
+- 发布流水线显式选择 Android `platform-tools`，不再依赖 setup-android 默认安装的已下架 `tools` 包；验证与正式打包使用同一 SDK 配置。
 
 ### 升级与验证边界
 
