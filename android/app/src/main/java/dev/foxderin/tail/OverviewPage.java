@@ -9,7 +9,7 @@ import java.time.Instant;
 
 /* Dashboard: renders the shared status store; owns no private status reads. */
 final class OverviewPage extends ControlPage {
-    private final LinearLayout statusBox, compatibility, skeleton, tilesRow, statusContent;
+    private final LinearLayout statusBox, compatibility, skeleton, tilesRow;
     private final ControlUi.HealthCard health;
     private final Button loginButton, retryButton;
     private ControlUi.MetricTile metricPeers, metricUptime;
@@ -29,8 +29,6 @@ final class OverviewPage extends ControlPage {
         metricPeers = metric(tiles, R.drawable.ic_group, s(R.string.network_peers));
         metricUptime = metric(tiles, R.drawable.ic_monitoring, s(R.string.network_uptime));
         statusBox = section(s(R.string.network_self));
-        statusContent = new LinearLayout(activity); statusContent.setOrientation(LinearLayout.VERTICAL);
-        statusBox.addView(statusContent, new LinearLayout.LayoutParams(-1, -2));
         compatibility = new LinearLayout(activity); compatibility.setOrientation(LinearLayout.VERTICAL);
         content.addView(ControlUi.cardTitle(activity, s(R.string.network_compat)), sectionTitleParams());
         content.addView(compatibility, new LinearLayout.LayoutParams(-1, -2));
@@ -78,7 +76,7 @@ final class OverviewPage extends ControlPage {
         skeleton.setVisibility(loading ? View.VISIBLE : View.GONE);
         health.setVisible(!loading);
         tilesRow.setVisibility(loading ? View.GONE : View.VISIBLE);
-        ((View) statusBox.getParent()).setVisibility(loading ? View.GONE : View.VISIBLE);
+        ControlUi.setCardVisible(statusBox, !loading);
         String error = activity.statusError();
         int label = connectionLabel(error == null ? snapshot : null);
         boolean connected = label == R.string.network_connected;
@@ -108,24 +106,24 @@ final class OverviewPage extends ControlPage {
             metricPeers.value.setText("—"); metricPeers.unit.setText(""); metricPeers.sub.setVisibility(View.GONE);
         }
         metricUptime.value.setText(compactUptime(value(snapshot, "uptime")));
-        statusContent.removeAllViews();
+        statusBox.removeAllViews();
         JSONObject self = snapshot == null ? null : snapshot.optJSONObject("self");
-        if (self == null) label(statusContent, s(R.string.network_unknown));
+        if (self == null) label(statusBox, s(R.string.network_unknown));
         else {
-            label(statusContent, value(self, "hostname"));
-            for (String ip : PeersPage.addresses(self)) ControlUi.insetRow(statusContent, ip, R.drawable.ic_content_copy, () -> copy(ip, ip));
-            ControlUi.infoRow(statusContent, s(R.string.network_region), value(self, "relay"), false);
+            label(statusBox, value(self, "hostname"));
+            for (String ip : PeersPage.addresses(self)) ControlUi.insetRow(statusBox, ip, R.drawable.ic_content_copy, () -> copy(ip, ip));
+            ControlUi.infoRow(statusBox, s(R.string.network_region), value(self, "relay"), false);
             boolean dns = Boolean.TRUE.equals(snapshot.opt("magicDns"));
-            ControlUi.infoRow(statusContent, "Tailnet MagicDNS", s(dns ? R.string.network_enabled : R.string.network_disabled), connected && dns);
+            ControlUi.infoRow(statusBox, "Tailnet MagicDNS", s(dns ? R.string.network_enabled : R.string.network_disabled), connected && dns);
         }
         String expiry = snapshot == null ? "" : snapshot.optString("keyExpiry", "");
         if (!expiry.isEmpty() && !"null".equals(expiry)) {
-            label(statusContent, s(R.string.network_key_expiry, expiry));
-            if (expiresSoon(expiry, System.currentTimeMillis())) label(statusContent, s(R.string.network_key_soon));
+            label(statusBox, s(R.string.network_key_expiry, expiry));
+            if (expiresSoon(expiry, System.currentTimeMillis())) label(statusBox, s(R.string.network_key_soon));
         }
         JSONObject routing = snapshot == null ? null : snapshot.optJSONObject("exitRouting");
-        label(statusContent, s(R.string.network_selected) + ": " + ExitNodesPage.selectedLabel(this, routing));
-        label(statusContent, s(R.string.network_effective) + ": " + s(ExitNodesPage.effectiveLabel(routing)));
+        label(statusBox, s(R.string.network_selected) + ": " + ExitNodesPage.selectedLabel(this, routing));
+        label(statusBox, s(R.string.network_effective) + ": " + s(ExitNodesPage.effectiveLabel(routing)));
     }
 
     String value(JSONObject object, String key) {

@@ -4,7 +4,7 @@
     <string name="network_account">Accounts</string>
     <string name="network_exits">Exit nodes</string>
     <string name="network_tunnel">Tunnel and DNS</string>
-    <string name="network_unknown">Unknown — refresh to check</string>
+    <string name="network_unknown">Unknown</string>
     <string name="network_hint_unknown">State unconfirmed. The detail is above; refresh to read the actual service.</string>
     <string name="network_stale">Read failed. Previous values below are stale, not current authority.</string>
     <string name="network_refresh">Refresh</string>

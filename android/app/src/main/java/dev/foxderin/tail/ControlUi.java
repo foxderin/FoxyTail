@@ -121,10 +121,10 @@ final class ControlUi {
         card.setRadius(dimen(card, R.dimen.ft_radius_card)); card.setCardElevation(0);
         card.setStrokeWidth(dp(context, 1)); card.setStrokeColor(attr(card, com.google.android.material.R.attr.colorOutlineVariant));
         card.setCardBackgroundColor(attr(card, com.google.android.material.R.attr.colorSurface));
-        LinearLayout box = new LinearLayout(context); box.setOrientation(LinearLayout.VERTICAL);
+        LinearLayout frame = new LinearLayout(context); frame.setOrientation(LinearLayout.VERTICAL);
         int pad = dimen(context, R.dimen.ft_space_xl);
-        box.setPadding(pad, dimen(context, R.dimen.ft_space_l), pad, pad);
-        card.addView(box, new android.widget.FrameLayout.LayoutParams(-1, -2));
+        frame.setPadding(pad, dimen(context, R.dimen.ft_space_l), pad, pad);
+        card.addView(frame, new android.widget.FrameLayout.LayoutParams(-1, -2));
         LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(-1, -2);
         params.topMargin = dp(context, 6); params.bottomMargin = dp(context, 6);
         parent.addView(card, params);
@@ -135,14 +135,22 @@ final class ControlUi {
             title.setTextColor(attr(title, com.google.android.material.R.attr.colorOnSurface));
             title.setPadding(0, 0, 0, dimen(context, R.dimen.ft_space_l));
             if (android.os.Build.VERSION.SDK_INT >= 28) title.setAccessibilityHeading(true);
-            box.addView(title, new LinearLayout.LayoutParams(-1, -2));
+            frame.addView(title, new LinearLayout.LayoutParams(-1, -2));
             if (description != null && !description.isEmpty()) {
                 TextView desc = muted(context, description, R.dimen.ft_section_desc);
                 desc.setPadding(0, -dimen(context, R.dimen.ft_space_m), 0, dimen(context, R.dimen.ft_space_l));
-                box.addView(desc, new LinearLayout.LayoutParams(-1, -2));
+                frame.addView(desc, new LinearLayout.LayoutParams(-1, -2));
             }
         }
+        LinearLayout box = new LinearLayout(context); box.setOrientation(LinearLayout.VERTICAL);
+        frame.addView(box, new LinearLayout.LayoutParams(-1, -2));
         return box;
+    }
+    /** Toggles the MaterialCardView shell owning a content box (survives card() layout changes). */
+    static void setCardVisible(LinearLayout box, boolean visible) {
+        android.view.View node = box;
+        while (node != null && !(node instanceof MaterialCardView)) node = (android.view.View) node.getParent();
+        if (node != null) node.setVisibility(visible ? android.view.View.VISIBLE : android.view.View.GONE);
     }
     static TextView cardTitle(Context context, String heading) {
         TextView title = muted(context, heading, R.dimen.ft_caption); title.setTypeface(null, android.graphics.Typeface.BOLD);

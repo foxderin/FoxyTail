@@ -57,8 +57,8 @@ final class TunnelPage extends ControlPage {
                 String endpoint = socksEndpoint(result);
                 label(tunBox, "SOCKS5: " + (endpoint == null ? s(R.string.network_unknown) : endpoint));
                 socks.setEnabled(endpoint != null && ("bridge".equals(result.optString("mode")) || "proxy".equals(result.optString("mode"))));
-            }, failure -> { reading = false; tunState.setText(s(R.string.network_stale)); socks.setEnabled(false); error(failure); }, "tun");
-        }, failure -> { reading = false; tunState.setText(s(R.string.network_stale)); socks.setEnabled(false); error(failure); }, "status");
+            }, failure -> { reading = false; tunState.setText(s(R.string.network_stale)); socks.setEnabled(false); tunBox.removeAllViews(); label(tunBox, s(R.string.network_unknown)); error(failure); }, "tun");
+        }, failure -> { reading = false; tunState.setText(s(R.string.network_stale)); socks.setEnabled(false); tunBox.removeAllViews(); label(tunBox, s(R.string.network_unknown)); error(failure); }, "status");
     }
     private void checkDns() {
         if (dnsReading) { dnsAgain = true; return; } dnsReading = true;
