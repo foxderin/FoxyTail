@@ -28,6 +28,22 @@ cmd_taildrop_targets() {
   _file_json_command 20 taildrop-targets --socket "${TS_SOCKET}"
 }
 
+taildrop_confirm_direct() {
+  _tcd_before=$(pids_of_path "${TS_BIN_DIR}/tailscaled")
+  case "${_tcd_before}" in ''|*[!0-9]*) return 1 ;; esac
+  _tcd_stamp=$(_proc_starttime "${_tcd_before}") _tcd_boot=$(boot_identity)
+  [ -n "${_tcd_stamp}" ] && [ -n "${_tcd_boot}" ] || return 1
+  _tcd_result=$(_op_exec 6 "${TS_BIN_DIR}/foxyfiles" receive-mode --socket "${TS_SOCKET}" 2>/dev/null) || return 1
+  printf '%s' "${_tcd_result}" | jqr -e '.ok==true and .direct==true' >/dev/null 2>&1 || return 1
+  [ "$(pids_of_path "${TS_BIN_DIR}/tailscaled")" = "${_tcd_before}" ] &&
+    [ "$(_proc_starttime "${_tcd_before}")" = "${_tcd_stamp}" ] && [ "$(boot_identity)" = "${_tcd_boot}" ] || return 1
+  taildrop_prepare_direct || return 1
+  # Use the pre-probe stamp; a replaced process must never inherit this result.
+  (umask 077; printf '%s %s %s\n' "${_tcd_before}" "${_tcd_stamp}" "${_tcd_boot}" >"${TAIL_DROP_MODE}.$$") &&
+    mv -f "${TAIL_DROP_MODE}.$$" "${TAIL_DROP_MODE}" || return 1
+  taildrop_direct_ready
+}
+
 cmd_files_browse() {
   _fb_path=${1:--}
   [ "${_fb_path}" != - ] || _fb_path=

@@ -233,6 +233,29 @@ if taildrop_direct_ready; then exit 2; fi
 ''')
         self.assertEqual(result.returncode, 0)
 
+    def test_live_direct_confirmation_recovers_missing_record_but_not_replaced_pid(self):
+        (self.downloads / 'Taildrop').mkdir()
+        helper = self.base / 'bin/foxyfiles'
+        helper.parent.mkdir(exist_ok=True)
+        helper.write_text('#!/bin/sh\necho \'{"ok":true,"direct":true}\'\n')
+        helper.chmod(0o755)
+        prefix = '''
+pids_of_path() { printf 7654; }
+_proc_starttime() { printf 12345; }
+boot_identity() { printf boot-a; }
+'''
+        self.shell(prefix + '\ntaildrop_confirm_direct && taildrop_direct_ready')
+        marker = self.run / 'taildrop-direct'
+        self.assertEqual(marker.read_text().strip(), '7654 12345 boot-a')
+        marker.unlink()
+        helper.write_text('#!/bin/sh\ntouch "' + str(self.base / 'replaced') + '"\necho \'{"ok":true,"direct":true}\'\n')
+        result = self.shell(prefix + '''
+_proc_starttime() { if [ -f "$TS_DIR/replaced" ]; then printf 54321; else printf 12345; fi; }
+taildrop_confirm_direct
+''', ok=False)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertFalse(marker.exists())
+
     def test_clear_removes_hidden_regular_files_and_preserves_directories(self):
         for name in ('ordinary.txt', '.env', '..hidden', '.meeting notes', 'literal *'):
             (self.inbox / name).write_text('remove')

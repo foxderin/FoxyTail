@@ -1,5 +1,13 @@
 # Changelog
 
+## v1.4.1 — 2026-10-09
+
+- 修复 KernelSU 默认卸载模块导致 systemless APK 在桌面/App 命名空间不可见：附属应用改为随模块携带，由开机包管理器安装/更新至 `/data/app`，保留同签名数据；不关闭隐藏策略或自动授予 root。
+- App root 调用使用可信绝对 su 路径、确认 UID 0 并区分启动/授权/模块/后端错误；设备读取失败不再误显示“无设备”，失败时禁用发送并支持刷新。
+- 修复早期共享存储不可用遗留的 Taildrop 模式记录：通过当前 daemon 的精确 LocalAPI direct-mode 响应及前后进程身份验证恢复，不猜测模式、不强制重启网络服务。
+- Android 16/OPlus + ReSukiSU 真机定位到桌面/App namespace 缺少 APK，而非资源打包错误；同签名包管理器更新与 daemon direct-mode 查询/记录恢复已实测，未关闭 SELinux 或更改 root 授权。
+- CI 保留全部回归，独立后端模块最多四路并行，合并 Gradle debug/lint 调用、缓存 Go/Gradle 依赖，并移除非 PR CI 重复的 ARM 编译；构建产物权限不再受签名步骤 `umask 077` 污染。
+
 ## v1.4.0 — 2026-10-09
 
 - 隧道页新增只读代理共存向导：基于已应用模式、当前 Tailnet、实际 DNS/SOCKS 端口生成 mihomo/Clash.Meta 合并片段，区分 fake-IP 黑名单、规则模式与 redir-host，拒绝未经审阅的白名单转换；不覆盖外部配置。

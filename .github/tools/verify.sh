@@ -5,7 +5,7 @@ cd "$(dirname "$0")/../.."
 for cmd in shellcheck python3 pnpm jq go sha256sum; do
   command -v "$cmd" >/dev/null || { echo "missing verifier: $cmd" >&2; exit 1; }
 done
-scripts=(customize.sh service.sh install-recovery.sh uninstall.sh tailscale/settings.sh META-INF/com/google/android/update-binary)
+scripts=(customize.sh service.sh install-recovery.sh install-companion.sh uninstall.sh tailscale/settings.sh META-INF/com/google/android/update-binary)
 for file in tailscale/scripts/*; do
   case "$file" in *.yaml) ;; *) scripts+=("$file") ;; esac
 done
@@ -21,11 +21,13 @@ done
 export FOXYFILES_TEST_BINARY="$build_dir/foxyfiles"
 (cd native/foxyfiles && GOTOOLCHAIN=local GOENV=off GOWORK=off GOFLAGS='' \
   go build -mod=readonly -o "$FOXYFILES_TEST_BINARY" .)
-bash .github/tools/build-native.sh "$build_dir/native"
+# Non-PR CI packages and validates these same static ELFs after verification.
+if [ "${FOXYTAIL_NATIVE_IN_PACKAGE:-0}" != 1 ]; then
+  bash .github/tools/build-native.sh "$build_dir/native"
+fi
 python3 .github/tools/native-notices.py --check
 bash .github/tools/build-android.sh debug "$build_dir/FoxyTail-debug.apk"
-android/gradlew --no-daemon -p android :app:lintDebug
-python3 -m unittest discover -s tests -p 'test_*.py' -v
+python3 .github/tools/verify-backend.py
 pnpm --dir webui typecheck
 pnpm --dir webui check:i18n
 pnpm --dir webui check:theme

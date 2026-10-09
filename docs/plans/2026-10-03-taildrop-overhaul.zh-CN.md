@@ -10,7 +10,7 @@
 - 模块 `foxyfiles` 持久发送任务、真实 daemon 字节进度、逐项错误、取消、历史和仅重试未成功项。
 - `dev.foxderin.tail` 原生 Android 附属应用：系统 SEND/SEND_MULTIPLE、SAF 多选、确认发送、收件浏览/导入/打开/分享/另存、历史及前台活动通知。
 - App 与 WebUI 共用模块能力，不复制 tailscaled 网络栈，不迁移登录、路由、DNS 等其余控制面。
-- Android APK 以稳定私有密钥签名，随两个模块 ZIP 挂载于 `system/app/FoxyTail/FoxyTail.apk`；不使用系统特权、共享 UID 或公开签名密钥。
+- Android APK 以稳定私有密钥签名，随包置于 `companion/FoxyTail.apk`，开机由包管理器安装到 `/data/app`；不再依赖 `system/app` 挂载可见性，不使用系统特权、共享 UID 或公开签名密钥。
 
 ## 发送与权限契约
 
@@ -36,6 +36,8 @@
 ## 收件语义
 
 固定 Android daemon 直接写入 `/sdcard/Download/Taildrop`。“导入已接收文件”仅导入已完成普通文件，保留共享原件，以私有收据去重，不等待 `tailscale file get`。`.taildrop` 与 `.outgoing` 为保留目录，partial/deleted 和链接不进入收件箱。
+
+开机记录缺失时，模块请求当前 LocalAPI 打开一个随机保留探测名；仅接受固定 daemon 返回的精确 direct-mode 拒绝，且 PID/启动时间/boot ID 前后相同才恢复记录。不创建、下载或删除探测文件，不用空文件列表猜测模式。若 daemon 实际未进入 direct mode，仍保留错误要求解锁重启。
 
 App 导出通过随机令牌、只读、非 exported 的 ContentProvider 授权单个文件，24 小时后失效；另存使用系统目的地选择器。WebUI 的 base64 内联下载仍限制 8 MiB，Android 使用二进制流，不把大文件装进命令参数。
 

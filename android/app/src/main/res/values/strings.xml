@@ -11,6 +11,7 @@
     <string name="pick_files">Choose files</string>
     <string name="choose_target">Choose a Taildrop device</string>
     <string name="no_targets">No send-capable devices. Check login and Taildrop sharing in the FoxyTail WebUI, then refresh.</string>
+    <string name="targets_failed">Devices could not be loaded. Check the error above, then Refresh.</string>
     <string name="send_hint">Choose up to 32 files (2 GiB each) and a device. Nothing is sent until you confirm. Unused or failed staged copies older than 24 hours are removed on the next Taildrop operation; choose originals again if retry reports expiration.</string>
     <string name="send_confirm">Send %1$d file(s) to %2$s?</string>
     <string name="retry_confirm">Retry only unsuccessful files to %1$s? Already completed files will not be sent again.</string>
@@ -33,8 +34,11 @@
     <string name="imported">Imported %1$d completed file(s).</string>
     <string name="saved">Copy saved.</string>
     <string name="error_title">FoxyTail could not complete this operation</string>
-    <string name="root_denied">Root access was denied or su is unavailable. Grant FoxyTail superuser access in Magisk/KernelSU, then refresh.</string>
-    <string name="module_missing">The FoxyTail module is missing or disabled. Install/enable it and restart the module.</string>
+    <string name="root_unavailable">FoxyTail could not start su. In Magisk/KernelSU, allow superuser access for FoxyTail (dev.foxderin.tail); check this app’s root-hiding/module-unmount profile, then reopen the app. ADB root access does not authorize this app.</string>
+    <string name="root_denied">The root command did not receive UID 0. Allow FoxyTail superuser access in Magisk/KernelSU and check its app profile, then refresh.</string>
+    <string name="root_failed">su exited before starting the module command. Check FoxyTail’s superuser authorization and app profile in Magisk/KernelSU, then refresh.</string>
+    <string name="backend_failed">The FoxyTail module command failed after root access succeeded.</string>
+    <string name="module_missing">Root access succeeded, but the FoxyTail module script is missing or unreadable. Check that the module is installed/enabled and visible in this app’s root profile, then restart the app.</string>
     <string name="timeout">The operation timed out. Check the root prompt and module status, then refresh History before retrying a send.</string>
     <string name="invalid_response">The module returned an invalid response. Update the module and companion together.</string>
     <string name="invalid_uri">Only readable content URIs are accepted. Share the file again or use Choose files.</string>

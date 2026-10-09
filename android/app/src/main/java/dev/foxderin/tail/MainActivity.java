@@ -28,7 +28,7 @@ public final class MainActivity extends Activity {
     private String selectedPeer, saveName;
     private Uri saveSource;
     private int page, generation;
-    private boolean resumed, receiverRegistered, loading;
+    private boolean resumed, receiverRegistered, loading, targetsLoaded;
     private String pageError = "";
     private final BroadcastReceiver updates = new BroadcastReceiver() {
         @Override public void onReceive(Context context, Intent intent) {
@@ -85,6 +85,7 @@ public final class MainActivity extends Activity {
     }
     private void showPage(int destination) {
         page = destination; generation++; loading = false; pageError = "";
+        if (page == 1) { peers.clear(); targetsLoaded = false; }
         LinearLayout root = section(); root.setPadding(dp(16), 0, dp(16), 0);
         root.setOnApplyWindowInsetsListener((view, insets) -> {
             if (Build.VERSION.SDK_INT >= 30) {
@@ -142,7 +143,7 @@ public final class MainActivity extends Activity {
             names.add(peer.name + " · " + peer.ip + (peer.online ? "" : " · " + getString(R.string.offline)));
             if (peer.id.equals(selectedPeer)) selected = i;
         }
-        if (names.isEmpty()) names.add(getString(R.string.no_targets));
+        if (names.isEmpty()) names.add(getString(targetPlaceholder(targetsLoaded, !pageError.isEmpty())));
         ArrayAdapter<String> adapter = new ArrayAdapter<>(this, android.R.layout.simple_spinner_item, names); adapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item);
         target.setAdapter(adapter); target.setSelection(selected); target.setEnabled(!peers.isEmpty());
         target.setOnItemSelectedListener(new android.widget.AdapterView.OnItemSelectedListener() {
@@ -150,8 +151,11 @@ public final class MainActivity extends Activity {
             public void onNothingSelected(AdapterView<?> parent) { selectedPeer = null; }
         });
         body.addView(target); selectedRows = section(); body.addView(selectedRows); renderSelection();
-        body.addView(button(R.string.send, this::confirmSend));
+        Button send = button(R.string.send, this::confirmSend); send.setEnabled(targetsLoaded && !peers.isEmpty()); body.addView(send);
         progressRows = section(); body.addView(progressRows); renderProgress();
+    }
+    static int targetPlaceholder(boolean loaded, boolean failed) {
+        return failed ? R.string.targets_failed : loaded ? R.string.no_targets : R.string.loading;
     }
     private void renderSelection() {
         if (selectedRows == null) return;
@@ -206,7 +210,9 @@ public final class MainActivity extends Activity {
     private void refresh() {
         if (loading) return;
         final int requestPage = page, token = generation;
-        loading = true; pageError = ""; updateProgress();
+        loading = true; pageError = "";
+        if (requestPage == 1) { peers.clear(); targetsLoaded = false; render(); }
+        updateProgress();
         io.execute(() -> {
             try {
                 JSONObject result = RootApi.json(this, requestPage == 0 ? "files-inbox" : requestPage == 1 ? "taildrop-targets" : "file-send-history");
@@ -221,11 +227,11 @@ public final class MainActivity extends Activity {
                     if (isDestroyed() || token != generation) return;
                     loading = false;
                     if (requestPage == 0) inbox = array;
-                    else if (requestPage == 1) { peers.clear(); peers.addAll(loadedPeers); }
+                    else if (requestPage == 1) { peers.clear(); peers.addAll(loadedPeers); targetsLoaded = true; }
                     else { history.clear(); history.addAll(loadedHistory); }
                     render(); updateProgress();
                 });
-            } catch (Exception e) { runOnUiThread(() -> { if (!isDestroyed() && token == generation) { loading = false; pageError = RootApi.message(e); updateProgress(); } }); }
+            } catch (Exception e) { runOnUiThread(() -> { if (!isDestroyed() && token == generation) { loading = false; pageError = RootApi.message(e); if (requestPage == 1) { peers.clear(); targetsLoaded = false; render(); } updateProgress(); } }); }
         });
     }
     private void adoptHistory() {

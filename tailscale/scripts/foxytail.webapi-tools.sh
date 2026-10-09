@@ -218,7 +218,7 @@ cmd_files_inbox() {
 
 
 cmd_file_receive() {
-  taildrop_direct_ready || jerr 'Taildrop direct receive mode is unknown or shared storage was unavailable at startup; unlock shared storage and restart FoxyTail'
+  taildrop_direct_ready || taildrop_confirm_direct || jerr 'Taildrop direct receive mode is unknown or shared storage is locked; unlock storage and restart FoxyTail if the current daemon cannot confirm direct mode'
   mkdir -p "${FILES_DIR}" || jerr 'file-receive: cannot create private inbox'
   _fr_out=$(_op_exec 60 "${TS_BIN_DIR}/foxyfiles" receive --source /sdcard --destination "${FILES_DIR}" 2>&1) ||
     jerr "file-receive failed: ${_fr_out:-cancelled}"

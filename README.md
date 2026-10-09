@@ -44,13 +44,17 @@ Requirements: arm or arm64 device, Magisk v20.4+ or KernelSU ≥ 10670. Upgrades
 
 Both packages include the first-party `foxydns` and `foxyfiles` helpers for ARM/ARM64, verified against the bundled native manifest. Module-root recovery runs before replaceable settings/scripts at boot; interrupted upgrades restore only a transaction with matching backup ownership. Unproven or failed recovery retains its journal and backup and defers startup.
 
-Both packages also contain `system/app/FoxyTail/FoxyTail.apk`. After reboot, the **FoxyTail** companion appears in the launcher (Android 8.0+, package `dev.foxderin.tail`). It is an ordinary non-privileged app: grant root through Magisk/KernelSU on first use. It does not occupy a VPN slot. Android requires a signature even for module companions; release packages use a stable private key, never a public debug key. A manually installed debug APK cannot be updated in place with a differently signed release APK.
+Both packages contain `companion/FoxyTail.apk`. On Android 8.0+, boot installs/updates the signed `dev.foxderin.tail` through PackageManager, preserving same-signature app data. It is no longer a `system/app` overlay: KernelSU's default module unmount otherwise hides the APK from launchers and the app itself. Installation errors go to `/data/adb/foxytail/run/companion-install.log` without blocking networking or uninstalling existing apps. **Grant root to FoxyTail itself** in Magisk/KernelSU; ADB root authorization is separate. The app never changes root grants or global hiding settings.
 
-**Upgrading to v1.4.0**: flash over v1.3.x and reboot; do not clear Tailscale identity or configuration. If a differently signed debug companion was installed manually, uninstall that debug app before using the release package. Do not uninstall the FoxyTail module to resolve an APK signature mismatch. Login, routing and DNS management remain in the WebUI.
+The v1.4.0 failure was traced on an Android 16/OPlus + ReSukiSU device to ENOENT for the systemless APK in launcher/app mount namespaces; correct permissions in ADB's namespace did not establish app access. The corrected installer updated the same-signature package via `pm install -r` on that device without stopping networking or changing global module-unmount policy.
+
+**Upgrading to v1.4.1**: flash over v1.3.x/v1.4.0 and reboot, preserving Tailscale identity/configuration. The v1.4.0 systemless APK is removed in favor of a PackageManager-owned same-signature copy; an existing signed user app updates in place. A differently signed debug app must be removed by its user, never silently uninstalled to bypass signature checks. Login, routing and DNS remain in the WebUI.
 
 ## Uninstall & reinstall
 
 Removing the module from Magisk/KernelSU runs `uninstall.sh`: every FoxyTail component is stopped, the routing/DNS chains are torn down, and `/data/adb/foxytail` is deleted — **but your Tailscale identity is not lost**. Before deletion, `tailscaled.state` is moved to `/data/adb/foxytail-state.backup`. On the next install, if no state exists yet, the installer restores that backup automatically (and prints a notice), so you come back as the same node, still logged in. Delete `/data/adb/foxytail-state.backup` manually if you want a fresh identity.
+
+The normally installed companion is not automatically uninstalled with the module, preserving its app data. It reports an unavailable module afterwards and may be removed separately in Android Settings.
 
 ## Quick start
 
@@ -104,7 +108,7 @@ The WebUI is built in: it lives in `webroot/` (zero-build static HTML/JS, backed
 
 For Funnel, choose a supported public listener: HTTPS, TCP or TLS-terminated TCP on port 443, 8443 or 10000. A local HTTP service such as `http://localhost:3000` normally uses a public **HTTPS** listener; the target's protocol and port are independent of the public listener. Plain HTTP listeners remain available for private Serve mappings.
 
-The pinned Android CLI receives directly into `/sdcard/Download/Taildrop`. **Import received files** copies completed regular files into the private inbox without waiting for a buffered `tailscale file get`; originals remain in shared storage. Private receipts prevent repeated imports, partial/deleted files and symlinks are excluded, and startup mode is bound to the owned daemon identity. If shared storage was unavailable at launch, unlock it and restart FoxyTail. Sends bind the selected stable peer ID to its current IP, including IPv6; duplicate hostnames are not destinations.
+The pinned Android CLI receives directly into `/sdcard/Download/Taildrop`. **Import received files** copies completed regular files into the private inbox without waiting for buffered `tailscale file get`; shared originals remain, private receipts deduplicate, partial/deleted files and symlinks are excluded. If early-boot storage left the mode record missing, a strict LocalAPI response from the current daemon can confirm direct mode and restore the record only while PID/start-time/boot identity remain unchanged. Directory existence alone is insufficient. Unlock and restart FoxyTail if the daemon cannot confirm direct mode. Sends bind the stable peer ID to its current IP, including IPv6.
 
 Automatic and manual exports preserve existing Download files, try numbered names through `-99`, and fail without removing the inbox copy when no safe destination is available. Clearing the inbox includes hidden regular files but preserves private receipts and directories. Inline downloads support files up to and including 8 MiB; larger files must be exported. Encoding uses a private temporary file, not command-line payload arguments.
 
@@ -117,7 +121,7 @@ Automatic and manual exports preserve existing Download files, try numbered name
 - **Background/cancel**: accepted jobs survive page/app closure and are adopted from History. The app runs a foreground notification only while working; denying notifications still allows in-app progress/cancel. Cancellation waits for worker acknowledgement and cannot revoke bytes already accepted remotely. Service stop/upgrade waits for transfer ownership to release.
 - **Data boundary**: the app reads granted `content://` URIs with its own `ContentResolver` and streams bytes into private staging through `su` stdin. No large command-line payloads, root reads of arbitrary external Intent paths, or root HTTP server. Export URIs expire after 24 hours. Successful stages are removed immediately; unused/failed stages older than 24 hours are cleaned on the next Taildrop operation, excluding active jobs. At most 100 history records and 256 staged items are retained. Original files are never removed.
 
-Login, routing, DNS and the remaining control plane stay in the WebUI for now. Receive import remains bound to the actual daemon startup identity; unlock storage and restart the module if it was unavailable at boot.
+Login, routing and DNS remain in the WebUI. The app distinguishes root launch failure, insufficient grant, unreadable module and actual backend failure; failed target reads are not presented as a successfully empty device list.
 
 ### Android builds and signing
 
@@ -145,6 +149,8 @@ Runtime layout: `settings.sh` initializes shared helpers; `scripts/foxytail.conf
 ## Verification and release
 
 Use Node 22.14.0, pnpm 10.30.3, Go 1.27.1 and the Android toolchain above; the WebUI requires Android WebView 109+. After installing dependencies, run `bash .github/tools/verify.sh` for ShellCheck, isolated backend regressions, Android debug build/lint, types, i18n, smoke, release metadata and committed build consistency. Run `pnpm --dir webui build` after frontend changes to update `webroot/`.
+
+CI runs isolated Python test modules with at most four workers, preserving all tests and failure statuses; Android debug assembly and lint share one Gradle invocation. Go/Gradle dependency caches exclude signing keys and release outputs. Non-PR CI builds/checks ARM/ARM64 static ELFs once in packaging; PR and local verification retain cross-compilation. Native race checks and the isolated Linux kernel gate remain required.
 
 Run `.github/tools/version-bump.sh`, commit version files and build outputs, then tag that commit. A branch push runs Verify and the Linux kernel tests, then builds both ZIPs against the reviewed `tailscale/checksums.txt` and retains them for 30 days. Release reuses those artifacts only from a successful Verify run in this repository at the exact tagged commit; PR artifacts are excluded. If verification is running, Release waits; if no reusable artifact exists, it requests one Verify run at the existing tag. Concurrent requests for the same commit share its successful artifacts. Failed gates stop publication, and downloaded checksums and package versions must match before uploading. Manual Release follows the same path.
 

@@ -46,7 +46,7 @@ test "$1" = release
 printf 'signed-companion-fixture\\n' >"$2"
 ''')
         shutil.copy(ROOT / 'tailscale/VERSIONS', self.root / 'tailscale/VERSIONS')
-        for relative in ['customize.sh', 'service.sh', 'install-recovery.sh', 'uninstall.sh', 'update.json', 'LICENSE',
+        for relative in ['customize.sh', 'service.sh', 'install-recovery.sh', 'install-companion.sh', 'uninstall.sh', 'update.json', 'LICENSE',
                          'tailscale/settings.sh', 'webroot/index.html',
                          'native/foxydns/THIRD_PARTY_NOTICES.txt',
                          'unwanted/private-data']:
@@ -79,6 +79,7 @@ curl() {
   esac
 }
 export -f curl
+umask 077
 bash .github/tools/build.sh "$@"
 '''
         env = os.environ.copy()
@@ -98,7 +99,11 @@ bash .github/tools/build.sh "$@"
                 self.assertIn('tailscale/scripts/' + path.name, names)
             self.assertEqual(archive.read('THIRD_PARTY_NOTICES.txt'), b'fixture\n')
             self.assertEqual(archive.read('install-recovery.sh'), b'fixture\n')
-            self.assertEqual(archive.read('system/app/FoxyTail/FoxyTail.apk'), b'signed-companion-fixture\n')
+            self.assertEqual(archive.read('companion/FoxyTail.apk'), b'signed-companion-fixture\n')
+            self.assertEqual(archive.read('companion/FoxyTail.apk.sha256').decode().strip(), hashlib.sha256(b'signed-companion-fixture\n').hexdigest())
+            self.assertNotIn('system/app/FoxyTail/FoxyTail.apk', names)
+            self.assertEqual((archive.getinfo('companion/FoxyTail.apk').external_attr >> 16) & 0o777, 0o644)
+            self.assertEqual(archive.read('install-companion.sh'), b'fixture\n')
             self.assertFalse(any('unwanted' in x or '.github' in x or 'native/foxydns' in x for x in names))
             self.assertEqual(sorted(x for x in names if '/bin/' in x),
                              sorted('tailscale/bin/' + x for x in NATIVE_BINARIES))
@@ -106,7 +111,8 @@ bash .github/tools/build.sh "$@"
         with zipfile.ZipFile(self.root / 'dist/FoxyTail-v1.0.3-full.zip') as archive:
             self.assertEqual(archive.read('THIRD_PARTY_NOTICES.txt'), b'fixture\n')
             self.assertEqual(archive.read('install-recovery.sh'), b'fixture\n')
-            self.assertEqual(archive.read('system/app/FoxyTail/FoxyTail.apk'), b'signed-companion-fixture\n')
+            self.assertEqual(archive.read('companion/FoxyTail.apk'), b'signed-companion-fixture\n')
+            self.assertNotIn('system/app/FoxyTail/FoxyTail.apk', archive.namelist())
             self.assertTrue(all('tailscale/bin/' + x in archive.namelist() for x in BINARIES + NATIVE_BINARIES))
             self.check_native_manifest(archive)
         self.assertFalse((self.root / 'tailscale/native-checksums.txt').exists())

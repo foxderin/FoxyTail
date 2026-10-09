@@ -44,13 +44,17 @@ FoxyTail 的灵感来自 [anasfanani/Magisk-Tailscaled](https://github.com/anasf
 
 两种包均内置 ARM/ARM64 的 `foxydns` 和 `foxyfiles`，按随包 native 清单校验。开机先由模块根目录的稳定代码恢复中断升级，再加载可替换的 settings/scripts；仅恢复与备份所有权一致的事务。记录无法证明或恢复失败时保留日志与备份、推迟启动，不猜测恢复对象。
 
-两种包也包含 `system/app/FoxyTail/FoxyTail.apk`，重启后在桌面出现 **FoxyTail** 附属应用（Android 8.0+，包名 `dev.foxderin.tail`）。它是普通非特权应用，首次使用需在 Magisk/KernelSU 授予 root，不占用 VPN 槽位。APK 必须签名才能安装/升级；正式包使用稳定的私有签名，不使用公开 debug key。手动安装 debug APK 后不能直接覆盖成不同签名的正式 APK。
+两种包均包含 `companion/FoxyTail.apk`。Android 8.0+ 开机后通过包管理器安装/更新为普通应用 `dev.foxderin.tail`，保留同签名 App 数据；不再挂载到 `system/app`，避免 KernelSU 默认卸载模块后桌面或 App 自身读不到 APK 资源。安装失败记录于 `/data/adb/foxytail/run/companion-install.log`，不会阻断网络服务或自动卸载原 App。首次使用请在 Magisk/KernelSU **单独允许 FoxyTail 的 root 权限**；ADB 获得 root 不等于 App 获得 root。应用不会自动改写 root 授权或全局隐藏设置。
 
-**v1.4.0 升级**：从 v1.3.x 直接刷入并重启，不需要清除 Tailscale 身份或配置。若已手动安装不同签名的 debug 附属应用，应先卸载该 debug 应用，再使用正式包；不要为此卸载 FoxyTail 模块。附属 App 暂不迁移登录、路由、DNS 等管理功能。
+已在 Android 16/OPlus + ReSukiSU 真机确认 v1.4.0 故障原因：桌面和 App 的挂载命名空间缺少 systemless APK，资源读取 ENOENT；ADB namespace 中权限正常并不能证明 App 可读。修复安装脚本已通过同签名 `pm install -r` 在该机更新，网络服务保持运行；不为此修改全局卸载模块策略。
+
+**v1.4.1 升级**：从 v1.3.x/v1.4.0 直接刷入并重启，不需要清除 Tailscale 身份或配置。v1.4.0 的 systemless APK 会移除，改用包管理器安装的同签名副本；用户已安装的同签名版本可原位更新。不同签名 debug App 需由用户先卸载，模块不会替用户删除数据来绕过签名检查。附属 App 暂不迁移登录、路由、DNS 等控制面。
 
 ## 卸载与重装
 
 从 Magisk/KernelSU 移除模块时会执行 `uninstall.sh`：停止所有 FoxyTail 组件、拆除路由/DNS 链、删除 `/data/adb/foxytail`——**但 Tailscale 身份不会丢**。删除前 `tailscaled.state` 会先备份到 `/data/adb/foxytail-state.backup`；下次安装时若尚无状态文件，安装器会自动恢复该备份（并打印提示），重装后仍是原节点、保持登录。如需全新身份，手动删除 `/data/adb/foxytail-state.backup` 即可。
+
+普通安装的附属 App 不随模块卸载自动删除，避免丢失 App 数据；移除模块后 App 会报告模块不可用，可由用户在系统设置中单独卸载。
 
 ## 快速上手
 
@@ -102,7 +106,7 @@ WebUI 已内置：位于 `webroot/`（纯静态零构建，后端为 `foxytail.w
 - 共 12 页（底部导航 +「更多」分组）：Dashboard · Peers（列表 + 拓扑图：直连/中继路径）· Exit Nodes · Account · Tunnel · Routing · Traffic · Serve · Files（Taildrop）· Logs · Settings · Diagnostics。
 - 构建产物自包含；中/英 i18n 与深浅色主题。
 
-固定的 Android CLI 直接收件至 `/sdcard/Download/Taildrop`。**导入已接收文件**只复制已完成的普通文件到私有收件箱，不等待缓冲模式的 `tailscale file get`，共享存储原件保留。私有收据防止重复导入，排除 partial/deleted 文件和软链接；模式记录绑定启动时所属 daemon 的身份。若启动时共享存储不可用，请解锁后重启 FoxyTail。发送使用稳定节点 ID 与其当前 IP（含 IPv6），不会把重名主机当成目标身份。
+固定 Android CLI 直接收件至 `/sdcard/Download/Taildrop`。**导入已接收文件**只复制已完成普通文件到私有收件箱，不等待缓冲模式的 `tailscale file get`，共享原件保留。私有收据去重，排除 partial/deleted 和软链接。若开机共享存储未就绪导致记录缺失，导入前可用当前 daemon 的 LocalAPI 严格确认 direct mode，并在 PID/启动时间/boot ID 前后不变时恢复记录；不凭目录存在推断。daemon 未确认 direct mode 时，仍须解锁并重启 FoxyTail。发送使用稳定节点 ID 与其当前 IP（含 IPv6）。
 
 自动与手动导出保留 Download 现有文件，依次尝试编号至 `-99`，耗尽时失败但不删除私有副本。清空包含隐藏普通文件，保留收据和目录。内联下载支持不超过 8 MiB 的文件，更大文件请导出；编码使用退出时清理的私有临时文件，不把文件内容放进命令行参数。
 
@@ -115,7 +119,7 @@ WebUI 已内置：位于 `webroot/`（纯静态零构建，后端为 `foxytail.w
 - **后台与取消**：已接受的发送由模块工作进程持有，退出页面、关闭 App 不停止发送；重新打开历史可接管。应用仅工作时运行前台通知，拒绝通知权限仍可在应用内查看或取消。取消是请求，等待工作进程确认；已被对端接受的字节无法撤回。服务停止/升级会先等待工作进程释放所有权。
 - **数据边界**：Android 以自身 `ContentResolver` 读取授权 `content://` URI，经 `su` 的二进制 stdin 写入私有暂存，不把大文件放入命令参数，不接受 root 读取外部 Intent 指定的任意路径，也不开放 root HTTP 服务。只读导出 URI 限时 24 小时。已发送暂存立即删除；未使用/失败副本超过 24 小时后在下次 Taildrop 操作时清理，活动任务除外；历史最多保留 100 条，暂存最多 256 项。不会删除原始文件。
 
-这一阶段保留 WebUI 处理登录、路由、DNS 等控制功能，不在 App 中重复实现。接收导入仍绑定启动时的 daemon 身份；首次开机存储未解锁时须解锁并重启模块。
+这一阶段保留 WebUI 处理登录、路由、DNS 等控制功能。App 区分 root 启动失败、授权不足、模块不可读和真实后端失败；读取设备失败不再显示为已确认的空设备列表。
 
 ### Android 构建与签名
 
@@ -141,6 +145,8 @@ WebUI 源码位于 `webui/`（Vite + SolidJS、原生控件及 Material Design 3
 ## 验证与发布
 
 开发工具链固定为 Node 22.14.0、pnpm 10.30.3、Go 1.27.1，以及上述 Android 工具链；WebUI 要求 Android WebView 109+。安装依赖后执行 `bash .github/tools/verify.sh`，统一检查 ShellCheck、隔离后端回归、Android debug 构建/lint、类型、国际化、smoke、版本元数据和生产产物一致性；前端改动后先执行 `pnpm --dir webui build` 更新 `webroot/`。
+
+CI 对独立 Python 测试模块最多四路并行，保留全部测试及失败状态；Android debug 构建和 lint 共用一次 Gradle 调用。Go 与 Gradle 依赖缓存不含签名密钥/发布产物。非 PR CI 的 ARM/ARM64 构建与静态 ELF 校验只在打包阶段执行一次，PR 和本地验证仍保留交叉编译；native race 与独立 Linux 内核门禁不跳过。
 
 发布前运行 `.github/tools/version-bump.sh`，提交版本元数据与前端产物后创建版本标签。分支推送执行 Verify 和 Linux 内核测试，通过后按已审阅的 `tailscale/checksums.txt` 构建两种 ZIP 并保存 30 天。Release 仅复用同仓库、标签对应完整提交 SHA 的成功 Verify 产物，排除 PR 产物；验证进行中则等待，没有可复用产物则对现有标签触发一次 Verify。同一提交的并发请求复用成功产物，失败门禁阻止发布，上传前再次核对下载包的校验和与版本。手动 Release 走同一路径。
 

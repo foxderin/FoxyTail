@@ -34,3 +34,9 @@ while command -v network_snapshot >/dev/null 2>&1 && ! network_snapshot >/dev/nu
 done
 
 "$TS_DIR/scripts/start.sh"
+_service_result=$?
+if [ -f "$MODDIR/install-companion.sh" ]; then
+  sh "$MODDIR/install-companion.sh" >"$TS_RUN_DIR/companion-install.log" 2>&1 ||
+    echo 'FoxyTail companion install failed; see run/companion-install.log' >&2
+fi
+exit "$_service_result"

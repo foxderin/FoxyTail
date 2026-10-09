@@ -12,6 +12,37 @@ final class RootApi {
     private static final String SCRIPT = "/data/adb/foxytail/scripts/foxytail.webapi.sh";
     private static final ExecutorService IO = Executors.newCachedThreadPool();
     private static final ScheduledExecutorService CLOCK = Executors.newScheduledThreadPool(1);
+    private static final String[] SU_PATHS = {"/system/bin/su", "/system/xbin/su", "/sbin/su", "/debug_ramdisk/su"};
+    interface ProcessStarter { Process start(ProcessBuilder builder) throws IOException; }
+    static Process startRoot(Context context, String command, ProcessStarter starter) throws IOException {
+        String executable = SU_PATHS[0];
+        for (String path : SU_PATHS) {
+            if (new File(path).canExecute()) { executable = path; break; }
+        }
+        // KernelSU may intercept this absolute exec even when stat cannot see su.
+        try { return starter.start(new ProcessBuilder(executable, "-c", command)); }
+        catch (IOException e) { throw new IOException(context.getString(R.string.root_unavailable) + "\n" + executable + ": " + launchDetail(e), e); }
+    }
+    static String launchDetail(IOException error) {
+        Throwable cause = error;
+        while (cause.getCause() != null && cause.getCause() != cause) cause = cause.getCause();
+        String value = cause.getMessage() == null ? cause.getClass().getSimpleName() : cause.getMessage();
+        StringBuilder clean = new StringBuilder();
+        for (int i = 0; i < value.length() && clean.length() < 160; i++) {
+            char c = value.charAt(i);
+            clean.append(Character.isISOControl(c) || Character.getType(c) == Character.FORMAT ? ' ' : c);
+        }
+        return clean.toString();
+    }
+    static int failureMessage(String errors) {
+        boolean root = false;
+        for (String line : errors.split("\n")) {
+            if (line.equals("FOXYTAIL_ROOT_DENIED")) return R.string.root_denied;
+            if (line.equals("FOXYTAIL_MODULE_MISSING")) return R.string.module_missing;
+            if (line.equals("FOXYTAIL_ROOT_READY")) root = true;
+        }
+        return root ? R.string.backend_failed : R.string.root_failed;
+    }
     interface Progress { void copied(long bytes); }
     static final class Call {
         volatile Process process;
@@ -45,15 +76,13 @@ final class RootApi {
         execute(context, null, null, destination, MAX_FILE, null, 1800, new Call(), "file-read", name);
     }
     private static void execute(Context context, String request, InputStream input, OutputStream output, long outputLimit, Progress progress, int seconds, Call call, String... args) throws Exception {
-        StringBuilder command = new StringBuilder("if [ ! -f ").append(quote(SCRIPT)).append(" ]; then echo FOXYTAIL_MODULE_MISSING >&2; exit 72; fi; exec /system/bin/sh ").append(quote(SCRIPT));
+        StringBuilder command = new StringBuilder("if [ \"$(/system/bin/id -u)\" != 0 ]; then echo FOXYTAIL_ROOT_DENIED >&2; exit 77; fi; if [ ! -f ").append(quote(SCRIPT)).append(" ] || [ ! -r ").append(quote(SCRIPT)).append(" ]; then echo FOXYTAIL_MODULE_MISSING >&2; exit 72; fi; echo FOXYTAIL_ROOT_READY >&2; exec /system/bin/sh ").append(quote(SCRIPT));
         if (request != null) command.append(" --request-id ").append(quote(request));
         for (String arg : args) {
             if (arg == null || arg.indexOf('\0') >= 0) throw new IOException(context.getString(R.string.invalid_response));
             command.append(' ').append(quote(arg));
         }
-        Process process;
-        try { process = new ProcessBuilder("su", "-c", command.toString()).start(); }
-        catch (IOException e) { throw new IOException(context.getString(R.string.root_denied), e); }
+        Process process = startRoot(context, command.toString(), ProcessBuilder::start);
         call.process = process;
         call.source = input;
         AtomicBoolean timedOut = new AtomicBoolean();
@@ -82,15 +111,15 @@ final class RootApi {
             String errors = stderr.get(5, TimeUnit.SECONDS).trim();
             if (timedOut.get()) throw new IOException(context.getString(R.string.timeout));
             if (call.cancelled.get()) throw new InterruptedIOException(context.getString(R.string.cancelled));
-            if (errors.contains("FOXYTAIL_MODULE_MISSING")) throw new IOException(context.getString(R.string.module_missing));
-            if (exit != 0) {
-                if (output instanceof ByteArrayOutputStream) {
+            int failure = failureMessage(errors);
+            if (exit != 0 || failure != R.string.backend_failed) {
+                if (failure == R.string.backend_failed && output instanceof ByteArrayOutputStream) {
                     try {
                         JSONObject error = new JSONObject(((ByteArrayOutputStream) output).toString(StandardCharsets.UTF_8.name()));
                         if (error.has("error")) throw new IOException(error.getString("error"));
                     } catch (org.json.JSONException ignored) { }
                 }
-                throw new IOException(context.getString(R.string.root_denied) + (errors.isEmpty() ? "" : "\n" + errors));
+                throw new IOException(context.getString(failure) + (errors.isEmpty() ? "" : "\n" + errors));
             }
             if (readFailure != null) throw readFailure;
             writer.get(5, TimeUnit.SECONDS);

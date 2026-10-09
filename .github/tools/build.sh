@@ -12,6 +12,7 @@
 # Devices without either can supply a trusted binary (see README).
 set -euo pipefail
 export TZ=UTC
+umask 022
 
 cd "$(dirname "$0")/../.."
 # shellcheck source=tailscale/VERSIONS
@@ -134,10 +135,11 @@ bash .github/tools/build-android.sh release "$COMPANION_APK"
 # caches or future development directories from entering a root module ZIP.
 PACKAGE_DIR="${WORK_DIR}/package"
 mkdir -p "$PACKAGE_DIR/tailscale/bin"
-mkdir -p "$PACKAGE_DIR/system/app/FoxyTail"
-cp "$COMPANION_APK" "$PACKAGE_DIR/system/app/FoxyTail/FoxyTail.apk"
+mkdir -p "$PACKAGE_DIR/companion"
+cp "$COMPANION_APK" "$PACKAGE_DIR/companion/FoxyTail.apk"
+(cd "$PACKAGE_DIR/companion" && sha256sum FoxyTail.apk | cut -d' ' -f1 >FoxyTail.apk.sha256)
 cp -R META-INF webroot "$PACKAGE_DIR/"
-cp customize.sh service.sh install-recovery.sh uninstall.sh module.prop update.json LICENSE "$PACKAGE_DIR/"
+cp customize.sh service.sh install-recovery.sh install-companion.sh uninstall.sh module.prop update.json LICENSE "$PACKAGE_DIR/"
 cp native/foxydns/THIRD_PARTY_NOTICES.txt "$PACKAGE_DIR/THIRD_PARTY_NOTICES.txt"
 cp -R tailscale/scripts tailscale/conf "$PACKAGE_DIR/tailscale/"
 cp tailscale/settings.sh tailscale/VERSIONS tailscale/checksums.txt "$PACKAGE_DIR/tailscale/"

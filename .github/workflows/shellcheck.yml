@@ -42,11 +42,21 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version-file: native/foxydns/go.mod
-          cache: false
+          cache-dependency-path: |
+            native/*/go.mod
+            native/*/go.sum
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: '21'
+      - name: Cache Gradle dependencies only
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches/modules-2
+            ~/.gradle/wrapper/dists
+          key: ${{ runner.os }}-java21-gradle-deps-${{ hashFiles('android/**/*.gradle', 'android/gradle/wrapper/gradle-wrapper.properties') }}
+          restore-keys: ${{ runner.os }}-java21-gradle-deps-
       - uses: android-actions/setup-android@v3
         with:
           packages: platform-tools
@@ -54,6 +64,8 @@ jobs:
       - run: sudo apt-get update && sudo apt-get install -y shellcheck jq
       - run: pnpm --dir webui install --frozen-lockfile
       - run: bash .github/tools/verify.sh
+        env:
+          FOXYTAIL_NATIVE_IN_PACKAGE: ${{ github.event_name != 'pull_request' && '1' || '0' }}
   native-kernel:
     needs: reuse
     if: needs.reuse.outputs.run == ''
@@ -63,7 +75,9 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version-file: native/foxydns/go.mod
-          cache: false
+          cache-dependency-path: |
+            native/*/go.mod
+            native/*/go.sum
       - run: sudo apt-get update && sudo apt-get install -y iptables
       - name: Verify real DNS paths in an isolated Linux network
         env:
@@ -78,11 +92,21 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version-file: native/foxydns/go.mod
-          cache: false
+          cache-dependency-path: |
+            native/*/go.mod
+            native/*/go.sum
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: '21'
+      - name: Cache Gradle dependencies only
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches/modules-2
+            ~/.gradle/wrapper/dists
+          key: ${{ runner.os }}-java21-gradle-deps-${{ hashFiles('android/**/*.gradle', 'android/gradle/wrapper/gradle-wrapper.properties') }}
+          restore-keys: ${{ runner.os }}-java21-gradle-deps-
       - uses: android-actions/setup-android@v3
         with:
           packages: platform-tools
