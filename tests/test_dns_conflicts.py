@@ -67,6 +67,15 @@ jqr() { jq "$@"; }
             with self.subTest(match=match):
                 self.assertEqual(self.invoke('legacy_connmark_safe', f'-A OUTPUT -j CONNMARK {match}\n').returncode, 0)
 
+    def test_connmark_named_chains_only_conflict_when_rules_use_reserved_bit(self):
+        chains = ('-N connmark_mangle_INPUT\n-N connmark_mangle_OUTPUT\n'
+                  '-A INPUT -j connmark_mangle_INPUT\n-A OUTPUT -j connmark_mangle_OUTPUT\n')
+        for mask, expected in (('0xfffff', 0), ('0x20000000', 1)):
+            with self.subTest(mask=mask):
+                rules = chains + ('-A connmark_mangle_OUTPUT -m connmark --mark 0x0/' + mask
+                                  + ' -j CONNMARK --save-mark --nfmask ' + mask + ' --ctmask ' + mask + '\n')
+                self.assertEqual(self.invoke('legacy_connmark_safe', rules).returncode, expected)
+
     def test_active_network_change_invalidates_legacy_upstream(self):
         snapshot = {'known': True, 'signature': 'net101', 'dns': ['192.0.2.53']}
         saved = self.base / 'network.json'

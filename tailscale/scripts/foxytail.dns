@@ -110,7 +110,10 @@ ${_lc_part}"
     function overlap(s,n) {n=number(s); return n<0 || int(n/536870912)%2==1}
     function mask(s,a,n) {n=split(s,a,"/"); return n!=2 || overlap(a[1]) || overlap(a[2])}
     $1=="-A" && $2=="FOXY_DNS" {next}
-    /CONNMARK|connmark/ {
+    $1=="-A" {
+      uses=0
+      for(i=1;i<NF;i++) if(($i=="-j" && $(i+1)=="CONNMARK") || ($i=="-m" && $(i+1)=="connmark")) uses=1
+      if(!uses) next
       known=0
       for(i=1;i<=NF;i++) {
         if($i=="--mark" || $i=="--set-mark" || $i=="--set-xmark") {known=1; if(mask($(i+1))) bad=1}
