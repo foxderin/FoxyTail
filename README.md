@@ -36,7 +36,7 @@ Two packages are published on the [Releases](../../releases) page:
 - **`FoxyTail-<version>.zip` (light)** — the installer downloads `tailscaled`, `jq` and `hev-socks5-tunnel` at install time from their pinned upstream releases and verifies each against `checksums.txt` (SHA256). Requires internet during install.
 - **`FoxyTail-<version>-full.zip` (full)** — all binaries bundled; installs offline. The bundled binaries are SHA256-verified too, so a tampered zip is rejected.
 
-Flash either zip in Magisk Manager, KernelSU Manager or MMRL, then reboot (or use the `/dev/` shortcuts the installer prints until you do).
+Flash either zip in Magisk Manager, KernelSU Manager or MMRL, then reboot (or use the absolute-path commands printed by the installer before rebooting).
 
 Requirements: arm or arm64 device, Magisk v20.4+ or KernelSU ≥ 10670. Upgrades preserve your state, config and hook files (see below).
 
@@ -51,7 +51,14 @@ su -c 'tailscale login'            # prints a login URL; open it in a browser
 su -c 'foxytail.service status'    # colored summary of the running daemon
 ```
 
-Before the first reboot after flashing, the binaries are not on `PATH` yet — use `/dev/tailscale` and `/dev/foxytail.service` instead (the installer prints exactly this).
+Before the first reboot after flashing, the commands are not on `PATH` yet. Use the installed paths and the module's private socket:
+
+```sh
+su -c '/data/adb/foxytail/bin/tailscale --socket=/data/adb/foxytail/run/tailscaled.sock login'
+su -c '/data/adb/foxytail/scripts/foxytail.service status'
+```
+
+The installer no longer creates command shortcuts under `/dev`. Successful upgrades and uninstalls remove old shortcuts only when they are symlinks to the exact FoxyTail targets; unrelated entries are left untouched. After reboot, the systemless `system/bin` commands remain available as before.
 
 Useful extras:
 

@@ -48,6 +48,19 @@ for _state in "${TS_DIR}/state/tailscaled.state" "${TS_DIR}/tailscaled.state"; d
     break
   fi
 done
+for _name in tailscale tailscaled foxytail.service; do
+  case "$_name" in
+    tailscale|tailscaled) _target="${TS_DIR}/bin/tailscaled" ;;
+    foxytail.service) _target="${TS_DIR}/scripts/foxytail.service" ;;
+  esac
+  _link="/dev/${_name}"
+  if [ -L "$_link" ] && [ "$(readlink "$_link")" = "$_target" ]; then
+    if ! rm "$_link"; then
+      say "! Unable to remove legacy FoxyTail entry ${_link}; data retained for recovery"
+      exit 1
+    fi
+  fi
+done
 if ! rm -rf "$TS_DIR"; then
   say "! Could not remove all FoxyTail data"
   exit 1

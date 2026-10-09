@@ -16,15 +16,25 @@ class DnsJournalInstallTests(unittest.TestCase):
         self.addCleanup(self.temp.cleanup)
         self.base = Path(self.temp.name)
         self.runtime = self.base / 'runtime'
+        self.dev = self.base / 'dev'
+        self.dev.mkdir()
+        self.identity = self.runtime / 'state/tailscaled.state'
+        self.journal = self.runtime / 'state/foxydns-preferences.json'
+        self.identity_backup = self.base / 'identity.backup'
+        self.journal_backup = self.base / 'dns.backup'
+        self.legacy_targets = {
+            'tailscale': self.runtime / 'bin/tailscaled',
+            'tailscaled': self.runtime / 'bin/tailscaled',
+            'foxytail.service': self.runtime / 'scripts/foxytail.service',
+        }
+        self.create_runtime()
+
+    def create_runtime(self):
         (self.runtime / 'state').mkdir(parents=True)
         (self.runtime / 'scripts').mkdir()
         controller = self.runtime / 'scripts/start.sh'
         controller.write_text('#!/bin/sh\nexit "${STOP_RESULT:-0}"\n')
         controller.chmod(0o755)
-        self.identity = self.runtime / 'state/tailscaled.state'
-        self.journal = self.runtime / 'state/foxydns-preferences.json'
-        self.identity_backup = self.base / 'identity.backup'
-        self.journal_backup = self.base / 'dns.backup'
         self.identity.write_text('fixture-identity')
         self.journal.write_text(json.dumps({'version': 1, 'entries': [
             {'id': 'profile-a', 'self': 'node-a', 'original': True, 'phase': 'owned'}]}))
@@ -32,17 +42,19 @@ class DnsJournalInstallTests(unittest.TestCase):
     def rewrite(self, source):
         return source.replace('/data/adb/foxytail-state.backup', str(self.identity_backup)) \
             .replace('/data/adb/foxytail-dns-preferences.backup', str(self.journal_backup)) \
-            .replace('/data/adb/foxytail', str(self.runtime))
+            .replace('/data/adb/foxytail', str(self.runtime)) \
+            .replace('"/dev/', '"' + str(self.dev) + '/')
 
-    def uninstall(self, ok=True, **environment):
+    def uninstall(self, ok=True, injection='', **environment):
         script = self.base / 'uninstall.sh'
-        script.write_text(self.rewrite((ROOT / 'uninstall.sh').read_text()))
+        script.write_text(injection + '\n' + self.rewrite((ROOT / 'uninstall.sh').read_text()))
         result = subprocess.run(['sh', str(script)], env={**os.environ, **environment},
                                 text=True, capture_output=True, timeout=10)
         if ok:
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         else:
             self.assertNotEqual(result.returncode, 0)
+        return result
 
     def restore(self, injection='', ok=True):
         source = (ROOT / 'customize.sh').read_text()
@@ -77,6 +89,124 @@ class DnsJournalInstallTests(unittest.TestCase):
         self.uninstall(ok=False, STOP_RESULT='1')
         self.assertEqual(self.journal.read_text(), original)
         self.assertEqual(self.identity.read_text(), 'fixture-identity')
+
+    def test_uninstall_only_removes_exact_owned_legacy_links(self):
+        for kind in ('owned', 'owned-dangling', 'file', 'directory',
+                     'external', 'external-dangling', 'wrong-runtime-target'):
+            with self.subTest(kind=kind):
+                if not self.runtime.exists():
+                    self.create_runtime()
+                expected_links = {}
+                external_targets = []
+                for name, target in self.legacy_targets.items():
+                    entry = self.dev / name
+                    if kind == 'file':
+                        entry.write_text('unrelated-file')
+                    elif kind == 'directory':
+                        entry.mkdir()
+                        (entry / 'keep').write_text('unrelated-directory')
+                    else:
+                        if kind.startswith('external'):
+                            target = self.base / (name + '-' + kind)
+                            if kind == 'external':
+                                target.write_text('unrelated-target')
+                                external_targets.append(target)
+                        elif kind == 'wrong-runtime-target':
+                            target = self.runtime / (name + '-wrong')
+                            target.write_text('different-runtime-file')
+                        elif kind == 'owned':
+                            target.parent.mkdir(parents=True, exist_ok=True)
+                            target.write_text('module-entry')
+                        entry.symlink_to(target)
+                        expected_links[name] = str(target)
+                self.uninstall()
+                self.assertFalse(self.runtime.exists())
+                self.assertEqual(self.identity_backup.read_text(), 'fixture-identity')
+                self.uninstall()
+                for name in self.legacy_targets:
+                    entry = self.dev / name
+                    if kind.startswith('owned'):
+                        self.assertFalse(os.path.lexists(entry))
+                    elif kind == 'file':
+                        self.assertFalse(entry.is_symlink())
+                        self.assertEqual(entry.read_text(), 'unrelated-file')
+                        entry.unlink()
+                    elif kind == 'directory':
+                        self.assertFalse(entry.is_symlink())
+                        self.assertEqual((entry / 'keep').read_text(), 'unrelated-directory')
+                        (entry / 'keep').unlink()
+                        entry.rmdir()
+                    else:
+                        self.assertTrue(entry.is_symlink())
+                        self.assertEqual(os.readlink(entry), expected_links[name])
+                        entry.unlink()
+                for target in external_targets:
+                    self.assertEqual(target.read_text(), 'unrelated-target')
+
+    def test_uninstall_stop_or_backup_failure_retains_all_legacy_links(self):
+        original_journal = self.journal.read_text()
+        for name, target in self.legacy_targets.items():
+            (self.dev / name).symlink_to(target)
+        for failure in ('stop', 'identity', 'dns'):
+            with self.subTest(failure=failure):
+                self.identity_backup.write_text('previous-identity')
+                self.journal_backup.write_text('previous-journal')
+                injection = ''
+                environment = {}
+                if failure == 'stop':
+                    environment['STOP_RESULT'] = '1'
+                else:
+                    source = self.identity if failure == 'identity' else self.journal
+                    injection = 'cp() { if [ "$1" = ' + shlex.quote(str(source)) \
+                        + ' ]; then return 1; fi; command cp "$@"; }\n'
+                result = self.uninstall(ok=False, injection=injection, **environment)
+                self.assertEqual(result.returncode, 1)
+                self.assertEqual(self.identity.read_text(), 'fixture-identity')
+                self.assertEqual(self.journal.read_text(), original_journal)
+                self.assertEqual(self.identity_backup.read_text(),
+                                 'fixture-identity' if failure == 'dns' else 'previous-identity')
+                self.assertEqual(self.journal_backup.read_text(), 'previous-journal')
+                for name, target in self.legacy_targets.items():
+                    self.assertTrue((self.dev / name).is_symlink())
+                    self.assertEqual(os.readlink(self.dev / name), str(target))
+
+    def test_uninstall_legacy_link_removal_failure_retains_runtime(self):
+        original_journal = self.journal.read_text()
+        for failed_name in self.legacy_targets:
+            with self.subTest(name=failed_name):
+                for name, target in self.legacy_targets.items():
+                    entry = self.dev / name
+                    if not entry.is_symlink():
+                        entry.symlink_to(target)
+                failed_entry = self.dev / failed_name
+                injection = 'rm() { if [ "$1" = ' + shlex.quote(str(failed_entry)) \
+                    + ' ]; then return 1; fi; command rm "$@"; }\n'
+                result = self.uninstall(ok=False, injection=injection)
+                self.assertEqual(result.returncode, 1)
+                self.assertIn(str(failed_entry), result.stdout)
+                self.assertEqual(self.identity.read_text(), 'fixture-identity')
+                self.assertEqual(self.journal.read_text(), original_journal)
+                self.assertEqual(self.identity_backup.read_text(), 'fixture-identity')
+                self.assertEqual(self.journal_backup.read_text(), original_journal)
+                self.assertEqual(os.readlink(failed_entry), str(self.legacy_targets[failed_name]))
+        self.uninstall()
+        self.assertFalse(self.runtime.exists())
+        for name in self.legacy_targets:
+            self.assertFalse(os.path.lexists(self.dev / name))
+
+    def test_repeated_uninstall_cleans_dangling_links_without_changing_backups(self):
+        self.uninstall()
+        backups = {path: (path.read_bytes(), path.stat().st_mode & 0o777)
+                   for path in (self.identity_backup, self.journal_backup)}
+        for name, target in self.legacy_targets.items():
+            (self.dev / name).symlink_to(target)
+        self.uninstall()
+        self.uninstall()
+        for name in self.legacy_targets:
+            self.assertFalse(os.path.lexists(self.dev / name))
+        for path, (content, mode) in backups.items():
+            self.assertEqual(path.read_bytes(), content)
+            self.assertEqual(path.stat().st_mode & 0o777, mode)
 
     def test_missing_journal_removes_stale_ownership_backup(self):
         self.journal.unlink()

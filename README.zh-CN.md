@@ -36,7 +36,7 @@ FoxyTail 的灵感来自 [anasfanani/Magisk-Tailscaled](https://github.com/anasf
 - **`FoxyTail-<version>.zip`（light 轻量包）** —— 安装时从固定的上游 release 下载 `tailscaled`、`jq`、`hev-socks5-tunnel`，并按 `checksums.txt` 逐个 SHA256 校验。安装过程需要联网。自研 `foxydns` 已随轻量包内置。
 - **`FoxyTail-<version>-full.zip`（full 完整包）** —— 内置全部二进制，可离线安装。内置二进制同样做 SHA256 校验，被篡改的 zip 会被拒绝。
 
-在 Magisk Manager、KernelSU Manager 或 MMRL 中刷入任一 zip，然后重启（重启前可使用安装器打印的 `/dev/` 快捷方式）。
+在 Magisk Manager、KernelSU Manager 或 MMRL 中刷入任一 zip，然后重启（重启前可使用安装器打印的绝对路径命令）。
 
 要求：arm 或 arm64 设备，Magisk v20.4+ 或 KernelSU ≥ 10670。升级时保留你的状态、配置与钩子文件（见下文）。
 
@@ -51,7 +51,14 @@ su -c 'tailscale login'            # 打印登录 URL，用浏览器打开完成
 su -c 'foxytail.service status'    # 彩色摘要查看运行状态
 ```
 
-刷入后首次重启之前，二进制还没挂上 `PATH`——请改用 `/dev/tailscale` 和 `/dev/foxytail.service`（安装器会打印同样的提示）。
+刷入后首次重启之前，命令还没挂上 `PATH`。请使用安装路径，并为 Tailscale 显式指定模块的私有 socket：
+
+```sh
+su -c '/data/adb/foxytail/bin/tailscale --socket=/data/adb/foxytail/run/tailscaled.sock login'
+su -c '/data/adb/foxytail/scripts/foxytail.service status'
+```
+
+安装器不再在 `/dev` 创建命令快捷方式。成功升级和卸载时，仅清理仍精确指向 FoxyTail 目标的旧软链接，保留其他同名条目；重启后的 systemless `system/bin` 命令入口保持不变。
 
 常用扩展：
 

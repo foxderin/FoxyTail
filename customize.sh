@@ -512,20 +512,27 @@ else
   ui_print "! Use proxy mode on this kernel"
 fi
 
-# --- Start service in background ----------------------------------------------
+# --- Commit and remove legacy /dev shortcuts ---------------------------------
 
 _INSTALL_SWITCH_ACTIVE=0
 rm -f "${TS_DIR}/.installing" "${TS_DIR}/.install-transaction"
+for _name in tailscale tailscaled foxytail.service; do
+  case "$_name" in
+    tailscale | tailscaled) _target="${TS_BIN_DIR}/tailscaled" ;;
+    foxytail.service) _target="${TS_SCRIPTS_DIR}/foxytail.service" ;;
+  esac
+  _link="/dev/${_name}"
+  if [ -L "$_link" ] && [ "$(readlink "$_link")" = "$_target" ]; then
+    rm "$_link" || ui_print "! WARNING: Failed to remove legacy shortcut ${_link}; installed software retained"
+  fi
+done
+
+# --- Start service in background ----------------------------------------------
+
 ui_print "- Starting FoxyTail service and resident helpers in background"
 "${TS_SCRIPTS_DIR}/start.sh" postinstall >/dev/null 2>&1 &
 
-# --- /dev shortcuts + quickstart ----------------------------------------------
-# /dev is a tmpfs: these links survive only until the next reboot, which is
-# exactly when the systemless $MODPATH/system/bin mount takes over.
-
-ln -sf "${TS_BIN_DIR}/tailscaled" /dev/tailscaled
-ln -sf "${TS_BIN_DIR}/tailscaled" /dev/tailscale
-ln -sf "${TS_SCRIPTS_DIR}/foxytail.service" /dev/foxytail.service
+# --- Quickstart --------------------------------------------------------------
 
 ui_print "-----------------------------------------------------------"
 ui_print " Quick start"
@@ -533,13 +540,13 @@ ui_print "-----------------------------------------------------------"
 if [ -f "${TS_DIR}/state/tailscaled.state" ] || [ -f "${TS_DIR}/tailscaled.state" ]; then
   ui_print "- Welcome back. Your tailscaled state was preserved."
   ui_print "- Until reboot, manage the service via:"
-  ui_print "    su -c '/dev/foxytail.service status'"
+  ui_print "    su -c '${TS_SCRIPTS_DIR}/foxytail.service status'"
   ui_print "- After reboot the commands are on PATH:"
   ui_print "    su -c 'foxytail.service status'"
 else
   ui_print "- New install. Until reboot, log in via:"
-  ui_print "    su -c '/dev/tailscale login'"
-  ui_print "    su -c '/dev/foxytail.service status'"
+  ui_print "    su -c '${TS_BIN_DIR}/tailscale --socket=${TS_DIR}/run/tailscaled.sock login'"
+  ui_print "    su -c '${TS_SCRIPTS_DIR}/foxytail.service status'"
   ui_print "- After reboot simply:"
   ui_print "    su -c 'tailscale login'"
 fi

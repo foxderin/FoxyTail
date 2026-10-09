@@ -114,6 +114,127 @@ _conf_runtime_dir() { _RUNTIME_CONF_DIR="$PWD/run/.applied.test"; }
         self.assertNotEqual(result.returncode, 0)
         self.assertTrue((runtime / 'settings.pending').exists())
 
+    def installer_success_fixture(self, directory, entry_kind='absent', fail_remove=False):
+        runtime = directory / 'runtime'
+        candidate = directory / 'candidate'
+        dev = directory / 'dev'
+        dev.mkdir(parents=True)
+        for tree, version in ((runtime, 'old'), (candidate, 'new')):
+            for part in ('bin', 'scripts', 'conf'):
+                (tree / part).mkdir(parents=True)
+                (tree / part / 'version').write_text(version)
+            for part in ('settings.sh', 'VERSIONS', 'checksums.txt', 'native-checksums.txt'):
+                (tree / part).write_text(version)
+            if entry_kind != 'owned-dangling':
+                for relative in ('bin/tailscaled', 'scripts/foxytail.service'):
+                    executable = tree / relative
+                    executable.write_text('#!/bin/sh\nexit 0\n')
+                    executable.chmod(0o755)
+            (tree / 'bin/tailscale').symlink_to('tailscaled')
+        starter = candidate / 'scripts/start.sh'
+        starter.write_text('''#!/bin/sh
+[ ! -e "$PWD/runtime/.installing" ] && [ ! -e "$PWD/runtime/.install-transaction" ] || exit 1
+for entry in "$PWD/dev/"*; do
+  [ ! -L "$entry" ] || printf '%s\\n' "${entry##*/}" >>"$PWD/links-at-start"
+done
+printf '%s\\n' "$1" >"$PWD/postinstall"
+''')
+        starter.chmod(0o755)
+        (runtime / '.installing').touch()
+        for name in ('tailscale', 'tailscaled', 'foxytail.service'):
+            entry = dev / name
+            expected = runtime / ('scripts/foxytail.service' if name == 'foxytail.service' else 'bin/tailscaled')
+            if entry_kind.startswith('owned-'):
+                entry.symlink_to(expected)
+            elif entry_kind.startswith('external-'):
+                target = directory / ('external-' + name)
+                if entry_kind == 'external-live':
+                    target.write_text('external')
+                entry.symlink_to(target)
+            elif entry_kind == 'wrong-runtime':
+                entry.symlink_to(runtime / 'bin/version')
+            elif entry_kind == 'file':
+                entry.write_text('unrelated')
+            elif entry_kind == 'directory':
+                entry.mkdir()
+                (entry / 'keep').write_text('unrelated')
+        source = (ROOT / 'customize.sh').read_text()
+        functions = source[source.index('rollback_install() {'):source.index('# Recover an interrupted earlier switch')]
+        success = source[source.index('ui_print "- Switching software; backup:'):]
+        # Relocate all filesystem probes as well as the legacy entries.
+        success = success.replace('/data/adb/', str(directory / 'adb') + '/')
+        success = success.replace('/dev/', str(dev) + '/')
+        success = success.replace('/proc/', str(directory / 'proc') + '/')
+        prelude = '''
+TS_DIR="$PWD/runtime"; TS_BIN_DIR="$TS_DIR/bin"; TS_SCRIPTS_DIR="$TS_DIR/scripts"
+TS_CONF_DIR="$TS_DIR/conf"; MODPATH="$PWD/module"
+CANDIDATE="$PWD/candidate"; BACKUP="$TS_DIR/backups/test"
+ui_print() { printf '%s\\n' "$*"; }
+abort() { exit 1; }
+set_perm() { :; }
+set_perm_recursive() { :; }
+iptables() { return 1; }
+rm() {
+  for arg do
+    if [ "$FAIL_REMOVE" = 1 ] && [ "$arg" = "$PWD/dev/tailscale" ]; then
+      [ "$_INSTALL_SWITCH_ACTIVE" = 0 ] && printf 'committed\\n' >"$PWD/remove-failed"
+      return 1
+    fi
+  done
+  command rm "$@"
+}
+'''
+        result = subprocess.run(['sh', '-c', prelude + functions + '\nbegin_install || exit 1\n' + success + '\nwait\n'],
+                                cwd=directory, env={**os.environ, 'FAIL_REMOVE': str(int(fail_remove))},
+                                text=True, capture_output=True, timeout=10)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual((directory / 'postinstall').read_text().strip(), 'postinstall')
+        for part in ('bin', 'scripts', 'conf'):
+            self.assertEqual((runtime / part / 'version').read_text(), 'new')
+            self.assertEqual((runtime / 'backups/test' / part / 'version').read_text(), 'old')
+        self.assertFalse((runtime / '.installing').exists())
+        self.assertFalse((runtime / '.install-transaction').exists())
+        for name in ('tailscale', 'tailscaled', 'foxytail.service'):
+            expected = runtime / ('scripts/foxytail.service' if name == 'foxytail.service' else 'bin/tailscaled')
+            public = directory / 'module/system/bin' / name
+            if name == 'foxytail.service' and entry_kind == 'owned-dangling':
+                self.assertFalse(os.path.lexists(public))
+            else:
+                self.assertEqual(os.readlink(public), str(expected))
+        return result.stdout
+
+    def test_installer_success_removes_only_exact_owned_dev_links(self):
+        for kind in ('absent', 'owned-live', 'owned-dangling', 'external-live', 'external-dangling',
+                     'wrong-runtime', 'file', 'directory'):
+            with self.subTest(kind=kind):
+                directory = self.dir / kind
+                self.installer_success_fixture(directory, kind)
+                for name in ('tailscale', 'tailscaled', 'foxytail.service'):
+                    entry = directory / 'dev' / name
+                    if kind == 'absent' or kind.startswith('owned-'):
+                        self.assertFalse(os.path.lexists(entry))
+                    elif kind.startswith('external-'):
+                        self.assertEqual(os.readlink(entry), str(directory / ('external-' + name)))
+                        self.assertEqual(entry.exists(), kind == 'external-live')
+                    elif kind == 'wrong-runtime':
+                        self.assertEqual(os.readlink(entry), str(directory / 'runtime/bin/version'))
+                    elif kind == 'file':
+                        self.assertEqual(entry.read_text(), 'unrelated')
+                    else:
+                        self.assertEqual((entry / 'keep').read_text(), 'unrelated')
+                if kind == 'absent' or kind.startswith('owned-'):
+                    self.assertFalse((directory / 'links-at-start').exists())
+
+    def test_installer_dev_cleanup_failure_warns_without_rollback_or_skipping_postinstall(self):
+        output = self.installer_success_fixture(self.dir, 'owned-live', fail_remove=True)
+        self.assertEqual((self.dir / 'remove-failed').read_text().strip(), 'committed')
+        link = self.dir / 'dev/tailscale'
+        self.assertEqual(os.readlink(link), str(self.dir / 'runtime/bin/tailscaled'))
+        self.assertEqual((self.dir / 'links-at-start').read_text().splitlines(), ['tailscale'])
+        self.assertIn(str(link), output)
+        for name in ('tailscaled', 'foxytail.service'):
+            self.assertFalse(os.path.lexists(self.dir / 'dev' / name))
+
     def test_upgrade_switch_rolls_back_after_second_directory_failure(self):
         source = (ROOT / 'customize.sh').read_text()
         functions = source[source.index('rollback_install() {'):source.index('# Recover an interrupted earlier switch')]
