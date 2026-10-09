@@ -11,6 +11,7 @@ MODERN_POLICY="${TS_RUN_DIR}/foxydns.policy"
 MODERN_MODE="${TS_RUN_DIR}/foxydns.mode"
 MODERN_CAPABILITIES="${TS_RUN_DIR}/foxydns.capabilities.json"
 MODERN_JOURNAL="${TS_DIR}/state/foxydns-preferences.json"
+MODERN_OWNERSHIP="${TS_DIR}/state/foxydns-flows.jsonl"
 MODERN_QUEUE=1053
 MODERN_UPSTREAM_GID=65533
 MODERN_CAPTURE=0x20000000/0x20000000
@@ -30,7 +31,7 @@ modern_pids() {
 
 modern_lock() {
   _md_lock="${TS_RUN_DIR}/.dns-lock"
-  _lock_identity
+  _lock_identity || return 1
   _md_token=${_LOCK_TOKEN}
   _owner_lock_acquire "${_md_lock}" "${_md_token}" 100 0.1
 }
@@ -139,6 +140,27 @@ modern_rules_teardown() {
   return "${_mt_rc}"
 }
 
+# Rules alone do not retire cached DNAT. Keep the listener until exact cleanup.
+modern_capture_cleanup() {
+  modern_rules_teardown || { modern_reason cleanup-failed "$(cat "${MODERN_POLICY}" 2>/dev/null)"; return 1; }
+  if [ -n "$(modern_pids)" ] && [ "$(jqr -r '.ownershipFile // ""' "${MODERN_CONF}" 2>/dev/null)" != "" ]; then
+    "${MODERN_BIN}" quiesce --config "${MODERN_CONF}" >/dev/null 2>&1 || {
+      modern_reason cleanup-failed "$(cat "${MODERN_POLICY}" 2>/dev/null)"; return 1;
+    }
+  fi
+  if [ -s "${MODERN_OWNERSHIP}" ]; then
+    tmo 12 "${MODERN_BIN}" cleanup --journal "${MODERN_OWNERSHIP}" >/dev/null 2>&1 || {
+      modern_reason cleanup-failed "$(cat "${MODERN_POLICY}" 2>/dev/null)"; return 1;
+    }
+  elif [ -r "${MODERN_CONF}" ] && [ "$(jqr -r '.mode' "${MODERN_CONF}" 2>/dev/null)" = transparent ] &&
+    [ "$(jqr -r '.ownershipFile // ""' "${MODERN_CONF}" 2>/dev/null)" = "" ]; then
+    _mc_oldport=$(jqr -r '.listen | split(":") | last' "${MODERN_CONF}")
+    tmo 12 "${MODERN_BIN}" legacy-cleanup --journal "${TS_DIR}/state/foxydns-upgrade-claim" --port "${_mc_oldport}" >/dev/null 2>&1 || {
+      modern_reason reconnect-needed "$(cat "${MODERN_POLICY}" 2>/dev/null)"; return 1;
+    }
+  fi
+}
+
 modern_family_policy_safe() {
   for _fp_table in mangle nat; do
     [ "$("$1" -t "${_fp_table}" -S OUTPUT 2>/dev/null |
@@ -205,10 +227,16 @@ modern_rules_exist() {
 modern_capture_safe() {
   {
     for _mb_cmd in iptables ip6tables; do
-      for _mb_table in mangle nat filter; do "${_mb_cmd}" -t "${_mb_table}" -S 2>/dev/null; done
+      for _mb_table in raw mangle nat filter; do
+        "${_mb_cmd}" -t "${_mb_table}" -S 2>/dev/null || {
+          [ "${_mb_cmd}" = ip6tables ] && [ "${IPV6}" != on ] && continue
+          [ "${_mb_cmd}" = ip6tables ] && [ "${_mb_table}" = nat ] && ! ipv6_nat_available && continue
+          echo FOXY_INVENTORY_UNKNOWN
+        }
+      done
     done
-    ip -4 rule show 2>/dev/null
-    ip -6 rule show 2>/dev/null
+    ip -4 rule show 2>/dev/null || echo FOXY_INVENTORY_UNKNOWN
+    ip -6 rule show 2>/dev/null || echo FOXY_INVENTORY_UNKNOWN
   } | awk -v queue="${MODERN_QUEUE_CHAIN}" -v capture="${MODERN_CAPTURE_CHAIN}" '
     function num(s, result,i,c) {
       if(s ~ /^0[xX][0-9a-fA-F]+$/) {
@@ -220,17 +248,19 @@ modern_capture_safe() {
       return -1
     }
     function bit(s,n) {n=num(s); return n>=0 && int(n/536870912)%2==1}
-    function masked(s,parts,n) { n=split(s,parts,"/"); return n<2 || bit(parts[2]) }
-    $1=="-A" && ($2==queue || $2==capture) {next}
+    function masked(s,parts,n) { n=split(s,parts,"/"); return n<2 || num(parts[1])<0 || bit(parts[1]) || num(parts[2])<0 || bit(parts[2]) }
+    $1=="FOXY_INVENTORY_UNKNOWN" {bad=1}
+    $1=="-A" && ($2==queue || $2==capture || $2=="FOXY_DNS") {next}
     {
       for(i=1;i<=NF;i++) {
         if(($i=="--mark" || $i=="fwmark" || $i=="--set-mark" || $i=="--set-xmark") && masked($(i+1))) bad=1
-        if(($i=="--or-mark" || $i=="--xor-mark") && bit($(i+1))) bad=1
+        if(($i=="--or-mark" || $i=="--xor-mark") && (num($(i+1))<0 || bit($(i+1)))) bad=1
         if($i=="--and-mark" && !bit($(i+1))) bad=1
         if($i=="--restore-mark" || $i=="--save-mark") {
           mask="0xffffffff"
-          for(j=i+1;j<=NF;j++) if($j=="--nfmask") mask=$(j+1)
-          if(bit(mask)) bad=1
+          ctmask="0xffffffff"
+          for(j=i+1;j<=NF;j++) {if($j=="--nfmask") mask=$(j+1); if($j=="--ctmask") ctmask=$(j+1)}
+          if(num(mask)<0 || num(ctmask)<0 || bit(mask) || bit(ctmask)) bad=1
         }
       }
     }
@@ -262,6 +292,7 @@ modern_queue_ready() {
 }
 
 modern_stop_process() {
+  modern_capture_cleanup || return 1
   modern_guard_stop || return 1
   _mk_pids=$(modern_pids)
   [ -z "${_mk_pids}" ] || stop_by_pids foxydns "${_mk_pids}" || return 1
@@ -309,7 +340,7 @@ modern_guard_health() {
 
 modern_guard_cleanup() {
   if [ -n "${_GUARD_WATCH_PID:-}" ]; then
-    _conf_owner_alive "${_GUARD_WATCH_PID}:${_GUARD_WATCH_STAMP}" && kill "${_GUARD_WATCH_PID}" 2>/dev/null
+    _conf_owner_alive "${_GUARD_WATCH_PID}:${_GUARD_WATCH_STAMP}:${_GUARD_BOOT}" && kill "${_GUARD_WATCH_PID}" 2>/dev/null
     wait "${_GUARD_WATCH_PID}" 2>/dev/null
   fi
   [ "${_GUARD_LOCK_HELD:-0}" != 1 ] || modern_unlock
@@ -321,7 +352,9 @@ modern_guard_cleanup() {
 # children or iptables inventory occur on its healthy path.
 modern_dns_guard() {
   ensure_run_dirs
-  _GUARD_TOKEN="$$:$(_conf_pid_stamp "$$")"
+  _lock_identity || return 1
+  _GUARD_TOKEN=${_LOCK_TOKEN}
+  _GUARD_BOOT=${_GUARD_TOKEN##*:}
   ln -s "${_GUARD_TOKEN}" "${MODERN_GUARD}" 2>/dev/null || return 0
   trap 'modern_guard_cleanup' 0
   trap 'exit 0' HUP INT TERM
@@ -341,7 +374,7 @@ modern_dns_guard() {
     _GUARD_LOCK_HELD=1
     _gg_reason=queue-failed
     modern_guard_health && _gg_reason=guard-failed
-    if modern_rules_teardown; then
+    if modern_capture_cleanup; then
       modern_reason "${_gg_reason}" "$(cat "${MODERN_POLICY}" 2>/dev/null)"
       modern_unlock; _GUARD_LOCK_HELD=0
       return 0
@@ -358,9 +391,8 @@ modern_dns_stop() (
   trap 'modern_unlock' 0
   trap 'exit 1' HUP INT TERM
   _md_rc=0
-  modern_rules_teardown || _md_rc=1
-  # A listener must remain while an owned REDIRECT still exists.
-  if [ "${_md_rc}" = 0 ]; then modern_stop_process || _md_rc=1; fi
+  # Neither rules nor cached DNAT may outlive this listener.
+  modern_stop_process || _md_rc=1
   modern_pref_restore || _md_rc=1
   if [ "${_md_rc}" = 0 ]; then
     # A pending restore (daemon-down) must survive the stop so the next
@@ -378,6 +410,7 @@ modern_dns_stop() (
 
 modern_dns_start() (
   ensure_run_dirs
+  mkdir -p "${TS_DIR}/state" || return 1
   load_runtime_conf || return 1
   modern_lock || return 1
   trap 'modern_unlock' 0
@@ -399,7 +432,7 @@ modern_dns_start() (
     return 0
   fi
   # Transition from the compatibility path only touches our old resolver.
-  redirect_teardown && redirect6_teardown || return 1
+  legacy_capture_cleanup || return 1
   _mn_old=$(dns_pids)
   [ -z "${_mn_old}" ] || stop_by_pids dnsmasq "${_mn_old}" || return 1
   if [ ! -x "${MODERN_BIN}" ]; then
@@ -411,6 +444,10 @@ modern_dns_start() (
   fi
   _mn_mode=local
   _mn_degraded_reason=transparent-unavailable
+  if [ "${DNS_MODE}" = transparent ] && [ -n "$(modern_pids)" ] &&
+    [ "$(jqr -r '.mode' "${MODERN_CONF}" 2>/dev/null)" = transparent ] && ! modern_queue_ready; then
+    modern_stop_process || return 1
+  fi
   if [ "${DNS_MODE}" = transparent ]; then
     # A running queue already owns its number; probing it would falsely fail.
     if ! modern_packet_policy_safe; then
@@ -426,11 +463,12 @@ modern_dns_start() (
   fi
   _mn_v6=false; [ "${IPV6}" != on ] || _mn_v6=true
   _mn_config=$(jqr -n -c --arg listen "127.0.0.1:${DNS_PORT}" --arg mode "${_mn_mode}" \
-    --arg context "${DNS_CONTEXT_FILE}" --arg state "${MODERN_STATE}" --argjson v6 "${_mn_v6}" --argjson queue "${MODERN_QUEUE}" \
-    '{listen:$listen,ipv6:$v6,mode:$mode,queue:$queue,contextFile:$context,stateFile:$state}') || return 1
+    --arg context "${DNS_CONTEXT_FILE}" --arg state "${MODERN_STATE}" --arg ownership "${MODERN_OWNERSHIP}" --argjson v6 "${_mn_v6}" --argjson queue "${MODERN_QUEUE}" \
+    '{listen:$listen,ipv6:$v6,mode:$mode,queue:$queue,contextFile:$context,stateFile:$state,ownershipFile:$ownership}') || return 1
   _mn_changed=false
   if [ "$(cat "${DNS_CONTEXT_FILE}" 2>/dev/null)" != "${_mn_context}" ] ||
-    [ "$(cat "${MODERN_CONF}" 2>/dev/null)" != "${_mn_config}" ] || ! modern_listener_ready; then
+    [ "$(cat "${MODERN_CONF}" 2>/dev/null)" != "${_mn_config}" ] || ! modern_listener_ready ||
+    { [ "${_mn_mode}" = transparent ] && ! modern_queue_ready; }; then
     modern_rules_teardown || return 1
     modern_stop_process || return 1
     (umask 077; printf '%s\n' "${_mn_context}" >"${DNS_CONTEXT_FILE}" && printf '%s\n' "${_mn_config}" >"${MODERN_CONF}") || return 1
@@ -458,14 +496,14 @@ modern_dns_start() (
   modern_pref_claim
   _mn_claim=$?
   if [ "${_mn_claim}" != 0 ]; then
-    modern_rules_teardown || return 1
+    modern_capture_cleanup || return 1
     [ "${_mn_claim}" = 2 ] && return 0
     return 1
   fi
   # The Android backend removes its own DNAT asynchronously. Do not announce
   # coexistence while that older global interceptor still owns ordinary DNS.
   if native_dns_present; then
-    modern_rules_teardown || return 1
+    modern_capture_cleanup || return 1
     modern_reason native-policy-unavailable native-rules-pending
     return 1
   fi
@@ -473,7 +511,7 @@ modern_dns_start() (
     # A root DNS interceptor may exempt this helper's uid, making replay miss
     # the original app's DNS policy. Leave that policy intact and provide only
     # the explicit local endpoint. VpnService routing alone is not a conflict.
-    modern_rules_teardown || return 1
+    modern_capture_cleanup || return 1
     modern_guard_stop || return 1
     modern_reason dns-interception-conflict owned
     printf '%s\n' "${DNS_MODE}" >"${MODERN_MODE}"
@@ -486,7 +524,7 @@ modern_dns_start() (
     if ! modern_rules_present iptables || { [ "${_mn_v6_nat}" = true ] && ! modern_rules_present ip6tables; }; then
       modern_rules_teardown || return 1
       if ! modern_rules_family iptables || { [ "${_mn_v6_nat}" = true ] && ! modern_rules_family ip6tables; }; then
-        modern_rules_teardown || return 1
+        modern_capture_cleanup || return 1
         modern_pref_restore || return 1
         modern_reason interception-failed restored
         return 1
@@ -496,12 +534,12 @@ modern_dns_start() (
     _mn_reason=running
     [ "${IPV6}" != on ] || [ "${_mn_v6_nat}" = true ] || _mn_reason=ipv6-unavailable
     if ! modern_guard_start; then
-      modern_rules_teardown || return 1
+      modern_capture_cleanup || return 1
       modern_reason guard-failed owned
       return 1
     fi
   else
-    modern_rules_teardown || return 1
+    modern_capture_cleanup || return 1
     modern_guard_stop || return 1
     [ "${DNS_MODE}" != transparent ] || _mn_reason="${_mn_degraded_reason}"
   fi
@@ -535,18 +573,18 @@ modern_dns_status() {
   _mo_reason=$(cat "${MODERN_REASON}" 2>/dev/null)
   _mo_policy=$(cat "${MODERN_POLICY}" 2>/dev/null)
   _mo_expect_capture=false
-  case "${_mo_reason}" in running|ipv6-unavailable|interception-lost|guard-failed) _mo_expect_capture=true ;; esac
+  case "${_mo_reason}" in running|ipv6-unavailable|interception-lost|guard-failed|queue-failed) _mo_expect_capture=true ;; esac
   _mo_state=stopped; _mo_repair=false
   if [ "${MAGIC_DNS}" = on ]; then
     _mo_state=degraded
     if [ "${_mo_ready}" = true ]; then
       case "${_mo_reason}" in
-        running|local|transparent-unavailable|capture-mark-conflict|packet-policy-conflict|dns-interception-conflict|ipv6-unavailable) _mo_state=running ;;
-        native-policy-unavailable|restore-pending|cleanup-failed) _mo_repair=true ;;
+        running|local|ipv6-unavailable) _mo_state=running ;;
+        native-policy-unavailable|restore-pending|cleanup-failed|queue-failed|guard-failed|reconnect-needed) _mo_repair=true ;;
       esac
       if [ "${_mo_mode}" = transparent ] && [ "${_mo_queue}" != true ] && [ "${_mo_state}" = running ]; then
         case "${_mo_reason}" in capture-mark-conflict|packet-policy-conflict|dns-interception-conflict) ;; *) _mo_reason=transparent-unavailable ;; esac
-        if modern_rules_exist; then
+        if [ "${_mo_expect_capture}" = true ] || modern_rules_exist; then
           _mo_state=degraded; _mo_reason=queue-failed; _mo_repair=true
         fi
       fi

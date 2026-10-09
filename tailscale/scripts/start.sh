@@ -9,30 +9,45 @@ ensure_run_dirs
 _start_applied=
 case "${1:-start}" in
   start|postinstall|enable)
+    _start_applied=--boot
     if [ -x "${TS_SCRIPTS_DIR}/foxytail.trial" ]; then
       "${TS_SCRIPTS_DIR}/foxytail.trial" boot
       _start_trial_rc=$?
-      case "${_start_trial_rc}" in 0) _start_applied=--applied ;; 3) ;; *) exit 1 ;; esac
+      case "${_start_trial_rc}" in 0|3) ;; *) exit 1 ;; esac
+    fi
+    # run/ survives reboot. Never promote saved edits during automatic recovery.
+    if [ -e "${TS_RUN_DIR}/applied-config" ] || [ -L "${TS_RUN_DIR}/applied-config" ]; then
+      _start_applied=--applied
     fi ;;
 esac
 
 stop_inotifyd() {
-  _si_pids=""
-  for _si_pid in $(busybox pidof inotifyd 2>/dev/null || pidof inotifyd 2>/dev/null); do
-    if _proc_cmdline "${_si_pid}" |
-      grep -qxF "${TS_SCRIPTS_DIR}/foxytail.inotify"; then
-      _si_pids="${_si_pids} ${_si_pid}"
-    fi
-  done
-  stop_by_pids inotifyd "$_si_pids"
+  daemon_stop_pidfile inotifyd
 }
 
-start_inotifyd() {
-  stop_inotifyd || return 1
-  [ -x "${TS_SCRIPTS_DIR}/foxytail.inotify" ] || return 0
+start_inotifyd() (
+  [ -x "${TS_SCRIPTS_DIR}/foxytail.inotify" ] || exit 0
+  _lock_identity || exit 1
+  _si_token=${_LOCK_TOKEN} _si_lock="${TS_PID_DIR}/.inotifyd.lock"
+  _owner_lock_acquire "${_si_lock}" "${_si_token}" 100 0.1 || exit 1
+  _si_published=0 _si_pid='' _si_stamp='' _si_boot=''
+  trap 'if [ "${_si_published}" = 0 ] && resident_identity_alive inotifyd "${_si_pid}" "${_si_stamp}" "${_si_boot}"; then kill -TERM "${_si_pid}" 2>/dev/null; fi; rm -f "${TS_PID_DIR}/inotifyd.pid.$$"; _owner_lock_release "${_si_lock}" "${_si_token}"' 0
+  trap 'exit 1' HUP INT TERM
+  daemon_pid_alive inotifyd && exit 0
   inotifyd "${TS_SCRIPTS_DIR}/foxytail.inotify" "${TS_MOD_DIR}" \
     >>"${TS_RUN_DIR}/inotifyd.log" 2>&1 &
-}
+  _si_pid=$! _si_boot=$(boot_identity)
+  _si_stamp=$(_proc_starttime "${_si_pid}") || exit 1
+  _si_i=0
+  until resident_identity_alive inotifyd "${_si_pid}" "${_si_stamp}" "${_si_boot}"; do
+    [ "$(_proc_starttime "${_si_pid}")" = "${_si_stamp}" ] && [ "${_si_i}" -lt 20 ] || exit 1
+    sleep 0.05
+    _si_i=$((_si_i + 1))
+  done
+  printf '%s %s %s\n' "${_si_pid}" "${_si_stamp}" "${_si_boot}" >"${TS_PID_DIR}/inotifyd.pid.$$" &&
+    mv "${TS_PID_DIR}/inotifyd.pid.$$" "${TS_PID_DIR}/inotifyd.pid" || exit 1
+  _si_published=1
+)
 
 stop_residents() {
   _sr_failed=0
@@ -78,7 +93,7 @@ case "${1:-start}" in
     # Stop controllers before the resources they can recreate.
     stop_inotifyd || exit 1
     stop_residents || exit 1
-    "${TS_SCRIPTS_DIR}/foxytail.service" stop
+    "${TS_SCRIPTS_DIR}/foxytail.service" stop --internal
     exit $?
     ;;
   reload-residents)

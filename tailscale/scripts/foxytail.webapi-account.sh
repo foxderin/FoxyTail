@@ -18,7 +18,8 @@ _login_probe() {
 _dns_account_begin() {
   [ "${DNS_MODE:-legacy}" != legacy ] || [ -f "${TS_DIR}/state/foxydns-preferences.json" ] || return 0
   _DAC_MARKER="${TS_RUN_DIR}/dns-account-transition"
-  _DAC_TOKEN="$$:$(_conf_pid_stamp "$$")"
+  _lock_identity || jerr 'cannot identify account controller'
+  _DAC_TOKEN=${_LOCK_TOKEN}
   conf_lock_acquire || jerr 'account change: configuration is busy'
   _dac_owner=$(readlink "${_DAC_MARKER}" 2>/dev/null)
   if [ -n "${_dac_owner}" ] && _conf_owner_alive "${_dac_owner}"; then
@@ -28,7 +29,8 @@ _dns_account_begin() {
   rm -f "${_DAC_MARKER}"
   ln -s "${_DAC_TOKEN}" "${_DAC_MARKER}" || { conf_lock_release; jerr 'cannot prepare DNS account transition'; }
   conf_lock_release
-  trap '_dns_account_finish; _op_finish' 0
+  _dac_exit=0
+  trap '_dac_exit=$?; _dns_account_finish; _op_finish "${_dac_exit}"' 0
   trap 'exit 130' HUP INT TERM
   [ -x "${TS_SCRIPTS_DIR}/foxytail.dns" ] || jerr 'cannot restore DNS policy: DNS controller is missing'
   _op_exec 60 "${TS_SCRIPTS_DIR}/foxytail.dns" stop >>"${TS_RUN_LOG_FILE}" 2>&1 ||
@@ -40,7 +42,7 @@ _dns_account_finish() {
   [ -n "${_DAC_TOKEN:-}" ] || return 0
   if [ "$(readlink "${_DAC_MARKER}" 2>/dev/null)" = "${_DAC_TOKEN}" ]; then
     rm -f "${_DAC_MARKER}"
-    if [ "${_DAC_RESUME:-0}" = 1 ] && [ ! -f "${TS_RUN_DIR}/manual-stop" ]; then
+    if [ "${_DAC_RESUME:-0}" = 1 ] && ! service_stop_held; then
       nohup "${TS_SCRIPTS_DIR}/foxytail.dns" start >>"${TS_RUN_LOG_FILE}" 2>&1 </dev/null &
     fi
   fi

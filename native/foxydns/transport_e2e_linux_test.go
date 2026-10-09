@@ -51,8 +51,22 @@ func requireDNSNamespace(t *testing.T) string {
 		}
 	}
 	interfaces, err := net.Interfaces()
-	if err != nil || len(interfaces) != 1 || interfaces[0].Name != "lo" {
-		t.Fatal("refusing netfilter access: expected an empty namespace with only loopback")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, iface := range interfaces {
+		if iface.Name == "lo" {
+			continue
+		}
+		// Android instantiates undeletable, inert tunnel templates in fresh netns.
+		switch iface.Name {
+		case "tunl0", "gre0", "gretap0", "erspan0", "ip_vti0", "ip6_vti0", "sit0", "ip6tnl0", "ip6gre0":
+			addresses, addressErr := iface.Addrs()
+			if addressErr == nil && len(addresses) == 0 && iface.Flags&net.FlagUp == 0 {
+				continue
+			}
+		}
+		t.Fatalf("refusing netfilter access: nonempty interface %s", iface.Name)
 	}
 	root := os.Getenv("FOXYTAIL_TEST_REPO_ROOT")
 	if !filepath.IsAbs(root) {
@@ -260,6 +274,7 @@ func TestPrivilegedDNSNamespace(t *testing.T) {
 	}
 	cfg := contextFixture(t)
 	cfg.Mode, cfg.Queue = "transparent", 1053
+	cfg.OwnershipFile = filepath.Join(filepath.Dir(cfg.ContextFile), "flows.jsonl")
 	s, err := startService(cfg)
 	if err != nil {
 		t.Fatal(err)
@@ -360,6 +375,12 @@ func TestPrivilegedDNSNamespace(t *testing.T) {
 		t.Fatalf("both real transports must be captured and forwarded: protocols=%v count=%d", protocols, s.resolver.forwarded.Load())
 	}
 	runE2ERules(t, root, filepath.Dir(cfg.ContextFile), port, "modern_rules_teardown")
+	if err := s.quiesce(); err != nil {
+		t.Fatal(err)
+	}
+	if err := cleanupOwnedFlows(cfg.OwnershipFile); err != nil {
+		t.Fatal(err)
+	}
 	s.Close()
 	if kernelCommand(t, "iptables", "-t", "nat", "-S") != baselineNat || kernelCommand(t, "iptables", "-t", "mangle", "-S") != baselineMangle {
 		t.Fatal("normal stop failed to remove only FoxyTail's rules")
@@ -373,7 +394,11 @@ func TestPrivilegedDNSNamespace(t *testing.T) {
 		t.Fatalf("normal stop left a ready state: %s", state)
 	}
 	for index, network := range []string{"udp", "tcp"} {
-		conn := &dns.Conn{Conn: netdDNSConnection(t, network, 43000+index), UDPSize: 4096}
+		sourcePort := 43000 + index
+		if network == "udp" {
+			sourcePort = 42000
+		}
+		conn := &dns.Conn{Conn: netdDNSConnection(t, network, sourcePort), UDPSize: 4096}
 		response := e2eQuery(t, conn, "after-stop.example.", dns.TypeA)
 		_ = conn.Close()
 		if len(response.Answer) != 1 || response.Answer[0].(*dns.A).A.String() != "198.51.100.77" {

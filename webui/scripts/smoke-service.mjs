@@ -144,6 +144,72 @@ export async function checkService() {
   canned.status = runningSnapshot;
   await window.__foxy.refreshStatus();
   assert(headerToggle?.checked && !headerToggle.indeterminate && !headerToggle.disabled, 'a later healthy snapshot clears uncertainty and restores service controls');
+
+  console.log('service component remount retains pending ownership');
+  const remountHost = window.document.createElement('div');
+  window.document.body.append(remountHost);
+  holdNext.add('control');
+  const beforeRemountReplies = heldReplies.length;
+  const beforeRemountCommands = commandLog.length;
+  await requestStop();
+  const remountedStop = window.__foxy.getTask('service-control')?.call;
+  const remountReply = heldReplies.slice(beforeRemountReplies).find(reply => reply.sub === 'control');
+  assert(remountReply && remountedStop, 'service component dispatches one owned stop');
+  let unmountControls = window.__foxy.mountServiceControls(remountHost);
+  await flush();
+  unmountControls();
+  unmountControls = window.__foxy.mountServiceControls(remountHost);
+  await flush();
+  const remountedToggle = remountHost.querySelector('[role="switch"]');
+  assert(remountedToggle?.disabled && window.__foxy.getTask('service-control')?.call === remountedStop, 'a newly mounted service component adopts and locks the existing operation');
+  remountedToggle?.click();
+  assert(commandLog.slice(beforeRemountCommands).filter(entry => entry.sub === 'control').length === 1, 'remount cannot dispatch a duplicate destructive service action');
+  canned.status = stoppedSnapshot;
+  remountReply?.finish();
+  await flush();
+  assert(remountedToggle && !remountedToggle.checked && !remountedToggle.disabled && window.__foxy.getTask('service-control')?.status === 'done', 'remounted service controls reconcile the actual late result against fresh status');
+  unmountControls();
+  remountHost.remove();
+  canned.status = runningSnapshot;
+  await window.__foxy.refreshStatus();
+
+  console.log('settings save survives page remount and rejects stale reads');
+  const settingsBeforeRemount = canned['settings-get'];
+  nav('settings');
+  await flush();
+  const settingsPort = window.document.querySelector('[data-setting="SOCKS_PORT"] input');
+  holdNext.add('settings-set');
+  const beforeSettingsReplies = heldReplies.length;
+  const beforeSettingsCommands = commandLog.length;
+  if (settingsPort) {
+    settingsPort.value = '1234';
+    settingsPort.dispatchEvent(new window.Event('change', { bubbles: true }));
+  }
+  await flush();
+  const saveCall = window.__foxy.getTask('settings-save')?.call;
+  const saveReply = heldReplies.slice(beforeSettingsReplies).find(reply => reply.sub === 'settings-set');
+  assert(saveReply && saveCall && settingsPort?.disabled, 'a settings mutation owns its session key and disables conflicting inputs');
+  nav('peers');
+  await flush();
+  assert(window.document.querySelector('.task-menu a[href="#/settings"]'), 'global activity can recover the settings operation after leaving the page');
+  holdNext.add('settings-get');
+  const beforeStaleRead = heldReplies.length;
+  nav('settings');
+  await flush();
+  const staleSettingsRead = heldReplies.slice(beforeStaleRead).find(reply => reply.sub === 'settings-get');
+  assert(window.document.querySelector('[data-task-key="settings-save"]') && window.__foxy.getTask('settings-save')?.call === saveCall, 'remounted settings adopts the same pending save');
+  assert(window.__foxy.startTask('settings-save', 'settings-set', 'SOCKS_PORT', '4321') === saveCall, 'remounted save key cannot replace a pending mutation with different arguments');
+  canned['settings-get'] = { ...settingsBeforeRemount, restartRequired: true, settings: { ...settingsBeforeRemount.settings, SOCKS_PORT: '1234' } };
+  saveReply?.finish();
+  await flush();
+  assert(window.document.querySelector('[data-setting="SOCKS_PORT"] input')?.value === '1234' && window.__foxy.getTask('settings-save')?.status === 'done', 'a late save updates the newly mounted settings page from the authoritative backend read');
+  staleSettingsRead?.finish();
+  await flush();
+  assert(window.document.querySelector('[data-setting="SOCKS_PORT"] input')?.value === '1234', 'a pre-commit read arriving last cannot overwrite the saved value');
+  assert(commandLog.slice(beforeSettingsCommands).filter(entry => entry.sub === 'settings-set').length === 1, 'settings navigation and repeated starts send exactly one mutation');
+  canned['settings-get'] = settingsBeforeRemount;
+  nav('dashboard');
+  await flush();
   return { runningSnapshot, headerToggle };
 }
 

@@ -8,6 +8,7 @@ import {
   statusError,
   statusLoading,
   refreshStatus,
+  exitRoutingLabel,
 } from '../state';
 import { fmtUptime, fmtBytes } from '../format';
 import { Card, KvRow, StatusDot, SkeletonCard } from '../components/Basics';
@@ -272,18 +273,20 @@ export default function Dashboard(): JSX.Element {
                     </div>
                     <div>
                       <strong>
-                        {s().exitNode?.hostname || t('net_exit_local')}
+                        {s().exitRouting?.known ? (s().exitRouting?.selected ? (s().exitRouting?.selected?.auto ? `auto:${s().exitRouting?.selected?.auto}` : s().exitRouting?.selected?.id || s().exitRouting?.selected?.ip) : t('net_exit_local')) : t('net_exit_unknown')}
                       </strong>
                       <p>
-                        {s().exitNode
-                          ? s().exitNode!.ip
-                          : t('net_no_exit_hint')}
+                        {t('net_exit_selection')}
                       </p>
                     </div>
-                    <Show when={s().exitNode}>
+                    <Show when={s().exitRouting?.effective === 'bridge-policy'}>
                       <StatusDot state={s().exitNode?.online ? 'on' : 'off'} />
                     </Show>
                   </div>
+                  <p class="network-supporting">{t(exitRoutingLabel())}</p>
+                  <Show when={s().exitRouting?.selected && s().mode === 'bridge'}>
+                    <p class="network-supporting">{t('net_exit_scope')}: {s().exitRouting?.scope} {s().exitRouting?.uids?.join(', ')}</p>
+                  </Show>
                   <Show when={s().exitNode}>
                     {(node) => (
                       <>

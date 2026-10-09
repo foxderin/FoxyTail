@@ -87,7 +87,7 @@ const commandLog = [];
 const holdNext = new Set();
 const heldReplies = [];
 const canned = {
-  status: { ok: true, daemon: 'running', backend: 'NeedsLogin', mode: 'tun', self: { hostname: 'fox', ips: ['100.64.0.1'], relay: 'sin' }, exitNode: null, peers: { online: 1, offline: 0 }, magicDns: true, keyExpiry: null, uptime: 60 },
+  status: { ok: true, daemon: 'running', backend: 'NeedsLogin', mode: 'tun', self: { hostname: 'fox', ips: ['100.64.0.1'], relay: 'sin' }, exitNode: null, exitRouting: { known: true, selected: null, effective: 'none', ipv4: false, ipv6: false, warning: '' }, peers: { online: 1, offline: 0 }, magicDns: true, keyExpiry: null, uptime: 60 },
   peers: { ok: true, peers: [{ id: 'p1', hostname: 'peer-one', ip: '100.64.0.2', ips: ['100.64.0.2', 'fd7a:115c:a1e0::2'], os: 'linux', relay: 'sin', online: true, curAddr: '192.0.2.1:41641', active: true, rxBytes: 1024, txBytes: 2048, exitNodeOption: true }] },
   exitnodes: { ok: true, peers: [{ id: 'p1', hostname: 'peer-one', ip: '100.64.0.2', os: 'linux', relay: 'sin', online: true, rxBytes: 1024, txBytes: 2048, exitNodeOption: true }] },
   compat: { ok: true, modules: [], apps: [], warnings: [], alert: null },
@@ -96,7 +96,7 @@ const canned = {
   accounts: { ok: true, accounts: [{ name: 'me@example.com', current: true }] },
   'serve-list': { ok: true, status: {} },
   'funnel-list': { ok: true, status: {} },
-  traffic: { ok: true, hours: [], days: [], topn: [] },
+  traffic: { ok: true, hours: [], days: [], topn: [], uids: [] },
   'traffic-uids': { ok: true, uids: [] },
   apps: { ok: true, apps: [{ label: 'com.example.app', package: 'com.example.app', uid: 10234 }] },
   'routes-get': { ok: true, scope: 'all', uids: [], subnets: ['100.64.0.0/10'] },
@@ -116,7 +116,8 @@ const canned = {
   logout: { ok: true },
   backup: { ok: true, path: '/sdcard/Download/foxytail-backup-smoke-first.tar.gz' },
   'backup-list': { ok: true, backups: [{ path: '/sdcard/Download/foxytail-backup-smoke-first.tar.gz', name: 'foxytail-backup-smoke-first.tar.gz', size: 500, mtime: 1700000000 }] },
-  'restore-preview': { ok: true, path: '/sdcard/Download/foxytail-backup-smoke-first.tar.gz', sha256: 'a'.repeat(64), changes: [{ file: 'foxytail.conf', key: 'SOCKS_PORT', before: '1099', after: '1200' }], hooks: ['foxytail.tun.up'] },
+  'restore-preview': { ok: true, path: '/sdcard/Download/foxytail-backup-smoke-first.tar.gz', sha256: 'a'.repeat(64), baselineSha256: 'b'.repeat(64), changes: [{ file: 'foxytail.conf', key: 'SOCKS_PORT', before: '1099', after: '1200' }], hooks: ['foxytail.tun.up'] },
+  restore: { ok: true, saved: true, applied: false, restartRequired: true, previous: '/data/adb/foxytail/conf.bak-smoke', note: null },
   'trial-status': { ok: true, trial: null },
   'trial-start': { ok: true },
   'trial-confirm': { ok: true },

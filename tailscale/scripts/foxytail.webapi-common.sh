@@ -106,15 +106,32 @@ _op_signal() (
 )
 
 _op_cancelled() {
-  [ -n "${_OP_DIR:-}" ] && [ -f "${_OP_DIR}/cancelled" ]
+  [ -n "${_OP_DIR:-}" ] && [ "$(readlink "${_OP_DIR}/phase" 2>/dev/null)" = cancelled ]
+}
+
+# A single atomic link elects cancellation or commit; neither can overtake it.
+_op_commit_begin() {
+  [ -n "${_OP_DIR:-}" ] || return 0
+  ln -s committing "${_OP_DIR}/phase" 2>/dev/null ||
+    [ "$(readlink "${_OP_DIR}/phase" 2>/dev/null)" = committing ]
 }
 
 _op_finish() {
-  conf_lock_release
+  _of_rc=${1:-$?}
   if [ -n "${_OP_DIR:-}" ]; then
+    if [ "${_of_rc}" != 0 ] || _op_cancelled; then
+      for _of_record in "${_OP_DIR}"/child.*; do
+        _op_signal "${_of_record}" KILL
+        while _op_pid_alive "${_of_record}"; do
+          sleep 0.1
+          _op_signal "${_of_record}" KILL
+        done
+      done
+    fi
     rm -f "${_OP_DIR}/runner"
     : >"${_OP_DIR}/done"
   fi
+  conf_lock_release
 }
 
 _op_init() {
@@ -132,6 +149,10 @@ _op_init() {
   trap '_op_finish' 0
   trap 'exit 130' HUP INT TERM
   _op_cancelled && jerr 'request was cancelled'
+  case "$2" in
+    control | mode-set | routes-set | subnet-routes-set | settings-set | context-set | backup | trial-start | trial-confirm | trial-revert)
+      _op_commit_begin || jerr 'request was cancelled before committing changes' ;;
+  esac
 }
 
 cmd_cancel() {
@@ -141,14 +162,17 @@ cmd_cancel() {
     echo '{"ok":true,"cancelled":true,"expired":true}'; return 0
   fi
   mkdir -p "${_oc_dir}" || jerr 'cannot record cancellation'
-  _oc_cmd=$(cat "${_oc_dir}/command" 2>/dev/null)
-  case "${_oc_cmd}" in
-    control | mode-set | routes-set | subnet-routes-set | settings-set | context-set | restore | backup | trial-start | trial-confirm | trial-revert)
-      if _op_pid_alive "${_oc_dir}/runner"; then jerr 'operation is committing changes and cannot be cancelled'; fi ;;
-  esac
-  : >"${_oc_dir}/cancelled" || jerr 'cannot record cancellation'
   _oc_socket=$(cat "${_oc_dir}/socket" 2>/dev/null)
   [ -z "${_oc_socket}" ] || [ "${_oc_socket}" = "${TS_SOCKET}" ] || jerr 'operation socket mismatch'
+  if ! ln -s cancelled "${_oc_dir}/phase" 2>/dev/null; then
+    case "$(readlink "${_oc_dir}/phase" 2>/dev/null)" in
+      cancelled) ;;
+      committing)
+        if _op_pid_alive "${_oc_dir}/runner"; then jerr 'operation is committing changes and cannot be cancelled'; fi
+        echo '{"ok":true,"completed":true}'; return 0 ;;
+      *) jerr 'cannot record cancellation' ;;
+    esac
+  fi
   _oc_i=0
   while [ "${_oc_i}" -lt 50 ]; do
     _oc_busy=0
@@ -203,13 +227,11 @@ _op_exec() {
   # identity remains ours even after reparenting; finish cleanup before return.
   _op_signal "${_oe_record}" KILL
   for _oe_child in "${_oe_record}".child.*; do
-    _oe_i=0
-    while _op_pid_alive "${_oe_child}" && [ "${_oe_i}" -lt 10 ]; do
+    while _op_pid_alive "${_oe_child}"; do
       sleep 0.1
-      _oe_i=$((_oe_i + 1))
+      _op_signal "${_oe_child}" KILL
     done
-    if _op_pid_alive "${_oe_child}"; then _oe_rc=1
-    else rm -f "${_oe_child}"; fi
+    rm -f "${_oe_child}"
   done
   rm -f "${_oe_record}" "${_oe_timeout}"
   _op_cancelled && return 130

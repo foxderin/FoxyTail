@@ -134,6 +134,8 @@ type service struct {
 	stateMu     sync.Mutex
 	ready       atomic.Bool
 	instance    string
+	control     *net.UnixListener
+	controlDone chan struct{}
 }
 
 // All listeners are bound before any transparent queue is claimed. A port
@@ -159,10 +161,21 @@ func startService(cfg Config) (*service, error) {
 		}
 	}
 	if cfg.Mode == "transparent" {
-		s.interceptor, s.queueError = NewInterceptor(cfg.Queue)
-		if s.interceptor != nil {
-			s.resolver.transport = s.interceptor
+		journal, err := openFlowJournal(cfg.OwnershipFile, uint16(s.port))
+		if err != nil {
+			s.queueError = err
+		} else {
+			s.interceptor, s.queueError = NewInterceptor(cfg.Queue, journal)
+			if s.interceptor == nil {
+				_ = journal.close()
+			} else {
+				s.resolver.transport = s.interceptor
+			}
 		}
+	}
+	if err := s.startControl(); err != nil {
+		s.Close()
+		return nil, err
 	}
 	ready := make(chan struct{}, len(s.servers))
 	for _, server := range s.servers {
@@ -260,6 +273,10 @@ func (s *service) closeListeners() {
 func (s *service) Close() {
 	s.once.Do(func() {
 		s.ready.Store(false)
+		if s.control != nil {
+			_ = s.control.Close()
+			<-s.controlDone
+		}
 		if s.interceptor != nil {
 			_ = s.interceptor.Close()
 		}

@@ -166,6 +166,34 @@ test ! -e "$TS_RUN_DIR/stopped"
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertTrue((self.run / 'service-stopped').exists())
 
+    def test_pending_marker_rejects_unlocked_writer(self):
+        self.shell('''
+conf_mark_pending && exit 1
+test ! -f "$TS_RUN_DIR/settings.pending" || exit 2
+conf_lock_acquire || exit 3
+conf_mark_pending || exit 4
+conf_lock_release
+test -f "$TS_RUN_DIR/settings.pending"
+''')
+
+    def test_disable_callback_uses_internal_stop_and_preserves_failures(self):
+        callback = self.scripts / 'foxytail.inotify'
+        callback.write_text((ROOT / 'tailscale/scripts/foxytail.inotify').read_text().replace(
+            '"${TS_SCRIPTS_DIR}/foxytail.service" stop',
+            'sh "${TS_SCRIPTS_DIR}/foxytail.service" stop').replace(
+            '|| "${TS_SCRIPTS_DIR}/${_s}" stop',
+            '|| sh "${TS_SCRIPTS_DIR}/${_s}" stop'))
+        (self.scripts / 'foxytail.watchdog').write_text('#!/bin/sh\nexit 9\n')
+        service = self.scripts / 'foxytail.service'
+        service.write_text('#!/bin/sh\nprintf "%s\\n" "$*" >' +
+                           shlex.quote(str(self.run / 'stop-args')) + '\n')
+        service.chmod(0o755)
+        result = subprocess.run(['sh', str(callback), 'n', str(self.base), 'disable'],
+                                cwd=self.base, text=True, capture_output=True, timeout=10)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual((self.run / 'stop-args').read_text(), 'stop --internal\n')
+        self.assertFalse((self.run / 'manual-stop').exists())
+
     def test_incompatible_native_hot_routes_are_not_promoted(self):
         self.main.write_text('TS_MODE=tun\n')
         self.shell('conf_activate_runtime')
@@ -354,6 +382,53 @@ except subprocess.TimeoutExpired:
         self.assertEqual((self.run / 'manual-stop').read_bytes(), marker)
         self.assertFalse((self.run / 'pids/tailscaled.pid').exists())
 
+    def test_context_up_never_clears_user_hold_and_internal_stop_does_not_create_one(self):
+        self.control('start')
+        self.control('stop')
+        user_hold = (self.run / 'manual-stop').read_bytes()
+        self.control('context', 'down')
+        self.assertTrue((self.run / 'context-stop').exists())
+        self.control('context', 'up')
+        self.assertEqual((self.run / 'manual-stop').read_bytes(), user_hold)
+        self.assertFalse((self.run / 'context-stop').exists())
+        self.assertFalse((self.run / 'pids/tailscaled.pid').exists())
+        self.control('start', '--boot')
+        self.assertFalse((self.run / 'pids/tailscaled.pid').exists())
+        self.control('start')
+        self.control('stop', '--internal')
+        self.assertFalse((self.run / 'manual-stop').exists())
+        self.control('recover', 'start')
+        self.assertTrue((self.run / 'pids/tailscaled.pid').exists())
+
+    def test_trial_rollback_after_context_down_restores_preference_after_daemon_start(self):
+        self.control('start')
+        self.control('context', 'down')
+        journal = self.base / 'state/config-trial'
+        journal.mkdir(parents=True)
+        (journal / 'id').write_text('retained')
+        (journal / 'status').write_text('rolling-back')
+        trial = self.scripts / 'foxytail.trial'
+        trial.write_text('#!/bin/sh\nDIR=$(dirname "$0")\n. "$DIR/../settings.sh"\n'
+                         '[ "$1" = prepare ] || exit 1\n'
+                         '_conf_runtime_dir && conf_prepare_runtime "$_RUNTIME_CONF_DIR"\n')
+        trial.chmod(0o755)
+        start = self.scripts / 'start.sh'
+        start.write_text('#!/bin/sh\ncase "$1" in pause-residents|resume-residents) exit 0 ;; *) exit 1 ;; esac\n')
+        start.chmod(0o755)
+        helper = self.scripts / 'foxytail.exitnode'
+        helper.write_text('#!/bin/sh\nDIR=$(dirname "$0")\n. "$DIR/../settings.sh"\n'
+                          '[ "$1" = trial-restore ] && [ "$2" = "$TS_DIR/state/config-trial" ] || exit 1\n'
+                          'tailscale --socket="$TS_SOCKET" status --json >/dev/null || exit 1\n'
+                          'echo restored >>"$TS_RUN_DIR/preference-restored"\n')
+        helper.chmod(0o755)
+        self.control('trial', 'retained', 'previous')
+        self.assertFalse((self.run / 'context-stop').exists())
+        self.assertFalse((self.run / 'manual-stop').exists())
+        self.assertEqual((self.run / 'preference-restored').read_text(), 'restored\n')
+        (journal / 'status').write_text('rolled-back')
+        self.control('recover', 'reconcile')
+        self.assertEqual((self.run / 'preference-restored').read_text(), 'restored\nrestored\n')
+
     def test_failed_launch_cannot_use_stale_socket_to_report_running(self):
         stale = socket.socket(socket.AF_UNIX)
         stale.bind(str(self.run / 'tailscaled.sock'))
@@ -404,13 +479,15 @@ class ConfigurationTrialTests(unittest.TestCase):
         self.binary.mkdir()
         self.clock = self.run / 'clock'
         self.clock.write_text('100')
+        self.wall_clock = self.run / 'wall-clock'
+        self.wall_clock.write_text('100')
         with self.settings.open('a') as settings:
             settings.write('\n# Private fixture process boundary.\n'
                            'pids_of_path() { case "$1" in */tailscaled) [ -f "$TS_RUN_DIR/daemon-stopped" ] || echo 42 ;; */hev-socks5-tunnel) [ ! -f "$TS_RUN_DIR/hev-running" ] || echo 43 ;; esac; }\n'
                            'detach_from_app_cgroup() { return 0; }\n'
-                           'daemon_pid_alive() { return 1; }\n')
+                           'monotonic_seconds() { cat "$TS_RUN_DIR/clock"; }\n')
         self.write_executable(self.binary / 'date', '#!/bin/sh\n'
-                              '[ "$1" != +%s ] || { cat ' + shlex.quote(str(self.clock)) + '; exit; }\n'
+                              '[ "$1" != +%s ] || { cat ' + shlex.quote(str(self.wall_clock)) + '; exit; }\n'
                               'exec /bin/date "$@"\n')
         self.write_executable(self.binary / 'tailscale', '#!/bin/sh\n'
                               'test ! -f ' + shlex.quote(str(self.run / 'health-failed')) + ' || exit 1\n'
@@ -486,6 +563,37 @@ conf_activate_runtime "$next"
         self.wait_status('rolled-back')
         self.assertEqual(self.runtime_mode(), 'bridge')
         self.assertTrue((self.run / 'settings.pending').exists())
+
+    def test_wall_clock_changes_do_not_extend_or_expire_elapsed_trial(self):
+        trial_id = self.begin('proxy')
+        self.wait_status('running')
+        for wall in ('1', '99999999'):
+            self.wall_clock.write_text(wall)
+            time.sleep(1.1)
+            self.assertEqual((self.journal / 'status').read_text().strip(), 'running')
+            status = json.loads(self.trial('status').stdout)['trial']
+            self.assertEqual(status['remaining'], 30)
+        self.clock.write_text('131')
+        self.assertNotEqual(self.trial('confirm', trial_id, ok=False).returncode, 0)
+        self.wait_status('rolled-back')
+
+    def test_changed_boot_identity_expires_trial_even_before_elapsed_deadline(self):
+        self.begin('proxy')
+        self.wait_status('running')
+        (self.journal / 'boot').write_text('previous-boot\n')
+        self.wait_status('rolled-back')
+        self.assertEqual(self.runtime_mode(), 'bridge')
+
+    def test_context_hold_does_not_supersede_trial_or_hide_timeout(self):
+        self.begin('proxy')
+        self.wait_status('running')
+        (self.run / 'context-stop').touch()
+        (self.run / 'health-failed').touch()
+        time.sleep(1.1)
+        self.assertEqual((self.journal / 'status').read_text().strip(), 'running')
+        self.clock.write_text('131')
+        self.wait_status('rolled-back')
+        self.assertEqual(self.runtime_mode(), 'bridge')
 
     def test_confirmation_persists_trial_choice_and_keeps_later_saved_settings(self):
         trial_id = self.begin('proxy')
@@ -568,6 +676,36 @@ conf_activate_runtime "$next"
         self.trial('check')
         self.assertEqual((self.run / 'service-calls').read_text(), calls)
         self.assertEqual((self.journal / 'status').read_text().strip(), 'superseded')
+
+    def test_rolled_back_saved_candidate_stays_pending_after_lost_runtime(self):
+        self.shell('conf_write_key foxytail.conf SOCKS_PORT 1300')
+        self.begin()
+        self.wait_status('running')
+        self.assertEqual(self.shell('load_runtime_conf && echo "$SOCKS_PORT"').strip(), '1300')
+        self.clock.write_text('131')
+        self.wait_status('rolled-back')
+        for _ in range(2):
+            shutil.rmtree(self.run)
+            self.run.mkdir()
+            self.clock.write_text('200')
+            self.wall_clock.write_text('1')
+            self.trial('boot')
+            self.assertEqual(self.shell('load_runtime_conf && echo "$SOCKS_PORT"').strip(), '1099')
+            self.assertEqual(self.shell('load_conf && echo "$SOCKS_PORT"').strip(), '1300')
+            self.assertTrue((self.run / 'settings.pending').exists())
+
+    def test_explicit_new_activation_retires_old_rollback_snapshot(self):
+        self.begin('proxy')
+        self.wait_status('running')
+        self.clock.write_text('131')
+        self.wait_status('rolled-back')
+        self.shell('conf_write_key foxytail.conf SOCKS_PORT 1400; conf_activate_runtime')
+        self.assertEqual((self.journal / 'status').read_text().strip(), 'superseded')
+        shutil.rmtree(self.run)
+        self.run.mkdir()
+        result = self.trial('boot', ok=False)
+        self.assertEqual(result.returncode, 3, result.stdout + result.stderr)
+        self.assertFalse((self.run / 'applied-config').exists())
 
     def test_stale_id_and_expired_confirmation_cannot_apply_or_confirm(self):
         trial_id = self.begin('proxy')

@@ -55,11 +55,13 @@ export default function Files(): JSX.Element {
       setPeerError(res.error || t('error'));
       return;
     }
-    const list = ((res.peers as Peer[]) || [])
-      .slice()
-      .sort((a, b) => Number(b.online) - Number(a.online) || a.hostname.localeCompare(b.hostname));
+    const list = (Array.isArray(res.peers) ? res.peers : [])
+      .filter((node): node is Peer => !!node && typeof node.id === 'string' && node.id.length > 0 &&
+        typeof node.ip === 'string' && node.ip.length > 0 && typeof node.hostname === 'string' &&
+        Array.isArray(node.ips) && node.ips.includes(node.ip))
+      .sort((a, b) => Number(b.online) - Number(a.online) || a.hostname.localeCompare(b.hostname) || a.id.localeCompare(b.id));
     setPeers(list);
-    if (!list.some((node) => node.hostname === peer())) setPeer(list[0]?.hostname ?? '');
+    if (!list.some((node) => node.id === peer())) setPeer(list[0]?.id ?? '');
   }
   async function downloadFile(name: string) {
     const res = await scope.api('file-download', name);
@@ -232,6 +234,7 @@ export default function Files(): JSX.Element {
             </Show>
           </Show>
         </Show>
+        <p class="tool-hint">{t('files_receive_hint')}</p>
         <TaskProgress taskKey={RECV_KEY} />
         <Show when={recvTask()?.status === 'error'}>
           <ErrorState text={recvTask()?.result?.error || t('error')} />
@@ -285,8 +288,8 @@ export default function Files(): JSX.Element {
                 >
                   <For each={peers()!}>
                     {(node) => (
-                      <option value={node.hostname}>
-                        {node.hostname}
+                      <option value={node.id}>
+                        {node.hostname} · {node.ip}
                         {node.online ? '' : ' (' + t('offline') + ')'}
                       </option>
                     )}
@@ -307,10 +310,10 @@ export default function Files(): JSX.Element {
             <TaskButton
               taskKey={SEND_KEY}
               cmd="file-send"
-              args={[path().trim(), peer()]}
+              args={[path().trim(), peer(), peers()?.find(node => node.id === peer())?.ip ?? '']}
               label={t('files_send_btn')}
               icon={<MdIcon name="send" size={18} />}
-              disabled={!pathValid() || !peer() || !hasRoot}
+              disabled={!pathValid() || !peers()?.some(node => node.id === peer()) || !hasRoot}
             />
           </div>
         </div>

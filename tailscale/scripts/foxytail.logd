@@ -36,14 +36,14 @@ ${_la_file}:${_la_size}
 
 case "$1" in
   start)
-    daemon_claim_pidfile foxytail.logd || exit 0
     _la_running=1
     trap '_la_running=0' TERM INT
+    daemon_claim_pidfile foxytail.logd || { [ "$?" = 2 ] && exit 0; exit 1; }
     while [ "$_la_running" = 1 ]; do
       rotate_all
       isleep "$_la_interval"
     done
-    rm -f "${TS_PID_DIR}/foxytail.logd.pid"
+    daemon_release_pidfile foxytail.logd
     ;;
   stop) daemon_stop_pidfile foxytail.logd ;;
   once) rotate_all ;;

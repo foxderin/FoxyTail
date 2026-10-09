@@ -22,8 +22,7 @@ class ContextTests(unittest.TestCase):
         self.source = (ROOT / 'tailscale/scripts/foxytail.context').read_text()
         # Invoke the private service stub through sh, as other lifecycle tests
         # do, so host executable-file policies do not interfere with fixtures.
-        self.source = self.source.replace('"$SERVICE" start --applied', 'sh "$SERVICE" start --applied')
-        self.source = self.source.replace('"$SERVICE" stop', 'sh "$SERVICE" stop')
+        self.source = self.source.replace('"$SERVICE" context', 'sh "$SERVICE" context')
         self.script.write_text(self.source)
         self.settings = install_settings(self.base)
         self.env = {**os.environ, 'TS_TEST_DIR': str(self.base),
@@ -32,19 +31,30 @@ class ContextTests(unittest.TestCase):
         self.state = self.base / 'run/context.state'
         self.result = self.base / 'run/context.result.json'
         self.events = self.base / 'events'
-        self.write_stub('bin/ip', '''
-if [ -f "$TS_TEST_DIR/offline" ]; then exit 0; fi
-if [ -f "$TS_TEST_DIR/ssid" ]; then
-  echo 'default dev wlan0'
-else
-  echo 'default dev rmnet0'
-fi
+        with self.settings.open('a') as stream:
+            stream.write('''
+network_snapshot() {
+  [ ! -f "$TS_TEST_DIR/offline" ] || { echo '{"known":false}'; return 1; }
+  _fixture_transport=cellular
+  [ ! -f "$TS_TEST_DIR/ssid" ] || _fixture_transport=wifi
+  [ ! -f "$TS_TEST_DIR/transport" ] || _fixture_transport=$(cat "$TS_TEST_DIR/transport")
+  jqr -nc --arg t "$_fixture_transport" '{known:true,transport:$t,signature:$t}'
+}
+''')
+        self.write_stub('scripts/foxytail.exitnode', '''
+case "$1" in
+  set) [ "$3" = --context ] || exit 2; _exit=$2 ;;
+  clear) [ "$2" = --context ] || exit 2; _exit= ;;
+  *) exit 2 ;;
+esac
+exec tailscale --socket=private set --exit-node="$_exit"
 ''')
         self.write_stub('bin/dumpsys', '''
 printf 'SSID: "%s"\n' "$(cat "$TS_TEST_DIR/ssid")"
 ''')
         self.write_stub('scripts/foxytail.service', '''
 printf '%s\n' "$*" >>"$TS_TEST_DIR/service-argv"
+case "$1:$2" in context:up) set -- start ;; context:down) set -- stop ;; *) exit 2 ;; esac
 printf 'service:%s\n' "$1" >>"$TS_TEST_DIR/events"
 if [ -f "$TS_TEST_DIR/fail-service-$1" ]; then
   rm "$TS_TEST_DIR/fail-service-$1"
@@ -154,6 +164,16 @@ fi
             stream.write('\ndaemon_stop_pidfile() { return 9; }\n')
         self.assertEqual(self.run_script('stop', ok=False).returncode, 9)
 
+    def test_start_propagates_claim_failure_but_duplicate_is_success(self):
+        self.rules.write_text('cellular:-:up\n')
+        with self.settings.open('a') as stream:
+            stream.write('\ndaemon_claim_pidfile() { return "${CLAIM_RESULT}"; }\n')
+        for claim, expected in [('1', 1), ('2', 0)]:
+            self.env['CLAIM_RESULT'] = claim
+            result = self.run_script('start', ok=False)
+            self.assertEqual(result.returncode, expected, result.stdout + result.stderr)
+        self.assertFalse(self.events.exists())
+
     def test_absent_empty_or_malformed_rules_never_run_actions(self):
         for rules in [None, '', '# comments only', 'cellular:-:up\ninvalid',
                       'cellular:-:down\nssid:Home:typo']:
@@ -201,9 +221,9 @@ fi
         self.rules.write_text('cellular:-:up\ncellular:-:down')
         self.run_script('check-once')
         self.assertEqual((self.base / 'service-argv').read_text().splitlines(),
-                         ['start --applied', 'stop'])
+                         ['context up', 'context down'])
 
-    def test_real_service_down_then_applied_up_clears_manual_stop(self):
+    def test_real_service_context_down_up_preserves_user_hold_and_trial(self):
         # Keep service dispatch, locks, config selection and lifecycle functions;
         # replace only process discovery/socket readiness and the daemon binary.
         service = (ROOT / 'tailscale/scripts/foxytail.service').read_text()
@@ -227,17 +247,38 @@ printf '%s\n' "$*" >"$TS_TEST_DIR/daemon-args"
         (self.base / 'ssid').write_text('Home')
 
         self.run_script('check-once')
-        self.assertTrue((self.base / 'run/manual-stop').exists())
+        self.assertTrue((self.base / 'run/context-stop').exists())
+        self.assertFalse((self.base / 'run/manual-stop').exists())
         self.assertFalse((self.base / 'daemon-args').exists())
         (self.base / 'ssid').unlink()
         self.run_script('check-once')
 
-        self.assertFalse((self.base / 'run/manual-stop').exists())
+        self.assertFalse((self.base / 'run/context-stop').exists())
         self.assertIn('--socks5-server=localhost:1199',
                       (self.base / 'daemon-args').read_text())
         self.assertEqual((self.base / 'run/applied-config').read_text(), '.applied.test\n')
         self.assertEqual((self.base / 'run/settings.pending').read_text(), 'unapplied\n')
         self.assertEqual(self.state.read_text(), 'cellular:-\n')
+        (self.base / 'daemon-args').unlink()
+        (self.base / 'run/manual-stop').write_text('user hold\n')
+        self.state.unlink()
+        self.run_script('check-once')
+        self.assertTrue((self.base / 'run/manual-stop').exists())
+        self.assertFalse((self.base / 'daemon-args').exists())
+        journal = self.base / 'state/config-trial'
+        journal.mkdir(parents=True)
+        (journal / 'status').write_text('running\n')
+        (self.base / 'ssid').write_text('Home')
+        self.run_script('check-once')
+        self.assertEqual((journal / 'status').read_text(), 'running\n')
+
+    def test_unknown_ethernet_and_vpn_never_match_cellular_rules(self):
+        self.rules.write_text('cellular:-:down\nssid:Home:up\n')
+        for transport in ('unknown', 'ethernet', 'vpn'):
+            (self.base / 'transport').write_text(transport)
+            self.run_script('check-once')
+            self.assertEqual(self.state.read_text().strip(), transport + ':-')
+        self.assertFalse(self.events.exists())
 
     def test_partial_retry_replays_idempotent_actions_in_order(self):
         self.rules.write_text('cellular:-:up\ncellular:-:exit-node:first\n'

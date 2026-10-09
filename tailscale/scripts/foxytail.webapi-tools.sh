@@ -6,23 +6,23 @@
 
 cmd_traffic() {
   case "$1" in
-    hourly)
+    summary|hourly)
       _tr_date="$2"
       case "${_tr_date}" in
         '' | *[!0-9-]*) _tr_date=$(date +%F) ;;
       esac
-      _tr_out=$("${TS_SCRIPTS_DIR}/foxytail.stats" query hourly "${_tr_date}" 2>/dev/null)
+      _tr_out=$(_op_exec 60 "${TS_SCRIPTS_DIR}/foxytail.stats" query "$1" "${_tr_date}" 2>/dev/null) || jerr 'traffic query failed or cancelled'
       ;;
     daily)
-      _tr_out=$("${TS_SCRIPTS_DIR}/foxytail.stats" query daily 2>/dev/null)
+      _tr_out=$(_op_exec 60 "${TS_SCRIPTS_DIR}/foxytail.stats" query daily 2>/dev/null) || jerr 'traffic query failed or cancelled'
       ;;
     topn)
       _tr_n="$2"
       case "${_tr_n}" in '' | *[!0-9]*) _tr_n=10 ;; esac
-      _tr_out=$("${TS_SCRIPTS_DIR}/foxytail.stats" query topn "${_tr_n}" 2>/dev/null)
+      _tr_out=$(_op_exec 60 "${TS_SCRIPTS_DIR}/foxytail.stats" query topn "${_tr_n}" 2>/dev/null) || jerr 'traffic query failed or cancelled'
       ;;
     *)
-      jerr "traffic: expected hourly|daily|topn"
+      jerr "traffic: expected summary|hourly|daily|topn"
       ;;
   esac
   if [ -n "${_tr_out}" ] && printf '%s' "${_tr_out}" | jqr -e . >/dev/null 2>&1; then
@@ -33,7 +33,7 @@ cmd_traffic() {
 }
 
 cmd_traffic_uids() {
-  _tu_out=$("${TS_SCRIPTS_DIR}/foxytail.stats" query uids 100000 2>/dev/null) || jerr "UID stats query failed"
+  _tu_out=$(_op_exec 60 "${TS_SCRIPTS_DIR}/foxytail.stats" query uids 100000 2>/dev/null) || jerr "UID stats query failed"
   printf '%s' "${_tu_out}" | jqr -e . >/dev/null 2>&1 || jerr "UID stats query returned invalid JSON"
   printf '%s' "${_tu_out}" | jqr -c '. + {ok:true}'
 }
@@ -205,7 +205,7 @@ cmd_files_inbox() {
   mkdir -p "${FILES_DIR}" 2>/dev/null
   ls -A "${FILES_DIR}" 2>/dev/null | while IFS= read -r _fi_name; do
     _fi_path="${FILES_DIR}/${_fi_name}"
-    [ -f "${_fi_path}" ] || continue
+    [ "${_fi_name}" != .taildrop ] && [ -f "${_fi_path}" ] && [ ! -L "${_fi_path}" ] || continue
     _fi_size=$(stat -c %s "${_fi_path}" 2>/dev/null)
     _fi_mtime=$(stat -c %Y "${_fi_path}" 2>/dev/null)
     case "${_fi_size}" in '' | *[!0-9]*) _fi_size=0 ;; esac
@@ -230,12 +230,13 @@ cmd_file_send() {
     *) jerr "file-send: path must live under /sdcard/" ;;
   esac
   [ -f "${_fs_path}" ] || jerr "file-send: no such file: ${_fs_path}"
-  # Peer accepts a hostname (letters, digits, dots, dashes) or a Tailscale
-  # IP (v4 dotted quad or v6 colon-hex). The CLI validates membership.
-  case "$2" in
-    *[!A-Za-z0-9._:-]*) jerr "file-send: invalid peer name" ;;
-  esac
-  _fs_out=$(ts_cli 300 file cp "${_fs_path}" "$2:" 2>&1)
+  [ -n "$3" ] || jerr 'file-send: select a current peer and address'
+  _fs_status=$(ts_status_json ts_cli 10 status --json) || jerr 'file-send: current peers unavailable'
+  _fs_peer=$(printf '%s' "${_fs_status}" | jqr -e -r --arg id "$2" --arg ip "$3" '
+    [.Peer // {} | .[] | select(.ID==$id and ((.TailscaleIPs // []) | index($ip))!=null)]
+    | select(length==1) | $ip') || jerr 'file-send: peer address changed; refresh the device list'
+  case "${_fs_peer}" in *:*) _fs_peer="[${_fs_peer}]" ;; esac
+  _fs_out=$(ts_cli 300 file cp "${_fs_path}" "${_fs_peer}:" 2>&1)
   if [ $? -eq 0 ]; then
     jqr -n -c --arg p "${_fs_path}" --arg t "$2" '{ok:true,path:$p,peer:$t}'
   else
@@ -244,34 +245,20 @@ cmd_file_send() {
 }
 
 cmd_file_receive() {
-  # --wait blocks until a new file arrives, so this call returns as soon as
-  # something was fetched. 60s covers slow uplinks; the CLI exits earlier
-  # when the transfer finishes.
-  mkdir -p "${FILES_DIR}" 2>/dev/null
-  # Keep names as individual shell arguments, never whitespace-delimited text.
-  set --
-  for _fr_src in "${FILES_DIR}"/* "${FILES_DIR}"/.[!.]* "${FILES_DIR}"/..?*; do
-    [ -e "${_fr_src}" ] || [ -L "${_fr_src}" ] || continue
-    set -- "$@" "${_fr_src}"
-  done
-  _fr_out=$(ts_cli 60 file get --wait "${FILES_DIR}/" 2>&1) ||
-    jerr "file-receive failed: ${_fr_out:-timeout}"
-  # Only newly-appeared regular files count. Export is best-effort and never
-  # removes the inbox copy, including when Download is full or unavailable.
-  _fr_count=0
+  taildrop_direct_ready || jerr 'Taildrop direct receive mode is unknown or shared storage was unavailable at startup; unlock shared storage and restart FoxyTail'
+  mkdir -p "${FILES_DIR}" || jerr 'file-receive: cannot create private inbox'
+  _fr_out=$(_op_exec 60 "${TS_BIN_DIR}/foxyfiles" receive --source /sdcard --destination "${FILES_DIR}" 2>&1) ||
+    jerr "file-receive failed: ${_fr_out:-cancelled}"
+  printf '%s' "${_fr_out}" | jqr -e '.ok==true and (.received|type=="number") and (.received>=0) and (.files|type=="array") and (.received==(.files|length)) and all(.files[]; type=="string" and length>0 and .!=".taildrop" and .!="." and .!=".." and ((contains("/") or contains("\\") or contains("\r") or contains("\n"))|not))' >/dev/null || jerr 'invalid Taildrop import response'
+  _fr_names=$(printf '%s' "${_fr_out}" | jqr -r '.files[]') || jerr 'invalid Taildrop import response'
+  _fr_count=$(printf '%s' "${_fr_out}" | jqr -r '.received') || jerr 'invalid Taildrop import response'
   _fr_exported=0
-  for _fr_src in "${FILES_DIR}"/* "${FILES_DIR}"/.[!.]* "${FILES_DIR}"/..?*; do
-    [ -f "${_fr_src}" ] || continue
-    _fr_seen=0
-    for _fr_old in "$@"; do
-      [ "${_fr_src}" != "${_fr_old}" ] || { _fr_seen=1; break; }
-    done
-    [ "${_fr_seen}" -eq 0 ] || continue
-    _fr_count=$((_fr_count + 1))
-    if _file_export_to_download "${_fr_src}" "${_fr_src##*/}"; then
-      _fr_exported=$((_fr_exported + 1))
-    fi
-  done
+  while IFS= read -r _fr_name; do
+    [ -n "${_fr_name}" ] || continue
+    if _file_export_to_download "${FILES_DIR}/${_fr_name}" "${_fr_name}"; then _fr_exported=$((_fr_exported + 1)); fi
+  done <<EOF_FILES
+${_fr_names}
+EOF_FILES
   jqr -n -c --argjson count "${_fr_count}" --argjson exported "${_fr_exported}" \
     '{ok:true,received:$count,exported:$exported}'
 }
@@ -281,8 +268,9 @@ cmd_file_receive() {
 # strictly inside the inbox directory.
 _file_inbox_path() {
   case "$1" in
-    '' | *..* | */* | *\\*) return 1 ;;
+    '' | . | .. | .taildrop | */* | *\\*) return 1 ;;
   esac
+  [ ! -L "${FILES_DIR}/$1" ] || return 1
   printf '%s/%s' "${FILES_DIR}" "$1"
 }
 
@@ -298,7 +286,7 @@ cmd_file_clear() {
   mkdir -p "${FILES_DIR}" 2>/dev/null
   _fc_removed=0
   for _fc_path in "${FILES_DIR}"/* "${FILES_DIR}"/.[!.]* "${FILES_DIR}"/..?*; do
-    [ -f "${_fc_path}" ] || continue
+    [ "${_fc_path##*/}" != .taildrop ] && [ -f "${_fc_path}" ] && [ ! -L "${_fc_path}" ] || continue
     rm -f "${_fc_path}" && _fc_removed=$((_fc_removed + 1))
   done
   jqr -n -c --argjson r "${_fc_removed}" '{ok:true,removed:$r}'

@@ -192,7 +192,7 @@ pids_of() {
 # A bounded reader isolates that race and also limits unusual argv lengths.
 _proc_cmdline() {
   case "$1" in '' | *[!0-9]*) return 1 ;; esac
-  tmo 2 dd "if=/proc/$1/cmdline" bs=4096 count=1 2>/dev/null | tr '\000' '\n'
+  tmo 2 dd "if=/proc/$1/cmdline" bs=4096 count=1 2>/dev/null | tr '\n' '\r' | tr '\000' '\n'
 }
 
 # Like pids_of, but every candidate PID is verified against
@@ -361,63 +361,109 @@ dns_status_healthy() {
 
 # --- Resident daemon scaffolding -------------------------------------------------
 
-# True when the pid file for <name> names a live process.
+# Linux boot identity and elapsed time are independent of wall-clock corrections.
+monotonic_seconds() {
+  IFS=' ' read -r _mono _mono_idle </proc/uptime || return 1
+  printf '%s\n' "${_mono%%.*}"
+}
+
+service_stop_held() {
+  [ -f "${TS_RUN_DIR}/manual-stop" ] || [ -f "${TS_RUN_DIR}/context-stop" ]
+}
+
+# Match the executable/script argument, never a substring in an unrelated argv.
+resident_identity_alive() {
+  _ria_name=$1 _ria_pid=$2 _ria_stamp=$3 _ria_boot=$4
+  case "${_ria_pid}:${_ria_stamp}" in *[!0-9:]*|:*|*:) return 1 ;; esac
+  [ -n "${_ria_boot}" ] && [ "${_ria_boot}" = "$(boot_identity)" ] || return 1
+  [ "$(_proc_starttime "${_ria_pid}")" = "${_ria_stamp}" ] || return 1
+  if [ "${_ria_name}" = inotifyd ]; then
+    _proc_cmdline "${_ria_pid}" | awk -v script="${TS_SCRIPTS_DIR}/foxytail.inotify" -v module="${TS_MOD_DIR}" '
+      NR==1 { if ($0 ~ /(^|\/)inotifyd$/) command=2; busybox=($0 ~ /(^|\/)busybox$/) }
+      NR==2 && busybox && $0=="inotifyd" { command=3 }
+      NR==command && $0==script { handler=1 }
+      NR==command+1 && $0==module { directory=1 }
+      END { exit !(handler && directory) }'
+    return $?
+  fi
+  _ria_action=start
+  [ "${_ria_name}" != foxytail.trial ] || _ria_action=run
+  _proc_cmdline "${_ria_pid}" | awk -v script="${TS_SCRIPTS_DIR}/${_ria_name}" -v action="${_ria_action}" '
+    NR==1 { if ($0==script) command=2; shell=($0 ~ /(^|\/)(sh|mksh|ash|bash)$/) }
+    NR==2 && shell && $0==script { command=3 }
+    NR==command && $0==action { found=1 }
+    END { exit !found }'
+}
+
+# The same predicate backs readiness, cold recovery, status, claim and stop.
 daemon_pid_alive() {
   _dpa_file="${TS_PID_DIR}/$1.pid"
-  [ -f "${_dpa_file}" ] || return 1
-  _dpa_pid=$(cat "${_dpa_file}" 2>/dev/null)
-  case "${_dpa_pid}" in '' | *[!0-9]*) return 1 ;; esac
-  kill -0 "${_dpa_pid}" 2>/dev/null
+  [ -f "${_dpa_file}" ] && [ ! -L "${_dpa_file}" ] || return 1
+  IFS=' ' read -r _dpa_pid _dpa_stamp _dpa_boot <"${_dpa_file}" || return 1
+  resident_identity_alive "$1" "${_dpa_pid}" "${_dpa_stamp}" "${_dpa_boot}"
 }
 
-# Claim ${TS_PID_DIR}/<name>.pid for the current process. Returns 1 when a
-# live pid file already points to a running instance of this script. PID
-# reuse guard: a live pid whose cmdline does not mention <name> is treated
-# as stale and the file is overwritten.
 daemon_claim_pidfile() {
-  _dcp_name="$1"
-  _dcp_file="${TS_PID_DIR}/${_dcp_name}.pid"
-  conf_lock_acquire || return 1
-  if [ -f "${_dcp_file}" ]; then
-    _dcp_pid=$(cat "${_dcp_file}" 2>/dev/null)
-    case "${_dcp_pid}" in '' | *[!0-9]*) _dcp_pid="" ;; esac
-    if [ -n "${_dcp_pid}" ] && kill -0 "${_dcp_pid}" 2>/dev/null; then
-      if _proc_cmdline "${_dcp_pid}" | grep -qF "${_dcp_name}"; then
-        log Info "${_dcp_name} already running (pid ${_dcp_pid})"
-        conf_lock_release
-        return 1
-      fi
-      log Warning "${_dcp_name}: stale pid file (pid ${_dcp_pid} belongs to another process); overwriting."
-    fi
+  _dcp_name=$1 _dcp_file="${TS_PID_DIR}/$1.pid"
+  _lock_identity || return 1
+  _dcp_token=${_LOCK_TOKEN}
+  _dcp_lock="${TS_PID_DIR}/.$1.lock"
+  _owner_lock_acquire "${_dcp_lock}" "${_dcp_token}" 100 0.1 || return 1
+  if daemon_pid_alive "${_dcp_name}"; then
+    _owner_lock_release "${_dcp_lock}" "${_dcp_token}"
+    return 2
   fi
-  if ! echo "$$" >"${_dcp_file}"; then conf_lock_release; return 1; fi
-  conf_lock_release
-  return 0
+  _dcp_stamp=$(_proc_starttime "$$") _dcp_boot=$(boot_identity)
+  _dcp_rc=0
+  if [ -z "${_dcp_stamp}" ] || [ -z "${_dcp_boot}" ] ||
+     ! { printf '%s %s %s\n' "$$" "${_dcp_stamp}" "${_dcp_boot}" >"${_dcp_file}.$$" &&
+         mv -f "${_dcp_file}.$$" "${_dcp_file}"; }; then
+    rm -f "${_dcp_file}.$$"
+    _dcp_rc=1
+  fi
+  _owner_lock_release "${_dcp_lock}" "${_dcp_token}"
+  return "${_dcp_rc}"
 }
 
-# Stop the daemon recorded in ${TS_PID_DIR}/<name>.pid via stop_by_pids and
-# remove the pid file. A pid file pointing at a process that is not <name>
-# (PID reuse) is only cleaned up, never signalled.
-daemon_stop_pidfile() {
-  _dsp_name="$1"
-  _dsp_file="${TS_PID_DIR}/${_dsp_name}.pid"
-  _dsp_rc=0
-  _dsp_pid=$(cat "${_dsp_file}" 2>/dev/null)
-  case "${_dsp_pid}" in '' | *[!0-9]*) _dsp_pid="" ;; esac
-  if [ -n "${_dsp_pid}" ] && kill -0 "${_dsp_pid}" 2>/dev/null; then
-    if _proc_cmdline "${_dsp_pid}" | grep -qF "${_dsp_name}"; then
-      stop_by_pids "${_dsp_name}" "${_dsp_pid}" || _dsp_rc=1
-    else
-      log Warning "${_dsp_name}: pid ${_dsp_pid} is not ours (stale pid file); not signalling it."
-    fi
-  else
-    log Info "${_dsp_name} is not running"
-  fi
-  [ "${_dsp_rc}" != 0 ] || rm -f "${_dsp_file}"
-  return "${_dsp_rc}"
+daemon_release_pidfile() {
+  _drp_file="${TS_PID_DIR}/$1.pid"
+  [ -f "${_drp_file}" ] && [ ! -L "${_drp_file}" ] || return 0
+  IFS=' ' read -r _drp_pid _drp_stamp _drp_boot <"${_drp_file}" || return 0
+  [ "${_drp_pid}" = "$$" ] && [ "${_drp_stamp}" = "$(_proc_starttime "$$")" ] &&
+    [ "${_drp_boot}" = "$(boot_identity)" ] || return 0
+  rm -f "${_drp_file}"
 }
+
+daemon_stop_pidfile() (
+  _dsp_name=$1 _dsp_file="${TS_PID_DIR}/$1.pid"
+  _lock_identity || exit 1
+  _dsp_token=${_LOCK_TOKEN} _dsp_lock="${TS_PID_DIR}/.$1.lock"
+  _owner_lock_acquire "${_dsp_lock}" "${_dsp_token}" 100 0.1 || exit 1
+  trap '_owner_lock_release "${_dsp_lock}" "${_dsp_token}"' 0
+  trap 'exit 1' HUP INT TERM
+  if daemon_pid_alive "${_dsp_name}"; then
+    _dsp_pid=${_dpa_pid} _dsp_stamp=${_dpa_stamp} _dsp_boot=${_dpa_boot}
+    resident_identity_alive "${_dsp_name}" "${_dsp_pid}" "${_dsp_stamp}" "${_dsp_boot}" && kill -TERM "${_dsp_pid}" 2>/dev/null
+    _dsp_i=0
+    while resident_identity_alive "${_dsp_name}" "${_dsp_pid}" "${_dsp_stamp}" "${_dsp_boot}"; do
+      if [ "${_dsp_i}" -ge 50 ]; then
+        resident_identity_alive "${_dsp_name}" "${_dsp_pid}" "${_dsp_stamp}" "${_dsp_boot}" && kill -KILL "${_dsp_pid}" 2>/dev/null
+        sleep 0.1
+        resident_identity_alive "${_dsp_name}" "${_dsp_pid}" "${_dsp_stamp}" "${_dsp_boot}" && exit 1
+        break
+      fi
+      sleep 0.1
+      _dsp_i=$((_dsp_i + 1))
+    done
+  fi
+  daemon_pid_alive "${_dsp_name}" || rm -f "${_dsp_file}"
+)
 
 # shellcheck source=tailscale/scripts/foxytail.lock.sh
 . "${DIR:-${TS_SCRIPTS_DIR}}/foxytail.lock.sh"
 # shellcheck source=tailscale/scripts/foxytail.config.sh
 . "${DIR:-${TS_SCRIPTS_DIR}}/foxytail.config.sh"
+# shellcheck source=tailscale/scripts/foxytail.network.sh
+. "${DIR:-${TS_SCRIPTS_DIR}}/foxytail.network.sh"
+# shellcheck source=tailscale/scripts/foxytail.taildrop.sh
+. "${DIR:-${TS_SCRIPTS_DIR}}/foxytail.taildrop.sh"

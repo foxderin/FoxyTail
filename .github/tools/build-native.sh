@@ -21,11 +21,16 @@ if [ "$actual_go" != "$required_go" ]; then
 fi
 mkdir -p "$1"
 output_dir=$(cd "$1" && pwd)
-for arch in arm arm64; do
-  echo "- Building foxydns-${arch} (${required_go})"
-  (cd native/foxydns && CGO_ENABLED=0 GOOS=linux GOARCH="$arch" GOARM=7 \
-    go build -mod=readonly -trimpath -buildvcs=false -ldflags='-s -w -buildid=' \
-      -o "${output_dir}/foxydns-${arch}" .)
+for helper in foxydns foxyfiles; do
+  test "$(awk '$1=="go" {print $2}' "native/$helper/go.mod")" = "${required_go#go}" || {
+    echo "native helper $helper requires a different Go toolchain" >&2; exit 1;
+  }
+  for arch in arm arm64; do
+    echo "- Building ${helper}-${arch} (${required_go})"
+    (cd "native/$helper" && CGO_ENABLED=0 GOOS=linux GOARCH="$arch" GOARM=7 \
+      go build -mod=readonly -trimpath -buildvcs=false -ldflags='-s -w -buildid=' \
+        -o "${output_dir}/${helper}-${arch}" .)
+  done
 done
 
 # A linux static executable runs on Android without a bionic interpreter.
@@ -36,8 +41,10 @@ import struct
 import sys
 
 root = Path(sys.argv[1])
-for arch, elf_class, machine in [('arm', 1, 40), ('arm64', 2, 183)]:
-    path = root / ('foxydns-' + arch)
+for name, arch, elf_class, machine in [(name, arch, elf_class, machine)
+        for name in ('foxydns', 'foxyfiles')
+        for arch, elf_class, machine in [('arm', 1, 40), ('arm64', 2, 183)]]:
+    path = root / (name + '-' + arch)
     data = path.read_bytes()
     assert data[:6] == b'\x7fELF' + bytes([elf_class, 1]), path
     assert struct.unpack_from('<HH', data, 16) == (2, machine), path

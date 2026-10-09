@@ -12,7 +12,7 @@ import (
 
 func run(args []string) error {
 	if len(args) == 0 {
-		return errors.New("usage: foxydns serve|check|probe|health|watch [options]")
+		return errors.New("usage: foxydns serve|check|probe|health|watch|quiesce|cleanup [options]")
 	}
 	flags := flag.NewFlagSet(args[0], flag.ContinueOnError)
 	config := flags.String("config", "", "absolute JSON configuration path")
@@ -20,11 +20,22 @@ func run(args []string) error {
 	queue := flags.Uint("queue", 1053, "netfilter queue number")
 	instance := flags.String("instance", "", "expected listener instance for watch")
 	parent := flags.Int("parent", 0, "expected guard PID for watch")
+	journal := flags.String("journal", "", "absolute captured-flow ownership journal")
+	port := flags.Uint("port", 0, "legacy listener port")
 	if err := flags.Parse(args[1:]); err != nil {
 		return err
 	}
 	if flags.NArg() != 0 {
 		return errors.New("unexpected positional argument")
+	}
+	if args[0] == "cleanup" {
+		return cleanupOwnedFlows(*journal)
+	}
+	if args[0] == "legacy-claim" || args[0] == "legacy-cleanup" {
+		if *port == 0 || *port > 65535 {
+			return errors.New("invalid legacy listener port")
+		}
+		return legacyOwnership(*journal, uint16(*port), args[0] == "legacy-cleanup")
 	}
 	if args[0] == "probe" {
 		if *queue == 0 || *queue > 65535 {
@@ -35,7 +46,7 @@ func run(args []string) error {
 		}
 		return json.NewEncoder(os.Stdout).Encode(map[string]any{"ok": true, "queue": true, "conntrack": true, "socketContext": true})
 	}
-	if args[0] != "check" && args[0] != "serve" && args[0] != "health" && args[0] != "watch" {
+	if args[0] != "check" && args[0] != "serve" && args[0] != "health" && args[0] != "watch" && args[0] != "quiesce" {
 		return errors.New("unknown command")
 	}
 	cfg, err := readConfig(*config)
@@ -47,6 +58,9 @@ func run(args []string) error {
 	}
 	if err = cfg.validate(); err != nil {
 		return err
+	}
+	if args[0] == "quiesce" {
+		return quiesceService(cfg)
 	}
 	if args[0] == "health" || args[0] == "watch" {
 		return monitorHealth(cfg, args[0] == "watch", *instance, *parent)
@@ -65,17 +79,28 @@ func run(args []string) error {
 		return err
 	}
 	defer s.Close()
-	select {
-	case <-signals:
-		return nil
-	case err := <-s.errors:
-		return fmt.Errorf("DNS server stopped: %w", err)
+	for {
+		select {
+		case <-signals:
+			if cfg.Mode == "transparent" {
+				if err := s.quiesce(); err != nil {
+					continue
+				}
+				if err := cleanupOwnedFlows(cfg.OwnershipFile); err != nil {
+					fmt.Fprintf(os.Stderr, "DNS cleanup pending; listener retained: %v\n", err)
+					continue
+				}
+			}
+			return nil
+		case err := <-s.errors:
+			return fmt.Errorf("DNS server stopped: %w", err)
+		}
 	}
 }
 
 func main() {
 	if err := run(os.Args[1:]); err != nil {
-		_ = json.NewEncoder(os.Stdout).Encode(map[string]any{"ok": false, "error": err.Error()})
+		_ = json.NewEncoder(os.Stdout).Encode(map[string]any{"ok": false, "error": err.Error(), "unsupported": errors.Is(err, ErrUnsupported)})
 		os.Exit(1)
 	}
 }

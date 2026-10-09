@@ -8,11 +8,12 @@ cmd_backup() (
   conf_lock_acquire || jerr 'backup: configuration is busy'
   _bk_ts="$(date +%Y%m%d-%H%M%S)-$$"
   _bk_out="/sdcard/Download/foxytail-backup-${_bk_ts}.tar.gz"
-  _bk_tmp="${_bk_out}.partial"
+  _bk_tmp=''
   _bk_stage=''
   trap 'rm -f "${_bk_tmp}"; [ -z "${_bk_stage}" ] || rm -rf "${_bk_stage}"; conf_lock_release' 0
   trap 'exit 1' HUP INT TERM
   _bk_stage=$(mktemp -d "${TS_RUN_DIR}/.backup.XXXXXX") || jerr 'backup: cannot create staging directory'
+  _bk_tmp="${_bk_stage}/backup.tar.gz"
   _bk_err="${_bk_stage}/error"
   _bk_fail() {
     _bk_detail=$(tail -c 2048 "${_bk_err}" 2>/dev/null | _sanitize_text)
@@ -22,7 +23,10 @@ cmd_backup() (
   # Android toybox/busybox tar treats -C as one global directory, unlike the
   # positional -C supported by GNU/BSD tar. Stage the portable archive layout
   # first, while the config lock keeps the snapshot consistent.
-  cp -R "${TS_CONF_DIR}" "${_bk_stage}/conf" 2>"${_bk_err}" || _bk_fail 'cannot stage configuration'
+  mkdir "${_bk_stage}/conf" || _bk_fail 'cannot stage configuration'
+  for _bk_f in foxytail.conf routes.conf context.conf; do
+    [ ! -f "${TS_CONF_DIR}/${_bk_f}" ] || _op_exec 10 cp "${TS_CONF_DIR}/${_bk_f}" "${_bk_stage}/conf/${_bk_f}" 2>"${_bk_err}" || _bk_fail 'cannot stage configuration'
+  done
   set --
   for _bk_h in foxytail.tun.up foxytail.tun.down; do
     if [ -f "${TS_SCRIPTS_DIR}/${_bk_h}" ]; then
@@ -30,26 +34,33 @@ cmd_backup() (
       set -- "$@" "${_bk_h}"
     fi
   done
-  tar -czf "${_bk_tmp}" -C "${_bk_stage}" conf "$@" 2>"${_bk_err}" || _bk_fail 'archive creation failed'
-  tar -tzf "${_bk_tmp}" >/dev/null 2>"${_bk_err}" || _bk_fail 'archive verification failed'
+  _op_exec 30 tar -czf "${_bk_tmp}" -C "${_bk_stage}" conf "$@" 2>"${_bk_err}" || _bk_fail 'archive creation failed'
+  _op_exec 30 "${TS_BIN_DIR}/foxyfiles" extract "${_bk_tmp}" "${_bk_stage}/verify" >/dev/null 2>"${_bk_err}" || _bk_fail 'archive verification failed'
   _bk_size=$(wc -c <"${_bk_tmp}" 2>"${_bk_err}") || _bk_fail 'cannot read archive size'
   [ "${_bk_size}" -gt 0 ] 2>/dev/null || jerr 'backup: archive is empty'
-  mv "${_bk_tmp}" "${_bk_out}" 2>"${_bk_err}" || _bk_fail 'cannot publish archive to Download'
+  (set -C; { cat "${_bk_tmp}" || { rm -f "${_bk_out}"; exit 1; }; } >"${_bk_out}") 2>"${_bk_err}" || _bk_fail 'cannot publish archive to Download'
   jqr -n -c --arg p "${_bk_out}" --argjson size "${_bk_size}" '{ok:true,path:$p,size:$size}'
 )
 
-# Validate member paths and entry types before extraction. In particular, a
-# symlink earlier in an archive must never redirect a later extraction outside
-# the staging directory. Hard links and special device entries are disallowed.
-_restore_archive_safe() {
-  tar -tzf "$1" >"$2/members" 2>/dev/null || return 1
-  while IFS= read -r _ras_member; do
-    case "${_ras_member}" in
-      '' | /* | .. | ../* | */../* | */.. | -* | *\\*) return 1 ;;
-    esac
-  done <"$2/members"
-  tar -tvzf "$1" >"$2/types" 2>/dev/null || return 1
-  LC_ALL=C awk 'substr($0,1,1)!="-" && substr($0,1,1)!="d" {exit 1}' "$2/types"
+# Hash the complete saved content set, including absent files, under the config lock.
+_restore_baseline() {
+  [ ! -L "${TS_CONF_DIR}" ] || return 1
+  _rb_records=''
+  for _rb_name in foxytail.conf routes.conf context.conf; do
+    if [ -e "${TS_CONF_DIR}/${_rb_name}" ] || [ -L "${TS_CONF_DIR}/${_rb_name}" ]; then
+      [ -f "${TS_CONF_DIR}/${_rb_name}" ] && [ ! -L "${TS_CONF_DIR}/${_rb_name}" ] || return 1
+      _rb_hash=$(sha256sum "${TS_CONF_DIR}/${_rb_name}") || return 1
+      _rb_hash=${_rb_hash%% *}
+    else _rb_hash=missing; fi
+    _rb_records="${_rb_records}${_rb_name}:${_rb_hash};"
+  done
+  _rb_hash=$(printf '%s' "${_rb_records}" | sha256sum) || return 1
+  printf '%s\n' "${_rb_hash%% *}"
+}
+
+_restore_hash_valid() {
+  [ "${#1}" = 64 ] || return 1
+  case "$1" in *[!a-f0-9]*) return 1 ;; esac
 }
 
 _restore_cleanup() {
@@ -68,27 +79,21 @@ _restore_cleanup() {
 _restore_stage() {
   [ -n "$1" ] || jerr 'restore: missing path'
   case "$1" in /sdcard/*.tar.gz) ;; *) jerr 'restore: expected .tar.gz under /sdcard/' ;; esac
+  [ ! -L "$1" ] || jerr 'restore: archive must not be a symlink'
   _rt_path=$(realpath "$1" 2>/dev/null)
   case "${_rt_path}" in /sdcard/*.tar.gz | /storage/emulated/*.tar.gz) ;; *) jerr 'restore: archive must resolve under shared storage' ;; esac
   [ -f "${_rt_path}" ] || jerr 'restore: archive does not exist'
   _rt_tmp=$(mktemp -d "${TS_DIR}/.restore.XXXXXX") || jerr 'restore: cannot create staging directory'
   trap '_restore_cleanup' 0
   trap 'exit 1' HUP INT TERM
-  mkdir "${_rt_tmp}/archive" "${_rt_tmp}/next" || jerr 'restore: staging failed'
-  _rt_input="${_rt_tmp}/input.tar.gz"
-  cat "${_rt_path}" >"${_rt_input}" && chmod 0600 "${_rt_input}" || jerr 'restore: cannot stage archive'
-  _rt_sha=$(sha256sum "${_rt_input}") || jerr 'restore: cannot hash archive'
-  _rt_sha=${_rt_sha%% *}
+  mkdir "${_rt_tmp}/next" || jerr 'restore: staging failed'
+  _rt_sha=$(_op_exec 30 "${TS_BIN_DIR}/foxyfiles" extract "$1" "${_rt_tmp}/unpack" 2>"${_rt_tmp}/error") || {
+    _rt_error=$(tail -c 2048 "${_rt_tmp}/error" | _sanitize_text)
+    jerr "restore: unsafe, oversized, damaged or cancelled archive${_rt_error:+: ${_rt_error}}"
+  }
+  _restore_hash_valid "${_rt_sha}" || jerr 'restore: invalid archive digest'
   [ -z "${2:-}" ] || [ "$2" = "${_rt_sha}" ] || jerr 'restore: backup changed after preview; preview it again'
-  _restore_archive_safe "${_rt_input}" "${_rt_tmp}" || jerr 'restore: unsafe or damaged archive'
-  tar --no-same-owner -xzf "${_rt_input}" -C "${_rt_tmp}/archive" 2>/dev/null || jerr 'restore: archive extraction failed'
-  _rt_src="${_rt_tmp}/archive"
-  if [ ! -d "${_rt_src}/conf" ]; then
-    for _rt_d in "${_rt_src}"/*/; do
-      [ ! -d "${_rt_d}conf" ] || { _rt_src="${_rt_d%/}"; break; }
-    done
-  fi
-  [ -d "${_rt_src}/conf" ] && [ ! -L "${_rt_src}/conf" ] || jerr 'restore: missing conf directory'
+  _rt_src="${_rt_tmp}/unpack/archive"
   # Validate every incoming entry before touching live configuration.
   for _rt_f in "${_rt_src}/conf/"*; do
     [ -e "${_rt_f}" ] || continue
@@ -109,10 +114,10 @@ _restore_prepare_next() {
     if [ -f "${_rt_src}/conf/${_rt_f}" ]; then _rt_from="${_rt_src}/conf/${_rt_f}"
     elif [ -f "${TS_CONF_DIR}/${_rt_f}" ]; then _rt_from="${TS_CONF_DIR}/${_rt_f}"
     else continue; fi
-    cat "${_rt_from}" >"${_rt_tmp}/next/${_rt_f}" && chmod 0600 "${_rt_tmp}/next/${_rt_f}" || jerr 'restore: cannot prepare configuration'
+    _op_exec 10 cp "${_rt_from}" "${_rt_tmp}/next/${_rt_f}" && chmod 0600 "${_rt_tmp}/next/${_rt_f}" || jerr 'restore: cannot prepare configuration'
   done
   if [ -f "${_rt_tmp}/next/context.conf" ]; then
-    _rt_why=$("${TS_SCRIPTS_DIR}/foxytail.context" validate "${_rt_tmp}/next/context.conf" 2>&1) || jerr "restore: ${_rt_why}"
+    _rt_why=$(_op_exec 15 "${TS_SCRIPTS_DIR}/foxytail.context" validate "${_rt_tmp}/next/context.conf" 2>&1) || jerr "restore: ${_rt_why}"
   fi
   if ! ( TS_CONF_DIR="${_rt_tmp}/next"; load_conf && { [ "$TS_MODE" != tun ] || [ "$ROUTE_SCOPE" = all ]; } ); then
     jerr 'restore: invalid configuration or native tun UID routing is unsupported'
@@ -121,9 +126,12 @@ _restore_prepare_next() {
 
 cmd_restore() (
   [ ! -f "${TS_DIR}/.installing" ] || jerr 'restore: an upgrade is in progress'
+  _restore_hash_valid "${2:-}" && _restore_hash_valid "${3:-}" || jerr 'restore: preview archive and saved configuration before restoring'
   _restore_stage "$1" "${2:-}"
   conf_lock_acquire || jerr 'restore: configuration is busy'
   [ ! -f "${TS_DIR}/.installing" ] || jerr 'restore: an upgrade is in progress'
+  _rt_baseline=$(_restore_baseline) || jerr 'restore: cannot hash saved configuration'
+  [ "$3" = "${_rt_baseline}" ] || jerr 'restore: saved configuration changed after preview; preview it again'
   _restore_prepare_next
   _rt_ts="$(date +%Y%m%d-%H%M%S)-${_rt_tmp##*.}"
   _rt_old="${TS_DIR}/conf.bak-${_rt_ts}"
@@ -134,7 +142,7 @@ cmd_restore() (
     if [ -f "${_rt_src}/${_rt_h}" ]; then
       _rt_parked="${TS_DIR}/restored-hooks-${_rt_ts}"
       mkdir -p "${_rt_parked}" || jerr 'restore: cannot prepare hook review directory'
-      cat "${_rt_src}/${_rt_h}" >"${_rt_parked}/${_rt_h}.restored" && chmod 0600 "${_rt_parked}/${_rt_h}.restored" || jerr 'restore: cannot park hook'
+      _op_exec 10 cp "${_rt_src}/${_rt_h}" "${_rt_parked}/${_rt_h}.restored" && chmod 0600 "${_rt_parked}/${_rt_h}.restored" || jerr 'restore: cannot park hook'
       _rt_note="hooks parked for review in ${_rt_parked}"
     fi
   done
@@ -149,6 +157,7 @@ cmd_restore() (
   printf '%s\n' "${_rt_old##*/}" >"${_rt_tmp}/journal/previous" &&
     printf '%s\n' "${_rt_tmp##*/}" >"${_rt_tmp}/journal/staging" &&
     printf '%s\n' "${_rt_had_previous}" >"${_rt_tmp}/journal/had-previous" || jerr 'restore: cannot write transaction'
+  _op_commit_begin || jerr 'restore: cancelled before commit'
   _rt_journal_owned=1
   mv "${_rt_tmp}/journal" "${TS_DIR}/.restore-transaction" || jerr 'restore: cannot publish transaction'
   if [ "${_rt_had_previous}" = 1 ]; then
@@ -189,6 +198,7 @@ cmd_restore_preview() (
   _backup_selected_path "$1" || jerr 'restore-preview: select a regular FoxyTail backup from Download'
   _restore_stage "$1"
   conf_lock_acquire || jerr 'restore-preview: configuration is busy'
+  _rp_baseline=$(_restore_baseline) || jerr 'restore-preview: cannot hash saved configuration'
   _restore_prepare_next
   _rp_changes=$(
     for _rp_file in foxytail.conf routes.conf context.conf; do
@@ -212,6 +222,6 @@ cmd_restore_preview() (
   for _rp_hook in foxytail.tun.up foxytail.tun.down; do
     [ ! -f "${_rt_src}/${_rp_hook}" ] || _rp_hooks="${_rp_hooks} ${_rp_hook}"
   done
-  jqr -n -c --arg p "$1" --arg sha "${_rt_sha}" --argjson changes "${_rp_changes}" --arg hooks "${_rp_hooks}" \
-    '{ok:true,path:$p,sha256:$sha,changes:$changes,hooks:($hooks|split(" ")|map(select(length>0)))}'
+  jqr -n -c --arg p "$1" --arg sha "${_rt_sha}" --arg baseline "${_rp_baseline}" --argjson changes "${_rp_changes}" --arg hooks "${_rp_hooks}" \
+    '{ok:true,path:$p,sha256:$sha,baselineSha256:$baseline,changes:$changes,hooks:($hooks|split(" ")|map(select(length>0)))}'
 )

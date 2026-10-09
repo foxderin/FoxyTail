@@ -100,13 +100,19 @@ probe() {
     '{modules:$m,apps:$a,warnings:$w}'
 }
 
-# Only reachable REDIRECT/DNAT/TPROXY rules count as DNS hijacks. Scan both
-# families and nat/mangle, carrying a port-53 match across custom-chain jumps.
-# An ACCEPT rule for DNS and an unmounted stale chain are not conflicts.
+# Conservatively follow paths that can carry UDP/TCP destination port 53.
+# Unknown matches may include DNS; disjoint port/protocol intersections cannot.
 check_dns_hijack_quiet() {
   for _dh_cmd in iptables ip6tables; do
     for _dh_table in nat mangle; do
-      if "${_dh_cmd}" -t "${_dh_table}" -S 2>/dev/null | awk -v table="${_dh_table}" '
+      _dh_rules=$("${_dh_cmd}" -t "${_dh_table}" -S 2>/dev/null) || {
+        [ "${_dh_cmd}" = ip6tables ] && [ "${IPV6:-off}" != on ] && continue
+        if [ "${_dh_cmd}:${_dh_table}" = ip6tables:nat ] &&
+          [ -r /proc/net/ip6_tables_names ] && ! grep -qx nat /proc/net/ip6_tables_names &&
+          ip6tables -t filter -S >/dev/null 2>&1; then continue; fi
+        return 0
+      }
+      _dh_verdict=$(printf '%s\n' "${_dh_rules}" | awk -v table="${_dh_table}" '
         # Exact rules emitted by the pinned Android tailscaled DNS manager
         # are compatible with our earlier local resolver jump. Do not exempt
         # arbitrary rules merely because they mention Quad100 or port 53.
@@ -124,27 +130,50 @@ check_dns_hijack_quiet() {
           }
           return 0
         }
+        function own(chain) {return chain=="FOXY_DNS" || chain=="FOXY_DNS_QUEUE" || chain=="FOXY_DNS_CAPTURE"}
+        function port53(value, parts,ranges,count,k,lo,hi,unknown) {
+          count=split(value,parts,","); unknown=0
+          for(k=1;k<=count;k++) {
+            if(parts[k]=="domain") return 1
+            if(parts[k] ~ /^[0-9]+$/) {if(parts[k]+0==53) return 1; continue}
+            if(parts[k] ~ /^[0-9]*:[0-9]*$/) {
+              split(parts[k],ranges,":"); lo=(ranges[1]=="" ? 0 : ranges[1]+0); hi=(ranges[2]=="" ? 65535 : ranges[2]+0)
+              if(lo<=53 && hi>=53) return 1
+            } else unknown=1
+          }
+          return unknown ? 2 : 0
+        }
         native_rule($0) {next}
-        $1=="-A" && $2 !~ /^FOXY_/ {
-          n++; source[n]=$2; dns[n]=0
+        $1=="-A" && !own($2) {
+          n++; source[n]=$2; udp[n]=1; tcp[n]=1; dns[n]=1
           for(i=3;i<NF;i++) {
-            if(($i=="-j" || $i=="-g") && $(i+1)!~/^FOXY_/) target[n]=$(i+1)
-            if(($i=="--dport" || $i=="--dports") && $(i+1)~/(^|,)53(,|$)/) dns[n]=1
+            if(($i=="-j" || $i=="-g") && !own($(i+1))) target[n]=$(i+1)
+            if($i=="--dport" || $i=="--destination-port" || $i=="--dports" || $i=="--destination-ports") {
+              neg=($(i-1)=="!" || $(i+1)=="!"); value=$(i+1+($(i+1)=="!")); covers=port53(value)
+              if(covers!=2 && ((!neg && !covers) || (neg && covers))) dns[n]=0
+            }
+            if($i=="-p" || $i=="--protocol") {
+              neg=($(i-1)=="!" || $(i+1)=="!"); value=$(i+1+($(i+1)=="!"))
+              if(value=="udp" || value=="17") {if(neg) udp[n]=0; else tcp[n]=0}
+              else if(value=="tcp" || value=="6") {if(neg) tcp[n]=0; else udp[n]=0}
+              else if(value=="all" || value=="0") {if(neg) {udp[n]=0; tcp[n]=0}}
+              else if(!neg && (value=="icmp" || value=="icmpv6" || value=="ipv6-icmp" || value=="1" || value=="58")) {udp[n]=0; tcp[n]=0}
+            }
           }
         }
         END {
-          reached["OUTPUT"]=1; reached["PREROUTING"]=1
+          u["OUTPUT"]=1; u["PREROUTING"]=1; t["OUTPUT"]=1; t["PREROUTING"]=1
           for(pass=0;pass<=n;pass++) for(i=1;i<=n;i++) {
-            if(!reached[source[i]] || target[i]=="") continue
-            matched=marked[source[i]] || dns[i]
-            if(matched && target[i]~/^(REDIRECT|DNAT|TPROXY)$/) exit 0
-            reached[target[i]]=1
-            if(matched) marked[target[i]]=1
+            if(!dns[i] || target[i]=="") continue
+            pu=u[source[i]] && udp[i]; pt=t[source[i]] && tcp[i]
+            if(!pu && !pt) continue
+            if(target[i]~/^(REDIRECT|DNAT|TPROXY)$/) {print "conflict"; exit 0}
+            if(pu) u[target[i]]=1
+            if(pt) t[target[i]]=1
           }
-          exit 1
-        }'; then
-        return 0
-      fi
+          print "clear"
+        }') || return 0
+      [ "${_dh_verdict}" = clear ] || return 0
     done
   done
   return 1

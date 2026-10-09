@@ -1,5 +1,5 @@
-Third-party notices for foxydns
-This file accompanies the FoxyTail DNS helper built for Linux ARMv7/ARM64
+Third-party notices for foxydns and foxyfiles
+This file accompanies the FoxyTail DNS and file helpers built for Linux ARMv7/ARM64
 with CGO disabled. It retains the notices for its linked module dependencies
 and the pinned Go runtime/standard library, including used vendored packages.
 Test-only and developer-tool dependencies are not linked into these binaries.

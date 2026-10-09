@@ -15,6 +15,10 @@ class BackupApiTests(ApiTestCase):
         self.archive(entries).replace(path)
         return path
 
+    def restore_command(self, archive):
+        baseline = self.shell('conf_lock_acquire && _restore_baseline').stdout.strip()
+        return 'cmd_restore ' + shlex.quote(str(archive)) + ' ' + hashlib.sha256(archive.read_bytes()).hexdigest() + ' ' + baseline
+
     def test_picker_excludes_symlinks_unrelated_names_and_path_escape(self):
         good = self.selected_archive({'conf/foxytail.conf': 'SOCKS_PORT=1200\n'})
         download = self.sdcard / 'Download'
@@ -63,23 +67,63 @@ class BackupApiTests(ApiTestCase):
         preview = json.loads(self.shell('cmd_restore_preview ' + shlex.quote(str(archive))).stdout)
         before = self.snapshot()
         self.selected_archive({'conf/foxytail.conf': 'SOCKS_PORT=1300\n'})
-        result = self.shell('cmd_restore ' + shlex.quote(str(archive)) + ' ' + preview['sha256'], ok=False)
+        result = self.shell('cmd_restore ' + shlex.quote(str(archive)) + ' ' + preview['sha256'] + ' ' + preview['baselineSha256'], ok=False)
         self.assertNotEqual(result.returncode, 0)
         self.assertIn('changed after preview', json.loads(result.stdout)['error'])
         self.assertEqual(self.snapshot(), before)
         self.assertFalse(list(self.base.glob('conf.bak-*')))
 
+    def test_restore_rejects_saved_config_change_with_unchanged_archive(self):
+        archive = self.selected_archive({'conf/foxytail.conf': (self.conf / 'foxytail.conf').read_text()})
+        preview = json.loads(self.shell('cmd_restore_preview ' + shlex.quote(str(archive))).stdout)
+        self.assertEqual(preview['changes'], [])
+        (self.conf / 'foxytail.conf').write_text('SOCKS_PORT=1234\n')
+        before = self.snapshot()
+        result = self.shell('cmd_restore ' + shlex.quote(str(archive)) + ' ' + preview['sha256'] + ' ' + preview['baselineSha256'], ok=False)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('saved configuration changed', json.loads(result.stdout)['error'])
+        self.assertEqual(self.snapshot(), before)
+        self.assertFalse(list(self.base.glob('conf.bak-*')))
+
+    def test_restore_requires_both_preview_hashes(self):
+        archive = self.selected_archive({'conf/foxytail.conf': 'SOCKS_PORT=1200\n'})
+        before = self.snapshot()
+        for suffix in ('', ' ' + hashlib.sha256(archive.read_bytes()).hexdigest(), ' bad bad'):
+            result = self.shell('cmd_restore ' + shlex.quote(str(archive)) + suffix, ok=False)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertEqual(self.snapshot(), before)
+
+    def test_cancel_before_commit_leaves_saved_config_and_no_journal(self):
+        archive = self.selected_archive({'conf/foxytail.conf': 'SOCKS_PORT=1200\n', 'foxytail.tun.up': 'review-only'})
+        before = self.snapshot()
+        result = self.shell('_op_commit_begin() { return 1; }\n' + self.restore_command(archive), ok=False)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(self.snapshot(), before)
+        self.assertFalse((self.base / '.restore-transaction').exists())
+        self.assertFalse(list(self.base.glob('restored-hooks-*')))
+        self.assertFalse(list(self.base.glob('conf.bak-*')))
+
+    def test_restore_rejects_archive_symlink_even_with_matching_hashes(self):
+        archive = self.archive({'conf/foxytail.conf': 'SOCKS_PORT=1200\n'})
+        link = self.sdcard / 'linked.tar.gz'
+        link.symlink_to(archive)
+        before = self.snapshot()
+        result = self.shell(self.restore_command(link), ok=False)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(self.snapshot(), before)
+        self.assertIn('symlink', json.loads(result.stdout)['error'])
+
     def test_restore_validation_has_no_partial_writes(self):
         previous = self.snapshot()
         archive = self.archive({'conf/foxytail.conf': 'SOCKS_PORT=1200\n', 'conf/routes.conf': 'PATH=/sdcard/evil\n'})
-        self.assertNotEqual(self.shell('cmd_restore ' + shlex.quote(str(archive)), ok=False).returncode, 0)
+        self.assertNotEqual(self.shell(self.restore_command(archive), ok=False).returncode, 0)
         self.assertEqual(self.snapshot(), previous)
 
     def test_restore_validates_retained_context_before_replacing_any_config(self):
         (self.conf / 'context.conf').write_text('cellular:-:typo')
         before = self.snapshot()
         archive = self.archive({'conf/foxytail.conf': 'SOCKS_PORT=1200\n'})
-        result = self.shell('cmd_restore ' + shlex.quote(str(archive)), ok=False)
+        result = self.shell(self.restore_command(archive), ok=False)
         self.assertNotEqual(result.returncode, 0)
         self.assertIn('restore:', json.loads(result.stdout)['error'])
         self.assertEqual(self.snapshot(), before)
@@ -87,7 +131,7 @@ class BackupApiTests(ApiTestCase):
     def test_restore_rejects_links_before_extraction(self):
         previous = self.snapshot()
         archive = self.archive({'conf/foxytail.conf': 'TS_MODE=bridge\n', 'conf/link': (str(self.base / 'escape'),)})
-        self.assertNotEqual(self.shell('cmd_restore ' + shlex.quote(str(archive)), ok=False).returncode, 0)
+        self.assertNotEqual(self.shell(self.restore_command(archive), ok=False).returncode, 0)
         self.assertEqual(self.snapshot(), previous)
         self.assertFalse((self.base / 'escape').exists())
 
@@ -95,7 +139,7 @@ class BackupApiTests(ApiTestCase):
         previous = self.snapshot()
         archive = self.archive({'conf/foxytail.conf': 'SOCKS_PORT=1200\n', 'conf/routes.conf': 'ROUTE_SCOPE=all\n'})
         result = self.shell('''mv() { case "$1" in */next) return 1 ;; esac; command mv "$@"; }
-cmd_restore ''' + shlex.quote(str(archive)), ok=False)
+''' + self.restore_command(archive), ok=False)
         self.assertNotEqual(result.returncode, 0)
         self.assertEqual(self.snapshot(), previous)
 
@@ -104,7 +148,7 @@ cmd_restore ''' + shlex.quote(str(archive)), ok=False)
         archive = self.archive({'conf/foxytail.conf': 'SOCKS_PORT=1200\n', 'conf/routes.conf': 'ROUTE_SCOPE=all\n'})
         result = self.shell('''conf_mark_pending() { return 1; }
 rm() { [ "$*" != "-rf $TS_CONF_DIR" ] || return 1; command rm "$@"; }
-cmd_restore ''' + shlex.quote(str(archive)), ok=False)
+''' + self.restore_command(archive), ok=False)
         self.assertNotEqual(result.returncode, 0)
         self.assertIn('previous configuration retained', result.stderr)
         backups = list(self.base.glob('conf.bak-*'))
@@ -114,7 +158,7 @@ cmd_restore ''' + shlex.quote(str(archive)), ok=False)
 
     def test_restore_retains_snapshot_and_marks_restart(self):
         archive = self.archive({'conf/foxytail.conf': 'SOCKS_PORT=1200\n', 'conf/routes.conf': 'ROUTE_SCOPE=all\n', 'foxytail.tun.up': '#!/system/bin/sh\necho restored\n'})
-        result = json.loads(self.shell('cmd_restore ' + shlex.quote(str(archive))).stdout)
+        result = json.loads(self.shell(self.restore_command(archive)).stdout)
         self.assertTrue(Path(result['previous']).is_dir())
         self.assertTrue(result['restartRequired'])
         self.assertEqual((self.conf / 'foxytail.conf').read_text(), 'SOCKS_PORT=1200\n')
@@ -155,7 +199,7 @@ cmd_backup''', ok=False)
                 # The actual restore implementation consumes this archive in our
                 # private fixture; no host/device service commands are involved.
                 (self.conf / 'foxytail.conf').write_text('SOCKS_PORT=9999\n')
-                restored = json.loads(self.shell('cmd_restore ' + shlex.quote(str(archive))).stdout)
+                restored = json.loads(self.shell(self.restore_command(archive)).stdout)
                 self.assertTrue(restored['ok']); self.assertEqual(self.snapshot(), before)
                 for name, content in hooks.items():
                     parked = list(self.base.glob('restored-hooks-*/' + name + '.restored'))
@@ -164,10 +208,10 @@ cmd_backup''', ok=False)
                     self.assertEqual(parked[0].stat().st_mode & 0o111, 0)
 
     def test_backup_verification_and_shared_storage_failures_are_actionable(self):
-        result = self.shell('''tar() { [ "$1" != -tzf ] || { echo 'gzip checksum mismatch' >&2; return 1; }; command tar "$@"; }
+        result = self.shell('''tar() { command tar "$@" || return; [ "$1" != -czf ] || printf 'broken gzip' >"$2"; }
 cmd_backup''', ok=False)
         self.assertNotEqual(result.returncode, 0)
-        self.assertIn('archive verification failed: gzip checksum mismatch', json.loads(result.stdout)['error'])
+        self.assertIn('archive verification failed', json.loads(result.stdout)['error'])
         self.assertEqual(list((self.sdcard / 'Download').iterdir()), [])
         result = self.shell('''mkdir() { [ "$*" != '-p ''' + str(self.sdcard / 'Download') + '''' ] || { echo 'Permission denied' >&2; return 1; }; command mkdir "$@"; }
 cmd_backup''', ok=False)
@@ -177,33 +221,6 @@ cmd_backup''', ok=False)
         self.assertFalse((self.run / '.conf-write-lock').is_symlink())
 
 
-    def test_file_receive_preserves_first_failure_without_retry(self):
-        result = self.shell('''ts_cli() {
-  echo "$*" >>"$TS_RUN_DIR/receive-calls"
-  echo 'disk full' >&2; return 1
-}
-cmd_file_receive''', ok=False)
-        self.assertNotEqual(result.returncode, 0)
-        self.assertIn('disk full', json.loads(result.stdout)['error'])
-        self.assertEqual((self.run / 'receive-calls').read_text().splitlines(),
-                         ['60 file get --wait ' + str(self.base / 'files') + '/'])
-
-    def test_file_send_accepts_tailscale_ip_as_peer(self):
-        target = self.sdcard / 'hello.txt'
-        target.write_text('hi')
-        result = self.shell('''ts_cli() {
-  echo "$*" >>"$TS_RUN_DIR/send-calls"
-}
-cmd_file_send ''' + shlex.quote(str(target)) + ''' 100.96.0.31''')
-        self.assertTrue(json.loads(result.stdout)['ok'])
-        self.assertIn('100.96.0.31:', (self.run / 'send-calls').read_text())
-
-    def test_file_send_rejects_peer_with_shell_metachars(self):
-        target = self.sdcard / 'hello.txt'
-        target.write_text('hi')
-        result = self.shell('cmd_file_send ' + shlex.quote(str(target)) + ' "bad;rm -rf /"', ok=False)
-        self.assertNotEqual(result.returncode, 0)
-        self.assertIn('invalid peer', json.loads(result.stdout)['error'])
 
     def test_file_delete_clear_export_download_lifecycle(self):
         inbox = self.base / 'files'

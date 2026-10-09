@@ -41,8 +41,8 @@ def generated_notices():
                    'GOFLAGS': '', 'GOEXPERIMENT': '', 'GOPROXY': 'off', 'GOSUMDB': 'off',
                    'CGO_ENABLED': '0', 'GOOS': 'linux', 'GOARM': '7'}
 
-    def go(*arguments, arch='arm64'):
-        result = subprocess.run(['go', *arguments], cwd=NATIVE,
+    def go(*arguments, arch='arm64', helper='foxydns'):
+        result = subprocess.run(['go', *arguments], cwd=ROOT / 'native' / helper,
                                 env={**environment, 'GOARCH': arch}, check=True,
                                 text=True, capture_output=True)
         return result.stdout
@@ -55,8 +55,8 @@ def generated_notices():
     goroot = Path(go('env', 'GOROOT').strip())
     modules = {}
     vendored = {}
-    for architecture in ['arm', 'arm64']:
-        for package in json_stream(go('list', '-mod=readonly', '-deps', '-json', '.', arch=architecture)):
+    for architecture, helper in [(arch, helper) for arch in ['arm', 'arm64'] for helper in ['foxydns', 'foxyfiles']]:
+        for package in json_stream(go('list', '-mod=readonly', '-deps', '-json', '.', arch=architecture, helper=helper)):
             module = package.get('Module')
             if module and not module.get('Main'):
                 if module.get('Replace') or not module.get('Version'):
@@ -77,8 +77,8 @@ def generated_notices():
     sections += [(f'{path} — vendored with {go_version}', licenses(directory))
                  for path, directory in sorted(vendored.items())]
     output = [
-        'Third-party notices for foxydns\n',
-        'This file accompanies the FoxyTail DNS helper built for Linux ARMv7/ARM64\n'
+        'Third-party notices for foxydns and foxyfiles\n',
+        'This file accompanies the FoxyTail DNS and file helpers built for Linux ARMv7/ARM64\n'
         'with CGO disabled. It retains the notices for its linked module dependencies\n'
         'and the pinned Go runtime/standard library, including used vendored packages.\n'
         'Test-only and developer-tool dependencies are not linked into these binaries.\n'

@@ -222,6 +222,7 @@ conf_recover_restore() (
 # Must be called under conf_lock_acquire. A restart clears only the revision it
 # captured in its candidate snapshot, so later writes retain their pending marker.
 conf_mark_pending() {
+  [ "${_CONF_LOCK_HELD:-0}" = 1 ] || { echo 'pending settings require the configuration lock' >&2; return 1; }
   _cmp_sum=$(cat "${TS_CONF_DIR}/foxytail.conf" "${TS_CONF_DIR}/routes.conf" "${TS_CONF_DIR}/context.conf" 2>/dev/null | cksum)
   printf '%s-%s-%s\n' "$$" "$(date +%s)" "${_cmp_sum}" >"${TS_RUN_DIR}/.settings.pending.$$" &&
     mv "${TS_RUN_DIR}/.settings.pending.$$" "${TS_RUN_DIR}/settings.pending"
@@ -366,6 +367,11 @@ conf_activate_runtime() (
     mv -f "${TS_RUN_DIR}/.applied-config.$$" "${TS_RUN_DIR}/applied-config" || exit 1
   _car_current=${_car_next}
   _car_next=
+  # A newer explicit activation must not resurrect an old rollback on boot.
+  if [ -z "${_TRIAL_ID:-}" ] && [ -f "${TS_DIR}/state/config-trial/status" ]; then
+    printf '%s\n' superseded >"${TS_DIR}/state/config-trial/.status.$$" &&
+      mv "${TS_DIR}/state/config-trial/.status.$$" "${TS_DIR}/state/config-trial/status" || exit 1
+  fi
   # A resident may still have its old rules file open. Full reload stops it
   # before activating, which is also the safe opportunity to collect snapshots.
   if ! daemon_pid_alive foxytail.context; then

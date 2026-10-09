@@ -34,6 +34,8 @@ export async function checkPages() {
   assert(window.document.querySelector('#view').textContent.includes('fd7a:115c:a1e0::/48'), 'IPv6 switch explains the required routed subnet');
   const portField = window.document.querySelector('#view input[type="number"]');
   assert(portField, 'numeric settings field exists');
+  canned['settings-get'].restartRequired = true;
+  canned['settings-get'].settings.SOCKS_PORT = '1100';
   if (portField) {
     portField.value = '1100';
     portField.dispatchEvent(new window.Event('change', { bubbles: true }));
@@ -281,7 +283,7 @@ export async function checkPages() {
   assert(applyExit && !applyExit.disabled, 'a valid changed exit selection enables the explicit Apply action');
   applyExit?.click();
   await flush();
-  assert(commandLog.slice(beforeSelection).filter(({ sub }) => sub === 'exitnode-set').length === 1 && commandLog.some(({ sub, args }) => sub === 'exitnode-set' && args[0] === '100.64.0.2'), 'Apply changes the exit exactly once using the selected peer IP');
+  assert(commandLog.slice(beforeSelection).filter(({ sub }) => sub === 'exitnode-set').length === 1 && commandLog.some(({ sub, args }) => sub === 'exitnode-set' && args[0] === 'p1'), 'Apply changes the exit exactly once using the selected stable peer identity');
 
   nav('logs');
   await flush();
@@ -333,8 +335,25 @@ export async function checkPages() {
   await flush();
   assert(!window.document.querySelectorAll('#view .card')[1].textContent.includes('/api'), 'a stale refresh cannot resurrect a deleted service mapping');
 
+  const originalFilePeers = canned.peers;
+  canned.peers = { ok: true, peers: [
+    { id: 'file-v4', hostname: 'same-host', ip: '100.64.0.8', ips: ['100.64.0.8'], online: true },
+    { id: 'file-v6', hostname: 'same-host', ip: 'fd7a:115c:a1e0::9', ips: ['fd7a:115c:a1e0::9'], online: true },
+  ] };
   nav('files');
   await flush();
+  const filePeer = window.document.querySelector('#view select');
+  assert(filePeer?.options.length === 2 && new Set([...filePeer.options].map(option => option.value)).size === 2, 'duplicate hostnames retain distinct device options');
+  filePeer.value = 'file-v6';
+  filePeer.dispatchEvent(new window.Event('change', { bubbles: true }));
+  const filePath = window.document.querySelector('#view input[placeholder="/sdcard/Download/example.zip"]');
+  filePath.value = '/sdcard/Download/send.zip';
+  filePath.dispatchEvent(new window.Event('input', { bubbles: true }));
+  canned['file-send'] = { ok: true };
+  [...window.document.querySelectorAll('#view button')].find(button => /^(Send|发送)$/.test(button.textContent.trim()))?.click();
+  await flush();
+  assert(commandLog.findLast(entry => entry.sub === 'file-send')?.args.join('|') === '/sdcard/Download/send.zip|file-v6|fd7a:115c:a1e0::9', 'Taildrop sends the selected identity and IPv6 address instead of its duplicate hostname');
+  canned.peers = originalFilePeers;
   holdNext.add('files-inbox');
   const inboxCard = window.document.querySelector('#view .card');
   [...inboxCard.querySelectorAll('button')].find(button => /^(Refresh|刷新)$/.test(button.textContent))?.click();
@@ -351,7 +370,7 @@ export async function checkPages() {
 
   nav('settings');
   await flush();
-  canned.restore = { ok: true, previous: '/data/adb/foxytail/backups/before-restore', note: 'Hooks staged in /data/adb/foxytail/backups/restored-hooks' };
+  canned.restore = { ok: true, saved: true, restartRequired: true, previous: '/data/adb/foxytail/backups/before-restore', note: 'Hooks staged in /data/adb/foxytail/backups/restored-hooks' };
   canned['settings-get'].restartRequired = true;
   const restoreInput = window.document.querySelector('#restore-backup');
   restoreInput.value = canned['backup-list'].backups[0].path;
@@ -362,12 +381,13 @@ export async function checkPages() {
   await flush();
   window.document.querySelector('.md-dialog-actions .btn-filled')?.click();
   await flush();
-  assert(commandLog.findLast(entry => entry.sub === 'restore')?.args.join('|') === [restoreInput.value, canned['restore-preview'].sha256].join('|'), 'restore submits the selected archive and preview hash');
+  assert(commandLog.findLast(entry => entry.sub === 'restore')?.args.join('|') === [restoreInput.value, canned['restore-preview'].sha256, canned['restore-preview'].baselineSha256].join('|'), 'restore submits the selected archive and both preview baselines');
   assert(window.document.querySelector('[data-testid="restore-previous"]')?.textContent === canned.restore.previous, 'restore keeps the previous configuration location visible');
   assert(window.document.querySelector('[data-testid="restore-note"]')?.textContent === canned.restore.note, 'restore keeps the hook staging instructions visible');
 
   console.log('exit confirmation waits for a snapshot started after the mutation');
-  canned.status = { ...canned.status, backend: 'Running', exitNode: null };
+  const noExitRoute = { known: true, selected: null, effective: 'none', ipv4: false, ipv6: false, warning: '' };
+  canned.status = { ...canned.status, backend: 'Running', exitNode: null, exitRouting: noExitRoute };
   await window.__foxy.refreshStatus();
   nav('exitnodes');
   await flush();
@@ -386,7 +406,8 @@ export async function checkPages() {
   const queuedA = window.__foxy.refreshStatus({ afterCurrent: true });
   const queuedB = window.__foxy.refreshStatus({ afterCurrent: true });
   assert(queuedA === queuedB, 'multiple post-mutation refreshes share a single queued read');
-  canned.status = { ...canned.status, exitNode: { ...canned.exitnodes.peers[0], rx: 0, tx: 0 } };
+  canned.status = { ...canned.status, exitNode: { ...canned.exitnodes.peers[0], rx: 0, tx: 0 },
+    exitRouting: { known: true, selected: { id: 'p1', ip: '100.64.0.2', auto: '', allowLAN: false }, effective: 'daemon-owned', ipv4: false, ipv6: false, warning: 'native-policy-unverified' } };
   staleStatus?.finish();
   await flush();
   await Promise.all([oldStatusRead, queuedA, queuedB]);
@@ -412,7 +433,7 @@ export async function checkPages() {
       ['stopped', '-', false],
       ['running', 'unreachable', false],
     ]) {
-      canned.status = { ...savedStatus, daemon, backend, exitNode: null };
+      canned.status = { ...savedStatus, daemon, backend, exitNode: null, exitRouting: { ...noExitRoute, known } };
       await window.__foxy.refreshStatus();
       assert(localExit()?.checked === known && localExit()?.disabled === !known && currentExitBadges().length === Number(known), daemon + '/' + backend + ': only readable exit preferences select and mark the local exit current');
       assert(Boolean(window.document.querySelector('.network-current-exit')) === !known && exitApply()?.disabled, daemon + '/' + backend + ': unknown preferences expose recovery without enabling Apply');
@@ -440,7 +461,7 @@ export async function checkPages() {
     assert(!localExit()?.closest('label').querySelector('.network-small-badge') && !newClearSuccess(), 'a rejected clear never marks the local exit current or reports success');
     delete overrides['exitnode-clear'];
     canned['exitnode-clear'] = { ok: true };
-    canned.status = { ...savedStatus, backend: 'unreachable', exitNode: null };
+    canned.status = { ...savedStatus, backend: 'unreachable', exitNode: null, exitRouting: { ...noExitRoute, known: false } };
     exitApply()?.click();
     await flush();
     assert(confirmingExit() && currentExitBadges().length === 0 && localExit()?.disabled && exitApply()?.disabled && !newClearSuccess(), 'an acknowledged clear followed by unreachable status stays pending without a current badge or success toast');
@@ -454,7 +475,7 @@ export async function checkPages() {
     window.document.querySelector('.network-apply-bar .btn-text')?.click();
     await flush();
     assert(confirmingExit() && !localExit()?.closest('label').querySelector('.network-small-badge') && !newClearSuccess(), 'a recovered snapshot with the old exit still cannot confirm the pending clear');
-    canned.status = { ...savedStatus, exitNode: null };
+    canned.status = { ...savedStatus, exitNode: null, exitRouting: noExitRoute };
     window.document.querySelector('.network-apply-bar .btn-text')?.click();
     await flush();
     assert(!confirmingExit() && localExit()?.checked && !localExit()?.disabled && localExit()?.closest('label').querySelector('.network-small-badge') && newClearSuccess(), 'a fresh readable snapshot with no exit confirms the clear and restores controls');
@@ -470,10 +491,34 @@ export async function checkPages() {
   await flush();
   assert(!window.document.querySelector('#view svg[role="img"]') && window.document.querySelector('.network-traffic-empty'), 'missing interface samples render an empty state instead of a fabricated zero chart');
   canned.traffic.hours[0].samples = 1;
+  canned.traffic.days = [{ date: '2026-10-09', samples: 1, rx: 1024, tx: 2048 }];
   nav('more');
   nav('traffic');
   await flush();
   assert(window.document.querySelector('#view svg[role="img"]') && !window.document.querySelector('.network-traffic-empty'), 'a recorded zero sample renders the chart instead of an empty state');
+  const summaryBefore = commandLog.filter(entry => entry.sub === 'traffic').length;
+  const periods = window.document.querySelectorAll('#view .network-period-toolbar .filter-chip');
+  assert(periods.length === 2 && periods[0].getAttribute('aria-pressed') === 'true', 'hourly period is initially selected');
+  periods[1].click();
+  assert(window.document.querySelector('#view svg[role="img"]'), 'switching cached periods keeps the current chart visible until replacement');
+  await flush();
+  assert(periods[1].getAttribute('aria-pressed') === 'true' && window.document.querySelector('.network-chart-readout strong')?.textContent === '10-09', 'the daily period publishes its date bucket');
+  assert([...window.document.querySelectorAll('.network-chart-data tbody td')].map(cell => Number.parseFloat(cell.textContent)).join('|') === '1|2', 'the daily chart exposes the selected summary totals');
+  periods[0].click();
+  await flush();
+  assert(periods[0].getAttribute('aria-pressed') === 'true' && window.document.querySelector('.network-chart-readout strong')?.textContent === '00:00', 'switching back restores the hourly bucket');
+  assert([...window.document.querySelectorAll('.network-chart-data tbody td')].map(cell => cell.textContent).join('|') === '0 B|0 B', 'recorded zero traffic remains visible after switching back');
+  assert(commandLog.filter(entry => entry.sub === 'traffic').length === summaryBefore, 'switching both periods reuses the same chronological summary');
+  nav('more');
+  overrides.traffic = [1, JSON.stringify({ ok: false, error: 'summary-read-failed' }), ''];
+  nav('traffic'); await flush();
+  assert(window.document.querySelector('#view').textContent.includes('summary-read-failed'), 'failed summary is visible instead of fabricated empty traffic');
+  delete overrides.traffic;
+  canned.traffic = { ok: true, hours: [{ hour: 0, samples: 1, iface: { rx: 1024, tx: 2048 } }],
+    days: [{ date: '2026-10-09', samples: 1, rx: 1024, tx: 2048 }], topn: [{ id: 'p1', rx: 128, tx: 256 }], uids: [{ uid: '10234', tx: 512 }] };
+  [...window.document.querySelectorAll('#view button')].find(button => /^(Retry|重试)$/.test(button.textContent.trim()))?.click();
+  await flush();
+  assert(!window.document.querySelector('#view').textContent.includes('summary-read-failed') && window.document.querySelector('.network-rank-row') && window.document.querySelector('.network-app-row'), 'retry fetches a fresh summary and updates charts, peers and apps together');
 
 }
 

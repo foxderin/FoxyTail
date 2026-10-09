@@ -13,8 +13,29 @@ ROUTE_STATE_FILE="${TS_RUN_DIR}/route.state"
 ROUTE_SNAPSHOT_DIR="${TS_RUN_DIR}/route.snapshot"
 
 safe_table() {
-  case "$1" in ''|*[!0-9]*) return 1 ;; esac
-  [ "$1" -ge 1000 ] && [ "$1" -le 65535 ]
+  [ "$1" = 1052 ]
+}
+
+route_exit_destinations() {
+  _re_snapshot=$("${TS_SCRIPTS_DIR}/foxytail.exitnode" snapshot) || {
+    log Error "exit preference is unknown; refusing to claim current routing"; return 1;
+  }
+  ROUTE_EXIT_FINGERPRINT=$(printf '%s' "${_re_snapshot}" | jqr -c '{profile,self,pref,actual:(.actual.ID // "")}') || return 1
+  ROUTE_DESTINATIONS=""
+  for _re_net in ${ROUTE_SUBNETS}; do
+    case "${_re_net}" in 0.0.0.0/0|::/0) continue ;; esac
+    ROUTE_DESTINATIONS="${ROUTE_DESTINATIONS}${ROUTE_DESTINATIONS:+ }${_re_net}"
+  done
+  if [ "${TS_MODE}" = bridge ] &&
+    { [ "${ROUTE_SCOPE}" != selected ] || [ -n "$(printf '%s\n' ${UID_LIST} | awk '$0!="0" && $0!=""')" ]; } &&
+    printf '%s' "${_re_snapshot}" | jqr -e '.profile!="" and .self!="" and .backend=="Running" and .actual!=null and
+      ((.pref.id!="" and .actual.ID==.pref.id) or
+       (.pref.id=="" and .pref.ip!="" and ((.actual.TailscaleIPs // [])|index(.pref.ip))!=null))' >/dev/null; then
+    case " ${ROUTE_DESTINATIONS} " in *' 0.0.0.0/0 '*) ;; *) ROUTE_DESTINATIONS="${ROUTE_DESTINATIONS} 0.0.0.0/0" ;; esac
+    if [ "${IPV6}" = on ]; then
+      case " ${ROUTE_DESTINATIONS} " in *' ::/0 '*) ;; *) ROUTE_DESTINATIONS="${ROUTE_DESTINATIONS} ::/0" ;; esac
+    fi
+  fi
 }
 
 route_validate() {
@@ -22,8 +43,9 @@ route_validate() {
   [ "${FWMARK}" = 0x40000000 ] && [ "${FWMARK_MASK}" = 0x40000000 ] || {
     log Error "unsupported mark/mask; FoxyTail reserves bit 0x40000000"; return 1;
   }
+  route_exit_destinations || return 1
   if [ "${IPV6}" = on ]; then
-    case "${ROUTE_SUBNETS}" in
+    case "${ROUTE_DESTINATIONS}" in
       *:*) ;;
       *) log Error "IPV6=on requires an IPv6 ROUTE_SUBNETS entry, e.g. fd7a:115c:a1e0::/48"; return 1 ;;
     esac
@@ -35,7 +57,7 @@ route_validate() {
 }
 
 route_fingerprint() {
-  printf '%s\n' "${TS_MODE}|${ROUTE_SCOPE}|${UID_LIST}|${ROUTE_SUBNETS}|${IPV6}|${ROUTE_TABLE}|${FWMARK}/${FWMARK_MASK}|${ROUTE_RULE_PREF}|${MAGIC_DNS}"
+  printf '%s\n' "${TS_MODE}|${ROUTE_SCOPE}|${UID_LIST}|${ROUTE_DESTINATIONS}|${IPV6}|${ROUTE_TABLE}|${FWMARK}/${FWMARK_MASK}|${ROUTE_RULE_PREF}|${MAGIC_DNS}|${ROUTE_EXIT_FINGERPRINT}"
 }
 
 # State is data, never shell input. Bad/incomplete state cannot select a table.
@@ -222,7 +244,7 @@ apply_family() {
       xtables_write "${_af_cmd}" -t mangle -A "${CHAIN_MARK}" -m owner --uid-owner "${_af_uid}" -j RETURN || return 1
     done
   fi
-  for _af_net in ${ROUTE_SUBNETS}; do
+  for _af_net in ${ROUTE_DESTINATIONS}; do
     case "${_af_family}:${_af_net}" in -4:*:*) continue ;; -6:*:*) ;; -6:*) continue ;; esac
     if [ "${ROUTE_SCOPE}" = selected ]; then
       for _af_uid in ${UID_LIST}; do

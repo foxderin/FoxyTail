@@ -17,12 +17,15 @@ class StatsRegression(unittest.TestCase):
  def setUp(self):
   self.tmp=tempfile.TemporaryDirectory(prefix='foxytail-stats-');self.addCleanup(self.tmp.cleanup)
   self.dir=Path(self.tmp.name)
+  binary=os.environ.get('FOXYFILES_TEST_BINARY')
+  if not binary:self.skipTest('run .github/tools/verify.sh to provide the native statistics helper')
+  shutil.copyfile(binary,self.dir/'foxyfiles');(self.dir/'foxyfiles').chmod(0o755)
   script=(ROOT/'tailscale/scripts/foxytail.stats').read_text()
   self.script=self.dir/'query.sh'
-  self.script.write_text('jqr() { jq "$@"; }\nstats_recent_files() { echo "$SAMPLES"; }\n'+script[script.index('stats_deltas() {'):script.index('\ncase "$1" in')]+ '\nquery "$@"\n')
+  self.script.write_text('TS_RUN_DIR="$TEST_DIR"\nTS_BIN_DIR="$TEST_DIR"\njqr() { jq "$@"; }\nstats_recent_files() { echo "$SAMPLES"; }\n'+script[script.index('stats_summary() ('):script.index('\ncase "$1" in')]+ '\nquery "$@"\n')
   self.file=self.dir/'samples.jsonl'
  def query(self,mode,*args):
-  r=subprocess.run(['sh',str(self.script),mode,*args],env={**os.environ,'SAMPLES':str(self.file),'TZ':'UTC'},text=True,capture_output=True)
+  r=subprocess.run(['sh',str(self.script),mode,*args],env={**os.environ,'TEST_DIR':str(self.dir),'SAMPLES':str(self.file),'TZ':'UTC'},text=True,capture_output=True)
   self.assertEqual(r.returncode,0,r.stderr)
   return json.loads(r.stdout)
  def samples(self,values,times=None,generations=None):
@@ -31,6 +34,14 @@ class StatsRegression(unittest.TestCase):
   for i,v in enumerate(values):
    rows.append(dict(ts=times[i],iface=dict(rx=v,tx=v),peers=[dict(id='peer',rx=v,tx=v)],uids=[dict(uid='10101',rx=0,tx=v)],uidDirection='tx',generation=dict(iface=(generations or ['a']*len(values))[i],peers=(generations or ['a']*len(values))[i],uids=(generations or ['a']*len(values))[i])))
   self.file.write_text('\n'.join(json.dumps(r) for r in rows)+'\n');return rows
+ def test_out_of_order_rows_keep_chronological_counter_semantics(self):
+  self.samples([100,300,200],[0,120,60])
+  result=self.query('summary','1970-01-01')
+  self.assertEqual(result['days'][0]['rx'],200)
+  self.assertEqual(result['hours'][0]['iface']['tx'],200)
+  self.assertEqual(result['topn'][0]['rx'],200)
+  self.assertEqual(result['uids'][0]['tx'],200)
+  self.assertEqual(list(self.dir.glob('.stats-query.*')),[])
  def test_counter_reset_accumulates_observable_bytes(self):
   self.samples([1000,1500,0,200])
   day=self.query('daily')['days'][0];self.assertEqual((day['rx'],day['tx']),(700,700))
@@ -105,13 +116,6 @@ ip6tables() { echo ipv6 >>"$TEST_DIR/calls"; echo '1 200 RETURN all -- * tailsca
   result=subprocess.run(['sh',str(runner)],env={**os.environ,'TEST_DIR':str(self.dir)},text=True,capture_output=True)
   self.assertEqual(result.returncode,0,result.stderr)
   return (self.dir/'calls').read_text().splitlines()
- def test_idle_collection_uses_one_json_pass_no_unowned_tables_and_daily_maintenance(self):
-  calls=self.collect('collect_once\ncollect_once\ncollect_once\n')
-  self.assertEqual({name:calls.count(name) for name in ['jq','cli','ipv4','ipv6','chmod','prune']},
-                   dict(jq=3,cli=3,ipv4=0,ipv6=0,chmod=1,prune=1))
-  rows=next(self.dir.glob('????-??-??.jsonl')).read_text().splitlines()
-  self.assertEqual(len(rows),3)
-  self.assertTrue(all(json.loads(row)['peers']==[dict(id='peer',rx=100,tx=200)] for row in rows))
  def test_hot_route_apply_changes_owned_families_and_generation_on_next_sample(self):
   calls=self.collect('''collect_once
 mkdir "$TEST_DIR/route.snapshot"
@@ -125,7 +129,6 @@ collect_once
   rows=[json.loads(row) for row in next(self.dir.glob('????-??-??.jsonl')).read_text().splitlines()]
   self.assertEqual([row['uids'] for row in rows],[[],[dict(uid='10101',rx=0,tx=100)],[dict(uid='10101',rx=0,tx=300)]])
   self.assertEqual([row['generation']['uids'] for row in rows],['','first','second'])
-  self.assertEqual((calls.count('ipv4'),calls.count('ipv6')),(2,1))
  def test_outage_rows_are_coalesced_until_recovery_or_date_change(self):
   calls=self.collect('''date() { echo "$test_time $test_day"; }
 test_time=100 test_day=2026-09-19
@@ -144,7 +147,6 @@ collect_once
   rows=[json.loads(row) for row in (self.dir/'2026-09-19.jsonl').read_text().splitlines()]
   self.assertEqual([row.get('error') for row in rows],['daemon-unreachable',None,'daemon-unreachable'])
   self.assertEqual(len((self.dir/'2026-09-20.jsonl').read_text().splitlines()),1)
-  self.assertEqual((calls.count('prune'),calls.count('chmod')),(2,2))
 
 class StatsLifecycle(unittest.TestCase):
  def setUp(self):

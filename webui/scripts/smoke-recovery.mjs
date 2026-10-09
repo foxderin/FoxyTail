@@ -1,10 +1,10 @@
-import { window, commandLog, canned, overrides, flush, nav, assert } from './smoke-fixture.mjs';
+import { window, commandLog, canned, overrides, holdNext, heldReplies, flush, nav, assert } from './smoke-fixture.mjs';
 
 export async function checkRecovery() {
   console.log('configuration trials survive page lifetimes and restore requires a valid preview');
   const controls = () => window.document.querySelector('[data-testid="trial-controls"]');
   const trialStatus = () => window.document.querySelector('[data-testid="trial-status"]');
-  const status = { id: 'trial_smoke', status: 'running', deadline: Math.floor(Date.now() / 1000) + 120, reason: '',
+  const status = { id: 'trial_smoke', status: 'running', remaining: 120, reason: '',
     previous: { mode: 'bridge', dnsMode: 'legacy', routeScope: 'all' }, candidate: { mode: 'proxy', dnsMode: 'local', routeScope: 'all' } };
   canned['trial-status'] = { ok: true, trial: null };
   nav('settings');
@@ -20,6 +20,13 @@ export async function checkRecovery() {
   await flush();
   assert(commandLog.findLast(entry => entry.sub === 'trial-start')?.args.join('|') === '60|proxy', 'trial start submits the explicit duration and candidate mode');
   assert(trialStatus()?.textContent.includes('proxy / local') && controls()?.querySelectorAll('button').length === 2, 'running trial exposes candidate, baseline and confirm/revert actions');
+  const clockNow = window.Date.now;
+  window.Date.now = () => clockNow() - 86400000;
+  try {
+    await new Promise(resolve => window.setTimeout(resolve, 1100));
+    const remaining = Number(trialStatus()?.textContent.match(/(\d+) s/)?.[1]);
+    assert(remaining >= 117 && remaining <= 120, 'wall-clock rollback cannot lengthen the monotonic trial countdown');
+  } finally { window.Date.now = clockNow; }
   nav('dashboard');
   await flush();
   nav('settings');
@@ -60,4 +67,37 @@ export async function checkRecovery() {
   await flush();
   assert(!window.document.querySelector('.restore-apply'), 'a malformed preview cannot authorize restoring an archive');
   delete overrides['restore-preview'];
+  window.document.querySelector('.restore-preview')?.click();
+  await flush();
+  assert(window.document.querySelector('.restore-apply'), 'a complete preview is actionable');
+  const changed = window.__foxy.startTask('settings-save', 'settings-set', 'SOCKS_PORT', '1201');
+  await flush();
+  await changed.promise;
+  assert(!window.document.querySelector('.restore-apply'), 'saving configuration invalidates an existing restore preview');
+  holdNext.add('restore-preview');
+  window.document.querySelector('.restore-preview')?.click();
+  await flush();
+  const oldPreview = heldReplies.findLast(reply => reply.sub === 'restore-preview');
+  const changedAgain = window.__foxy.startTask('settings-save', 'settings-set', 'SOCKS_PORT', '1202');
+  await flush();
+  await changedAgain.promise;
+  oldPreview?.finish();
+  await flush();
+  assert(!window.document.querySelector('.restore-apply'), 'a late preview from before a save cannot authorize restore');
+  window.document.querySelector('.restore-preview')?.click();
+  await flush();
+  holdNext.add('restore');
+  window.document.querySelector('.restore-apply')?.click();
+  await flush();
+  window.document.querySelector('.md-dialog-actions .btn-filled')?.click();
+  await flush();
+  const restoreReply = heldReplies.findLast(reply => reply.sub === 'restore');
+  const restoreCount = commandLog.filter(entry => entry.sub === 'restore').length;
+  const restoreId = window.__foxy.getTask('restore')?.call.requestId;
+  nav('dashboard'); await flush(); nav('settings'); await flush();
+  assert(restoreReply && window.__foxy.getTask('restore')?.call.requestId === restoreId && window.document.querySelector('[data-task-key="restore"]'), 'restore ownership and progress survive Settings remount');
+  assert(commandLog.filter(entry => entry.sub === 'restore').length === restoreCount, 'remount does not repeat the restore mutation');
+  restoreReply?.finish();
+  await flush();
+  assert(window.document.querySelector('[data-testid="restore-previous"]')?.textContent === canned.restore.previous, 'late restore completion retains the rollback location after navigation');
 }

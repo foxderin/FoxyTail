@@ -6,7 +6,7 @@ import {
   onMount,
   type JSX,
 } from 'solid-js';
-import { createApiScope } from '../api';
+import { createApiScope, type ApiResult } from '../api';
 import { t } from '../i18n';
 import { fmtBytes } from '../format';
 import {
@@ -69,20 +69,22 @@ export default function Traffic(): JSX.Element {
   const [uidError, setUidError] = createSignal<string | null>(null);
   const [uidLoading, setUidLoading] = createSignal(false);
   const hasSamples = () =>
-    chart()?.rx.some((value) => value !== null) ||
-    chart()?.tx.some((value) => value !== null);
+    Boolean(chart()?.rx.some((value) => value !== null) ||
+      chart()?.tx.some((value) => value !== null));
   const totals = createMemo(() => ({
     rx: chart()?.rx.reduce<number>((sum, value) => sum + bytes(value), 0) || 0,
     tx: chart()?.tx.reduce<number>((sum, value) => sum + bytes(value), 0) || 0,
   }));
   const refreshing = () => chartLoading() || topLoading() || uidLoading();
+  let summary: Promise<ApiResult> | undefined;
+  const readSummary = () => summary ??= scope.api('traffic', 'summary');
 
   async function loadChart() {
     const selectedMode = mode();
     const my = ++chartSeq;
     setChartLoading(true);
     setChartError(null);
-    const res = await scope.api('traffic', selectedMode);
+    const res = await readSummary();
     if (res.cancelled || my !== chartSeq) return;
     setChartLoading(false);
     if (!res.ok) {
@@ -119,7 +121,7 @@ export default function Traffic(): JSX.Element {
     if (topLoading()) return;
     const my = ++topSeq;
     setTopLoading(true);
-    const res = await scope.api('traffic', 'topn', 10);
+    const res = await readSummary();
     if (res.cancelled || my !== topSeq) return;
     if (!res.ok) {
       setTopLoading(false);
@@ -131,6 +133,7 @@ export default function Traffic(): JSX.Element {
       ? (res.topn as TopEntry[])
           .filter((row) => bytes(row.rx) + bytes(row.tx) > 0)
           .sort((a, b) => bytes(b.rx) + bytes(b.tx) - bytes(a.rx) - bytes(a.tx))
+          .slice(0, 10)
       : [];
     setTopn(rows.map((entry) => ({ entry, name: entry.id })));
     // Avoid an extra root call when there are no counters to label.
@@ -155,7 +158,7 @@ export default function Traffic(): JSX.Element {
     if (uidLoading()) return;
     const my = ++uidSeq;
     setUidLoading(true);
-    const res = await scope.api('traffic-uids');
+    const res = await readSummary();
     if (res.cancelled || my !== uidSeq) return;
     if (!res.ok) {
       setUidLoading(false);
@@ -196,6 +199,7 @@ export default function Traffic(): JSX.Element {
   }
 
   const refresh = () => {
+    summary = undefined;
     void loadChart();
     void loadTopn();
     void loadUids();
@@ -226,7 +230,6 @@ export default function Traffic(): JSX.Element {
                 onClick={() => {
                   if (period === mode()) return;
                   setMode(period);
-                  setChart(null);
                   void loadChart();
                 }}
               >
@@ -282,7 +285,7 @@ export default function Traffic(): JSX.Element {
         <LoadGate
           ready={chart() !== null}
           error={chartError()}
-          onRetry={() => void loadChart()}
+          onRetry={refresh}
           skeleton={
             <div class="network-chart-skeleton" aria-busy="true">
               <div class="skeleton" />
@@ -330,7 +333,7 @@ export default function Traffic(): JSX.Element {
           <LoadGate
             ready={topn() !== null}
             error={topError()}
-            onRetry={() => void loadTopn()}
+            onRetry={refresh}
             skeleton={<SkeletonRows rows={4} />}
             hasContent={(topn() || []).length > 0}
             empty={<EmptyState text={t('net_traffic_no_peer')} icon="group" />}
@@ -381,7 +384,7 @@ export default function Traffic(): JSX.Element {
           <LoadGate
             ready={uidRows() !== null}
             error={uidError()}
-            onRetry={() => void loadUids()}
+            onRetry={refresh}
             skeleton={<SkeletonRows rows={4} />}
             hasContent={(uidRows() || []).length > 0}
             empty={<EmptyState text={t('net_traffic_no_app')} icon="router" />}

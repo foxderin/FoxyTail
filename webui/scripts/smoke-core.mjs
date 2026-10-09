@@ -1,4 +1,4 @@
-import { window, bundle, ROUTES, failures, vc, stubDom, bridge, pendingCancels, commandLog, canned, overrides, spawnLog, flush, nav, assert, JSDOM, VirtualConsole } from './smoke-fixture.mjs';
+import { window, bundle, ROUTES, failures, vc, stubDom, bridge, pendingCancels, commandLog, holdNext, heldReplies, canned, overrides, spawnLog, flush, nav, assert, JSDOM, VirtualConsole } from './smoke-fixture.mjs';
 
 export async function checkCore() {
   /* --- boot --------------------------------------------------------------- */
@@ -168,41 +168,147 @@ export async function checkCore() {
     assert(!view.textContent.includes('first-load-' + route), route + ': retry recovers data');
   }
 
-  console.log('cancellation identity, delayed acknowledgement and replacement ordering');
+  console.log('cancellation identity and retained ownership');
   const old = window.__foxy.startTask('identity', 'speedtest-exitnodes');
   await flush();
   const oldFinish = bridge.releaseSpeedtest;
   const countBeforeReplace = bridge.speedtestExecCount;
+  const adopted = window.__foxy.startTask('identity', 'speedtest-exitnodes');
+  assert(adopted === old, 'starting a pending key returns its exact existing call');
   bridge.holdCancel = true;
-  const replacement = window.__foxy.startTask('identity', 'speedtest-exitnodes');
+  const cancelling = old.cancel();
   await flush();
-  assert(bridge.speedtestExecCount === countBeforeReplace, 'replacement waits for cancellation acknowledgement');
-  assert(pendingCancels.some((entry) => entry.requestId === old.requestId), 'cancel targets only the old request id');
+  assert(bridge.speedtestExecCount === countBeforeReplace && old.cancellation === 'requested', 'requesting cancellation retains the running task without replacement');
+  assert(pendingCancels.some((entry) => entry.requestId === old.requestId), 'cancel targets only the owned request id');
   oldFinish();
   await flush();
-  assert(window.__foxy.getTask('identity')?.status === 'running', 'late old response does not finish replacement');
+  assert(window.__foxy.getTask('identity')?.status === 'done', 'real completion wins while cancellation acknowledgement is pending');
   for (const entry of pendingCancels.splice(0)) entry.acknowledge();
   bridge.holdCancel = false;
+  const completedCancel = await cancelling;
+  assert(completedCancel.completed && !completedCancel.cancelled && window.__foxy.getTask('identity')?.result?.ok, 'late cancellation acknowledgement cannot replace successful completion');
+  const replacement = window.__foxy.startTask('identity', 'speedtest-exitnodes');
   await flush();
-  assert(bridge.speedtestExecCount === countBeforeReplace + 1, 'replacement launches once after acknowledgement');
-  assert(replacement.requestId !== old.requestId, 'replacement has a distinct identity');
+  assert(replacement.requestId !== old.requestId && bridge.speedtestExecCount === countBeforeReplace + 1, 'only a deliberate start after terminal completion launches a new request');
   bridge.releaseSpeedtest();
   await flush();
   assert(!commandLog.some(({ cmd }) => cmd.includes('pkill')), 'no cancellation uses process-name matching');
 
-  const cannotCancel = window.__foxy.startTask('denied', 'speedtest-exitnodes');
+  nav('exitnodes');
+  await flush();
+  const cannotCancel = window.__foxy.startTask('speedtest-exitnodes', 'speedtest-exitnodes');
   await flush();
   overrides.cancel = [1, JSON.stringify({ ok: false, error: 'still running' }), ''];
   const beforeDenied = bridge.speedtestExecCount;
-  window.__foxy.startTask('denied', 'speedtest-exitnodes');
+  const denied = cannotCancel.cancel();
   await flush();
-  assert(bridge.speedtestExecCount === beforeDenied, 'failed cancellation blocks replacement');
-  assert(window.__foxy.getTask('denied')?.status === 'error', 'failed cancellation is visible as an error');
-  window.__foxy.startTask('denied', 'speedtest-exitnodes');
+  assert(!(await denied).ok && cannotCancel.cancellation === 'failed' && !cannotCancel.cancelled, 'failed cancellation does not claim confirmed termination');
+  assert(window.__foxy.getTask('speedtest-exitnodes')?.status === 'running' && !window.__foxy.getTask('speedtest-exitnodes')?.result, 'failed cancellation leaves task pending without a cached terminal error');
+  assert(window.document.querySelector('[data-task-key="speedtest-exitnodes"][data-cancellation="failed"] button:not(:disabled)'), 'failed cancellation exposes a usable retry action');
+  assert(window.__foxy.startTask('speedtest-exitnodes', 'speedtest-exitnodes') === cannotCancel && bridge.speedtestExecCount === beforeDenied, 'failed cancellation cannot be bypassed by another start');
+  const attemptsBeforeRetry = commandLog.filter(entry => entry.sub === 'cancel').length;
+  const retry = cannotCancel.cancel();
   await flush();
-  assert(bridge.speedtestExecCount === beforeDenied, 'repeated replacement cannot bypass a failed cancellation');
-  delete overrides.cancel;
+  await retry;
+  assert(commandLog.filter(entry => entry.sub === 'cancel').length === attemptsBeforeRetry + 1, 'retry performs a new cancellation attempt instead of replaying the failed promise');
   bridge.releaseSpeedtest();
+  await flush();
+  assert(window.__foxy.getTask('speedtest-exitnodes')?.status === 'done' && window.__foxy.getTask('speedtest-exitnodes')?.result?.ok, 'late real completion remains available after repeated cancellation failure');
+  delete overrides.cancel;
+
+  const confirmed = window.__foxy.startTask('confirmed', 'speedtest-exitnodes');
+  await flush();
+  const confirmedFinish = bridge.releaseSpeedtest;
+  const confirmedCancel = confirmed.cancel();
+  await flush();
+  assert((await confirmedCancel).cancelled && confirmed.cancelled && window.__foxy.getTask('confirmed')?.status === 'cancelled', 'backend acknowledgement alone permits cancelled terminal status');
+  confirmedFinish();
+  await flush();
+  assert(window.__foxy.getTask('confirmed')?.status === 'cancelled', 'a response after confirmed termination cannot overwrite cancellation');
+
+  console.log('restore commit races and abandoned read observers');
+  canned.restore = { ok: true, restored: true };
+  holdNext.add('restore');
+  const restoreReplyStart = heldReplies.length;
+  const restore = window.__foxy.startTask('restore-owner-smoke', 'restore', '/backup', 'archive', 'baseline');
+  await flush();
+  overrides.cancel = [1, JSON.stringify({ ok: false, error: 'restore commit already owns the transaction' }), ''];
+  const rejectedRestoreCancel = restore.cancel();
+  await flush();
+  assert(!(await rejectedRestoreCancel).ok && restore.cancellation === 'failed' && window.__foxy.getTask('restore-owner-smoke')?.status === 'running', 'commit rejection leaves the destructive mutation owned and awaiting its true result');
+  overrides.cancel = [0, JSON.stringify({ ok: true, completed: true }), ''];
+  const commitCancel = restore.cancel();
+  await flush();
+  assert((await commitCancel).completed && !restore.cancelled && window.__foxy.getTask('restore-owner-smoke')?.status === 'running', 'completed commit acknowledgement waits for the original bridge result rather than claiming cancellation');
+  assert(window.__foxy.startTask('restore-owner-smoke', 'restore', '/different') === restore, 'a crossing commit response still blocks duplicate destructive action');
+  heldReplies.slice(restoreReplyStart).find(reply => reply.sub === 'restore')?.finish();
+  await flush();
+  assert(window.__foxy.getTask('restore-owner-smoke')?.status === 'done', 'restore publishes its actual commit outcome after the acknowledgement race');
+  overrides.cancel = [1, JSON.stringify({ ok: false, error: 'cannot stop read yet' }), ''];
+  const scope = window.__foxy.createApiScope();
+  holdNext.add('peers');
+  const readReplyStart = heldReplies.length;
+  const abandoned = scope.api('peers');
+  let appliedLateRead = false;
+  abandoned.then(result => { if (!result.cancelled) appliedLateRead = true; });
+  await flush();
+  scope.cancelAll();
+  await flush();
+  heldReplies.slice(readReplyStart).find(reply => reply.sub === 'peers')?.finish();
+  await flush();
+  assert((await abandoned).cancelled && !appliedLateRead, 'detached page observers never apply late read data even when backend cancellation failed');
+  delete overrides.cancel;
+  const freshRead = scope.api('peers');
+  await flush();
+  assert((await freshRead).ok, 'a reused scope can issue fresh reads after detaching its old generation');
+
+  console.log('timeouts report ownership instead of false completion');
+  const originalSetTimeout = window.setTimeout;
+  const deadlines = [];
+  window.setTimeout = function (callback, delay, ...args) {
+    if (delay === 120000 || delay === 90000) {
+      deadlines.push(() => callback(...args));
+      return originalSetTimeout.call(window, () => {}, 2147483647);
+    }
+    return originalSetTimeout.call(window, callback, delay, ...args);
+  };
+  holdNext.add('control');
+  const timeoutReplyStart = heldReplies.length;
+  const committing = window.__foxy.startTask('timeout-commit', 'control', 'restart');
+  await flush();
+  window.setTimeout = originalSetTimeout;
+  const cancelCount = commandLog.filter(entry => entry.sub === 'cancel').length;
+  assert(deadlines.length === 1, 'commit command installs its deadline');
+  deadlines[0]?.();
+  await flush();
+  assert(committing.timedOut && window.__foxy.getTask('timeout-commit')?.status === 'running' && commandLog.filter(entry => entry.sub === 'cancel').length === cancelCount, 'a committing timeout stays owned without dispatching unsafe cancellation');
+  heldReplies.slice(timeoutReplyStart).find(reply => reply.sub === 'control')?.finish();
+  await flush();
+  assert(window.__foxy.getTask('timeout-commit')?.status === 'done', 'commit success arriving beyond the deadline is preserved');
+
+  deadlines.length = 0;
+  window.setTimeout = function (callback, delay, ...args) {
+    if (delay === 90000) {
+      deadlines.push(() => callback(...args));
+      return originalSetTimeout.call(window, () => {}, 2147483647);
+    }
+    return originalSetTimeout.call(window, callback, delay, ...args);
+  };
+  overrides.cancel = [1, JSON.stringify({ ok: false, error: 'timeout cancellation failed' }), ''];
+  const timedProbe = window.__foxy.startTask('speedtest-exitnodes', 'speedtest-exitnodes');
+  await flush();
+  window.setTimeout = originalSetTimeout;
+  const timedProbeFinish = bridge.releaseSpeedtest;
+  assert(deadlines.length === 1, 'cancellable command installs its deadline');
+  deadlines[0]?.();
+  await flush();
+  assert(timedProbe.timedOut && timedProbe.cancellation === 'failed' && window.document.querySelector('[data-task-key="speedtest-exitnodes"][data-timed-out="true"]'), 'failed deadline cancellation remains visibly running and timed out');
+  delete overrides.cancel;
+  const timeoutRetry = timedProbe.cancel();
+  await flush();
+  await timeoutRetry;
+  assert(window.__foxy.getTask('speedtest-exitnodes')?.result?.timedOut && window.__foxy.getTask('speedtest-exitnodes')?.result?.stopped && window.__foxy.getTask('speedtest-exitnodes')?.status === 'error', 'confirmed timeout termination becomes a truthful stopped timeout result');
+  timedProbeFinish();
   await flush();
 
   console.log('native TUN capabilities and SOCKS5 protocol');

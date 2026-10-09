@@ -84,7 +84,7 @@ case "$1" in
   diag) shift; cmd_diag "$1" ;;
   diag-check) cmd_diag_check ;;
   files-inbox) cmd_files_inbox ;;
-  file-send) shift; cmd_file_send "$1" "$2" ;;
+  file-send) shift; cmd_file_send "$1" "$2" "$3" ;;
   file-receive) cmd_file_receive ;;
   file-delete) shift; cmd_file_delete "$1" ;;
   file-clear) cmd_file_clear ;;
@@ -93,7 +93,7 @@ case "$1" in
   backup) cmd_backup ;;
   backup-list) cmd_backup_list ;;
   restore-preview) shift; cmd_restore_preview "$1" ;;
-  restore) shift; cmd_restore "$1" "$2" ;;
+  restore) shift; cmd_restore "$1" "$2" "$3" ;;
   trial-start) shift; cmd_trial_start "$1" "$2" ;;
   trial-status) cmd_trial_status ;;
   trial-confirm) shift; cmd_trial_confirm "$1" ;;

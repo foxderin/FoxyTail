@@ -6,6 +6,8 @@ import { Card, SkeletonRows } from '../components/Basics';
 import { MdIcon } from '../icons';
 import ContextRules from './ContextRules';
 import SettingsBackup from './SettingsBackup';
+import { getTask } from '../tasks';
+import { RESTORE_TASK } from '../backup';
 
 const HOOKS: [string, 'set_hook_up' | 'set_hook_down'][] = [
   ['foxytail.tun.up', 'set_hook_up'],
@@ -14,16 +16,12 @@ const HOOKS: [string, 'set_hook_up' | 'set_hook_down'][] = [
 
 export default function SettingsMaintenance(props: ParentProps<{
   locked: boolean;
-  busy: boolean;
-  setBusy: (busy: boolean) => void;
   onPending: () => void;
-  onRestore: () => Promise<unknown>;
 }>): JSX.Element {
   const hookAbort = new AbortController();
   onCleanup(() => hookAbort.abort());
   const [advancedLoaded, setAdvancedLoaded] = createSignal(false);
   const [advancedBusy, setAdvancedBusy] = createSignal(false);
-  const [revision, setRevision] = createSignal(1);
   const [hooks, setHooks] = createSignal<Record<string, string>>({});
   async function loadAdvanced() {
     if (advancedBusy()) return;
@@ -36,13 +34,9 @@ export default function SettingsMaintenance(props: ParentProps<{
         if (!hookAbort.signal.aborted) setHooks(h => ({ ...h, [key]: t('misc_unavailable') }));
       }
     }));
+    if (hookAbort.signal.aborted) return;
     setAdvancedBusy(false);
     setAdvancedLoaded(true);
-  }
-  async function restored() {
-    await props.onRestore();
-    setRevision(value => value + 1);
-    if (advancedLoaded()) void loadAdvanced();
   }
   return <>
     <details class="tool-disclosure" onToggle={e => { if (e.currentTarget.open && !advancedLoaded()) void loadAdvanced(); }}>
@@ -50,13 +44,13 @@ export default function SettingsMaintenance(props: ParentProps<{
       <div class="tool-disclosure-body">
         {props.children}
         <Show when={advancedLoaded() && !advancedBusy()} fallback={<SkeletonRows rows={5} />}>
-          <Show when={revision()} keyed>{(_revision) => <ContextRules locked={props.locked} onPending={props.onPending} />}</Show>
+          <Show when={getTask(RESTORE_TASK)?.status === 'done' ? getTask(RESTORE_TASK)?.startedAt : 1} keyed>{(_revision) => <ContextRules locked={props.locked} onPending={props.onPending} />}</Show>
           <Card title={t('set_hooks')} icon="article" description={t('set_hooks_hint')}>
             <For each={HOOKS}>{([, key]) => <div class="tool-result"><p class="tool-hint">{t(key)}</p><pre class="mono">{hooks()[key] ?? t('loading')}</pre></div>}</For>
           </Card>
         </Show>
       </div>
     </details>
-    <SettingsBackup locked={props.locked} busy={props.busy} setBusy={props.setBusy} onPending={props.onPending} onRestore={restored} />
+    <SettingsBackup locked={props.locked} />
   </>;
 }

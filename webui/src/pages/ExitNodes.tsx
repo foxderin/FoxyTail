@@ -10,7 +10,7 @@ import {
 } from 'solid-js';
 import { createApiScope, hasRoot } from '../api';
 import { t } from '../i18n';
-import { status, statusError, statusLoading, refreshStatus, connState } from '../state';
+import { status, statusError, statusLoading, refreshStatus, connState, exitRoutingLabel } from '../state';
 import { getTask } from '../tasks';
 import { latClass } from '../format';
 import {
@@ -44,9 +44,9 @@ export default function ExitNodes(): JSX.Element {
   const task = () => getTask(TASK_KEY);
   // A live daemon can be stopped even when its exit preferences are unreadable.
   const statusKnown = () =>
-    !statusError() && !['unknown', 'stopped'].includes(connState(status()));
+    !statusError() && status()?.exitRouting?.known === true && !['unknown', 'stopped'].includes(connState(status()));
   const currentId = () =>
-    statusKnown() ? (status()?.exitNode?.id ?? '') : null;
+    statusKnown() ? (status()?.exitRouting?.selected?.auto ? `auto:${status()!.exitRouting!.selected!.auto}` : status()?.exitRouting?.selected?.id || status()?.exitRouting?.selected?.ip || '') : null;
   const selectedId = () => draftId() ?? currentId();
   const changed = () =>
     selectedId() !== null &&
@@ -57,7 +57,7 @@ export default function ExitNodes(): JSX.Element {
   const canApply = () =>
     statusKnown() &&
     pendingId() === null &&
-    changed() &&
+    (changed() || status()?.exitRouting?.effective === 'not-effective') &&
     (selectedId() === '' || selectedPeer()?.online);
   const choose = (id: string) => {
     setPendingId(null);
@@ -65,7 +65,7 @@ export default function ExitNodes(): JSX.Element {
   };
   createEffect(() => {
     const expected = pendingId();
-    if (expected !== null && statusKnown() && currentId() === expected) {
+    if (expected !== null && statusKnown() && currentId() === expected && status()?.exitRouting?.effective !== 'not-effective') {
       setPendingId(null);
       setDraftId(null);
       showToast(t(expected === '' ? 'exit_cleared' : 'exit_set_done'), 'ok');
@@ -110,7 +110,7 @@ export default function ExitNodes(): JSX.Element {
     setSwitching(true);
     const res = clear
       ? await scope.api('exitnode-clear')
-      : await scope.api('exitnode-set', peer!.ip);
+      : await scope.api('exitnode-set', peer!.id);
     if (res.cancelled) {
       setSwitching(false);
       return;
@@ -120,7 +120,10 @@ export default function ExitNodes(): JSX.Element {
       setDraftId(expected);
       setPendingId(expected);
       await refreshStatus({ afterCurrent: true });
-    } else toastApiError(t('op_failed'), res);
+    } else {
+      toastApiError(t('op_failed'), res);
+      await refreshStatus({ afterCurrent: true });
+    }
     setSwitching(false);
   }
 
@@ -141,6 +144,13 @@ export default function ExitNodes(): JSX.Element {
         <RefreshButton loading={loading()} onClick={() => void loadList()} />
       </div>
       <TaskProgress taskKey={TASK_KEY} />
+      <div class="banner" classList={{ warn: !!status()?.exitRouting?.warning }}>
+        <MdIcon name="info" size={18} />
+        <span>{t(exitRoutingLabel())}</span>
+      </div>
+      <Show when={status()?.exitRouting?.selected && status()?.mode === 'bridge'}>
+        <p class="network-supporting">{t('net_exit_scope')}: {status()?.exitRouting?.scope} {status()?.exitRouting?.uids?.join(', ')}</p>
+      </Show>
       <Show when={task()?.status === 'error'}>
         <div class="banner warn">
           <MdIcon name="error" size={18} />
@@ -160,7 +170,7 @@ export default function ExitNodes(): JSX.Element {
           <span class="eyebrow">{t('net_exit_selection')}</span>
           <h2>
             {statusKnown()
-              ? status()?.exitNode?.hostname || t('net_exit_local')
+              ? status()?.exitNode?.hostname || currentId() || t('net_exit_local')
               : t('net_exit_unknown')}
           </h2>
           <p>
@@ -311,7 +321,7 @@ export default function ExitNodes(): JSX.Element {
           <div>
             <StatusDot
               state={
-                !statusKnown() || pendingId() !== null || changed()
+                !statusKnown() || pendingId() !== null || changed() || status()?.exitRouting?.effective === 'not-effective'
                   ? 'warn'
                   : 'on'
               }
@@ -325,7 +335,7 @@ export default function ExitNodes(): JSX.Element {
                     ? t('net_exit_pending') +
                       ' · ' +
                       (selectedPeer()?.hostname || t('net_exit_local'))
-                    : t('net_exit_applied')}
+                    : t(exitRoutingLabel())}
             </span>
           </div>
           <Show when={pendingId() !== null}>

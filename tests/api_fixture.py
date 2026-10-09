@@ -1,5 +1,7 @@
 """Private filesystem and actual shell modules shared by the WebAPI tests."""
 import io
+import os
+import shutil
 from pathlib import Path
 import shlex
 import subprocess
@@ -8,7 +10,7 @@ import tarfile
 import tempfile
 import unittest
 
-from runtime_fixture import ROOT, install_settings
+from runtime_fixture import ROOT, host_process_shell, install_settings
 
 
 class ApiTestCase(unittest.TestCase):
@@ -24,6 +26,13 @@ class ApiTestCase(unittest.TestCase):
         for name in ['foxytail.conf', 'routes.conf', 'context.conf']:
             (self.conf / name).write_bytes((ROOT / 'tailscale/conf' / name).read_bytes())
         install_settings(self.base)
+        taildrop = self.scripts / 'foxytail.taildrop.sh'
+        taildrop.write_text(taildrop.read_text().replace('/sdcard', str(self.sdcard)))
+        binary = os.environ.get('FOXYFILES_TEST_BINARY')
+        if binary:
+            (self.base / 'bin').mkdir(exist_ok=True)
+            shutil.copyfile(binary, self.base / 'bin/foxyfiles')
+            (self.base / 'bin/foxyfiles').chmod(0o755)
         context = (ROOT / 'tailscale/scripts/foxytail.context').read_text()
         # Keep the actual validator; watcher lifecycle is outside this fixture.
         context = context.replace('#!/system/bin/sh', '#!/bin/sh\n'
@@ -33,7 +42,7 @@ class ApiTestCase(unittest.TestCase):
         (self.scripts / 'start.sh').write_text('#!/bin/sh\n[ "$1" = reload-residents ]\n')
         (self.scripts / 'start.sh').chmod(0o755)
         for path in (ROOT / 'tailscale/scripts').glob('foxytail.webapi*.sh'):
-            source = path.read_text().replace('/sdcard/', str(self.sdcard) + '/')
+            source = path.read_text().replace('/sdcard', str(self.sdcard))
             source = source.replace('"${TS_SCRIPTS_DIR}/start.sh" reload-residents',
                                     'sh "${TS_SCRIPTS_DIR}/start.sh" reload-residents')
             (self.scripts / path.name).write_text(source)
@@ -54,11 +63,14 @@ class ApiTestCase(unittest.TestCase):
 base64() {
   case "$1" in -w0) ''' + encoder + ''' ;; *) /usr/bin/base64 "$@" ;; esac
 }
+tar() {
+  case "$1" in -czf) command tar --format ustar "$@" ;; *) command tar "$@" ;; esac
+}
 '''
         self.lib.write_text(
             'DIR=' + shlex.quote(str(self.scripts)) + '\n' +
             '. ' + shlex.quote(str(self.base / 'settings.sh')) + '\n' +
-            'mkdir -p "$TS_PID_DIR"\n' + platform + helpers + '\n'
+            'mkdir -p "$TS_PID_DIR"\n' + platform + helpers + host_process_shell() + '\n'
         )
 
     def tearDown(self):

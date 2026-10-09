@@ -3,11 +3,13 @@ import {
   createEffect,
   createSignal,
   createUniqueId,
+  on,
   onCleanup,
   Show,
   type JSX,
 } from 'solid-js';
-import { createApiScope, hasRoot } from '../api';
+import { hasRoot } from '../api';
+import { getTask, startTask, type Task } from '../tasks';
 import { t, type I18nKey } from '../i18n';
 import {
   refreshStatus,
@@ -32,7 +34,6 @@ type Feedback = { key: I18nKey; tone: 'info' | 'warning'; settings?: boolean; un
 const MODES = ['tun', 'bridge', 'proxy'] as const;
 
 export function ServiceControls(): JSX.Element {
-  const scope = createApiScope();
   const feedbackId = createUniqueId();
   let container!: HTMLDivElement;
   let disposed = false;
@@ -59,8 +60,10 @@ export function ServiceControls(): JSX.Element {
     !statusLoading() && !statusError() && knownSnapshot(status());
   const running = () => status()?.daemon === 'running';
   const mode = () => status()?.mode || '';
+  const serviceTask = () => getTask('service-control');
+  const operationRunning = () => serviceTask()?.status === 'running';
   const canWrite = () => !disposed && hasRoot && known();
-  const locked = () => !canWrite() || Boolean(busy()) || Boolean(pending());
+  const locked = () => !canWrite() || Boolean(busy()) || Boolean(pending()) || operationRunning();
   const matches = (snapshot: StatusSnapshot | null, expected: ExpectedState) =>
     knownSnapshot(snapshot) &&
     (snapshot.daemon === 'running') === expected.running &&
@@ -105,16 +108,49 @@ export function ServiceControls(): JSX.Element {
     }
   });
 
+  async function reconcile(task: Task) {
+    if (!task.result) return;
+    const action = task.cmd === 'mode-set' ? 'mode' : task.args[0] as ServiceAction;
+    const expected: ExpectedState = {
+      action,
+      running: action !== 'stop',
+      mode: action === 'mode' ? String(task.args[0]) : mode(),
+      configPending: task.result.applied === false || task.result.restartRequired === true,
+    };
+    setBusy(action);
+    setPhase('verify');
+    try {
+      const observed = await refreshStatus({ afterCurrent: true });
+      if (disposed || serviceTask()?.call !== task.call) return;
+      if (!task.result.ok || task.result.cancelled) {
+        setFeedback({ key: 'net_controls_result_unknown', tone: 'warning', unconfirmed: true });
+        if (!task.result.cancelled && !(action !== 'restart' && action !== 'mode' && matches(observed, expected))) {
+          toastApiError(t('op_failed'), task.result);
+        }
+      } else if (!observed || !matches(observed, expected)) {
+        setPending(expected);
+        setFeedback({ key: 'net_controls_pending', tone: 'warning' });
+      } else finish(expected);
+    } finally {
+      if (!disposed) {
+        setBusy(null);
+        setPhase(null);
+        syncControls();
+      }
+    }
+  }
+  let reconciledCall = serviceTask()?.result ? serviceTask()?.call : undefined;
+  createEffect(on(serviceTask, task => {
+    if (!task?.result || task.call === reconciledCall) return;
+    reconciledCall = task.call;
+    void reconcile(task);
+  }));
+
   async function mutate(action: ServiceAction, nextMode?: string) {
     if (locked()) {
       syncControls();
       return;
     }
-    const expected: ExpectedState = {
-      running: action !== 'stop',
-      mode: nextMode || mode(),
-      action,
-    };
     if (
       action === 'mode' &&
       (!nextMode ||
@@ -140,34 +176,9 @@ export function ServiceControls(): JSX.Element {
       }
       if (!canWrite()) return;
       setPhase('run');
-      const result =
-        action === 'mode'
-          ? await scope.api('mode-set', nextMode!)
-          : await scope.api('control', action);
-      if (disposed) return;
-      if (!result.ok || result.cancelled) {
-        // A failed command may have partially changed state. Re-read the device,
-        // but never claim that an acknowledgement proves the requested outcome.
-        setPhase('verify');
-        const observed = await refreshStatus({ afterCurrent: true });
-        if (disposed) return;
-        setFeedback({ key: 'net_controls_result_unknown', tone: 'warning', unconfirmed: true });
-        // Starting/stopping has an observable outcome even if its response was
-        // lost. A running snapshot alone cannot prove that a restart completed.
-        if (!result.cancelled && !(action !== 'restart' && action !== 'mode' && matches(observed, expected))) {
-          toastApiError(t('op_failed'), result);
-        }
-        return;
-      }
-      setPhase('verify');
-      expected.configPending =
-        result.applied === false || result.restartRequired === true;
-      const observed = await refreshStatus({ afterCurrent: true });
-      if (disposed) return;
-      if (!observed || !matches(observed, expected)) {
-        setPending(expected);
-        setFeedback({ key: 'net_controls_pending', tone: 'warning' });
-      } else finish(expected);
+      if (operationRunning()) return;
+      if (action === 'mode') startTask('service-control', 'mode-set', nextMode!);
+      else startTask('service-control', 'control', action);
     } finally {
       setBusy(null);
       setPhase(null);
@@ -201,7 +212,11 @@ export function ServiceControls(): JSX.Element {
     }
   }
   const message = (): string =>
-    phase() === 'confirm'
+    operationRunning() && serviceTask()?.call.timedOut
+      ? t('task_timeout_running')
+      : operationRunning() && !busy()
+        ? t('net_working')
+      : phase() === 'confirm'
       ? t('net_controls_awaiting_confirm')
       : phase() === 'verify'
         ? t('net_controls_verifying')
@@ -221,7 +236,7 @@ export function ServiceControls(): JSX.Element {
       class="service-controls"
       role="group"
       aria-label={t('net_controls_label')}
-      aria-busy={Boolean(busy())}
+      aria-busy={Boolean(busy()) || operationRunning()}
     >
       <div class="service-controls-row">
         <div class="service-controls-toggle" data-testid="service-toggle">
@@ -288,7 +303,7 @@ export function ServiceControls(): JSX.Element {
           role="status"
         >
           <Show
-            when={busy()}
+            when={busy() || operationRunning()}
             fallback={
               <MdIcon
                 name={
@@ -303,7 +318,7 @@ export function ServiceControls(): JSX.Element {
             <CircularProgress size={16} />
           </Show>
           <span>{message()}</span>
-          <Show when={!busy() && (pending() || !known() || feedback()?.unconfirmed)}>
+          <Show when={!busy() && !operationRunning() && (pending() || !known() || feedback()?.unconfirmed)}>
             <Button
               variant="text"
               class="service-controls-retry"

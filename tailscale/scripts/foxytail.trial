@@ -28,13 +28,28 @@ trial_summary() (
 )
 trial_status() {
   [ -f "${TRIAL_DIR}/id" ] || { echo '{"ok":true,"trial":null}'; return; }
+  _ts_remaining=0
+  if [ "$(cat "${TRIAL_DIR}/status")" = running ] && trial_unexpired; then
+    _ts_remaining=$((_tu_deadline - _tu_now))
+  fi
   jqr -n -c --arg id "$(cat "${TRIAL_DIR}/id")" --arg status "$(cat "${TRIAL_DIR}/status")" \
-    --arg deadline "$(cat "${TRIAL_DIR}/deadline" 2>/dev/null)" --arg reason "$(cat "${TRIAL_DIR}/reason" 2>/dev/null)" \
+    --argjson remaining "${_ts_remaining}" --arg reason "$(cat "${TRIAL_DIR}/reason" 2>/dev/null)" \
     --slurpfile previous "${TRIAL_DIR}/previous.json" --slurpfile candidate "${TRIAL_DIR}/candidate.json" \
-    '{ok:true,trial:{id:$id,status:$status,deadline:($deadline|tonumber? // null),reason:$reason,previous:$previous[0],candidate:$candidate[0]}}'
+    '{ok:true,trial:{id:$id,status:$status,remaining:$remaining,reason:$reason,previous:$previous[0],candidate:$candidate[0]}}'
 }
+
+trial_unexpired() {
+  _tu_boot=$(boot_identity) || return 1
+  [ -n "${_tu_boot}" ] && [ "$(cat "${TRIAL_DIR}/boot" 2>/dev/null)" = "${_tu_boot}" ] || return 1
+  _tu_deadline=$(cat "${TRIAL_DIR}/monotonic-deadline" 2>/dev/null)
+  case "${_tu_deadline}" in ''|*[!0-9]*) return 1 ;; esac
+  _tu_now=$(monotonic_seconds) || return 1
+  case "${_tu_now}" in ''|*[!0-9]*) return 1 ;; esac
+  [ "${_tu_now}" -lt "${_tu_deadline}" ]
+}
+
 trial_service_lock() {
-  _lock_identity
+  _lock_identity || trial_error 'cannot identify service controller'
   _TRIAL_LOCK_TOKEN=${_LOCK_TOKEN}
   _owner_lock_acquire "${TS_RUN_DIR}/.service-lock" "${_TRIAL_LOCK_TOKEN}" 120 0.5 || trial_error 'service controller is busy'
 }
@@ -67,6 +82,8 @@ trial_begin() (
   _tb_id="$(date +%s)_${_tb_tmp##*.}"
   printf '%s\n' "${_tb_id}" >"${_tb_tmp}/id"
   printf '%s\n' "$1" >"${_tb_tmp}/duration"
+  _tb_boot=$(boot_identity) && [ -n "${_tb_boot}" ] || trial_error 'cannot identify trial boot'
+  printf '%s\n' "${_tb_boot}" >"${_tb_tmp}/boot" || trial_error 'cannot retain trial boot'
   echo preparing >"${_tb_tmp}/status"
   chmod -R go-rwx "${_tb_tmp}"
   rm -rf "${TRIAL_DIR}"
@@ -144,14 +161,17 @@ trial_run() {
   trap 'trial_worker_cleanup' 0
   trap 'exit 1' HUP INT TERM
   if [ "${2:-}" = candidate ] && [ "$(cat "${TRIAL_DIR}/status")" = preparing ]; then
-    if ! tmo 120 "${TS_SCRIPTS_DIR}/start.sh" reload-trial "$1" candidate >>"${TS_RUN_LOG_FILE}" 2>&1 || ! trial_health; then
+    if ! tmo 120 "${TS_SCRIPTS_DIR}/start.sh" reload-trial "$1" candidate >>"${TS_RUN_LOG_FILE}" 2>&1 ||
+       { ! service_stop_held && ! trial_health; }; then
       trial_revert "$1" 'candidate startup or health check failed' >/dev/null
       trap - 0
       return
     fi
     conf_lock_acquire || return 1
     if trial_id "$1" && [ "$(cat "${TRIAL_DIR}/status")" = preparing ]; then
-      printf '%s\n' "$(($(date +%s) + $(cat "${TRIAL_DIR}/duration")))" >"${TRIAL_DIR}/deadline"
+      _tr_now=$(monotonic_seconds) || return 1
+      case "${_tr_now}" in ''|*[!0-9]*) return 1 ;; esac
+      printf '%s\n' "$((_tr_now + $(cat "${TRIAL_DIR}/duration")))" >"${TRIAL_DIR}/monotonic-deadline" || return 1
       trial_state running
     fi
     conf_lock_release
@@ -159,12 +179,19 @@ trial_run() {
   if trial_id "$1" && [ "$(cat "${TRIAL_DIR}/status")" = preparing ]; then
     trial_revert "$1" 'trial worker stopped during candidate startup' >/dev/null
   fi
-  _tr_deadline=$(cat "${TRIAL_DIR}/deadline" 2>/dev/null)
-  case "${_tr_deadline}" in ''|*[!0-9]*) _tr_deadline=0 ;; esac
+  _tr_health_at=0
   while [ ! -f "${TS_DIR}/.installing" ] && trial_id "$1" && [ "$(cat "${TRIAL_DIR}/status")" = running ]; do
-    if [ "$(date +%s)" -ge "${_tr_deadline}" ]; then
+    if ! trial_unexpired; then
       trial_revert "$1" 'trial expired without confirmation' >/dev/null
       break
+    fi
+    # Intentional context downtime is not a failed candidate.
+    if ! service_stop_held && [ "$(monotonic_seconds)" -ge "${_tr_health_at}" ]; then
+      if ! trial_health; then
+        trial_revert "$1" 'candidate health check failed' >/dev/null
+        break
+      fi
+      _tr_health_at=$(($(monotonic_seconds) + 5))
     fi
     sleep 1
   done
@@ -185,17 +212,16 @@ trial_worker_cleanup() {
 }
 
 trial_process_alive() {
-  [ -f "${TRIAL_DIR}/$1" ] || return 1
-  IFS=' ' read -r _tp_pid _tp_stamp <"${TRIAL_DIR}/$1"
-  case "${_tp_pid}" in ''|*[!0-9]*) return 1 ;; esac
-  _conf_owner_alive "${_tp_pid}:${_tp_stamp}"
+  [ -f "${TRIAL_DIR}/$1" ] && [ ! -L "${TRIAL_DIR}/$1" ] || return 1
+  IFS=' ' read -r _tp_pid _tp_stamp _tp_boot <"${TRIAL_DIR}/$1" || return 1
+  resident_identity_alive foxytail.trial "${_tp_pid}" "${_tp_stamp}" "${_tp_boot}"
 }
 
 # Readers only repair a missing worker. A nonblocking configuration lock keeps
 # worker registration with its journal and never waits for service work.
 trial_ensure_worker() (
   [ ! -f "${TS_DIR}/.installing" ] || exit 0
-  _lock_identity
+  _lock_identity || exit 1
   _CONF_LOCK_TOKEN=${_LOCK_TOKEN}
   _owner_lock_acquire "${TS_RUN_DIR}/.conf-write-lock" "${_CONF_LOCK_TOKEN}" 1 0 || exit 0
   _CONF_LOCK_HELD=1
@@ -207,7 +233,17 @@ trial_ensure_worker() (
   [ -e "${TRIAL_DIR}/worker" ] || _te_action=candidate
   nohup "${TS_SCRIPTS_DIR}/foxytail.trial" run "${_te_id}" "${_te_action}" >>"${TS_RUN_LOG_FILE}" 2>&1 </dev/null &
   _te_pid=$!
-  printf '%s %s\n' "${_te_pid}" "$(_conf_pid_stamp "${_te_pid}")" >"${TRIAL_DIR}/worker"
+  _te_stamp=$(_proc_starttime "${_te_pid}") _te_boot=$(boot_identity)
+  [ -n "${_te_stamp}" ] && [ -n "${_te_boot}" ] || exit 1
+  printf '%s %s %s\n' "${_te_pid}" "${_te_stamp}" "${_te_boot}" >"${TRIAL_DIR}/.worker.$$" &&
+    mv "${TRIAL_DIR}/.worker.$$" "${TRIAL_DIR}/worker" || exit 1
+  # Hold registration through nohup/exec so another reader cannot launch a twin.
+  _te_tries=0
+  until trial_process_alive worker; do
+    [ "$(_proc_starttime "${_te_pid}")" = "${_te_stamp}" ] && [ "${_te_tries}" -lt 20 ] || exit 1
+    sleep 0.05
+    _te_tries=$((_te_tries + 1))
+  done
 )
 
 trial_confirm() (
@@ -217,7 +253,7 @@ trial_confirm() (
   conf_lock_acquire || trial_error 'configuration is busy'
   trial_id "$1" || trial_error 'trial no longer exists'
   [ "$(cat "${TRIAL_DIR}/status")" = running ] || trial_error 'trial is not ready for confirmation'
-  [ "$(date +%s)" -lt "$(cat "${TRIAL_DIR}/deadline")" ] || trial_error 'trial has expired'
+  trial_unexpired || trial_error 'trial has expired'
   _conf_runtime_dir && trial_same "${_RUNTIME_CONF_DIR}" "${TRIAL_DIR}/candidate" || trial_error 'trial runtime was replaced'
   # Preserve later saves. Only persist a trial-only mode choice if the original
   # saved main file is still unchanged; routes and context are never overwritten.
@@ -234,7 +270,19 @@ trial_confirm() (
 # Boot/install recovery does not start processes. The caller starts the retained
 # applied snapshot afterward; unconfirmed saved candidates remain pending.
 trial_boot() (
-  conf_trial_active || exit 3
+  if ! conf_trial_active; then
+    # A terminal rollback still owns its retained previous snapshot if run/ was lost.
+    [ "$(cat "${TRIAL_DIR}/status" 2>/dev/null)" = rolled-back ] &&
+      [ ! -e "${TS_RUN_DIR}/applied-config" ] || exit 3
+    trial_service_lock
+    trap 'trial_unlock' 0
+    _TRIAL_ID=$(cat "${TRIAL_DIR}/id")
+    _tb_next=$(conf_prepare_runtime "${TRIAL_DIR}/previous") || exit 1
+    conf_activate_runtime "${_tb_next}" || exit 1
+    conf_lock_acquire || exit 1
+    conf_mark_pending || exit 1
+    exit 0
+  fi
   trial_service_lock
   trap 'trial_unlock' 0
   conf_lock_acquire || exit 1
@@ -252,6 +300,7 @@ trial_boot() (
   _TRIAL_BOOT=1
   _tb_next=$(trial_prepare "${_TRIAL_ID}" previous) || exit 1
   conf_activate_runtime "${_tb_next}" || exit 1
+  rm -f "${TS_RUN_DIR}/context-stop" || exit 1
   conf_lock_acquire || exit 1
   conf_mark_pending || exit 1
   trial_state rolled-back 'unconfirmed trial recovered after restart'

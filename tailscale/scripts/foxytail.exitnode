@@ -1,0 +1,156 @@
+#!/system/bin/sh
+# Exit preferences and bridge policy share the config lock; no service lock.
+DIR=$(dirname "$(realpath "$0")")
+. "${DIR}/../settings.sh"
+
+exit_profile() {
+  tmo 5 tailscale --socket="${TS_SOCKET}" switch --list --json 2>/dev/null |
+    jqr -e -r '[.[] | select(.selected == true) | .id | select(type=="string" and length>0)] | select(length==1) | .[0]'
+}
+
+exit_snapshot() {
+  _xs_profile=$(exit_profile) || return 1
+  _xs_prefs=$(tmo 5 tailscale --socket="${TS_SOCKET}" debug prefs 2>/dev/null |
+    jqr -e -c 'select(type=="object" and (.ExitNodeID|type)=="string") |
+      {id:.ExitNodeID,ip:(.ExitNodeIP // ""),auto:(if has("AutoExitNode") then .AutoExitNode else "" end),allowLAN:.ExitNodeAllowLANAccess} |
+      select((.ip|type)=="string" and (.auto|type)=="string" and (.allowLAN|type)=="boolean")') || return 1
+  _xs_status=$(ts_status_json tmo 5 tailscale --socket="${TS_SOCKET}" status --json 2>/dev/null) || return 1
+  [ "$(exit_profile)" = "${_xs_profile}" ] || return 1
+  printf '%s' "${_xs_status}" | jqr -e -c --arg profile "${_xs_profile}" --argjson pref "${_xs_prefs}" '
+    select(type=="object" and (.Self.ID|type)=="string" and (.Self.ID|length)>0) | {profile:$profile,self:.Self.ID,pref:$pref,
+      backend:(.BackendState // "unknown"),actual:(.ExitNodeStatus // null)}'
+}
+
+exit_status() {
+  _es_snapshot=$(exit_snapshot) || { echo '{"known":false,"selected":null,"effective":"unknown","ipv4":false,"ipv6":false,"warning":"preference-unavailable"}'; return 0; }
+  _es_policy=false
+  if [ "${TS_MODE}" = bridge ]; then
+    "${TS_SCRIPTS_DIR}/foxytail.route" check >/dev/null 2>&1 && _es_policy=true
+    [ "$(exit_snapshot)" = "${_es_snapshot}" ] || _es_policy=false
+  fi
+  printf '%s' "${_es_snapshot}" | jqr -c --arg mode "${TS_MODE}" --arg scope "${ROUTE_SCOPE}" --arg uids "${UID_LIST}" --arg ipv6 "${IPV6}" --argjson policy "${_es_policy}" '
+    (.pref.id!="" or .pref.ip!="" or .pref.auto!="") as $selected |
+    (.backend=="Running" and .actual!=null and .actual.Online==true and
+      ((.pref.id!="" and .actual.ID==.pref.id) or
+       (.pref.id=="" and .pref.ip!="" and ((.actual.TailscaleIPs // []) | index(.pref.ip))!=null))) as $online |
+    ($scope!="selected" or ($uids|split(" ")|map(select(length>0 and .!="0"))|length)>0) as $covered |
+    {known:true,selected:(if $selected then .pref else null end),profile:.profile,
+      scope:$scope,uids:($uids|split(" ")|map(select(length>0))),
+      effective:(if ($selected|not) and ($mode!="bridge" or $policy) then "none" elif $selected|not then "not-effective" elif $online|not then "not-effective" elif $mode=="proxy" then "explicit-proxy" elif $mode=="tun" then "daemon-owned" elif $policy and $covered then "bridge-policy" else "not-effective" end),
+      ipv4:($selected and $mode=="bridge" and $policy and $online and $covered),
+      ipv6:($selected and $mode=="bridge" and $policy and $online and $covered and $ipv6=="on"),
+      warning:(if $mode=="bridge" and ($policy|not) then "route-apply-failed" elif $selected|not then "" elif $online|not then "exit-unavailable" elif $mode=="proxy" then "explicit-proxy-only" elif $mode=="tun" then "daemon-owned-unverified" elif $covered|not then "empty-uid-scope" elif $ipv6!="on" then "ipv6-not-covered" else "" end)}'
+}
+
+exit_journal_write() {
+  (umask 077; printf '%s\n' "$1" >"${EXIT_JOURNAL}.next.$$") && mv "${EXIT_JOURNAL}.next.$$" "${EXIT_JOURNAL}"
+}
+
+exit_journal_read() {
+  [ ! -L "${EXIT_JOURNAL}" ] || return 1
+  jqr -e -c 'def pref: type=="object" and (.id|type)=="string" and (.ip|type)=="string" and (.auto|type)=="string" and (.allowLAN|type)=="boolean";
+    select(.version==1 and (.profile|type)=="string" and .profile!="" and (.self|type)=="string" and .self!="" and
+    (.original|pref) and (.expected|pref) and (.owned|type)=="boolean")' "${EXIT_JOURNAL}"
+}
+
+exit_target() {
+  if [ -z "$1" ]; then echo '{"id":"","ip":"","auto":""}'; return; fi
+  case "$1" in *[!A-Za-z0-9._:-]*) return 1 ;; esac
+  ts_status_json tmo 5 tailscale --socket="${TS_SOCKET}" status --json 2>/dev/null |
+    jqr -e -c --arg target "$1" --arg context "$2" '[.Peer // {} | .[] | select(.ExitNodeOption==true) |
+      select(.ID==$target or ((.TailscaleIPs // []) | index($target))!=null or ($context=="--context" and .HostName==$target))] |
+      select(length==1) | .[0] | {id:.ID,ip:((.TailscaleIPs // [])[0] // ""),auto:""} | select((.id|type)=="string" and .id!="" and .ip!="")'
+}
+
+exit_change() {
+  _xc_before=$(exit_snapshot) || { EXIT_ERROR=preference-unavailable; return 1; }
+  _xc_target=$(exit_target "$1" "$2") || { EXIT_ERROR=exit-node-not-found; return 1; }
+  EXIT_JOURNAL="${TS_DIR}/state/config-trial/exit-preference.json"
+  _xc_context=false
+  if [ "$2" = --context ]; then
+    case "$(cat "${TS_DIR}/state/config-trial/status" 2>/dev/null)" in preparing|running) _xc_context=true ;; esac
+  fi
+  _xc_expected=$(printf '%s' "${_xc_target}" | jqr -c --argjson before "${_xc_before}" '{id,ip:(if .id!="" then "" else .ip end),auto,allowLAN:$before.pref.allowLAN}') || return 1
+  if [ "${_xc_context}" = true ]; then
+    _xc_entry=$(printf '%s' "${_xc_before}" | jqr -e -c --argjson target "${_xc_expected}" '
+      select(.profile!="" and .self!="") | {version:1,profile,self,original:.pref,expected:$target,owned:true}') || return 1
+    if [ -e "${EXIT_JOURNAL}" ]; then
+      _xc_old=$(exit_journal_read) || return 1
+      _xc_entry=$(printf '%s' "${_xc_entry}" | jqr -e -c --argjson old "${_xc_old}" --argjson before "${_xc_before}" '
+        select(.profile==$old.profile and .self==$old.self) |
+        if $old.owned and $before.pref==$old.expected then .original=$old.original
+        else .owned=false end') || return 1
+    fi
+    exit_journal_write "${_xc_entry}" || return 1
+  elif [ -e "${EXIT_JOURNAL}" ]; then
+    _xc_entry=$(exit_journal_read | jqr -c '.owned=false') || return 1
+    exit_journal_write "${_xc_entry}" || return 1
+  fi
+  [ "$(exit_snapshot)" = "${_xc_before}" ] || return 1
+  _xc_ip=$(printf '%s' "${_xc_target}" | jqr -r '.ip')
+  tmo 15 tailscale --socket="${TS_SOCKET}" set --exit-node="${_xc_ip}" >/dev/null 2>&1 || { EXIT_ERROR=preference-write-failed; return 1; }
+  _xc_after=$(exit_snapshot) || return 1
+  printf '%s' "${_xc_after}" | jqr -e --argjson before "${_xc_before}" --argjson target "${_xc_expected}" '
+    .profile==$before.profile and .self==$before.self and .pref==$target' >/dev/null || return 1
+  # The pre-write expected tuple also covers a process death before this read.
+  if [ "${_xc_context}" = true ]; then exit_journal_write "${_xc_entry}" || return 1; fi
+}
+
+exit_restore() {
+  [ "$1" = "${TS_DIR}/state/config-trial" ] && [ ! -L "$1" ] || return 1
+  EXIT_JOURNAL="$1/exit-preference.json"
+  [ -e "${EXIT_JOURNAL}" ] || return 0
+  _xr_entry=$(exit_journal_read) || return 1
+  if [ "$(printf '%s' "${_xr_entry}" | jqr -r '.owned')" != true ]; then rm -f "${EXIT_JOURNAL}"; return; fi
+  _xr_now=$(exit_snapshot) || return 1
+  printf '%s' "${_xr_now}" | jqr -e --argjson entry "${_xr_entry}" '.profile==$entry.profile and .self==$entry.self' >/dev/null || return 1
+  if ! printf '%s' "${_xr_now}" | jqr -e --argjson entry "${_xr_entry}" '.pref==$entry.expected' >/dev/null; then
+    rm -f "${EXIT_JOURNAL}"; return 0
+  fi
+  _xr_original=$(printf '%s' "${_xr_entry}" | jqr -r '.original | if .auto!="" then "auto:"+.auto elif .id!="" then .id else .ip end')
+  if [ -n "${_xr_original}" ]; then
+    case "${_xr_original}" in auto:*) ;; *)
+      _xr_target=$(exit_target "${_xr_original}") || return 1
+      _xr_original=$(printf '%s' "${_xr_target}" | jqr -r '.ip') ;;
+    esac
+  fi
+  [ "$(exit_snapshot)" = "${_xr_now}" ] || return 1
+  _xr_lan=$(printf '%s' "${_xr_entry}" | jqr -r '.original.allowLAN')
+  tmo 15 tailscale --socket="${TS_SOCKET}" set --exit-node="${_xr_original}" --exit-node-allow-lan-access="${_xr_lan}" >/dev/null 2>&1 || return 1
+  _xr_after=$(exit_snapshot) || return 1
+  printf '%s' "${_xr_after}" | jqr -e --argjson entry "${_xr_entry}" '
+    .profile==$entry.profile and .self==$entry.self and
+    (if $entry.original.auto!="" then (.pref|{auto,allowLAN})==($entry.original|{auto,allowLAN})
+     else .pref==$entry.original end)' >/dev/null || return 1
+  rm -f "${EXIT_JOURNAL}"
+}
+
+ensure_run_dirs
+case "$1" in
+  snapshot) exit_snapshot; exit $? ;;
+  status) load_runtime_conf || exit 1; exit_status; exit $? ;;
+  set|clear|trial-restore) ;;
+  *) echo 'usage: foxytail.exitnode {set <node> [--context]|clear [--context]|status|trial-restore <journal-dir>}' >&2; exit 1 ;;
+esac
+conf_lock_acquire || exit 1
+trap 'conf_lock_release' EXIT
+trap 'exit 1' HUP INT TERM
+load_runtime_conf || exit 1
+EXIT_ERROR=preference-verification-failed
+_x_rc=0
+case "$1" in
+  set) [ -n "$2" ] && exit_change "$2" "$3" || _x_rc=1 ;;
+  clear) exit_change '' "$2" || _x_rc=1 ;;
+  trial-restore) exit_restore "$2"; exit $? ;;
+esac
+conf_lock_release
+# Route re-reads the current profile under its lock: a later writer always wins.
+if [ "${TS_MODE}" = bridge ]; then
+  "${TS_SCRIPTS_DIR}/foxytail.route" apply >/dev/null 2>&1 || { EXIT_ERROR=route-apply-failed; _x_rc=1; }
+fi
+_x_status=$(exit_status) || _x_status='{"known":false,"selected":null,"effective":"unknown","ipv4":false,"ipv6":false,"warning":"status-unavailable"}'
+if [ "${_x_rc}" = 0 ] && printf '%s' "${_x_status}" | jqr -e '.known!=true or .effective=="not-effective"' >/dev/null; then
+  EXIT_ERROR=exit-not-effective; _x_rc=1
+fi
+printf '%s' "${_x_status}" | jqr -c --argjson rc "${_x_rc}" --arg error "${EXIT_ERROR}" '{ok:($rc==0),exitRouting:.,error:(if $rc==0 then null else $error end)}'
+exit "${_x_rc}"

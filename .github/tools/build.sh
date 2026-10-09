@@ -5,7 +5,7 @@
 # arm64, verifies the reviewed tailscale/checksums.txt, then produces:
 #   dist/FoxyTail-<version>.zip       light: upstream binaries downloaded at install
 #   dist/FoxyTail-<version>-full.zip  full:  all binaries bundled
-# The first-party foxydns helper is built from source and bundled in both.
+# First-party foxydns and foxyfiles helpers are built from source and bundled in both.
 #
 # dnsmasq is intentionally NOT packaged: there is no trusted static-build
 # source. Runtime prefers a supplied binary, then the system/vendor dnsmasq.
@@ -133,14 +133,15 @@ bash .github/tools/build-native.sh "$NATIVE_DIR"
 PACKAGE_DIR="${WORK_DIR}/package"
 mkdir -p "$PACKAGE_DIR/tailscale/bin"
 cp -R META-INF webroot "$PACKAGE_DIR/"
-cp customize.sh service.sh uninstall.sh module.prop update.json LICENSE "$PACKAGE_DIR/"
+cp customize.sh service.sh install-recovery.sh uninstall.sh module.prop update.json LICENSE "$PACKAGE_DIR/"
 cp native/foxydns/THIRD_PARTY_NOTICES.txt "$PACKAGE_DIR/THIRD_PARTY_NOTICES.txt"
 cp -R tailscale/scripts tailscale/conf "$PACKAGE_DIR/tailscale/"
 cp tailscale/settings.sh tailscale/VERSIONS tailscale/checksums.txt "$PACKAGE_DIR/tailscale/"
-cp "$NATIVE_DIR/foxydns-arm" "$NATIVE_DIR/foxydns-arm64" "$PACKAGE_DIR/tailscale/bin/"
+cp "$NATIVE_DIR/foxydns-arm" "$NATIVE_DIR/foxydns-arm64" \
+  "$NATIVE_DIR/foxyfiles-arm" "$NATIVE_DIR/foxyfiles-arm64" "$PACKAGE_DIR/tailscale/bin/"
 {
   echo '# First-party helpers built from this release source with the pinned Go toolchain.'
-  (cd "$NATIVE_DIR" && sha256sum foxydns-arm foxydns-arm64)
+  (cd "$NATIVE_DIR" && sha256sum foxydns-arm foxydns-arm64 foxyfiles-arm foxyfiles-arm64)
 } >"$PACKAGE_DIR/tailscale/native-checksums.txt"
 # ZIP metadata gets a fixed timestamp from the source commit.
 SOURCE_DATE_EPOCH=${SOURCE_DATE_EPOCH:-$(git log -1 --format=%ct)}

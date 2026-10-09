@@ -7,6 +7,7 @@
 cmd_status() {
   _cs_st=""
   daemon_up && _cs_st=$(ts_status_json ts_cli 10 status --json)
+  _cs_exit=$("${TS_SCRIPTS_DIR}/foxytail.exitnode" status 2>/dev/null) || _cs_exit='{"known":false,"selected":null,"effective":"unknown","ipv4":false,"ipv6":false,"warning":"preference-unavailable"}'
   if [ -z "${_cs_st}" ]; then
     # A Stop may have completed during the CLI read. Recheck before reporting
     # either a stopped daemon or a live process with an unavailable LocalAPI.
@@ -17,12 +18,13 @@ cmd_status() {
     jqr -n -c --arg mode "${TS_MODE}" --arg daemon "${_cs_daemon}" \
       --arg backend "${_cs_backend}" --argjson uptime "${_cs_uptime}" \
       --arg power "${POWER_SAVE:-off}" --arg refresh "${WEBUI_AUTO_REFRESH:-on}" \
-      '{ok:true,daemon:$daemon,backend:$backend,mode:$mode,self:null,exitNode:null,peers:{online:0,offline:0},magicDns:false,keyExpiry:null,uptime:$uptime,powerSave:($power=="on"),autoRefresh:($refresh=="on")}'
+      --argjson exitRouting "${_cs_exit}" \
+      '{ok:true,daemon:$daemon,backend:$backend,mode:$mode,self:null,exitNode:null,exitRouting:$exitRouting,peers:{online:0,offline:0},magicDns:false,keyExpiry:null,uptime:$uptime,powerSave:($power=="on"),autoRefresh:($refresh=="on")}'
     return 0
   fi
   _cs_up=$(daemon_uptime)
   printf '%s' "${_cs_st}" | jqr -c --arg mode "${TS_MODE}" --argjson uptime "${_cs_up}" \
-    --arg power "${POWER_SAVE:-off}" --arg refresh "${WEBUI_AUTO_REFRESH:-on}" '
+    --argjson exitRouting "${_cs_exit}" --arg power "${POWER_SAVE:-off}" --arg refresh "${WEBUI_AUTO_REFRESH:-on}" '
     (.Peer // {} | to_entries | map(.value)) as $peers
     | (.ExitNodeStatus // null) as $en
     | {
@@ -31,6 +33,7 @@ cmd_status() {
         backend: (.BackendState // "unknown"),
         mode: $mode,
         powerSave: ($power=="on"),
+        exitRouting: $exitRouting,
         autoRefresh: ($refresh=="on"),
         self: (.Self // {} | {
           hostname: (.HostName // "-"),
@@ -168,17 +171,19 @@ cmd_derp_speedtest() {
 }
 
 cmd_exitnode_set() {
-  [ -n "$1" ] || jerr "exitnode-set: missing node ip/hostname"
+  [ -n "$1" ] || jerr "exitnode-set: missing stable node ID or IP"
   case "$1" in
     *[!A-Za-z0-9._:-]*) jerr "exitnode-set: invalid node identifier" ;;
   esac
-  _es_out=$(ts_cli 15 set --exit-node="$1" 2>&1) || jerr "failed to set exit node: ${_es_out}"
-  jqr -n -c --arg n "$1" '{ok:true,exitNode:$n}'
+  _es_out=$(_op_exec 90 "${TS_SCRIPTS_DIR}/foxytail.exitnode" set "$1")
+  [ -n "${_es_out}" ] || jerr 'exit controller failed before reporting preference/policy state'
+  printf '%s\n' "${_es_out}"
 }
 
 cmd_exitnode_clear() {
-  _ec_out=$(ts_cli 15 set --exit-node= 2>&1) || jerr "failed to clear exit node: ${_ec_out}"
-  echo '{"ok":true,"exitNode":null}'
+  _ec_out=$(_op_exec 90 "${TS_SCRIPTS_DIR}/foxytail.exitnode" clear)
+  [ -n "${_ec_out}" ] || jerr 'exit controller failed before reporting preference/policy state'
+  printf '%s\n' "${_ec_out}"
 }
 
 # --- tun / dns ----------------------------------------------------------------

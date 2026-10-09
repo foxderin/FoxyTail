@@ -97,8 +97,9 @@ const zh = {
 
   files_title: '文件', files_inbox: '收件箱', files_empty: '收件箱为空',
   files_send: '发送文件', files_path: '/sdcard 下的文件路径', files_path_hint: '/sdcard/Download/example.zip',
-  files_peer: '目标节点', files_peer_hint: '主机名或 Tailscale IP', files_send_btn: '发送', files_receive: '拉取待接收文件',
-  files_sent: '发送完成', files_received: '拉取完成',
+  files_peer: '目标节点', files_peer_hint: '选择设备及地址', files_send_btn: '发送', files_receive: '导入已接收文件',
+  files_sent: '发送完成', files_received: '导入完成',
+  files_receive_hint: '从 /sdcard/Download/Taildrop 导入已完整接收的文件，保留原文件。若直接接收模式未知，请解锁共享存储后重启 FoxyTail。',
   files_download: '下载', files_export: '导出到 Download', files_delete: '删除', files_clear: '清空收件箱',
   files_deleted: '已删除', files_cleared: '已清空', files_exported_to: '已导出到', files_download_started: '已开始下载',
 
@@ -230,8 +231,9 @@ const en: Record<I18nKey, string> = {
 
   files_title: 'Files', files_inbox: 'Inbox', files_empty: 'Inbox is empty',
   files_send: 'Send file', files_path: 'File path under /sdcard', files_path_hint: '/sdcard/Download/example.zip',
-  files_peer: 'Target peer', files_peer_hint: 'Hostname or Tailscale IP', files_send_btn: 'Send', files_receive: 'Fetch waiting files',
-  files_sent: 'File sent', files_received: 'Fetch done',
+  files_peer: 'Target peer', files_peer_hint: 'Choose a device and address', files_send_btn: 'Send', files_receive: 'Import received files',
+  files_sent: 'File sent', files_received: 'Import complete',
+  files_receive_hint: 'Import completed files from /sdcard/Download/Taildrop; originals are retained. If direct receive mode is unknown, unlock shared storage and restart FoxyTail.',
   files_download: 'Download', files_export: 'Export to Downloads', files_delete: 'Delete', files_clear: 'Clear inbox',
   files_deleted: 'Deleted', files_cleared: 'Cleared', files_exported_to: 'Exported to', files_download_started: 'Download started',
 

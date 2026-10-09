@@ -40,6 +40,8 @@ FoxyTail 的灵感来自 [anasfanani/Magisk-Tailscaled](https://github.com/anasf
 
 要求：arm 或 arm64 设备，Magisk v20.4+ 或 KernelSU ≥ 10670。升级时保留你的状态、配置与钩子文件（见下文）。
 
+两种包均内置 ARM/ARM64 的 `foxydns` 和 `foxyfiles`，按随包 native 清单校验。开机先由模块根目录的稳定代码恢复中断升级，再加载可替换的 settings/scripts；仅恢复与备份所有权一致的事务。记录无法证明或恢复失败时保留日志与备份、推迟启动，不猜测恢复对象。
+
 ## 卸载与重装
 
 从 Magisk/KernelSU 移除模块时会执行 `uninstall.sh`：停止所有 FoxyTail 组件、拆除路由/DNS 链、删除 `/data/adb/foxytail`——**但 Tailscale 身份不会丢**。删除前 `tailscaled.state` 会先备份到 `/data/adb/foxytail-state.backup`；下次安装时若尚无状态文件，安装器会自动恢复该备份（并打印提示），重装后仍是原节点、保持登录。如需全新身份，手动删除 `/data/adb/foxytail-state.backup` 即可。
@@ -63,7 +65,7 @@ su -c '/data/adb/foxytail/scripts/foxytail.service status'
 常用扩展：
 
 ```sh
-su -c 'tailscale set --exit-node=<节点>'   # 走出口节点
+su -c 'foxytail.exitnode set <节点ID或IP>' # 协调出口偏好与本地接管规则
 su -c 'foxytail.service mode tun'          # 切换运行模式并重启
 ```
 
@@ -76,9 +78,10 @@ su -c 'foxytail.service mode tun'          # 切换运行模式并重启
 | `foxytail.service` | `start` `stop` `restart` `status [summary\|peer\|exit-node\|all]` `log [daemon\|service]` `mode [bridge\|tun\|proxy]` `help [all]` | tailscaled 生命周期、彩色状态、模式切换 |
 | `foxytail.tun` | `start` `stop` `restart` `status` | hev-socks5-tunnel → `tailscale0` 接口（bridge 模式）；调用 `foxytail.tun.up` / `.tun.down` 用户钩子 |
 | `foxytail.route` | `apply` `teardown` `reload` `status` | 幂等策略路由引擎（`FOXY_*` 链、表 1052、fwmark `0x40000000/0x40000000`） |
+| `foxytail.exitnode` | `set <节点ID或IP>` `clear` `status` | 协调账户出口偏好与实际模式/UID 范围的路由 |
 | `foxytail.dns` | `start` `stop` `status` | MagicDNS 本地端点、透明共存和旧 DNS 控制 |
-| `foxytail.stats` | `start` `stop` `status` `collect-once` `query [hourly <日期>\|daily\|topn <n>]` | 流量采集（按 peer Rx/Tx、按 UID 计数） |
-| `foxytail.watchdog` | `start` `stop` `status` `check-once` | 崩溃重启、默认路由变化后 rebind（有限频） |
+| `foxytail.stats` | `start` `stop` `status` `collect-once` `query [summary [日期]\|hourly <日期>\|daily\|topn <n>\|uids <n>]` | 采样、按时间顺序流式聚合统计 |
+| `foxytail.watchdog` | `start` `stop` `status` `check-once` | 崩溃重启、Android 默认网络变化后 rebind（有限频） |
 | `foxytail.context` | `start` `stop` `status` `check-once` | SSID / 蜂窝变化时执行 `context.conf` 规则 |
 | `foxytail.compat` | `probe` `check` `check-dns-hijack` `suggest` | 探测共存的代理/防火墙/VPN 工具；校验 `FOXY_*` 链是否被清 |
 | `foxytail.diag` | `collect [输出目录]` | 一键诊断 tar.gz（默认 `/sdcard/Download`） |
@@ -93,7 +96,9 @@ WebUI 已内置：位于 `webroot/`（纯静态零构建，后端为 `foxytail.w
 - 共 12 页（底部导航 +「更多」分组）：Dashboard · Peers（列表 + 拓扑图：直连/中继路径）· Exit Nodes · Account · Tunnel · Routing · Traffic · Serve · Files（Taildrop）· Logs · Settings · Diagnostics。
 - 无第三方依赖；中/英 i18n 与深浅色主题。
 
-Taildrop 接收数量只统计本次新增文件。自动与手动导出都保留 Download 中已有文件，依次尝试编号至 `-99`，无可用目标时失败但不删除收件箱副本；文件名中的空格保持原样。清空包含隐藏文件，但保留目录。内联下载支持不超过 8 MiB 的文件，更大的文件请导出；编码使用私有临时文件，正常完成或失败退出时清理，不把文件内容放进命令行参数。
+固定的 Android CLI 直接收件至 `/sdcard/Download/Taildrop`。**导入已接收文件**只复制已完成的普通文件到私有收件箱，不等待缓冲模式的 `tailscale file get`，共享存储原件保留。私有收据防止重复导入，排除 partial/deleted 文件和软链接；模式记录绑定启动时所属 daemon 的身份。若启动时共享存储不可用，请解锁后重启 FoxyTail。发送使用稳定节点 ID 与其当前 IP（含 IPv6），不会把重名主机当成目标身份。
+
+自动与手动导出保留 Download 现有文件，依次尝试编号至 `-99`，耗尽时失败但不删除私有副本。清空包含隐藏普通文件，保留收据和目录。内联下载支持不超过 8 MiB 的文件，更大文件请导出；编码使用退出时清理的私有临时文件，不把文件内容放进命令行参数。
 
 <!-- 截图占位：docs/screenshots/*.png（待补充，见 Roadmap） -->
 
@@ -106,7 +111,7 @@ WebUI 源码位于 `webui/`（Vite + SolidJS + Material Web 3 组件 + `kernelsu
 - `pnpm --dir webui build` —— 生产构建输出到 `../webroot/`（构建结果需提交）
 - `pnpm --dir webui typecheck` / `check:i18n` / `smoke` —— 类型检查、中英键值对齐校验、jsdom 冒烟（13 条路由 + 任务接管 + no-root 横幅）
 
-契约：`webui/src/api.ts` 是 `tailscale/scripts/foxytail.webapi.sh` 的唯一消费者，其 JSON 契约冻结不可改。
+前后端 JSON 契约随模块同步发布：恢复同时校验归档 SHA256 与已保存配置基线 SHA256，旧预览必须重做；试用状态使用单调剩余秒数；出口状态区分选中偏好与实际路由。
 
 ## 验证与发布
 
@@ -118,9 +123,11 @@ WebUI 源码位于 `webui/`（Vite + SolidJS + Material Web 3 组件 + `kernelsu
 
 设置保存后以 WebUI 的“重启应用”或 `/data/adb/foxytail/scripts/start.sh reload` 刷新主服务和驻留组件。`foxytail.service restart` 仅重启网络服务层。升级保留接收文件、自备 dnsmasq、配置和身份；切换前停止旧组件，失败保留回滚记录。
 
-服务启动同时验证所属 daemon 和 LocalAPI 响应，残留 socket 不算就绪，`NeedsLogin` 则是有效的就绪状态。自动重启失败后仍允许看门狗恢复，显式停止继续阻止自动拉起。安装先准备回滚目录再发布事务日志；身份与 DNS 偏好文件先私有暂存再原子发布，身份最后发布，复制失败后仍可重试。
+服务启动同时验证所属 daemon 与 LocalAPI，残留 socket 不算就绪，`NeedsLogin` 是有效状态。驻留记录和控制锁校验 PID、启动时间、boot ID 与精确命令参数。用户停止与场景 down 各自持有停止状态，场景 up 不能覆盖用户停止，内部重启不创建用户停止记录。身份与 DNS 偏好文件先私有暂存，再完整发布。
 
-设置页也可选择 **限时试用配置**：以已保存配置为候选，可单独选择运行模式；启动检查通过后，在 30–300 秒内确认保留，否则恢复之前的运行配置。计时由后台进程负责，关闭 WebUI 不影响回退；试用期间后续保存的配置不会被覆盖。检查只确认本机组件状态，仍需自行测试实际目标连通性。备份恢复先从 Download 选择文件并预览差异，恢复时校验相同文件内容；钩子仍只停放供审阅。
+**限时试用配置**以保存设置为候选，可选模式覆盖；启动检查通过后在 30–300 单调秒内确认，否则恢复已接受的运行基线。重启使未确认试用过期，以后开机不会重新启用被拒绝但仍保存的候选。出口偏好副作用仅对原账户及仍匹配预期的完整偏好回退，后来的手动选择优先。检查仅覆盖本机就绪，不代表实际目标连通。
+
+恢复预览绑定归档内容及当前保存配置。原生读取器仅允许三个配置文件和两个待审阅钩子，限制为压缩 1 MiB、展开 2 MiB、单成员 512 KiB、16 个物理头；拒绝链接、元数据扩展与尾随归档。暂存受超时监督且可取消；提交阶段通过原子门拒绝取消。恢复、保存与服务控制任务跨页面保留，取消失败不丢失稍后真实结果，可以重试取消但不重复启动破坏性操作。
 
 配置恢复在切换目录前记录事务。进程中断后，下次获取配置锁时先恢复：未提交的事务恢复旧配置，已提交的事务保留完整候选。恢复失败时阻止配置读写并保留记录供重试，不会把配置目录缺失当成默认设置；已应用运行快照保持独立。
 
@@ -138,7 +145,7 @@ WebUI 源码位于 `webui/`（Vite + SolidJS + Material Web 3 组件 + `kernelsu
 | `DNS_MODE` | `legacy` | `legacy` 旧模式 / `local` 本地端点 / `transparent` 透明共存 |
 | `MAGIC_DNS` | `off` | 启用所选模式的 Tailnet 域名解析 |
 | `IPV6` | `off` | tailscale0 双栈 + ip6tables 对称规则 |
-| `ROUTE_TABLE` | `1052` | 独立策略路由表号（1000–65535） |
+| `ROUTE_TABLE` | `1052` | 固定独立策略路由表，外部资源冲突时拒绝应用 |
 | `FWMARK` / `FWMARK_MASK` | `0x40000000` | 固定共享标记位；旧 0xF7 配置读取时迁移 |
 | `WATCHDOG` / `WATCHDOG_INTERVAL` | `on` / `30` | 崩溃重启 + rebind，检查间隔秒数 |
 | `WATCHDOG_RESTART_LIMIT` / `WATCHDOG_RESTART_WINDOW` | `5` / `600` | 窗口（秒）内允许的重启次数，达到上限后进入冷却 |
@@ -179,6 +186,8 @@ WebUI 源码位于 `webui/`（Vite + SolidJS + Material Web 3 组件 + `kernelsu
 | `UID_LIST` | 空 | 空格分隔的 App UID 列表 |
 | `ROUTE_SUBNETS` | `100.64.0.0/10` | 走隧道的 CIDR 列表 |
 
+Bridge 公网默认目标需要选中偏好与实际出口身份一致，且仍受 all/selected/bypass 范围限制。UID 0 与 Tailscale 标记流量绕行；关闭 IPv6 时不保护 IPv6。proxy 仅处理显式代理客户端；原生 TUN 由 daemon 管理，不宣称已独立验证。出口页区分已选择、未生效和未知状态；需要立即协调 bridge 时使用 `foxytail.exitnode` 而非裸 `tailscale set`。
+
 ### `context.conf`（网络环境感知）
 
 每行一条规则：`<触发>:<值>:<动作>[:<参数>]`
@@ -190,6 +199,8 @@ cellular:-:no-exit-node       # 切到蜂窝时清除出口节点
 ```
 
 动作：`up`、`down`、`exit-node <参数>`、`no-exit-node`。
+
+默认网络、传输类型、接口与 DNS 来自 ConnectivityService 的 active default network 及对应 LinkProperties，不从 main 表推断。未知、VPN、Ethernet 不会冒充蜂窝；场景与看门狗使用同一快照。
 
 WebUI 设置的高级选项支持可视化增删、编辑与排序，也可切换原文编辑；保留注释和未识别行，非法规则仍由后端拒绝。最近执行结果来自实际整组动作，保存成功不等于动作已执行成功。
 
@@ -214,7 +225,7 @@ WebUI 设置的高级选项支持可视化增删、编辑与排序，也可切�
 `foxytail.route` 把一切放在独立位置，不影响其他模块：
 
 - 所有规则进专用链：`FOXY_MARK`（mangle）与 `FOXY_STAT`（filter，供流量统计计数）；内置链各只挂一跳
-- 策略路由使用独立表 **1052**（1000–65535，须无外部资源冲突）与固定 mark/mask **`0x40000000/0x40000000`**；保留其他标记位，不清空整张路由表
+- 策略路由固定使用独立表 **1052** 与 mark/mask **`0x40000000/0x40000000`**；冲突时拒绝应用，保留其他标记位，不清空整张路由表
 - `check` 比较完整配置、双栈规则、OUTPUT 跳转及路由快照；`apply` 在失配时修复，`teardown` 只移除精确策略规则和协议 186、设备 tailscale0 的路由
 - 旧 DNS 模式额外使用 `FOXY_DNS`（nat）做 53 重定向；检测到其他模块已劫持 53 端口时自动跳过
 
@@ -246,9 +257,13 @@ FoxyTail 从不动其他模块的链，开机时自动探测邻居（`foxytail.c
 
 Android 16 + FlClash 测试机已通过本地 UDP/TCP 与 IPv6 DNS 验证，但缺少 `CONFIG_NETFILTER_NETLINK_GLUE_CT`，现有 OEM mark 规则也阻止透明接管；单独支持 NFQUEUE 和 conntrack 并不足够。这台设备使用本地模式，仍需使用端配置 Tailnet 分域 DNS，未实现免配置的透明共存。完整透明路径通过的是独立的严格 Linux 内核测试。
 
-旧模式依次使用 `/data/adb/foxytail/bin/dnsmasq`、`/system/bin/dnsmasq`、`/vendor/bin/dnsmasq`；三者都不存在时仍需用户提供可信二进制。其公网兜底策略保持原样，以上“无公共兜底”约束针对两个新模式。
+旧模式依次使用 `/data/adb/foxytail/bin/dnsmasq`、`/system/bin/dnsmasq`、`/vendor/bin/dnsmasq`；不存在时需自备可信二进制。公网 DNS 仅取当前 Android 默认网络快照，并在变化时刷新；上游未知时取消接管、报告降级，不再使用硬编码公网兜底。
 
 旧模式的短名与完整名使用精确 hosts 记录，名为 `dev` 的节点不会接管无关的 `*.dev` 域名。为兼容系统 dnsmasq 2.51 降权后的读取，只将节点名称/IP 映射放在 `/dev/foxytail-dns/hosts`：目录由 root 持有、权限 `0755`，映射文件 `0644`、本机其他用户可读；不放宽 `/data/adb` 权限。成功停止后删除映射，目录为空时一并删除。任一地址族的重定向规则清理失败时保留解析器和映射，报告降级，等待重试清理。
+
+撤重定向规则不会清除已存在的 DNAT。透明接管在标记 verdict 前持久记录精确流，先停队列，再按原/回复元组、conntrack ID 与 zone 0 删除自有连接。legacy 在检查外部掩码及已有使用后保留独立 connmark 位 `0x20000000`，清理须匹配 boot/端口声明及精确 DNS 重定向元组；两条路径都不全表 flush。失败保留所有权和旧监听器供重试，升级前无标记连接报告 `reconnect-needed`，直到过期或客户端重连。队列故障在撤规则后仍需要修复。冲突扫描保守覆盖全端口、范围、多端口、否定、模糊条件与读取失败。
+
+本次隔离 Android 验证覆盖真实 journal/connmark 清理、同源 UDP 跨端口和停止后复用、错误 ID 拒绝、外部流保留及旧无标记流保留。该模拟器缺少 `CONFIG_NETFILTER_NETLINK_GLUE_CT`，更新后的完整 NFQUEUE 转发仍需独立 Linux 内核门禁；能力拒绝不计作透明转发通过。
 
 ## IPv6
 
@@ -257,6 +272,7 @@ Android 16 + FlClash 测试机已通过本地 UDP/TCP 与 IPv6 DNS 验证，但�
 ## 流量分析与诊断包
 
 - `foxytail.stats` 每 `STATS_INTERVAL` 秒采样一次 per-peer Rx/Tx 与双栈隧道 OUTPUT 的 UID 发送计数，写入 `/data/adb/foxytail/run/stats/YYYY-MM-DD.jsonl`（默认 7 天环形，由 `STATS_RETENTION_DAYS` 控制，熄屏降频）。查询：`foxytail.stats query hourly <日期> | daily | topn <n>`。
+- 流量页每次刷新只取一份 summary，共享给图表、节点和 UID。私有 1 MiB 分块稳定外排序保留时钟跳变后的时间顺序，流式聚合仅保留最近计数与统计桶；单行超过 512 KiB 明确失败，超时/取消覆盖整棵自有子进程树。
 - 诊断页可按需查看服务、隧道、路由和 DNS 摘要，并跳转到对应处理页面；设备详情可分别测试 IPv4/IPv6，显示实际 Ping 的延迟及直连/中继路径。
 - `foxytail.diag collect` 把日志尾部、状态、netcheck、路由与配置打包到 `/sdcard/Download/foxytail-diag-<时间戳>.tar.gz`，默认用一致代号替换采集到的账户、设备名、SSID 和地址。分享前仍应检查自定义日志内容。`foxytail.diag collect /sdcard/Download local` 保留详细信息，仅供本机排查；WebUI 也可显式选择此模式。
 

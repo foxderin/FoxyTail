@@ -6,15 +6,14 @@
  * Legacy managers without spawn fall back to exec. Without either bridge
  * `hasRoot` stays false and the UI disables root-only controls.
  *
- * Every call is time-boxed (the old UI had no timeout and froze on any
- * hung exec) and cancellable: cancel() settles the front-end promise
- * after the backend acknowledges cancellation of that request identity.
- * Replacements wait for that acknowledgement before launching.
+ * Deadlines request cancellation only where it is safe. A failed cancellation
+ * never settles the operation: its identity and late response stay owned until
+ * the backend actually finishes or acknowledges termination.
  */
 import { exec as ksuExec } from 'kernelsu';
-import { getOwner, onCleanup } from 'solid-js';
+import { createSignal, getOwner, onCleanup } from 'solid-js';
 import { afterPaint } from './schedule';
-import { WEBAPI, DEFAULT_TIMEOUT_MS, CLEANUP_TIMEOUT_MS, COMMAND_TIMEOUTS } from './config';
+import { WEBAPI, DEFAULT_TIMEOUT_MS, CLEANUP_TIMEOUT_MS, COMMAND_TIMEOUTS, NONCANCELLABLE_COMMANDS, markSavedConfigChanged } from './config';
 
 declare global {
   interface Window {
@@ -259,26 +258,29 @@ export function execRaw(cmd: string, timeoutMs: number = DEFAULT_TIMEOUT_MS, sig
   });
 }
 
+export type CancellationState = 'idle' | 'requested' | 'confirmed' | 'failed';
+
 export interface ApiCall {
   readonly promise: Promise<ApiResult>;
   readonly requestId: string;
   readonly cancelled: boolean;
-  /* Resolves only after the backend has acknowledged termination. */
+  readonly cancellable: boolean;
+  readonly cancellation: CancellationState;
+  readonly cancellationError: string | null;
+  readonly timedOut: boolean;
+  /* Failure leaves the operation pending; another attempt can confirm it. */
   cancel(): Promise<ApiResult>;
 }
 
-function apiCall(cmd: string, ...args: (string | number)[]): ApiCall {
-  return apiCallAfter(Promise.resolve({ ok: true }), cmd, ...args);
-}
-
-/* A replacement can be created synchronously for reactive UI state, while
- * execution remains gated on the previous request's cancellation. */
-export function apiCallAfter(before: Promise<ApiResult>, cmd: string, ...args: (string | number)[]): ApiCall {
+export function apiCall(cmd: string, ...args: (string | number)[]): ApiCall {
   const timeoutMs = COMMAND_TIMEOUTS[cmd] ?? DEFAULT_TIMEOUT_MS;
   const requestId = Math.floor(Date.now() / 1000) + '_' + requestSession + '_' + (++requestSequence).toString(36);
   const line = WEBAPI + ' --request-id ' + quote(requestId) + ' ' + quote(cmd) +
     (args.length ? ' ' + args.map(quote).join(' ') : '');
-  let isCancelled = false;
+  const cancellable = NONCANCELLABLE_COMMANDS[cmd] !== true;
+  const [cancellation, setCancellation] = createSignal<CancellationState>('idle');
+  const [cancellationError, setCancellationError] = createSignal<string | null>(null);
+  const [timedOut, setTimedOut] = createSignal(false);
   let launched = false;
   let done = false;
   let timer: ReturnType<typeof setTimeout> | undefined;
@@ -291,61 +293,68 @@ export function apiCallAfter(before: Promise<ApiResult>, cmd: string, ...args: (
     done = true;
     unschedule?.();
     clearTimeout(timer);
+    if (result.ok && ['settings-set', 'routes-set', 'context-set', 'restore'].includes(cmd)) markSavedConfigChanged();
     resolveResult(result);
   };
   const cancel = (): Promise<ApiResult> => {
+    if (done) return Promise.resolve({ ok: true, cancelled: cancellation() === 'confirmed', completed: true });
     if (cleanup) return cleanup;
-    if (done) return Promise.resolve({ ok: true });
-    isCancelled = true;
+    setCancellation('requested');
+    setCancellationError(null);
     unschedule?.();
-    clearTimeout(timer);
-    cleanup = (launched ? cleanupBackend(requestId) : before).then((res) => {
-      finish(res.ok
-        ? { ok: false, error: 'cancelled', cancelled: true }
-        : { ok: false, error: 'Cancellation failed: ' + (res.error || 'unknown error'), cleanupFailed: true });
-      return res;
+    const attempt: Promise<ApiResult> = !launched ? Promise.resolve({ ok: true })
+      : cancellable ? cleanupBackend(requestId)
+      : Promise.resolve({ ok: false, error: 'Operation is committing changes and cannot be cancelled' });
+    cleanup = attempt.then((res) => {
+      cleanup = undefined;
+      // An actual result can arrive while acknowledgement is still in flight.
+      if (done) return { ok: true, completed: true };
+      if (res.ok && res.completed === true) {
+        setCancellation('idle');
+        return res;
+      }
+      if (!res.ok) {
+        setCancellationError(res.error || 'Cancellation was not confirmed');
+        setCancellation('failed');
+        return res;
+      }
+      setCancellation('confirmed');
+      finish(timedOut()
+        ? { ok: false, error: `${cmd}: timed out after ${Math.round(timeoutMs / 1000)}s`, timedOut: true, stopped: true }
+        : { ok: false, error: 'cancelled', cancelled: true });
+      return { ...res, cancelled: true };
     });
     return cleanup;
   };
 
-  void before.then((previous) => {
-    if (isCancelled || done) return;
-    if (!previous.ok) {
-      cleanup = Promise.resolve(previous);
-      finish({ ok: false, error: 'Previous operation could not be cancelled: ' + (previous.error || 'unknown error') });
-      return;
-    }
-    if (!execImpl) {
-      finish({ ok: false, error: 'no root exec bridge (open this page in KernelSU manager or MMRL)' });
-      return;
-    }
+  if (!execImpl) {
+    finish({ ok: false, error: 'no root exec bridge (open this page in KernelSU manager or MMRL)' });
+  } else {
     unschedule = afterPaint(() => {
-      if (isCancelled || done) return;
+      if (done) return;
       launched = true;
       timer = setTimeout(() => {
-        isCancelled = true;
-        cleanup = cleanupBackend(requestId);
-        void cleanup.then((res) => finish({
-          ok: false,
-          error: `${cmd}: timed out after ${Math.round(timeoutMs / 1000)}s` +
-            (res.ok ? '' : '; cancellation failed: ' + (res.error || 'unknown error')),
-          cleanupFailed: !res.ok,
-        }));
+        setTimedOut(true);
+        if (cancellable) void cancel();
       }, timeoutMs);
       execImpl(line).then(
-        (out) => { if (!isCancelled) finish(parseResult(out, cmd)); },
-        (err) => {
-          if (!isCancelled) finish({
-            ...(err instanceof ApiExecutionError ? err.result : {}),
-            ok: false,
-            error: String(err instanceof Error ? err.message : err),
-          });
-        },
+        (out) => finish(parseResult(out, cmd)),
+        (err) => finish({
+          ...(err instanceof ApiExecutionError ? err.result : {}),
+          ok: false,
+          error: String(err instanceof Error ? err.message : err),
+        }),
       );
     });
-  }, (err) => finish({ ok: false, error: String(err) }));
+  }
 
-  return { promise, requestId, get cancelled() { return isCancelled; }, cancel };
+  return {
+    promise, requestId, cancellable, cancel,
+    get cancelled() { return cancellation() === 'confirmed'; },
+    get cancellation() { return cancellation(); },
+    get cancellationError() { return cancellationError(); },
+    get timedOut() { return timedOut(); },
+  };
 }
 
 /* Convenience form for lightweight read-only calls. */
@@ -367,19 +376,30 @@ export interface ApiScope {
  * from affecting a new page's requests. */
 export function createApiScope(): ApiScope {
   const calls = new Set<ApiCall>();
+  let generation = 0;
   const cancelAll = () => {
-    const pending = [...calls];
-    calls.clear();
-    /* Mark queued calls cancelled before their launch microtask can run.
-     * Native cancellation itself goes through the frame-aware exec path. */
-    pending.forEach((c) => { void c.cancel(); });
+    generation++;
+    // Detach page observers, but retain backend ownership until it really ends.
+    calls.forEach((call) => { void call.cancel(); });
   };
   if (getOwner()) onCleanup(cancelAll);
-  const track = (c: ApiCall): ApiCall => {
-    calls.add(c);
-    const drop = () => calls.delete(c);
-    c.promise.then(drop, drop);
-    return c;
+  const track = (call: ApiCall): ApiCall => {
+    const started = generation;
+    calls.add(call);
+    const promise = call.promise.then((result) => {
+      calls.delete(call);
+      return started === generation ? result : { ok: false, cancelled: true, error: 'cancelled' };
+    });
+    return {
+      promise,
+      requestId: call.requestId,
+      get cancelled() { return call.cancelled; },
+      get cancellable() { return call.cancellable; },
+      get cancellation() { return call.cancellation; },
+      get cancellationError() { return call.cancellationError; },
+      get timedOut() { return call.timedOut; },
+      cancel: () => call.cancel(),
+    };
   };
   return {
     call: (cmd, ...args) => track(apiCall(cmd, ...args)),

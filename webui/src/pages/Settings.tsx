@@ -1,13 +1,14 @@
 /* Settings separate appearance, runtime configuration and recovery operations. */
-import { createSignal, For, onMount, Show, type JSX } from 'solid-js';
+import { createEffect, createSignal, For, on, onCleanup, onMount, Show, type JSX } from 'solid-js';
 import { createApiScope, hasRoot } from '../api';
 import { t, lang, setLang, type Lang } from '../i18n';
 import { NETWORK, BACKGROUND, ROUTE_TABLE, type Field } from '../settings';
 import SettingsMaintenance from './SettingsMaintenance';
 import SettingsTrial from './SettingsTrial';
 import { refreshStatus, status } from '../state';
-import { getTask } from '../tasks';
-import { BACKUP_TASK } from '../backup';
+import { getTask, startTask } from '../tasks';
+import { BACKUP_TASK, RESTORE_TASK } from '../backup';
+import { TaskProgress } from '../components/TaskProgress';
 import { mode, applyTheme, type ThemeMode } from '../theme';
 import { Card, SkeletonRows, ErrorState, StatusBadge } from '../components/Basics';
 import { showToast, toastApiError } from '../components/Toast';
@@ -17,23 +18,28 @@ import './tools.css';
 
 export default function Settings(): JSX.Element {
   const scope = createApiScope();
+  let disposed = false;
+  let settingsLoad = 0;
+  onCleanup(() => { disposed = true; });
   const [settings, setSettings] = createSignal<Record<string, string> | null>(null);
   const [settingsError, setSettingsError] = createSignal<string | null>(null);
   const [restartRequired, setRestartRequired] = createSignal(false);
-  const [restartBusy, setRestartBusy] = createSignal(false);
   const [trialActive, setTrialActive] = createSignal(false);
-  const [saving, setSaving] = createSignal<string | null>(null);
-  const [restoreBusy, setRestoreBusy] = createSignal(false);
   // `null` = never probed; `false` = kernel lacks transparent capture; `true`
   // = cached probe confirms the kernel can run transparent split DNS.
   const [transparentAvailable, setTransparentAvailable] = createSignal<boolean | null>(null);
   const [transparentReason, setTransparentReason] = createSignal<string | null>(null);
   const backupBusy = () => getTask(BACKUP_TASK)?.status === 'running';
-  const locked = () => !hasRoot || Boolean(saving()) || restartBusy() || restoreBusy() || backupBusy();
+  const saveTask = () => getTask('settings-save');
+  const serviceTask = () => getTask('service-control');
+  const saving = () => saveTask()?.status === 'running' ? String(saveTask()?.args[0] ?? '') : null;
+  const restartBusy = () => serviceTask()?.status === 'running';
+  const locked = () => !hasRoot || Boolean(saving()) || restartBusy() || getTask(RESTORE_TASK)?.status === 'running' || backupBusy();
 
   async function loadSettings(): Promise<boolean | undefined> {
+    const load = ++settingsLoad;
     const res = await scope.api('settings-get');
-    if (res.cancelled) return;
+    if (res.cancelled || disposed || load !== settingsLoad) return;
     if (!res.ok) {
       setSettingsError(res.error || t('error'));
       return;
@@ -46,7 +52,7 @@ export default function Settings(): JSX.Element {
   }
   async function loadTransparentCapability() {
     const res = await scope.api('dns');
-    if (res.cancelled) return;
+    if (res.cancelled || disposed) return;
     if (res.ok) {
       const available = res.transparentAvailable;
       if (available === true || available === false) {
@@ -59,7 +65,7 @@ export default function Settings(): JSX.Element {
     // actual device rather than a stale or absent cache. Probe is fast and
     // idempotent; failures still record a verdict in the backend cache.
     const probe = await scope.api('dns-probe');
-    if (probe.cancelled) return;
+    if (probe.cancelled || disposed) return;
     if (probe.ok) {
       setTransparentAvailable(probe.transparentAvailable === true);
       setTransparentReason(typeof probe.transparentUnavailableReason === 'string' ? probe.transparentUnavailableReason : null);
@@ -89,9 +95,8 @@ export default function Settings(): JSX.Element {
       restoreInput();
       return;
     }
-    setSaving(field.key);
-    const res = await scope.api('settings-set', field.key, value);
-    setSaving(null);
+    const res = await startTask('settings-save', 'settings-set', field.key, value).promise;
+    if (disposed) return;
     if (res.cancelled) {
       restoreInput();
       return;
@@ -106,11 +111,12 @@ export default function Settings(): JSX.Element {
   }
   async function applySavedSettings() {
     if (locked() || trialActive()) return;
-    setRestartBusy(true);
-    const res = await scope.api('control', 'restart');
+    const res = await startTask('service-control', 'control', 'restart').promise;
+    if (disposed) return;
     if (!res.cancelled) {
       if (res.ok) {
         const pending = await loadSettings();
+        if (disposed) return;
         if (pending !== false) setRestartRequired(true);
         showToast(
           t(pending === false ? 'set_applied' : 'set_restart_required'),
@@ -119,8 +125,12 @@ export default function Settings(): JSX.Element {
         void refreshStatus({ afterCurrent: true });
       } else toastApiError(t('op_failed'), res);
     }
-    setRestartBusy(false);
   }
+  createEffect(on(
+    () => [saveTask()?.result, serviceTask()?.result, getTask(RESTORE_TASK)?.result],
+    results => { if (results.some(result => result != null)) void loadSettings(); },
+    { defer: true },
+  ));
   onMount(() => {
     void loadSettings();
     void loadTransparentCapability();
@@ -206,6 +216,18 @@ export default function Settings(): JSX.Element {
   }
   return (
     <div class="tools-page">
+      <TaskProgress taskKey="settings-save" />
+      <TaskProgress taskKey="service-control" />
+      <For each={['settings-save', 'service-control']}>{key => {
+        const task = () => getTask(key);
+        return <Show when={task()?.result}>
+          <div class="tool-result" role={task()?.status === 'error' ? 'alert' : 'status'} data-task-result={key} data-task-status={task()?.status}>
+            {task()?.result?.ok
+              ? t(key === 'settings-save' && task()?.result?.applied !== true ? 'tools_saved_pending' : key === 'settings-save' ? 'tools_all_applied' : 'dash_action_done')
+              : String(task()?.result?.error || t('error'))}
+          </div>
+        </Show>;
+      }}</For>
       <Show when={restartRequired()}>
         <div class="tool-pending" role="status">
           <div class="toolbar">
@@ -290,8 +312,7 @@ export default function Settings(): JSX.Element {
         </Show>
       </Show>
       <SettingsTrial locked={locked()} onActive={setTrialActive} onUpdate={loadSettings} />
-      <SettingsMaintenance locked={locked()} busy={restoreBusy()} setBusy={setRestoreBusy}
-        onPending={() => setRestartRequired(true)} onRestore={loadSettings}>
+      <SettingsMaintenance locked={locked()} onPending={() => setRestartRequired(true)}>
         <Show when={settings()}>
           {fieldRow(ROUTE_TABLE)}
           <div class="tool-setting">

@@ -1,7 +1,19 @@
 #!/system/bin/sh
 # FoxyTail - Magisk/KernelSU late-start service.
-# Wait for boot to complete (300s cap) and for a default route (60s cap),
-# then hand over to the FoxyTail entry point.
+# Recover shared software before loading settings or any replaceable script.
+# Keep ownership until startup returns so an installer cannot switch under boot.
+
+TS_DIR="/data/adb/foxytail"
+MODDIR=${0%/*}
+# shellcheck source=install-recovery.sh
+. "$MODDIR/install-recovery.sh" || exit 1
+install_lock || exit 1
+trap 'install_unlock' 0
+trap 'exit 1' HUP INT TERM
+install_recover_locked || { echo 'FoxyTail installation recovery failed; startup deferred' >&2; exit 1; }
+DIR="$TS_DIR/scripts"
+# shellcheck source=tailscale/settings.sh
+. "$TS_DIR/settings.sh" || exit 1
 
 _i=0
 while [ "$(getprop sys.boot_completed)" != "1" ]; do
@@ -13,7 +25,7 @@ while [ "$(getprop sys.boot_completed)" != "1" ]; do
 done
 
 _i=0
-while [ -z "$(ip route show default 2>/dev/null)" ]; do
+while command -v network_snapshot >/dev/null 2>&1 && ! network_snapshot >/dev/null 2>&1; do
   _i=$((_i + 1))
   if [ "$_i" -ge 60 ]; then
     break
@@ -21,4 +33,4 @@ while [ -z "$(ip route show default 2>/dev/null)" ]; do
   sleep 1
 done
 
-/data/adb/foxytail/scripts/start.sh
+"$TS_DIR/scripts/start.sh"

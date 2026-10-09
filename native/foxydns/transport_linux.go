@@ -39,8 +39,8 @@ type observedFlow struct {
 	token   uint64
 }
 
-// Interceptor owns only its NFQUEUE and read-only conntrack/link sockets. It
-// never changes iptables, connmarks, routes, interfaces, or another queue.
+// Interceptor owns its queue and journals each flow before allowing our DNAT.
+// Cleanup deletes only verified journaled DNAT tuples, never connmarks/routes.
 type Interceptor struct {
 	queue           *nfqueue.Nfqueue
 	ct              *netfilter.Conn
@@ -48,6 +48,7 @@ type Interceptor struct {
 	cancel          context.CancelFunc
 	wg              sync.WaitGroup
 	ctMu            sync.Mutex
+	verdictMu       sync.Mutex
 	lookupConntrack func(flowTuple) (*conntrack.Flow, error)
 	lookupRoute     func(flowTuple, uint32, uint32, uint8) (int, error)
 	lookupSocket    func(flowTuple) (socketIdentity, error)
@@ -57,14 +58,17 @@ type Interceptor struct {
 	serial          uint64
 	flows           map[flowTuple]observedFlow
 	ifaces          map[int]interfaceState
+	ownership       *flowJournal
+	closeOnce       sync.Once
+	closeError      error
 }
 
-func NewInterceptor(queue uint16) (*Interceptor, error) {
+func NewInterceptor(queue uint16, ownership *flowJournal) (*Interceptor, error) {
 	if queue == 0 {
 		return nil, errors.New("NFQUEUE number must be nonzero")
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	i := &Interceptor{cancel: cancel, flows: make(map[flowTuple]observedFlow), ifaces: make(map[int]interfaceState)}
+	i := &Interceptor{cancel: cancel, flows: make(map[flowTuple]observedFlow), ifaces: make(map[int]interfaceState), ownership: ownership}
 	fail := func(err error) (*Interceptor, error) { _ = i.Close(); return nil, err }
 	var err error
 	i.ct, err = netfilter.Dial(nil)
@@ -128,13 +132,13 @@ func queueRegistrationError(err error) error {
 	// that kernel error. Do not unwrap binding failures or syscall errors into
 	// this diagnosis: they do not prove the metadata capability is missing.
 	if ack, direct := err.(*netlink.OpError); direct && ack.Op == "receive" && ack.Err == unix.EOPNOTSUPP {
-		return fmt.Errorf("NFQUEUE kernel does not support required conntrack queue metadata (CONFIG_NETFILTER_NETLINK_GLUE_CT): %w", err)
+		return fmt.Errorf("%w: NFQUEUE kernel does not support required conntrack queue metadata (CONFIG_NETFILTER_NETLINK_GLUE_CT): %w", ErrUnsupported, err)
 	}
 	return fmt.Errorf("NFQUEUE bind/metadata flags: %w", err)
 }
 
 func ProbeCapabilities(queue uint16) error {
-	i, err := NewInterceptor(queue)
+	i, err := NewInterceptor(queue, nil)
 	if err != nil {
 		return err
 	}
@@ -159,26 +163,33 @@ func (i *Interceptor) Health() error {
 }
 
 func (i *Interceptor) Close() error {
-	i.mu.Lock()
-	if i.closed {
+	i.closeOnce.Do(func() {
+		i.mu.Lock()
+		i.closed = true
 		i.mu.Unlock()
-		return nil
-	}
-	i.closed = true
-	i.mu.Unlock()
-	i.cancel()
-	var errs []error
-	if i.queue != nil {
-		errs = append(errs, i.queue.Close())
-	}
-	if i.links != nil {
-		errs = append(errs, i.links.Close())
-	}
-	i.wg.Wait()
-	if i.ct != nil {
-		errs = append(errs, i.ct.Close())
-	}
-	return errors.Join(errs...)
+		if i.cancel != nil {
+			i.cancel()
+		}
+		var errs []error
+		if i.queue != nil {
+			errs = append(errs, i.queue.Close())
+			// A callback may have journaled but not yet issued its verdict.
+		}
+		if i.links != nil {
+			errs = append(errs, i.links.Close())
+		}
+		i.wg.Wait()
+		if i.ct != nil {
+			errs = append(errs, i.ct.Close())
+		}
+		i.verdictMu.Lock()
+		defer i.verdictMu.Unlock()
+		if i.ownership != nil {
+			errs = append(errs, i.ownership.close())
+		}
+		i.closeError = errors.Join(errs...)
+	})
+	return i.closeError
 }
 
 func (i *Interceptor) watchLinks() {
@@ -240,6 +251,8 @@ func (i *Interceptor) applyLinkEvent(message netlink.Message) {
 }
 
 func (i *Interceptor) capture(a nfqueue.Attribute) int {
+	i.verdictMu.Lock()
+	defer i.verdictMu.Unlock()
 	if a.PacketID == nil {
 		i.setError(errors.New("NFQUEUE packet missing verdict ID"))
 		return 1
@@ -284,6 +297,9 @@ func (i *Interceptor) captureDecision(a nfqueue.Attribute) (int, uint32, bool) {
 }
 
 func (i *Interceptor) observe(a nfqueue.Attribute) (uint32, bool) {
+	if i.ownership == nil {
+		return 0, false
+	}
 	if a.UID == nil || a.GID == nil || a.OutDev == nil || *a.OutDev == 0 ||
 		a.Hook == nil || *a.Hook != unix.NF_INET_LOCAL_OUT || a.Payload == nil || a.Ct == nil {
 		return 0, false
@@ -307,6 +323,11 @@ func (i *Interceptor) observe(a nfqueue.Attribute) (uint32, bool) {
 	ct, err := decodeCapturedConntrack(*a.Ct, tuple.source.Addr().Is6())
 	if err != nil || ct.Zone != 0 || ct.TupleOrig.Zone != 0 || ct.TupleReply.Zone != 0 ||
 		fromCTTuple(ct.TupleOrig) != tuple {
+		return mark, false
+	}
+	// Existing foreign NAT (including an identical local endpoint) cannot
+	// become ours merely because a subsequent packet entered this queue.
+	if i.ownership != nil && ct.Status.DstNATDone() && !i.ownership.contains(tuple, ct.ID) {
 		return mark, false
 	}
 	socketLookup := i.lookupSocket
@@ -362,6 +383,12 @@ func (i *Interceptor) observe(a nfqueue.Attribute) (uint32, bool) {
 			OutIfIndex: int(*a.OutDev), InterfaceName: iface.name, CapturedAt: now,
 			protocol: tuple.protocol, tos: tos, generation: iface.generation, socketCookie: identity.Cookie, socketInode: identity.Inode,
 		}, ctID: ct.ID, token: i.serial}
+	}
+	if i.ownership != nil {
+		if err := i.ownership.record(tuple, ct.ID); err != nil {
+			i.err = fmt.Errorf("capture ownership journal: %w", err)
+			return mark, false
+		}
 	}
 	flow.last = now
 	i.flows[tuple] = flow

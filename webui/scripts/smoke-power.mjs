@@ -151,7 +151,7 @@ export async function checkPower() {
     [...w.document.querySelectorAll('#view button')].find(button => /^(Refresh|刷新)$/.test(button.textContent))?.click();
     await flush();
     assert(count('logs') === pausedLogs + 1 && timers.size === 0, 'explicit refresh remains available with the global refresh switch off');
-    const trial = { id: 'power_trial', status: 'running', deadline: Math.floor(now / 1000) + 120, reason: '',
+    const trial = { id: 'power_trial', status: 'running', remaining: 120, reason: '',
       previous: { mode: 'bridge', dnsMode: 'legacy', routeScope: 'all' }, candidate: { mode: 'proxy', dnsMode: 'local', routeScope: 'all' } };
     fixtures['trial-status'] = { ok: true, trial };
     await nav('more'); await nav('settings');

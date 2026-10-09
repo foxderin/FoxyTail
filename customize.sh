@@ -91,6 +91,25 @@ if ! unzip -qqo "$ZIPFILE" -d "$MODPATH" \
   abort "! Failed to extract module files (corrupt zip?)"
 fi
 
+# Publish recovery in both roots before touching shared software. An interrupted
+# modules_update install may never become the active module at the next boot.
+install_recovery_entry() {
+  _ie_root="$MODPATH"
+  case "$MODPATH" in
+    /data/adb/modules_update/foxytail)
+      [ ! -d /data/adb/modules/foxytail ] || _ie_root=/data/adb/modules/foxytail ;;
+  esac
+  if [ "$_ie_root" != "$MODPATH" ]; then
+    for _ie_file in install-recovery.sh service.sh; do
+      cp "$MODPATH/$_ie_file" "$_ie_root/.$_ie_file-$$" &&
+        chmod 0755 "$_ie_root/.$_ie_file-$$" &&
+        mv -f "$_ie_root/.$_ie_file-$$" "$_ie_root/$_ie_file" || return 1
+    done
+  fi
+}
+# shellcheck source=install-recovery.sh
+. "$MODPATH/install-recovery.sh" || abort "! Missing installation recovery helper"
+
 STAGE="${TMPDIR}/foxytail-stage"
 mkdir -p "${STAGE}/root" "${STAGE}/scripts" "${STAGE}/hooks" \
   "${STAGE}/conf" "${STAGE}/bin/unpack"
@@ -238,7 +257,9 @@ ui_print "- Downloading and verifying binaries"
 # only in the full ZIP. Do not proceed after a failed extraction.
 unzip -qqjo "$ZIPFILE" "tailscale/bin/*-${ARCH}" -d "${STAGE}/bin" ||
   abort "! Failed to extract bundled binaries"
-verify_native_bin "foxydns-${ARCH}"
+for _native in foxydns foxyfiles; do
+  verify_native_bin "${_native}-${ARCH}"
+done
 
 install_bin tailscaled "$TAILSCALE_REPO" "$TAILSCALE_VERSION" "tailscale_.*_${ARCH}\\.tgz" tgz
 install_bin jq "$JQ_REPO" "$JQ_VERSION" "$JQ_ASSET"
@@ -249,32 +270,16 @@ install_bin hev-socks5-tunnel "$HEV_REPO" "$HEV_VERSION" "hev-socks5-tunnel-linu
 # candidate contains software/config only, including user-provided binaries.
 CANDIDATE="${TS_DIR}/.install-$$"
 BACKUP="${TS_DIR}/backups/${OLD_CODE}-$(date +%Y%m%d-%H%M%S)-$$"
-rollback_install() {
-  _ri_ok=0
-  for _ri_part in bin scripts conf settings.sh VERSIONS checksums.txt native-checksums.txt; do
-    if [ -e "${BACKUP}/${_ri_part}" ] || [ -e "${BACKUP}/.absent-${_ri_part}" ]; then
-      if ! rm -rf "${TS_DIR:?}/${_ri_part}"; then
-        _ri_ok=1
-        continue
-      fi
-      if [ -e "${BACKUP}/${_ri_part}" ]; then
-        mv "${BACKUP}/${_ri_part}" "${TS_DIR}/${_ri_part}" || _ri_ok=1
-      fi
-    fi
-  done
-  if [ "$_ri_ok" = 0 ]; then
-    rm -f "${TS_DIR}/.installing" "${TS_DIR}/.install-transaction" "${TS_DIR}/.install-transaction-$$"
-  fi
-  return "$_ri_ok"
-}
 
 install_abort() {
   ui_print "! Installation switch failed: $1"
-  _INSTALL_SWITCH_ACTIVE=0
-  if rollback_install; then
-    ui_print "! Previous software restored; restart FoxyTail after resolving the error"
-  else
-    ui_print "! Rollback incomplete; original files remain in ${BACKUP}"
+  if [ "${_INSTALL_SWITCH_ACTIVE:-0}" = 1 ]; then
+    _INSTALL_SWITCH_ACTIVE=0
+    if rollback_install; then
+      ui_print "! Previous software restored; restart FoxyTail after resolving the error"
+    else
+      ui_print "! Rollback incomplete; original files remain in ${BACKUP}"
+    fi
   fi
   abort "! Installation failed; not reporting success"
 }
@@ -283,18 +288,23 @@ install_interrupted() {
   if [ "${_INSTALL_SWITCH_ACTIVE:-0}" = 1 ]; then
     _INSTALL_SWITCH_ACTIVE=0
     ui_print "! Interrupted install; restoring previous software"
-    rollback_install || ui_print "! Recovery incomplete; retained journal for the next installation"
+    rollback_install || ui_print "! Recovery incomplete; retained journal for boot recovery"
   fi
+  rm -f "${TS_DIR}/.installing-$$" "${TS_DIR}/.install-transaction-$$"
+  install_unlock
 }
 
 begin_install() {
-  # The journal must never advertise a rollback directory that does not exist.
-  # Arm cleanup before publishing it or creating the controller gate.
-  mkdir -p "$BACKUP" || return 1
+  [ "${_INSTALL_LOCK_HELD:-0}" = 1 ] || install_lock || return 1
+  # Never reuse an earlier snapshot, even if a PID/name is recycled.
+  install_validate_backup && mkdir -p "$TS_DIR/backups" && mkdir "$BACKUP" || return 1
+  (umask 077; printf '%s\n' "$_INSTALL_OWNER" >"$BACKUP/.install-owner") || return 1
   _INSTALL_SWITCH_ACTIVE=1
   trap 'install_interrupted' 0
   trap 'exit 1' HUP INT TERM
-  (umask 077; printf '%s\n' "$BACKUP" >"${TS_DIR}/.install-transaction-$$") &&
+  (umask 077; printf '%s\n' "$_INSTALL_OWNER" >"${TS_DIR}/.installing-$$") &&
+    mv "${TS_DIR}/.installing-$$" "${TS_DIR}/.installing" &&
+    (umask 077; printf '%s\n' "$BACKUP" >"${TS_DIR}/.install-transaction-$$") &&
     mv "${TS_DIR}/.install-transaction-$$" "${TS_DIR}/.install-transaction"
 }
 
@@ -311,27 +321,14 @@ switch_install() {
 }
 
 # Recover an interrupted earlier switch before reading installed software.
-# Journal paths are constrained to our backups directory; configuration is not
-# executed to select the recovery source.
-if [ -f "${TS_DIR}/.install-transaction" ]; then
-  _RECOVERY_BACKUP=$(cat "${TS_DIR}/.install-transaction")
-  case "$_RECOVERY_BACKUP" in
-    "${TS_DIR}/backups/"*)
-      _RECOVERY_NAME=${_RECOVERY_BACKUP#"${TS_DIR}/backups/"}
-      case "$_RECOVERY_NAME" in ''|*[!A-Za-z0-9_-]*) abort "! Invalid installation journal" ;; esac
-      ;;
-    *) abort "! Invalid installation journal" ;;
-  esac
-  _NEXT_BACKUP=$BACKUP
-  BACKUP=$_RECOVERY_BACKUP
-  # Older installers published the journal before mkdir. A missing backup at
-  # this boundary means no old entry could have been moved; leave data intact.
-  if [ -e "$BACKUP" ] && [ ! -d "$BACKUP" ]; then
-    abort "! Invalid installation backup"
-  fi
-  rollback_install || abort "! Unable to recover previous interrupted installation"
-  BACKUP=$_NEXT_BACKUP
-fi
+mkdir -p "$TS_DIR" || abort "! Unable to create runtime directory"
+install_lock || abort "! Installation or boot recovery is already active"
+trap 'install_interrupted' 0
+trap 'exit 1' HUP INT TERM
+install_recovery_entry || abort "! Unable to publish stable boot recovery"
+_NEXT_BACKUP=$BACKUP
+install_recover_locked || abort "! Unable to recover previous interrupted installation"
+BACKUP=$_NEXT_BACKUP
 
 
 mkdir -p "${CANDIDATE}/bin" "${CANDIDATE}/scripts" "${CANDIDATE}/conf" ||
@@ -342,7 +339,7 @@ for _part in bin scripts conf; do
       abort "! Unable to preserve installed ${_part}; old installation unchanged"
   fi
 done
-for b in tailscaled jq hev-socks5-tunnel foxydns; do
+for b in tailscaled jq hev-socks5-tunnel foxydns foxyfiles; do
   cp -f "${STAGE}/bin/${b}-${ARCH}" "${CANDIDATE}/bin/${b}" ||
     abort "! Unable to prepare ${b}; old installation unchanged"
 done
@@ -389,7 +386,7 @@ installed_pids() {
 quiesce_installed() {
   # Gate controllers in current/new versions. Old releases lack the gate,
   # hence explicit watcher and resident shutdown before the old service.
-  : >"${TS_DIR}/.installing" || return 1
+  [ "$(cat "${TS_DIR}/.installing")" = "$_INSTALL_OWNER" ] || return 1
   for _qi_pid in $(installed_pids); do
     if tr '\0' '\n' <"/proc/${_qi_pid}/cmdline" 2>/dev/null |
       grep -qxF "${TS_SCRIPTS_DIR}/foxytail.inotify"; then
@@ -401,7 +398,7 @@ quiesce_installed() {
       "${TS_SCRIPTS_DIR}/${_qi_name}" stop || return 1
   done
   [ ! -x "${TS_SCRIPTS_DIR}/foxytail.service" ] ||
-    "${TS_SCRIPTS_DIR}/foxytail.service" stop || return 1
+    "${TS_SCRIPTS_DIR}/foxytail.service" stop --internal || return 1
   _qi_left=$(installed_pids)
   for _qi_pid in $_qi_left; do kill -TERM "$_qi_pid" 2>/dev/null; done
   _qi_tries=0
@@ -475,6 +472,7 @@ set_perm_recursive "$TS_CONF_DIR" 0 0 0700 0600 || install_abort "configuration 
 set_perm "${TS_DIR}/settings.sh" 0 0 0644 || install_abort "runtime permissions"
 
 set_perm "$MODPATH/service.sh" 0 0 0755 "u:object_r:system_file:s0"
+set_perm "$MODPATH/install-recovery.sh" 0 0 0755 "u:object_r:system_file:s0"
 set_perm "$MODPATH/uninstall.sh" 0 0 0755 "u:object_r:system_file:s0"
 [ -d "$MODPATH/webroot" ] &&
   set_perm_recursive "$MODPATH/webroot" 0 0 0755 0644 "u:object_r:system_file:s0"
@@ -514,8 +512,9 @@ fi
 
 # --- Commit and remove legacy /dev shortcuts ---------------------------------
 
+rm -f "${TS_DIR}/.install-transaction" && rm -f "${TS_DIR}/.installing" || install_abort "cannot commit installation journal"
 _INSTALL_SWITCH_ACTIVE=0
-rm -f "${TS_DIR}/.installing" "${TS_DIR}/.install-transaction"
+install_unlock
 for _name in tailscale tailscaled foxytail.service; do
   case "$_name" in
     tailscale | tailscaled) _target="${TS_BIN_DIR}/tailscaled" ;;

@@ -19,11 +19,11 @@ class TaildropApiTests(ApiTestCase):
         self.downloads = self.sdcard / 'Download'
 
     def receive(self, entries, prefix=''):
-        writes = '\n'.join('printf %s ' + shlex.quote(body) + ' >' +
-                           shlex.quote(str(self.inbox / name))
-                           for name, body in entries.items())
-        return json.loads(self.shell(prefix + '\nts_cli() {\n' +
-                                     (writes or ':') + '\n}\ncmd_file_receive').stdout)
+        incoming = self.downloads / 'Taildrop'
+        incoming.mkdir(exist_ok=True)
+        for name, body in entries.items():
+            (incoming / name).write_text(body)
+        return json.loads(self.shell(prefix + '\ntaildrop_direct_ready() { return 0; }\ncmd_file_receive').stdout)
 
     def download(self, name, prefix='', ok=True):
         return self.shell(prefix + '\ncmd_file_download ' + shlex.quote(name), ok=ok)
@@ -36,7 +36,7 @@ class TaildropApiTests(ApiTestCase):
         (self.inbox / 'directory').mkdir()
         result = self.receive({'c.txt': 'received-c'})
         self.assertEqual(result, {'ok': True, 'received': 1, 'exported': 1})
-        self.assertEqual({p.name: p.read_text() for p in self.downloads.iterdir()},
+        self.assertEqual({p.name: p.read_text() for p in self.downloads.iterdir() if p.is_file()},
                          {'a.txt': 'user-a.txt', 'b.txt': 'user-b.txt',
                           'c.txt': 'user-c.txt', 'c-1.txt': 'received-c'})
         self.assertEqual((self.inbox / 'c.txt').read_text(), 'received-c')
@@ -45,12 +45,11 @@ class TaildropApiTests(ApiTestCase):
     def test_receive_keeps_spaces_and_metacharacter_names_intact(self):
         entries = {'meeting notes.txt': 'spaces', 'literal * ? [x].txt': 'glob',
                    "quote ' ; $(echo injected).txt": 'literal',
-                   '.env': 'hidden', '-leading.txt': 'dash',
-                   'line\nbreak.txt': 'newline'}
+                   '.env': 'hidden', '-leading.txt': 'dash'}
         result = self.receive(entries)
         self.assertEqual(result, {'ok': True, 'received': len(entries), 'exported': len(entries)})
-        self.assertEqual({p.name: p.read_text() for p in self.downloads.iterdir()}, entries)
-        self.assertEqual({p.name: p.read_text() for p in self.inbox.iterdir()}, entries)
+        self.assertEqual({p.name: p.read_text() for p in self.downloads.iterdir() if p.is_file()}, entries)
+        self.assertEqual({p.name: p.read_text() for p in self.inbox.iterdir() if p.is_file()}, entries)
         self.assertEqual(self.receive({}), {'ok': True, 'received': 0, 'exported': 0})
 
     def test_manual_export_preserves_metacharacter_names(self):
@@ -75,7 +74,7 @@ class TaildropApiTests(ApiTestCase):
         (self.inbox / 'a.txt').unlink()
         self.assertEqual(self.receive({'a.txt': 'received content'}),
                          {'ok': True, 'received': 1, 'exported': 0})
-        self.assertEqual({p.name: p.read_text() for p in self.downloads.iterdir()}, expected)
+        self.assertEqual({p.name: p.read_text() for p in self.downloads.iterdir() if p.is_file()}, expected)
         self.assertEqual((self.inbox / 'a.txt').read_text(), 'received content')
 
     def test_export_skips_directories_and_symlinks(self):
@@ -146,27 +145,113 @@ cp() { return 1; }
         result = self.receive({'received.txt': 'complete inbox content'}, failing_copy)
         self.assertEqual(result, {'ok': True, 'received': 1, 'exported': 0})
         self.assertEqual((self.inbox / 'received.txt').read_text(), 'complete inbox content')
-        self.assertEqual(list(self.downloads.iterdir()), [])
+        self.assertEqual([p for p in self.downloads.iterdir() if p.is_file()], [])
         result = self.shell(failing_copy + 'cmd_file_export received.txt', ok=False)
         self.assertNotEqual(result.returncode, 0)
         self.assertFalse(json.loads(result.stdout)['ok'])
         self.assertEqual((self.inbox / 'received.txt').read_text(), 'complete inbox content')
-        self.assertEqual(list(self.downloads.iterdir()), [])
+        self.assertEqual([p for p in self.downloads.iterdir() if p.is_file()], [])
 
-    def test_receive_retains_first_cli_error_without_retry(self):
-        result = self.shell('''ts_cli() {
-  printf '%s\\n' "$*" >>"$TS_RUN_DIR/receive-calls"
-  printf kept >"$FILES_DIR/partial.txt"
-  echo 'first receive: disk full' >&2
-  return 1
-}
-cmd_file_receive''', ok=False)
+    def test_receive_unknown_startup_mode_does_not_import(self):
+        incoming = self.downloads / 'Taildrop'
+        incoming.mkdir()
+        (incoming / 'keep.txt').write_text('shared')
+        result = self.shell('taildrop_direct_ready() { return 1; }\ncmd_file_receive', ok=False)
         self.assertNotEqual(result.returncode, 0)
-        self.assertIn('first receive: disk full', json.loads(result.stdout)['error'])
-        self.assertEqual((self.run / 'receive-calls').read_text().splitlines(),
-                         ['60 file get --wait ' + str(self.inbox) + '/'])
-        self.assertEqual((self.inbox / 'partial.txt').read_text(), 'kept')
-        self.assertEqual(list(self.downloads.iterdir()), [])
+        self.assertIn('mode is unknown', json.loads(result.stdout)['error'])
+        self.assertEqual(list(self.inbox.iterdir()), [])
+        self.assertEqual((incoming / 'keep.txt').read_text(), 'shared')
+
+    def test_receive_reports_unavailable_shared_directory_without_fallback(self):
+        result = self.shell('taildrop_direct_ready() { return 0; }\ncmd_file_receive', ok=False)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('incoming directory unavailable', json.loads(result.stdout)['error'])
+        self.assertEqual(list(self.inbox.iterdir()), [])
+
+    def test_receive_preserves_new_content_after_same_name_collision(self):
+        self.assertEqual(self.receive({'a.txt': 'first'})['received'], 1)
+        self.assertEqual(self.receive({'a.txt': 'second'})['received'], 1)
+        self.assertEqual((self.inbox / 'a.txt').read_text(), 'first')
+        self.assertEqual((self.inbox / 'a-1.txt').read_text(), 'second')
+        self.assertEqual((self.downloads / 'Taildrop/a.txt').read_text(), 'second')
+        self.assertEqual(self.receive({})['received'], 0)
+
+    def test_receive_skips_unfinished_files_and_keeps_receipts_after_clear(self):
+        result = self.receive({'done.txt': 'complete', 'later.partial': 'partial',
+                               'removed.deleted': 'deleted', 'line\nbreak.txt': 'unsupported'})
+        self.assertEqual(result, {'ok': True, 'received': 1, 'exported': 1})
+        self.assertEqual(json.loads(self.shell('cmd_file_clear').stdout)['removed'], 1)
+        self.assertTrue((self.inbox / '.taildrop').is_dir())
+        self.assertEqual(self.receive({})['received'], 0)
+        self.assertEqual((self.downloads / 'Taildrop/done.txt').read_text(), 'complete')
+
+    def test_private_receipts_and_symlinks_are_not_file_api_items(self):
+        receipts = self.inbox / '.taildrop'
+        receipts.mkdir()
+        (receipts / 'receipt').write_text('private')
+        outside = self.base / 'secret'
+        outside.write_text('secret')
+        (self.inbox / 'link').symlink_to(outside)
+        for command in ('cmd_file_download', 'cmd_file_delete', 'cmd_file_export'):
+            for name in ('.taildrop', '.taildrop/receipt', 'link'):
+                result = self.shell(command + ' ' + shlex.quote(name), ok=False)
+                self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(json.loads(self.shell('cmd_files_inbox').stdout)['files'], [])
+        self.assertEqual(json.loads(self.shell('cmd_file_clear').stdout)['removed'], 0)
+        self.assertEqual((receipts / 'receipt').read_text(), 'private')
+        self.assertEqual(outside.read_text(), 'secret')
+
+    def test_send_uses_peer_id_and_exact_current_address_not_hostname(self):
+        target = self.sdcard / 'hello.txt'
+        target.write_text('payload')
+        status = {'Peer': {
+            'a': {'ID': 'node-a', 'HostName': 'duplicate', 'TailscaleIPs': ['100.96.0.31']},
+            'b': {'ID': 'node-b', 'HostName': 'duplicate', 'TailscaleIPs': ['fd7a:115c:a1e0::2']}}}
+        prefix = 'ts_status_json() { printf %s ' + shlex.quote(json.dumps(status)) + '; }\n'
+        prefix += 'ts_cli() { printf "%s\\n" "$@" >"$TS_RUN_DIR/send-calls"; }\n'
+        for peer, address, destination in [('node-a', '100.96.0.31', '100.96.0.31:'),
+                                            ('node-b', 'fd7a:115c:a1e0::2', '[fd7a:115c:a1e0::2]:')]:
+            result = self.shell(prefix + 'cmd_file_send ' + shlex.quote(str(target)) + ' ' + peer + ' ' + address)
+            self.assertTrue(json.loads(result.stdout)['ok'])
+            self.assertEqual((self.run / 'send-calls').read_text().splitlines(),
+                             ['300', 'file', 'cp', str(target), destination])
+        (self.run / 'send-calls').unlink()
+        for peer, address in [('duplicate', '100.96.0.31'), ('node-a', 'fd7a:115c:a1e0::2'),
+                              ('node-b', '100.96.0.99'), ('bad;rm -rf /', '100.96.0.31')]:
+            result = self.shell(prefix + 'cmd_file_send ' + shlex.quote(str(target)) + ' ' + shlex.quote(peer) + ' ' + address, ok=False)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertFalse((self.run / 'send-calls').exists())
+
+    def test_direct_mode_marker_requires_same_owned_daemon_identity(self):
+        result = self.shell('''
+_TAIL_DROP_READY=1
+_proc_starttime() { printf 12345; }
+boot_identity() { printf boot-a; }
+pids_of_path() { printf 7654; }
+taildrop_record_direct 7654 || exit 1
+taildrop_direct_ready || exit 2
+_proc_starttime() { printf 54321; }
+if taildrop_direct_ready; then exit 3; fi
+_proc_starttime() { printf 12345; }
+boot_identity() { printf boot-b; }
+if taildrop_direct_ready; then exit 4; fi
+boot_identity() { printf boot-a; }
+pids_of_path() { printf 8765; }
+if taildrop_direct_ready; then exit 5; fi
+''')
+        self.assertEqual(result.returncode, 0)
+
+    def test_unknown_startup_mode_cannot_be_promoted_by_later_directory(self):
+        (self.downloads / 'Taildrop').mkdir()
+        result = self.shell('''
+_TAIL_DROP_READY=0
+_proc_starttime() { printf 12345; }
+boot_identity() { printf boot-a; }
+pids_of_path() { printf 7654; }
+if taildrop_record_direct 7654; then exit 1; fi
+if taildrop_direct_ready; then exit 2; fi
+''')
+        self.assertEqual(result.returncode, 0)
 
     def test_clear_removes_hidden_regular_files_and_preserves_directories(self):
         for name in ('ordinary.txt', '.env', '..hidden', '.meeting notes', 'literal *'):

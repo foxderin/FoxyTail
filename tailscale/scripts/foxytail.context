@@ -53,14 +53,15 @@ get_ssid() {
 # Set the current context token. Cellular-only rules need no Wi-Fi Binder call;
 # explicit status reads still obtain the actual SSID for display.
 current_context() {
-  _def=$(ip route show default 2>/dev/null)
-  case "$_def" in
-    '') _ctx=none:- ;;
-    *'dev wlan'*)
+  _network=$(network_snapshot) || { _ctx=unknown:-; return 0; }
+  _transport=$(printf '%s' "$_network" | jqr -r '.transport')
+  case "$_transport" in
+    wifi)
       _ssid=unknown
       [ "${1:-}" = cellular-only ] || get_ssid
       _ctx="ssid:${_ssid}" ;;
-    *) _ctx=cellular:- ;;
+    cellular) _ctx=cellular:- ;;
+    *) _ctx="${_transport}:-" ;;
   esac
 }
 
@@ -118,20 +119,20 @@ run_action() {
   _arg="$2"
   case "$_act" in
     up)
-      log Info "context: action up (foxytail.service start --applied)"
-      [ -x "$SERVICE" ] && "$SERVICE" start --applied >>"${TS_RUN_LOG_FILE}" 2>&1
+      log Info "context: action up"
+      [ -x "$SERVICE" ] && "$SERVICE" context up >>"${TS_RUN_LOG_FILE}" 2>&1
       ;;
     down)
-      log Info "context: action down (foxytail.service stop)"
-      [ -x "$SERVICE" ] && "$SERVICE" stop >>"${TS_RUN_LOG_FILE}" 2>&1
+      log Info "context: action down"
+      [ -x "$SERVICE" ] && "$SERVICE" context down >>"${TS_RUN_LOG_FILE}" 2>&1
       ;;
     exit-node)
       log Info "context: action exit-node"
-      tmo 10 tailscale --socket="$TS_SOCKET" set --exit-node="$_arg" >/dev/null 2>&1
+      tmo 90 "${TS_SCRIPTS_DIR}/foxytail.exitnode" set "$_arg" --context >/dev/null 2>&1
       ;;
     no-exit-node)
       log Info "context: action no-exit-node"
-      tmo 10 tailscale --socket="$TS_SOCKET" set --exit-node= >/dev/null 2>&1
+      tmo 90 "${TS_SCRIPTS_DIR}/foxytail.exitnode" clear --context >/dev/null 2>&1
       ;;
     *)
       log Error "context: unknown action '${_act}'"
@@ -218,12 +219,13 @@ do_start() {
     rm -f "$STATE_FILE" "$RESULT_FILE"
     return $?
   fi
-  daemon_claim_pidfile foxytail.context || return 0
+  _ctx_running=1
+  trap '_context_stop' TERM INT
+  daemon_claim_pidfile foxytail.context || { [ "$?" = 2 ] && return 0; return 1; }
+  trap 'daemon_release_pidfile foxytail.context' 0
   # Force the first resident round to replay the rules: the persisted token
   # would otherwise suppress actions that are still owed after a reboot.
   rm -f "$STATE_FILE" "$RESULT_FILE" || return 1
-  _ctx_running=1
-  trap '_context_stop' TERM INT
   log Info "foxytail.context started (pid $$, interval ${CONTEXT_INTERVAL}s)"
   while [ "$_ctx_running" = "1" ]; do
     check_once
@@ -231,25 +233,21 @@ do_start() {
     _int=$(effective_interval "$CONTEXT_INTERVAL" 5 60 180)
     isleep "$_int"
   done
-  rm -f "$PID_FILE"
+  daemon_release_pidfile foxytail.context
   log Info "foxytail.context stopped"
   return 0
 }
 
 do_status() {
   current_context
-  # Read the pid once: the loop removes the file on exit, so a second read
-  # could feed jq an empty string and produce broken JSON.
-  _ctx_pid=$(cat "$PID_FILE" 2>/dev/null)
-  case "$_ctx_pid" in '' | *[!0-9]*) _ctx_pid="" ;; esac
   _ctx_result=$(jqr -s -c '
     if length == 1 and (.[0] | type == "object" and (.context | type) == "string"
         and (.ok | type) == "boolean" and (.at | type) == "number")
     then .[0] | {context,ok,at} + (if .ok then {} else {error:"context-action-failed"} end)
     else null end' "$RESULT_FILE" 2>/dev/null) || _ctx_result=null
   _ctx_live=false
-  if [ -n "$_ctx_pid" ] && kill -0 "$_ctx_pid" 2>/dev/null; then
-    _ctx_live=true
+  if daemon_pid_alive foxytail.context; then
+    _ctx_live=true _ctx_pid=${_dpa_pid}
   else
     _ctx_pid=null
   fi

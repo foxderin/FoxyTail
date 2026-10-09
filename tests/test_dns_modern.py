@@ -59,6 +59,14 @@ case "$1" in
     if [ -f "$TEST_DIR/probe-failed" ]; then echo '{"ok":false}'; exit 1; fi
     echo '{"ok":true,"queue":true,"conntrack":true,"socketContext":true}' ;;
   check) [ ! -f "$TEST_DIR/check-failed" ] ;;
+  quiesce)
+    [ ! -f "$TEST_DIR/quiesce-failed" ] || exit 1
+    state="$TEST_DIR/run/foxydns.state.json"
+    jq '.queueReady=false' "$state" >"$state.next" && mv "$state.next" "$state" ;;
+  cleanup)
+    [ ! -f "$TEST_DIR/cleanup-failed" ] || exit 1
+    : >"$3" ;;
+  legacy-cleanup) exit 0 ;;
   health)
     [ -f "$TEST_DIR/alive" ] && [ ! -f "$TEST_DIR/stale-helper" ] || exit 1
     state="$TEST_DIR/run/foxydns.state.json"
@@ -73,6 +81,10 @@ case "$1" in
     mode=$(jq -r .mode "$3")
     queue=false
     [ "$mode" != transparent ] || [ -f "$TEST_DIR/queue-failed" ] || queue=true
+    if [ "$queue" = true ]; then
+      journal=$(jq -r '.ownershipFile' "$3")
+      printf '%s\\n' '{"boot":"fixture","port":1054}' >"$journal"
+    fi
     touch "$TEST_DIR/alive"
     port=$(jq -r '.listen | split(":") | last' "$3")
     printf '{"ready":true,"queueReady":%s,"pid":100,"instance":"fixture-instance","port":%s,"updatedAt":%s}\\n' "$queue" "$port" "$(date +%s)" >"$5" ;;
@@ -85,7 +97,7 @@ esac
         self.config()
         self.runner = self.base / 'runner.sh'
         settings = (ROOT / 'tailscale/scripts/foxytail.lock.sh').read_text()
-        locks = settings[settings.index('_lock_identity() {'):settings.index('conf_lock_acquire() {')]
+        locks = settings[settings.index('_proc_starttime() {'):settings.index('conf_lock_acquire() {')]
         self.runner.write_text('''
 TS_DIR="$TEST_DIR"
 TS_RUN_DIR="$TEST_DIR/run"
@@ -102,8 +114,6 @@ ts_status_json() { _tsj_r=$1; shift; "$_tsj_r" "$@"; }
 tmo() { shift; "$@"; }
 log() { printf '%s: %s\\n' "$1" "$2" >>"$TEST_DIR/service-log"; }
 rotate_log() { :; }
-_conf_pid_stamp() { echo fixture; }
-_conf_owner_alive() { kill -0 "${1%%:*}" 2>/dev/null; }
 dns_pids() { :; }
 # tailscaled liveness is separate from the foxydns listener (`alive`): the
 # helper is stopped before pref_restore runs, so keying the daemon check to
@@ -112,6 +122,7 @@ pids_of_path() { [ -f "$TEST_DIR/tailscaled-alive" ] && echo 100; return 0; }
 TS_DAEMON_CMD=tailscaled
 redirect_teardown() { return 0; }
 redirect6_teardown() { return 0; }
+legacy_capture_cleanup() { return 0; }
 current_dns_context() { cat "$TEST_DIR/context.json"; }
 stop_by_pids() { [ ! -f "$TEST_DIR/stop-failed" ] && rm -f "$TEST_DIR/alive"; }
 ipv6_nat_available() { ip6tables -t nat -S OUTPUT >/dev/null 2>&1; }
@@ -121,6 +132,8 @@ native_dns_present() { test -f "$TEST_DIR/native-present"; }
 dns_hijack_conflict() { test -f "$TEST_DIR/other-dns"; }
 flush_android_dns_cache() { echo flush >>"$TEST_DIR/flushes"; }
 ''' + locks + '\n. ' + shlex.quote(str(ROOT / 'tailscale/scripts/foxytail.dns-modern.sh')) + '\n. ' + shlex.quote(str(ROOT / 'tailscale/scripts/foxytail.dns-pref.sh')) + '''
+_proc_starttime() { ps -p "$1" -o pid= | tr -d ' '; }
+boot_identity() { echo fixture-boot; }
 modern_pids() {
   [ -f "$TEST_DIR/alive" ] || return 0
   echo 100
@@ -130,11 +143,38 @@ if [ "${REAL_GUARD_TEST:-0}" != 1 ]; then
   modern_guard_stop() { rm -f "$TEST_DIR/guard-active"; }
   modern_guard_alive() { test -f "$TEST_DIR/guard-active"; }
 else
-  _proc_starttime() { echo fixture-helper; }
+  _proc_starttime() { if [ "$1" = 100 ]; then echo 100; else ps -p "$1" -o pid= | tr -d ' '; fi; }
+  _conf_pid_stamp() { _proc_starttime "$1"; }
+  boot_identity() { echo fixture-boot; }
 fi
 load_conf
 "$@"
 ''')
+
+    def test_queue_failure_stays_repairable_after_guard_removed_rules(self):
+        self.run_script('modern_dns_start')
+        self.run_script('modern_capture_cleanup')
+        self.run_script('modern_reason', 'queue-failed', 'owned')
+        status = self.status()
+        self.assertTrue(status['repairNeeded'])
+        self.assertEqual(status['reason'], 'queue-failed')
+        self.assertFalse(status['interception4'])
+        self.run_script('modern_dns_start')
+        self.assertTrue(self.status()['interception4'])
+
+    def test_conntrack_cleanup_failure_retains_journal_and_listener(self):
+        self.run_script('modern_dns_start')
+        journal = self.base / 'state/foxydns-flows.jsonl'
+        before = journal.read_bytes()
+        (self.base / 'cleanup-failed').touch()
+        self.run_script('modern_dns_stop', ok=False)
+        self.assertEqual(journal.read_bytes(), before)
+        self.assertTrue(self.status()['listenerReady'])
+        self.assertTrue(self.status()['repairNeeded'])
+        (self.base / 'cleanup-failed').unlink()
+        self.run_script('modern_dns_stop')
+        self.assertFalse(self.status()['listenerReady'])
+        self.assertEqual(journal.read_bytes(), b'')
 
     def executable(self, name, contents):
         path = self.base / 'bin' / name
@@ -205,7 +245,7 @@ load_conf
                 (self.base / 'probe-failed').touch()
                 self.run_script('modern_dns_start')
                 status = self.status()
-                self.assertEqual(status['state'], 'running'); self.assertTrue(status['listenerReady'])
+                self.assertEqual(status['state'], 'running' if mode == 'local' else 'degraded'); self.assertTrue(status['listenerReady'])
                 self.assertFalse(status['interception4']); self.assertFalse(status['interception6'])
                 self.assertFalse(status['repairNeeded'])
                 self.assertEqual(status['reason'], 'local' if mode == 'local' else 'transparent-unavailable')
@@ -384,7 +424,7 @@ load_conf
         self.assertEqual((self.base / 'guard-watches').read_text().splitlines(), ['watch'])
         self.assertEqual(self.sets(), ['--accept-dns=false'])
         status = self.status()
-        self.assertFalse(status['interception4']); self.assertFalse(status['repairNeeded'])
+        self.assertFalse(status['interception4']); self.assertTrue(status['repairNeeded'])
         self.assertEqual(status['reason'], 'queue-failed')
         mutations = [row for row in self.kernel()['calls'] if '-D' in row and 'OUTPUT' in row]
         nat = next(i for i, row in enumerate(mutations) if 'FOXY_DNS_CAPTURE' in row)
@@ -430,7 +470,7 @@ load_conf
 
     def test_active_account_transition_does_not_claim_departing_profile(self):
         marker = self.base / 'run/dns-account-transition'
-        marker.symlink_to(f'{os.getpid()}:fixture')
+        marker.symlink_to(f'{os.getpid()}:{os.getpid()}:fixture-boot')
         self.run_script('modern_dns_start')
         self.assertFalse((self.base / 'alive').exists())
         self.assertEqual(self.sets(), [])

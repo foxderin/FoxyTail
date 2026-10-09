@@ -55,7 +55,7 @@ detach_from_app_cgroup''')
         request_id = str(int(time.time())) + '_delayed_123'
         result = self.shell('cmd_cancel ' + request_id + '; _op_init ' + request_id + ' login', ok=False)
         self.assertNotEqual(result.returncode, 0)
-        self.assertTrue((self.run / 'operations' / request_id / 'cancelled').exists())
+        self.assertEqual(os.readlink(self.run / 'operations' / request_id / 'phase'), 'cancelled')
 
     def test_child_discovery_reads_parent_and_starttime_from_one_proc_record(self):
         proc = self.base / 'proc'
@@ -118,6 +118,21 @@ _op_exec 3 sh -c 'printf ready; exit 7' ''', ok=False)
             writer.terminate()
             writer.wait(timeout=3)
 
+    def test_embedded_newline_cannot_forge_resident_argument_boundaries(self):
+        proc = self.base / 'proc' / '101'
+        proc.mkdir(parents=True)
+        (proc / 'cmdline').write_bytes(b'/system/bin/sh\0-c\n' +
+                                      str(self.scripts / 'foxytail.context').encode() + b'\nstart\0')
+        settings = (ROOT / 'tailscale/settings.sh').read_text()
+        reader = settings[settings.index('_proc_cmdline() {'):settings.index('# Like pids_of')]
+        reader = reader.replace('/proc/', str(self.base / 'proc') + '/')
+        result = self.shell(reader + '''
+_proc_starttime() { echo 123; }
+boot_identity() { echo fixture-boot; }
+resident_identity_alive foxytail.context 101 123 fixture-boot
+''', ok=False)
+        self.assertNotEqual(result.returncode, 0)
+
     def test_process_lookup_skips_foreign_or_vanished_candidates_before_read(self):
         result = self.shell('''pids_of() { printf '101 102'; }
 readlink() { return 1; }
@@ -139,6 +154,132 @@ pids_of_path "$TS_BIN_DIR/tailscaled"''')
         self.assertEqual(result.stdout.strip(), '123456')
         (proc / '101' / 'stat').write_text('101 (tailscaled) ' + rest.replace('S ', 'Z ', 1) + '\n')
         self.assertNotEqual(self.shell(function + '\n_proc_starttime 101', ok=False).returncode, 0)
+
+    def test_resident_records_reject_pid_reuse_wrong_boot_and_path_substrings(self):
+        result = self.shell('''
+boot_identity() { echo current-boot; }
+_proc_starttime() { echo 123; }
+_proc_cmdline() { printf '%s\\n' /system/bin/sh "$resident_path" start; }
+kill() { echo "$*" >>"$TS_RUN_DIR/signals"; }
+resident_path="$TS_SCRIPTS_DIR/foxytail.context"
+mkdir -p "$TS_PID_DIR"
+record="$TS_PID_DIR/foxytail.context.pid"
+for bad in '42' '42 124 current-boot' '42 123 old-boot'; do
+  echo "$bad" >"$record"
+  daemon_pid_alive foxytail.context && exit 1
+  daemon_stop_pidfile foxytail.context || exit 2
+  test ! -e "$record" || exit 3
+done
+echo '42 123 current-boot' >"$record"
+for resident_path in /foreign/foxytail.context "$TS_SCRIPTS_DIR/foxytail.context.evil"; do
+  daemon_pid_alive foxytail.context && exit 4
+done
+resident_path="$TS_SCRIPTS_DIR/foxytail.context"
+daemon_pid_alive foxytail.context || exit 5
+_proc_cmdline() { printf '%s\\n' /system/bin/sh "$resident_path" status; }
+daemon_pid_alive foxytail.context && exit 9
+test "$_dpa_pid" = 42 || exit 6
+_proc_cmdline() { printf '%s\\n' /bin/echo "$resident_path"; }
+daemon_pid_alive foxytail.context && exit 7
+daemon_stop_pidfile foxytail.context || exit 8
+test ! -e "$TS_RUN_DIR/signals"
+''')
+        self.assertEqual(result.stdout, '')
+
+    def test_inotify_identity_requires_exact_handler_and_module_arguments(self):
+        self.shell('''
+boot_identity() { echo fixture-boot; }
+_proc_starttime() { echo 123; }
+handler="$TS_SCRIPTS_DIR/foxytail.inotify"
+module="$TS_MOD_DIR"
+_proc_cmdline() { printf '%s\\n' /system/bin/inotifyd "$handler" "$module"; }
+resident_identity_alive inotifyd 42 123 fixture-boot || exit 1
+handler="$handler.foreign"
+resident_identity_alive inotifyd 42 123 fixture-boot && exit 2
+handler="$TS_SCRIPTS_DIR/foxytail.inotify"
+module=/foreign/module
+resident_identity_alive inotifyd 42 123 fixture-boot && exit 3
+module="$TS_MOD_DIR"
+_proc_cmdline() { printf '%s\\n' /system/bin/echo inotifyd "$handler" "$module"; }
+resident_identity_alive inotifyd 42 123 fixture-boot && exit 4
+_proc_cmdline() { printf '%s\\n' /data/adb/magisk/busybox inotifyd "$handler" "$module"; }
+resident_identity_alive inotifyd 42 123 fixture-boot
+''')
+
+    def test_concurrent_resident_start_keeps_one_owner_and_stop_releases_it(self):
+        resident = self.scripts / 'foxytail.fixture'
+        resident.write_text('#!/bin/sh\nDIR=$(dirname "$0")\n. "$DIR/../settings.sh"\n'
+                            'running=1\ntrap "running=0" TERM INT\n'
+                            'daemon_claim_pidfile foxytail.fixture || { [ "$?" = 2 ] && exit 0; exit 1; }\n'
+                            'trap "daemon_release_pidfile foxytail.fixture" 0\n'
+                            'echo claimed >>"$TS_RUN_DIR/claims"\n'
+                            'while [ "$running" = 1 ]; do isleep 0.1; done\n')
+        resident.chmod(0o755)
+        children = [subprocess.Popen(['sh', str(resident), 'start'], stdout=subprocess.DEVNULL,
+                                     stderr=subprocess.DEVNULL) for _ in range(3)]
+        try:
+            record = self.run / 'pids/foxytail.fixture.pid'
+            deadline = time.monotonic() + 5
+            while not record.exists() and time.monotonic() < deadline:
+                time.sleep(0.02)
+            self.assertTrue(record.exists())
+            while sum(child.poll() is None for child in children) > 1 and time.monotonic() < deadline:
+                time.sleep(0.02)
+            self.assertEqual(sum(child.poll() is None for child in children), 1)
+            self.assertEqual((self.run / 'claims').read_text(), 'claimed\n')
+            self.shell('daemon_pid_alive foxytail.fixture && daemon_stop_pidfile foxytail.fixture')
+            self.assertFalse(record.exists())
+            for child in children:
+                self.assertEqual(child.wait(timeout=3), 0)
+        finally:
+            for child in children:
+                if child.poll() is None:
+                    child.kill()
+                child.wait(timeout=3)
+
+    def test_stop_never_signals_live_foreign_process_with_valid_pid_stamp(self):
+        foreign = subprocess.Popen(['sleep', '30'])
+        try:
+            self.shell('''
+pid=''' + str(foreign.pid) + '''
+printf '%s %s %s\\n' "$pid" "$(_proc_starttime "$pid")" "$(boot_identity)" >"$TS_PID_DIR/foxytail.context.pid"
+daemon_stop_pidfile foxytail.context || exit 1
+test ! -e "$TS_PID_DIR/foxytail.context.pid"
+''')
+            self.assertIsNone(foreign.poll())
+        finally:
+            foreign.terminate()
+            foreign.wait(timeout=3)
+
+    def test_owner_lock_rejects_reused_and_previous_boot_records(self):
+        self.shell('''
+_lock_identity || exit 1
+owner=$_LOCK_TOKEN
+_conf_owner_alive "$owner" || exit 2
+pid=${owner%%:*}
+rest=${owner#*:}
+stamp=${rest%%:*}
+boot=${rest#*:}
+_conf_owner_alive "$pid:$stamp:other-boot" && exit 3
+_conf_owner_alive "$pid:$((stamp + 1)):$boot" && exit 4
+_conf_owner_alive "$pid:-:$boot" && exit 5
+_conf_owner_alive "$pid:$stamp" && exit 6
+ln -s "$pid:$stamp:other-boot" "$TS_RUN_DIR/test-lock"
+_owner_lock_acquire "$TS_RUN_DIR/test-lock" "$owner" 2 0 || exit 7
+test "$(readlink "$TS_RUN_DIR/test-lock")" = "$owner" || exit 8
+_owner_lock_release "$TS_RUN_DIR/test-lock" "$owner"
+''')
+
+    def test_resident_release_does_not_unlink_new_owner_record(self):
+        self.shell('''
+record="$TS_PID_DIR/foxytail.context.pid"
+printf '%s %s %s\\n' "$$" "$(_proc_starttime "$$")" "$(boot_identity)" >"$record"
+daemon_release_pidfile foxytail.context || exit 1
+test ! -e "$record" || exit 2
+echo '999999 123 replacement-boot' >"$record"
+daemon_release_pidfile foxytail.context || exit 3
+test "$(cat "$record")" = '999999 123 replacement-boot'
+''')
 
     def test_expired_requests_never_restart_and_gc_is_bounded(self):
         result = self.shell("_op_init 1_expired status", ok=False)

@@ -11,6 +11,8 @@ import { createSignal } from 'solid-js';
 import { api, hasRoot, type ApiResult } from './api';
 import { STATUS_POLL_MS, STATUS_POLL_POWER_SAVE_MS, STATUS_POLL_STARTING_MS } from './config';
 import { pollWhileVisible } from './schedule';
+import type { ExitRouting } from './types';
+import type { I18nKey } from './i18n';
 
 export interface StatusSnapshot extends ApiResult {
   daemon?: string;
@@ -25,6 +27,7 @@ export interface StatusSnapshot extends ApiResult {
     rx: number;
     tx: number;
   } | null;
+  exitRouting?: ExitRouting;
   peers?: { online: number; offline: number };
   magicDns?: boolean;
   keyExpiry?: string | null;
@@ -38,6 +41,17 @@ const [statusError, setStatusError] = createSignal<string | null>(null);
 const [statusLoading, setStatusLoading] = createSignal(true);
 
 export { status, statusError, statusLoading };
+
+export function exitRoutingLabel(): I18nKey {
+  const route = status()?.exitRouting;
+  if (statusError() || !route?.known) return 'net_exit_unknown_hint';
+  if (route.effective === 'not-effective') return 'net_exit_failed';
+  if (!route.selected) return 'net_no_exit_hint';
+  if (route.effective === 'explicit-proxy') return 'net_exit_proxy';
+  if (route.effective === 'daemon-owned') return 'net_exit_daemon';
+  if (route.effective !== 'bridge-policy') return 'net_exit_failed';
+  return route.ipv6 ? 'net_exit_bridge_dual' : 'net_exit_bridge_v4';
+}
 
 /** Applied runtime preferences govern view reads; unsaved/pending settings
  * never change polling. Explicit refreshes and user tasks bypass this. */

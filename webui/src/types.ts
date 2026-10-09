@@ -1,4 +1,4 @@
-/* Shared API payload shapes (frozen webapi contract). */
+/* Shared API payload shapes. */
 
 export interface Peer {
   id: string;
@@ -21,6 +21,18 @@ export interface ExitNodeProbe {
   ip: string;
   latencyMs: number | null;
   ok: boolean;
+}
+
+export interface ExitRouting {
+  known: boolean;
+  selected: { id: string; ip: string; auto: string; allowLAN: boolean } | null;
+  profile?: string;
+  scope?: string;
+  uids?: string[];
+  effective: 'unknown' | 'none' | 'explicit-proxy' | 'daemon-owned' | 'bridge-policy' | 'not-effective';
+  ipv4: boolean;
+  ipv6: boolean;
+  warning: string;
 }
 
 export interface AppInfo {

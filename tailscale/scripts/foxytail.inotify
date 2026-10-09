@@ -21,10 +21,12 @@ _ctl() {
     "${TS_SCRIPTS_DIR}/start.sh" enable >>"${TS_RUN_LOG_FILE}" 2>&1
   else
     # Do not stop/restart the watcher from its own callback.
+    _ctl_failed=0
     for _s in foxytail.watchdog foxytail.context foxytail.stats foxytail.logd; do
-      [ ! -x "${TS_SCRIPTS_DIR}/${_s}" ] || "${TS_SCRIPTS_DIR}/${_s}" stop
+      [ ! -x "${TS_SCRIPTS_DIR}/${_s}" ] || "${TS_SCRIPTS_DIR}/${_s}" stop || _ctl_failed=1
     done
-    "${TS_SCRIPTS_DIR}/foxytail.service" stop >>"${TS_RUN_LOG_FILE}" 2>&1
+    "${TS_SCRIPTS_DIR}/foxytail.service" stop --internal >>"${TS_RUN_LOG_FILE}" 2>&1 || _ctl_failed=1
+    return "${_ctl_failed}"
   fi
 }
 

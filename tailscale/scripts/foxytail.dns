@@ -34,6 +34,8 @@ DNS_CONTEXT_FILE="${TS_RUN_DIR}/dnsmasq.context.json"
 DNS_HOSTS_DIR="/dev/foxytail-dns"
 DNS_HOSTS="${DNS_HOSTS_DIR}/hosts"
 CHAIN_DNS="FOXY_DNS"
+LEGACY_OWNERSHIP="${TS_DIR}/state/dnsmasq-connmark.jsonl"
+LEGACY_NETWORK="${TS_RUN_DIR}/dnsmasq.network.json"
 
 # New modes are opt-in. Older installs keep the existing dnsmasq behavior.
 [ ! -r "${TS_SCRIPTS_DIR}/foxytail.dns-modern.sh" ] || . "${TS_SCRIPTS_DIR}/foxytail.dns-modern.sh"
@@ -86,6 +88,77 @@ dns_hijack_conflict() {
   ! foxytail.compat check-dns-hijack >/dev/null 2>&1
 }
 
+# Connmarks are separate from packet marks; never overwrite other connmark bits.
+legacy_connmark_safe() {
+  _lc_rules=
+  for _lc_cmd in iptables ip6tables; do
+    for _lc_table in raw mangle nat filter; do
+      _lc_part=$("${_lc_cmd}" -t "${_lc_table}" -S 2>/dev/null) || {
+        [ "${_lc_cmd}" = ip6tables ] && { [ "${IPV6}" != on ] || { [ "${_lc_table}" = nat ] && ! ipv6_nat_available; }; } && continue
+        return 1
+      }
+      _lc_rules="${_lc_rules}
+${_lc_part}"
+    done
+  done
+  printf '%s\n' "${_lc_rules}" | awk '
+    function number(s,n,i,c) {
+      if(s ~ /^0[xX][0-9a-fA-F]+$/) {s=tolower(substr(s,3)); n=0; for(i=1;i<=length(s);i++) {c=index("0123456789abcdef",substr(s,i,1))-1; n=n*16+c}; return n}
+      if(s ~ /^[0-9]+$/) return s+0
+      return -1
+    }
+    function overlap(s,n) {n=number(s); return n<0 || int(n/536870912)%2==1}
+    function mask(s,a,n) {n=split(s,a,"/"); return n!=2 || overlap(a[1]) || overlap(a[2])}
+    $1=="-A" && $2=="FOXY_DNS" {next}
+    /CONNMARK|connmark/ {
+      known=0
+      for(i=1;i<=NF;i++) {
+        if($i=="--mark" || $i=="--set-mark" || $i=="--set-xmark") {known=1; if(mask($(i+1))) bad=1}
+        if($i=="--or-mark" || $i=="--xor-mark") {known=1; if(overlap($(i+1))) bad=1}
+        if($i=="--and-mark") {known=1; if(number($(i+1))<0 || !overlap($(i+1))) bad=1}
+        if($i=="--save-mark" || $i=="--restore-mark") {known=1; cm="0xffffffff"; nf="0xffffffff"; for(j=1;j<NF;j++) {if($j=="--ctmask") cm=$(j+1); if($j=="--nfmask") nf=$(j+1)}; if(overlap(cm) || overlap(nf)) bad=1}
+      }
+      if(!known) bad=1
+    }
+    END {exit bad ? 1 : 0}'
+}
+
+legacy_capture_cleanup() {
+  _lc_had_rules=false
+  for _lc_cmd in iptables ip6tables; do
+    "${_lc_cmd}" -t nat -S "${CHAIN_DNS}" >/dev/null 2>&1 && _lc_had_rules=true
+  done
+  _lc_cleanup_rc=0
+  redirect_teardown || _lc_cleanup_rc=1
+  redirect6_teardown || _lc_cleanup_rc=1
+  [ "${_lc_cleanup_rc}" = 0 ] || return 1
+  if [ "${_lc_had_rules}" != true ] && [ ! -s "${LEGACY_OWNERSHIP}" ] && [ ! -f "${DNS_CONF}" ] && [ -z "$(dns_pids)" ]; then return 0; fi
+  if [ "${_lc_had_rules}" != true ] && [ ! -s "${LEGACY_OWNERSHIP}" ] &&
+    [ "$(cat "${TS_RUN_DIR}/dnsmasq.local-only" 2>/dev/null)" = "$(sed -n 's/^port=//p' "${DNS_CONF}" 2>/dev/null)" ] &&
+    [ -s "${TS_RUN_DIR}/dnsmasq.local-only" ]; then return 0; fi
+  _lc_port=$(sed -n 's/^port=//p' "${DNS_CONF}" 2>/dev/null)
+  if [ -s "${LEGACY_OWNERSHIP}" ]; then
+    _lc_port=$(jqr -r '.port' "${LEGACY_OWNERSHIP}" 2>/dev/null) || return 1
+  fi
+  [ -n "${_lc_port}" ] || return 0
+  case "${_lc_port}" in *[!0-9]*) return 1 ;; esac
+  legacy_connmark_safe || { set_state degraded ownership-conflict; return 1; }
+  mkdir -p "${TS_DIR}/state" || return 1
+  tmo 12 "${TS_BIN_DIR}/foxydns" legacy-cleanup --journal "${LEGACY_OWNERSHIP}" --port "${_lc_port}" >/dev/null 2>&1 || {
+    set_state degraded reconnect-needed; return 1;
+  }
+  printf '%s\n' "${_lc_port}" >"${TS_RUN_DIR}/dnsmasq.local-only" || return 1
+}
+
+legacy_upstream_snapshot() {
+  _lu_snapshot=$(network_snapshot) || return 1
+  printf '%s' "${_lu_snapshot}" | jqr -e -c 'select(.known == true) | {signature, dns:(.dns | map(select(type == "string" and test("^[0-9a-fA-F:.]+$") and . != "127.0.0.1" and . != "::1" and . != "100.100.100.100")))} | select(.dns | length > 0)'
+}
+
+legacy_upstream_matches() {
+  _lu_now=$(legacy_upstream_snapshot) || return 1
+  [ "$(cat "${LEGACY_NETWORK}" 2>/dev/null)" = "${_lu_now}" ]
+}
 # Mount FOXY_DNS (nat) on OUTPUT and redirect UDP/53 into dnsmasq. The first
 # rules exempt dnsmasq and marked Tailscale upstream queries. ACCEPT ends nat
 # traversal: RETURN would fall through to Android tailscaled's global DNAT.
@@ -101,6 +174,9 @@ redirect_family_apply() {
     fi
     if ! "${_dr_cmd}" -t nat -C "${CHAIN_DNS}" -p "${_dr_proto}" --dport 53 -m mark ! --mark 0x0/0x1e000000 -j ACCEPT 2>/dev/null; then
       "${_dr_cmd}" -t nat -I "${CHAIN_DNS}" 1 -p "${_dr_proto}" --dport 53 -m mark ! --mark 0x0/0x1e000000 -j ACCEPT || return 1
+    fi
+    if ! "${_dr_cmd}" -t nat -C "${CHAIN_DNS}" -p "${_dr_proto}" --dport 53 -j CONNMARK --set-xmark 0x20000000/0x20000000 2>/dev/null; then
+      "${_dr_cmd}" -t nat -A "${CHAIN_DNS}" -p "${_dr_proto}" --dport 53 -j CONNMARK --set-xmark 0x20000000/0x20000000 || return 1
     fi
     if ! "${_dr_cmd}" -t nat -C "${CHAIN_DNS}" -p "${_dr_proto}" --dport 53 -j REDIRECT --to-ports "${DNS_PORT}" 2>/dev/null; then
       "${_dr_cmd}" -t nat -A "${CHAIN_DNS}" -p "${_dr_proto}" --dport 53 -j REDIRECT --to-ports "${DNS_PORT}" ||
@@ -230,17 +306,24 @@ ensure_ipv6_nat() {
 reconcile_redirect() {
   if dns_hijack_conflict; then
     _dr_cleanup=0
-    redirect_teardown || _dr_cleanup=1
-    redirect6_teardown || _dr_cleanup=1
+    legacy_capture_cleanup || _dr_cleanup=1
     log Warning "another tool hijacks DNS; local resolver runs without interception"
-    set_state degraded conflict
+    [ "${_dr_cleanup}" != 0 ] || set_state degraded conflict
     return "${_dr_cleanup}"
   fi
+  if ! legacy_upstream_matches || ! legacy_connmark_safe ||
+    ! tmo 12 "${TS_BIN_DIR}/foxydns" legacy-claim --journal "${LEGACY_OWNERSHIP}" --port "${DNS_PORT}" >/dev/null 2>&1; then
+    legacy_capture_cleanup || return 1
+    set_state degraded ownership-unavailable
+    return 0
+  fi
+  rm -f "${TS_RUN_DIR}/dnsmasq.local-only" || return 1
+  # Rebuild incomplete/pre-upgrade chains so marking cannot land after REDIRECT.
+  if ! redirect_present; then redirect_teardown && redirect6_teardown || return 1; fi
   _dr_v6=off
   if [ "${IPV6}" = on ] && ensure_ipv6_nat; then _dr_v6=on; fi
   if ! redirect_apply || { [ "${_dr_v6}" = on ] && ! redirect6_apply; }; then
-    redirect_teardown
-    redirect6_teardown
+    legacy_capture_cleanup || return 1
     set_state degraded redirect-failed
     return 1
   fi
@@ -266,7 +349,16 @@ redirect_present() {
     for _dp_proto in udp tcp; do
       "${_dp_cmd}" -t nat -C "${CHAIN_DNS}" -p "${_dp_proto}" --dport 53 -m owner --uid-owner 9999 -j ACCEPT 2>/dev/null || return 1
       "${_dp_cmd}" -t nat -C "${CHAIN_DNS}" -p "${_dp_proto}" --dport 53 -m mark ! --mark 0x0/0x1e000000 -j ACCEPT 2>/dev/null || return 1
+      "${_dp_cmd}" -t nat -C "${CHAIN_DNS}" -p "${_dp_proto}" --dport 53 -j CONNMARK --set-xmark 0x20000000/0x20000000 2>/dev/null || return 1
       "${_dp_cmd}" -t nat -C "${CHAIN_DNS}" -p "${_dp_proto}" --dport 53 -j REDIRECT --to-ports "${DNS_PORT}" 2>/dev/null || return 1
+      "${_dp_cmd}" -t nat -S "${CHAIN_DNS}" 2>/dev/null | awk -v chain="${CHAIN_DNS}" -v proto="${_dp_proto}" -v port="${DNS_PORT}" '
+        {gsub(/ -m (udp|tcp)/, "")}
+        $0=="-A " chain " -p " proto " --dport 53 -j REDIRECT --to-ports " port {
+          if(previous!="-A " chain " -p " proto " --dport 53 -j CONNMARK --set-xmark 0x20000000/0x20000000") bad=1
+          found=1
+        }
+        {previous=$0}
+        END {exit (!found || bad) ? 1 : 0}' || return 1
     done
   done
 }
@@ -429,7 +521,7 @@ dns_start() {
     _ds_config_v6=off
     grep -q '^listen-address=::1$' "${DNS_CONF}" 2>/dev/null && _ds_config_v6=on
     if [ "$(sed -n 's/^port=//p' "${DNS_CONF}" 2>/dev/null)" = "${DNS_PORT}" ] &&
-      [ "${_ds_config_v6}" = "${IPV6}" ] && dns_context_matches "${_ds_context}"; then
+      [ "${_ds_config_v6}" = "${IPV6}" ] && dns_context_matches "${_ds_context}" && legacy_upstream_matches; then
       log Info "dnsmasq is already running; reconciling DNS interception."
       _ds_redirect_ready=false
       [ "$(get_state)" = running ] && redirect_present && _ds_redirect_ready=true
@@ -448,9 +540,11 @@ dns_start() {
     set_state degraded missing-binary
     return 0
   fi
+  legacy_capture_cleanup || return 1
 
-  _ds_default_dns=$(getprop net.dns1 2>/dev/null)
-  [ -z "${_ds_default_dns}" ] && _ds_default_dns="1.1.1.1"
+  _ds_network=$(legacy_upstream_snapshot) || _ds_network='{"signature":"unknown","dns":[]}'
+  _ds_default_dns=$(printf '%s' "${_ds_network}" | jqr -r '.dns[]')
+  mkdir -p "${TS_DIR}/state" || return 1
   write_dns_hosts "${_ds_context}" || { set_state degraded hosts-failed; return 1; }
 
   {
@@ -464,9 +558,11 @@ dns_start() {
     # on Android's older 2.51 build which does not support host-record=.
     echo "addn-hosts=${DNS_HOSTS}"
     echo "server=/${_ds_suffix}/100.100.100.100"
-    echo "server=${_ds_default_dns}"
+    for _ds_upstream in ${_ds_default_dns}; do printf 'server=%s\n' "${_ds_upstream}"; done
   } >"${DNS_CONF}"
   chmod 0644 "${DNS_CONF}"
+  printf '%s\n' "${_ds_network}" >"${LEGACY_NETWORK}" || return 1
+  printf '%s\n' "${DNS_PORT}" >"${TS_RUN_DIR}/dnsmasq.local-only" || return 1
 
   rotate_log "${DNS_LOG}"
   log Info "Starting dnsmasq on 127.0.0.1:${DNS_PORT} (suffix: ${_ds_suffix}, upstream: ${_ds_default_dns})."
@@ -503,8 +599,7 @@ dns_stop() {
   # Only the legacy redirects decide whether it is safe to stop this listener.
   # An unrelated modern cleanup failure must not keep legacy dnsmasq alive.
   _dt_legacy_rc=0
-  redirect_teardown || _dt_legacy_rc=1
-  redirect6_teardown || _dt_legacy_rc=1
+  legacy_capture_cleanup || _dt_legacy_rc=1
   if [ "${_dt_legacy_rc}" = 0 ]; then
     _dt_pids=$(dns_pids)
     if [ -n "${_dt_pids}" ]; then
@@ -520,7 +615,7 @@ dns_stop() {
     set_state stopped
   else
     log Error "DNS cleanup incomplete; retaining degraded state for retry"
-    set_state degraded
+    [ "$(cat "${DNS_REASON_FILE}" 2>/dev/null)" = reconnect-needed ] || set_state degraded cleanup-failed
   fi
   return "${_dt_rc}"
 }
@@ -544,9 +639,9 @@ dns_status() {
   if [ -n "${_dst_pids}" ]; then
     _dst_context=$(current_dns_context)
     if [ "${_dst_state}" != running ] || [ -z "${_dst_context}" ] ||
-      ! dns_context_matches "${_dst_context}" || ! redirect_present || dns_hijack_conflict; then
+      ! dns_context_matches "${_dst_context}" || ! legacy_upstream_matches || ! redirect_present || ! legacy_connmark_safe || dns_hijack_conflict; then
       _dst_state=degraded
-      _dst_reason=reconcile-needed
+      case "${_dst_reason}" in reconnect-needed|ownership-conflict|ownership-unavailable|cleanup-failed) ;; *) _dst_reason=reconcile-needed ;; esac
     fi
   elif [ "${_dst_state}" = "running" ]; then
     # An unexpectedly dead resolver may leave interception in place.

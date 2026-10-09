@@ -38,19 +38,21 @@ expected_go="go$(awk '$1=="go" {print $2}' native/foxydns/go.mod)"
 (cd native/foxydns && CGO_ENABLED=0 go test -mod=readonly -c -trimpath -o "$work_dir/foxydns-e2e.test" .)
 parent_netns=$(readlink /proc/self/ns/net)
 parent_mntns=$(readlink /proc/self/ns/mnt)
-echo 'Running real NFQUEUE/conntrack DNS checks in a disposable network namespace.'
-timeout --signal=TERM --kill-after=10s 75s "${privilege[@]}" \
-  unshare --net --mount --fork --kill-child --propagation private \
-  env FOXYTAIL_PRIVILEGED_TESTS=1 FOXYTAIL_TEST_PARENT_NETNS="$parent_netns" \
-    FOXYTAIL_REQUIRE_PRIVILEGED_TESTS="${FOXYTAIL_REQUIRE_PRIVILEGED_TESTS:-0}" \
-    FOXYTAIL_TEST_PARENT_MNTNS="$parent_mntns" FOXYTAIL_TEST_REPO_ROOT="$PWD" \
-    "$work_dir/foxydns-e2e.test" -test.v -test.timeout=60s -test.run='^TestPrivilegedDNS' \
-  | tee "$work_dir/result.log"
-if grep -q '^--- SKIP: TestPrivilegedDNS' "$work_dir/result.log"; then
-  unavailable 'kernel integration did not execute; see the explicit capability reason above.'
-fi
-for test in TestPrivilegedDNSNamespace TestPrivilegedDNSIsolatedSocketUID TestPrivilegedDNSSocketTupleAmbiguity; do
-  if ! grep -q "^--- PASS: ${test} " "$work_dir/result.log"; then
+echo 'Running real DNS ownership checks in separate disposable network namespaces.'
+for group in DNS LegacyOwnership; do
+  timeout --signal=TERM --kill-after=10s 75s "${privilege[@]}" \
+    unshare --net --mount --fork --kill-child --propagation private \
+    env FOXYTAIL_PRIVILEGED_TESTS=1 FOXYTAIL_TEST_PARENT_NETNS="$parent_netns" \
+      FOXYTAIL_REQUIRE_PRIVILEGED_TESTS="${FOXYTAIL_REQUIRE_PRIVILEGED_TESTS:-0}" \
+      FOXYTAIL_TEST_PARENT_MNTNS="$parent_mntns" FOXYTAIL_TEST_REPO_ROOT="$PWD" \
+      "$work_dir/foxydns-e2e.test" -test.v -test.timeout=60s -test.run="^TestPrivileged${group}" \
+    | tee "$work_dir/result-$group.log"
+  if grep -q '^--- SKIP: TestPrivileged' "$work_dir/result-$group.log"; then
+    unavailable 'kernel integration did not execute; see the explicit capability reason above.'
+  fi
+done
+for test in TestPrivilegedDNSNamespace TestPrivilegedDNSIsolatedSocketUID TestPrivilegedDNSSocketTupleAmbiguity TestPrivilegedLegacyOwnershipNamespace; do
+  if ! grep -q "^--- PASS: ${test} " "$work_dir"/result-*.log; then
     echo "ERROR: privileged DNS test ${test} produced no verified result." >&2
     exit 1
   fi

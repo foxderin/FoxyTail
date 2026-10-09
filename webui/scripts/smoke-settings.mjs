@@ -141,10 +141,10 @@ export async function checkSettings() {
   await flush();
   assert(dnsModeSelect().value === 'local' && [...window.document.querySelectorAll('#toast-root .toast')].some(toast => toast.textContent.includes('dns-mode-save-rejected')), 'a rejected mode save restores the selected value and exposes the error');
   delete overrides['settings-set'];
+  canned['settings-get'].settings.DNS_MODE = 'transparent';
   dnsModeSelect().value = 'transparent';
   dnsModeSelect().dispatchEvent(new window.Event('change', { bubbles: true }));
   await flush();
-  canned['settings-get'].settings.DNS_MODE = 'transparent';
   assert(dnsModeSelect().value === 'transparent' && /DoH\s*\/\s*DoT/.test(window.document.querySelector('[data-setting="DNS_MODE"]')?.textContent || ''), 'transparent mode states the encrypted-DNS boundary without client-specific instructions');
 
   const localDns = { ok: true, mode: 'local', enabled: true, state: 'running', reason: 'local',

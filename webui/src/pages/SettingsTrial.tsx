@@ -11,7 +11,7 @@ import { refreshStatus } from '../state';
 type Trial = {
   id: string;
   status: 'preparing' | 'running' | 'rolling-back' | 'confirmed' | 'rolled-back' | 'rollback-failed' | 'superseded';
-  deadline: number | null;
+  remaining: number;
   reason: string;
   previous: { mode: string; dnsMode: string; routeScope: string };
   candidate: { mode: string; dnsMode: string; routeScope: string };
@@ -29,7 +29,7 @@ function validTrial(value: unknown): value is Trial | null {
     ['mode', 'dnsMode', 'routeScope'].every(key => typeof (v as Record<string, unknown>)[key] === 'string');
   return typeof item.id === 'string' && /^[A-Za-z0-9_-]+$/.test(item.id) &&
     typeof item.status === 'string' && Object.keys(labels).includes(item.status) &&
-    (item.deadline === null || (typeof item.deadline === 'number' && Number.isFinite(item.deadline))) &&
+    typeof item.remaining === 'number' && Number.isFinite(item.remaining) && item.remaining >= 0 &&
     typeof item.reason === 'string' && Boolean(summary(item.candidate) && summary(item.previous));
 }
 
@@ -43,7 +43,8 @@ export default function SettingsTrial(props: {
   const [busy, setBusy] = createSignal(false);
   const [mode, setMode] = createSignal('saved');
   const [duration, setDuration] = createSignal('120');
-  const [now, setNow] = createSignal(Date.now());
+  const [now, setNow] = createSignal(performance.now());
+  const [receivedAt, setReceivedAt] = createSignal(performance.now());
   const active = () => ['preparing', 'running', 'rolling-back', 'rollback-failed'].includes(trial()?.status ?? '');
   let loading = false;
   async function load(refresh = true) {
@@ -59,6 +60,9 @@ export default function SettingsTrial(props: {
     }
     const previous = trial()?.status;
     setTrial(res.trial);
+    const received = performance.now();
+    setReceivedAt(received);
+    setNow(received);
     setKnown(true);
     setError('');
     props.onActive(active());
@@ -83,7 +87,7 @@ export default function SettingsTrial(props: {
   }
   pollWhileVisible(() => busy() ? undefined : load(), () =>
     (!known() && !error()) || (active() && trial()?.status !== 'rollback-failed') ? TRIAL_POLL_MS : false);
-  pollWhileVisible(() => setNow(Date.now()), () => trial()?.status === 'running' ? TRIAL_COUNTDOWN_MS : false);
+  pollWhileVisible(() => setNow(performance.now()), () => trial()?.status === 'running' ? TRIAL_COUNTDOWN_MS : false);
   return <Card title={t('trial_title')} icon="sync" description={t('trial_description')}>
     <Show when={error()}><ErrorState text={error()} onRetry={() => void load()} /></Show>
     <div class="tool-setting wide-control">
@@ -105,8 +109,8 @@ export default function SettingsTrial(props: {
       <strong>{t(labels[value().status])}</strong>
       <p>{t('trial_candidate')}: {value().candidate.mode} / {value().candidate.dnsMode} / {value().candidate.routeScope}</p>
       <p>{t('trial_previous')}: {value().previous.mode} / {value().previous.dnsMode} / {value().previous.routeScope}</p>
-      <Show when={value().status === 'running' && value().deadline}>
-        <p>{t('trial_remaining')}: {Math.max(0, Math.ceil((value().deadline! * 1000 - now()) / 1000))} s</p>
+      <Show when={value().status === 'running'}>
+        <p>{t('trial_remaining')}: {Math.max(0, Math.ceil(value().remaining - (now() - receivedAt()) / 1000))} s</p>
       </Show>
       <Show when={value().reason}><p class="tool-hint">{value().reason}</p></Show>
     </div>}</Show>

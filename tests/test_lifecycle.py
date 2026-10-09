@@ -5,6 +5,8 @@ import subprocess
 import tempfile
 import unittest
 
+from runtime_fixture import host_process_shell
+
 ROOT = Path(__file__).resolve().parents[1]
 
 
@@ -21,6 +23,26 @@ class LifecycleTests(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
         self.dir = Path(self.tmp.name).resolve()
+
+    def recovery_source(self):
+        source = (ROOT / 'install-recovery.sh').read_text()
+        host = host_process_shell()
+        if not host:
+            return source
+        # Only replace platform process reads, retaining the real lock protocol.
+        start = source.index('install_stamp() {')
+        end = source.index('install_owner_valid() {')
+        source = source[:start] + 'install_stamp() { _proc_starttime "$1"; }\n\n' + source[end:]
+        source = source.replace('$(cat /proc/sys/kernel/random/boot_id)', '$(boot_identity)')
+        source = source.replace('IFS= read -r _il_stat </proc/self/stat || return 1\n  _il_pid=${_il_stat%% *}',
+                                '_lock_identity || return 1\n  _il_pid=${_LOCK_TOKEN%%:*}')
+        return source + '\n' + host
+
+    def installer_functions(self):
+        source = (ROOT / 'customize.sh').read_text()
+        entry = source[source.index('install_recovery_entry() {'):source.index('# shellcheck source=install-recovery.sh')]
+        return (self.recovery_source() + '\n' + entry + '\n' +
+                source[source.index('install_abort() {'):source.index('# Recover an interrupted earlier switch')])
 
     def service_functions(self):
         source = (ROOT / 'tailscale/scripts/foxytail.service').read_text()
@@ -54,7 +76,7 @@ load_runtime_conf() { :; }
 daemon_pid_alive() { return 1; }
 ensure_run_dirs() { :; }
 log() { :; }
-stop_by_pids() { :; }
+daemon_stop_pidfile() { :; }
 ''')
         for name in ['foxytail.service', 'foxytail.stats', 'foxytail.watchdog', 'foxytail.context', 'foxytail.logd']:
             path = scripts / name
@@ -86,7 +108,7 @@ load_runtime_conf() { :; }
 daemon_pid_alive() { return 1; }
 ensure_run_dirs() { :; }
 log() { :; }
-stop_by_pids() { :; }
+daemon_stop_pidfile() { :; }
 conf_lock_acquire() { :; }
 conf_lock_release() { :; }
 conf_trial_active() { return 1; }
@@ -140,7 +162,7 @@ done
 printf '%s\\n' "$1" >"$PWD/postinstall"
 ''')
         starter.chmod(0o755)
-        (runtime / '.installing').touch()
+        (directory / 'module').mkdir()
         for name in ('tailscale', 'tailscaled', 'foxytail.service'):
             entry = dev / name
             expected = runtime / ('scripts/foxytail.service' if name == 'foxytail.service' else 'bin/tailscaled')
@@ -159,7 +181,7 @@ printf '%s\\n' "$1" >"$PWD/postinstall"
                 entry.mkdir()
                 (entry / 'keep').write_text('unrelated')
         source = (ROOT / 'customize.sh').read_text()
-        functions = source[source.index('rollback_install() {'):source.index('# Recover an interrupted earlier switch')]
+        functions = self.installer_functions()
         success = source[source.index('ui_print "- Switching software; backup:'):]
         # Relocate all filesystem probes as well as the legacy entries.
         success = success.replace('/data/adb/', str(directory / 'adb') + '/')
@@ -237,7 +259,7 @@ rm() {
 
     def test_upgrade_switch_rolls_back_after_second_directory_failure(self):
         source = (ROOT / 'customize.sh').read_text()
-        functions = source[source.index('rollback_install() {'):source.index('# Recover an interrupted earlier switch')]
+        functions = self.installer_functions()
         for part in ['bin', 'scripts', 'conf']:
             (self.dir / part).mkdir()
             (self.dir / part / 'value').write_text('old-' + part)
@@ -306,7 +328,7 @@ installed_pids
 
     def test_upgrade_rollback_restores_native_helper_and_manifest_or_their_absence(self):
         source = (ROOT / 'customize.sh').read_text()
-        functions = source[source.index('rollback_install() {'):source.index('# Recover an interrupted earlier switch')]
+        functions = self.installer_functions()
         for had_native in [False, True]:
             with self.subTest(had_native=had_native):
                 directory = self.dir / str(had_native)
@@ -321,14 +343,17 @@ installed_pids
                     (directory / 'candidate' / part).write_text('new-' + part)
                 (directory / 'candidate/native-checksums.txt').write_text('new-native-manifest')
                 (directory / 'candidate/bin/foxydns').write_text('new-helper')
+                (directory / 'candidate/bin/foxyfiles').write_text('new-files-helper')
                 if had_native:
                     (directory / 'native-checksums.txt').write_text('old-native-manifest')
                     (directory / 'bin/foxydns').write_text('old-helper')
+                    (directory / 'bin/foxyfiles').write_text('old-files-helper')
                 run_sh(functions + '''
 TS_DIR="$PWD"; CANDIDATE="$PWD/candidate"; BACKUP="$PWD/backups/unique"
 begin_install || exit 6
 switch_install || exit 7
 test "$(cat "$TS_DIR/bin/foxydns")" = new-helper || exit 8
+test "$(cat "$TS_DIR/bin/foxyfiles")" = new-files-helper || exit 10
 test "$(cat "$TS_DIR/native-checksums.txt")" = new-native-manifest || exit 9
 # A later permission failure must roll back every part of the switched tree.
 rollback_install
@@ -337,20 +362,24 @@ _INSTALL_SWITCH_ACTIVE=0
                 if had_native:
                     self.assertEqual((directory / 'native-checksums.txt').read_text(), 'old-native-manifest')
                     self.assertEqual((directory / 'bin/foxydns').read_text(), 'old-helper')
+                    self.assertEqual((directory / 'bin/foxyfiles').read_text(), 'old-files-helper')
                 else:
                     self.assertFalse((directory / 'native-checksums.txt').exists())
                     self.assertFalse((directory / 'bin/foxydns').exists())
+                    self.assertFalse((directory / 'bin/foxyfiles').exists())
                 self.assertEqual((directory / 'conf/value').read_text(), 'old-conf')
 
     def test_rollback_delete_failure_retains_backup_and_journal(self):
         source = (ROOT / 'customize.sh').read_text()
-        functions = source[source.index('rollback_install() {'):source.index('# Recover an interrupted earlier switch')]
+        functions = self.installer_functions()
         for relative in ['bin', 'backups/old/bin']:
             (self.dir / relative).mkdir(parents=True)
         (self.dir / 'bin/version').write_text('new')
         (self.dir / 'backups/old/bin/version').write_text('old')
-        (self.dir / '.installing').write_text('')
-        (self.dir / '.install-transaction').write_text('journal')
+        owner = '999999:1:previous-boot\n'
+        (self.dir / '.installing').write_text(owner)
+        (self.dir / 'backups/old/.install-owner').write_text(owner)
+        (self.dir / '.install-transaction').write_text(str(self.dir / 'backups/old') + '\n')
         run_sh(functions + '''
 TS_DIR="$PWD"; BACKUP="$PWD/backups/old"
 rm() { if [ "$*" = "-rf $TS_DIR/bin" ]; then return 1; fi; command rm "$@"; }
@@ -376,7 +405,7 @@ test -f "$TS_DIR/.installing"
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text('preserved-' + relative)
         source = (ROOT / 'customize.sh').read_text()
-        functions = source[source.index('rollback_install() {'):source.index('# Recover an interrupted earlier switch')]
+        functions = self.installer_functions()
         recovery = source[source.index('# Recover an interrupted earlier switch'):source.index('mkdir -p "${CANDIDATE}/bin"')]
         prelude = '''
 TS_DIR="$PWD"; CANDIDATE="$PWD/candidate"; BACKUP="$PWD/backups/42-interrupted"
@@ -395,38 +424,92 @@ abort() { echo "$*" >&2; exit 1; }
         self.assertFalse((directory / '.installing').exists())
         self.assertFalse((directory / '.install-transaction').exists())
 
-    def test_killed_switch_recovers_journal_and_first_directory_boundaries(self):
-        for boundary in ['journal-before', 'journal-after', 'old-bin-before', 'old-bin-after', 'new-bin-after']:
+    def boot_fixture(self, directory):
+        module = directory / 'module'
+        module.mkdir(exist_ok=True)
+        (module / 'install-recovery.sh').write_text(self.recovery_source())
+        source = (ROOT / 'service.sh').read_text().replace('/data/adb/foxytail', str(directory))
+        (module / 'service.sh').write_text(source)
+        (directory / 'settings.sh').write_text('# old-settings.sh\nnetwork_snapshot() { return 0; }\n')
+        (directory / 'candidate/settings.sh').write_text('echo partial-settings >&2; exit 66\n')
+        starter = directory / 'scripts/start.sh'
+        starter.write_text('''#!/bin/sh
+for part in bin scripts conf; do
+  [ "$(cat "$PWD/$part/value")" = "old-$part" ] || exit 71
+done
+[ ! -e "$PWD/.installing" ] && [ ! -e "$PWD/.install-transaction" ] || exit 72
+echo started >"$PWD/boot-started"
+''')
+        starter.chmod(0o755)
+        (directory / 'candidate/scripts/start.sh').write_text('#!/bin/sh\nexit 73\n')
+        return module
+
+    def boot(self, directory, injection=''):
+        return subprocess.run(['sh', '-c', 'getprop() { echo 1; }\n' + injection +
+                               '\n. "$PWD/module/service.sh"', str(directory / 'module/service.sh')],
+                              cwd=directory, text=True, capture_output=True, timeout=10)
+
+    def test_killed_switch_recovers_through_root_boot_at_every_boundary(self):
+        parts = ('bin', 'scripts', 'conf', 'settings.sh', 'VERSIONS', 'checksums.txt', 'native-checksums.txt')
+        boundaries = ['journal-before', 'journal-after'] + [
+            f'{which}-{part}-{when}' for part in parts for which in ('old', 'new') for when in ('before', 'after')]
+        for boundary in boundaries:
             with self.subTest(boundary=boundary):
                 directory = self.dir / boundary
-                functions, recovery = self.installer_transaction_fixture(directory)
+                functions, _ = self.installer_transaction_fixture(directory)
+                self.boot_fixture(directory)
                 result = subprocess.run(['sh', '-c', functions + '''
 mv() {
   boundary=
   if [ "$2" = "$TS_DIR/.install-transaction" ]; then boundary=journal; fi
-  if [ "$1" = "$TS_DIR/bin" ]; then boundary=old-bin; fi
-  if [ "$1" = "$CANDIDATE/bin" ]; then boundary=new-bin; fi
+  for part in bin scripts conf settings.sh VERSIONS checksums.txt native-checksums.txt; do
+    [ "$1" != "$TS_DIR/$part" ] || boundary=old-$part
+    [ "$1" != "$CANDIDATE/$part" ] || boundary=new-$part
+  done
   [ "$FAULT" != "$boundary-before" ] || kill -KILL "$$"
   command mv "$@" || return 1
   [ "$FAULT" != "$boundary-after" ] || kill -KILL "$$"
-  return 0
 }
 begin_install || exit 2
-: >"$TS_DIR/.installing"
 switch_install || exit 3
 exit 4
 '''], cwd=directory, env={**os.environ, 'FAULT': boundary}, text=True, capture_output=True, timeout=10)
                 self.assertEqual(result.returncode, -9, result.stdout + result.stderr)
-                self.assertTrue((directory / 'backups/42-interrupted').is_dir())
-                journal = directory / '.install-transaction'
-                if boundary != 'journal-before':
-                    self.assertEqual(journal.read_text().strip(), str(directory / 'backups/42-interrupted'))
-                    self.assertEqual(journal.stat().st_mode & 0o777, 0o600)
-                else:
-                    self.assertFalse(journal.exists())
-                    self.assertFalse((directory / '.installing').exists())
-                run_sh(functions + recovery, directory)
-                self.assert_installed_tree_preserved(directory)
+                result = self.boot(directory)
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                self.assertEqual((directory / 'boot-started').read_text().strip(), 'started')
+                self.assertEqual((directory / 'settings.sh').read_text(), '# old-settings.sh\nnetwork_snapshot() { return 0; }\n')
+                for part in ('bin', 'scripts', 'conf'):
+                    self.assertEqual((directory / part / 'value').read_text(), 'old-' + part)
+                self.assertFalse((directory / '.install-transaction').exists())
+
+    def test_recovery_itself_can_be_killed_and_retried(self):
+        for part in ('bin', 'scripts', 'conf', 'settings.sh'):
+            for when in ('before', 'after'):
+                with self.subTest(part=part, when=when):
+                    directory = self.dir / (part + when)
+                    functions, _ = self.installer_transaction_fixture(directory)
+                    self.boot_fixture(directory)
+                    result = subprocess.run(['sh', '-c', functions + '\nbegin_install; switch_install; kill -KILL "$$"'],
+                                            cwd=directory, text=True, capture_output=True, timeout=10)
+                    self.assertEqual(result.returncode, -9, result.stderr)
+                    injection = f'''
+mv() {{
+  if [ "$1" = "$PWD/backups/42-interrupted/{part}" ]; then
+    [ "{when}" != before ] || kill -KILL "$$"
+    command mv "$@" || return 1
+    kill -KILL "$$"
+  fi
+  command mv "$@"
+}}
+'''
+                    result = self.boot(directory, injection)
+                    self.assertEqual(result.returncode, -9, result.stderr)
+                    self.assertFalse((directory / 'boot-started').exists())
+                    self.assertTrue((directory / '.install-transaction').exists())
+                    result = self.boot(directory)
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    self.assertTrue((directory / 'boot-started').exists())
 
     def test_interrupted_journal_publication_cleans_gate_and_private_temporary(self):
         for boundary in ['before', 'after']:
@@ -449,22 +532,183 @@ begin_install || install_abort journal
                 self.assertEqual(list(directory.glob('.install-transaction-*')), [])
                 self.assertTrue((directory / 'backups/42-interrupted').is_dir())
 
-    def test_legacy_preswitch_journal_without_backup_recovers_without_data_loss(self):
+    def test_unproven_journal_preserves_evidence_and_unrelated_backups(self):
         functions, recovery = self.installer_transaction_fixture(self.dir)
-        (self.dir / '.install-transaction').write_text(str(self.dir / 'backups/legacy-interrupted') + '\n')
-        (self.dir / '.installing').touch()
-        run_sh(functions + recovery, self.dir)
+        (self.dir / '.install-transaction').write_text(str(self.dir / 'backups/retained') + '\n')
+        (self.dir / '.installing').write_text('999999:1:previous-boot\n')
+        result = subprocess.run(['sh', '-c', functions + recovery], cwd=self.dir,
+                                text=True, capture_output=True, timeout=10)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual((self.dir / 'bin/value').read_text(), 'old-bin')
+        self.assertEqual((self.dir / 'backups/retained/bin/user').read_text(),
+                         'preserved-backups/retained/bin/user')
+        self.assertTrue((self.dir / '.install-transaction').exists())
+        self.assertTrue((self.dir / '.installing').exists())
+
+    def test_begin_install_never_reuses_an_existing_backup(self):
+        functions, _ = self.installer_transaction_fixture(self.dir)
+        backup = self.dir / 'backups/42-interrupted'
+        backup.mkdir()
+        (backup / '.install-owner').write_text('999999:1:older-boot\n')
+        (backup / 'settings.sh').write_text('retained-settings')
+        result = subprocess.run(['sh', '-c', functions + '\nbegin_install || install_abort existing'],
+                                cwd=self.dir, text=True, capture_output=True, timeout=10)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual((backup / 'settings.sh').read_text(), 'retained-settings')
+        self.assertEqual((backup / '.install-owner').read_text(), '999999:1:older-boot\n')
         self.assert_installed_tree_preserved(self.dir)
-        # The recovered installation remains upgradeable, with a distinct
-        # versioned snapshot rather than overwriting an earlier backup.
-        run_sh(functions + '''
-begin_install || exit 2
-switch_install || exit 3
-_INSTALL_SWITCH_ACTIVE=0
+
+    def test_boot_and_installer_cannot_cross_a_live_install_lock(self):
+        functions, _ = self.installer_transaction_fixture(self.dir)
+        self.boot_fixture(self.dir)
+        holder = subprocess.Popen(['sh', '-c', functions + '''
+install_lock || exit 1
+trap 'install_unlock' 0
+printf 'ready\\n'
+read -r release
+'''], cwd=self.dir, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        try:
+            self.assertEqual(holder.stdout.readline(), 'ready\n')
+            result = self.boot(self.dir)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertFalse((self.dir / 'boot-started').exists())
+            result = subprocess.run(['sh', '-c', functions + '\nbegin_install'], cwd=self.dir,
+                                    text=True, capture_output=True, timeout=10)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertFalse((self.dir / '.installing').exists())
+        finally:
+            _, stderr = holder.communicate('release\n', timeout=10)
+        self.assertEqual(holder.returncode, 0, stderr)
+        result = self.boot(self.dir)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertTrue((self.dir / 'boot-started').exists())
+
+    def test_boot_keeps_install_lock_until_startup_returns(self):
+        functions, _ = self.installer_transaction_fixture(self.dir)
+        self.boot_fixture(self.dir)
+        starter = self.dir / 'scripts/start.sh'
+        starter.write_text('#!/bin/sh\nprintf "starting\\n"\nread -r release\n')
+        boot = subprocess.Popen(['sh', '-c', 'getprop() { echo 1; }; . "$PWD/module/service.sh"',
+                                 str(self.dir / 'module/service.sh')], cwd=self.dir,
+                                stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        try:
+            self.assertEqual(boot.stdout.readline(), 'starting\n')
+            result = subprocess.run(['sh', '-c', functions + '\nbegin_install'], cwd=self.dir,
+                                    text=True, capture_output=True, timeout=10)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertFalse((self.dir / '.installing').exists())
+        finally:
+            _, stderr = boot.communicate('release\n', timeout=10)
+        self.assertEqual(boot.returncode, 0, stderr)
+        self.assertFalse((self.dir / '.install-lock').is_symlink())
+
+    def test_stale_lock_requires_exact_boot_and_starttime(self):
+        run_sh(self.recovery_source() + '''
+TS_DIR="$PWD"
+install_lock || exit 1
+owner=$_INSTALL_OWNER
+pid=${owner%%:*}
+install_owner_alive "$owner" || exit 2
+install_owner_alive "$pid:0:$_INSTALL_BOOT" && exit 3
+install_owner_alive "$pid:$_il_start:another-boot" && exit 4
+install_unlock
+for stale in "$pid:0:$_INSTALL_BOOT" "$pid:$_il_start:another-boot"; do
+  ln -s "$stale" "$TS_DIR/.install-lock" || exit 5
+  ln -s choosing "$TS_DIR/.install-waiters/$stale" || exit 6
+  install_lock || exit 7
+  [ "$(readlink "$TS_DIR/.install-lock")" = "$owner" ] || exit 8
+  [ ! -L "$TS_DIR/.install-waiters/$stale" ] || exit 9
+  install_unlock
+done
 ''', self.dir)
-        self.assertEqual((self.dir / 'bin/value').read_text(), 'new-bin')
+
+    def test_active_module_receives_only_stable_boot_files(self):
+        source = (ROOT / 'customize.sh').read_text()
+        entry = source[source.index('install_recovery_entry() {'):source.index('# shellcheck source=install-recovery.sh')]
+        entry = entry.replace('/data/adb/', str(self.dir) + '/')
+        active = self.dir / 'modules/foxytail'
+        staged = self.dir / 'modules_update/foxytail'
+        active.mkdir(parents=True)
+        staged.mkdir(parents=True)
+        for name in ('install-recovery.sh', 'service.sh'):
+            (active / name).write_text('old-' + name)
+            (staged / name).write_bytes((ROOT / name).read_bytes())
+        (active / 'custom').mkdir()
+        (active / 'custom/settings').write_text('keep-custom')
+        (active / 'module.prop').write_text('old-version')
+        run_sh(entry + '\nMODPATH="$PWD/modules_update/foxytail"\ninstall_recovery_entry\n', self.dir)
+        for name in ('install-recovery.sh', 'service.sh'):
+            self.assertEqual((active / name).read_bytes(), (staged / name).read_bytes())
+            self.assertEqual((active / name).stat().st_mode & 0o777, 0o755)
+        self.assertEqual((active / 'custom/settings').read_text(), 'keep-custom')
+        self.assertEqual((active / 'module.prop').read_text(), 'old-version')
+
+    def test_boot_rejects_unowned_or_escaped_backup_without_deleting_data(self):
+        for fault in ('owner', 'traversal', 'backup-symlink', 'owner-symlink'):
+            with self.subTest(fault=fault):
+                directory = self.dir / fault
+                functions, _ = self.installer_transaction_fixture(directory)
+                self.boot_fixture(directory)
+                result = subprocess.run(['sh', '-c', functions + '\nbegin_install; switch_install; kill -KILL "$$"'],
+                                        cwd=directory, text=True, capture_output=True, timeout=10)
+                self.assertEqual(result.returncode, -9, result.stderr)
+                backup = directory / 'backups/42-interrupted'
+                if fault == 'owner':
+                    (backup / '.install-owner').write_text('999999:1:foreign-boot\n')
+                elif fault == 'traversal':
+                    (directory / '.install-transaction').write_text(str(backup / '../retained') + '\n')
+                elif fault == 'backup-symlink':
+                    alias = directory / 'backups/alias'
+                    alias.symlink_to(backup, target_is_directory=True)
+                    (directory / '.install-transaction').write_text(str(alias) + '\n')
+                else:
+                    (backup / '.install-owner').unlink()
+                    (backup / '.install-owner').symlink_to(directory / '.installing')
+                result = self.boot(directory)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertFalse((directory / 'boot-started').exists())
+                self.assertTrue((directory / '.install-transaction').exists())
+                self.assertTrue((directory / '.installing').exists())
+                self.assertEqual((backup / 'bin/value').read_text(), 'old-bin')
+                self.assertEqual((directory / 'bin/value').read_text(), 'new-bin')
+                self.assertEqual((directory / 'backups/retained/bin/user').read_text(),
+                                 'preserved-backups/retained/bin/user')
+
+    def test_failed_boot_restore_retains_evidence_for_retry(self):
+        functions, _ = self.installer_transaction_fixture(self.dir)
+        self.boot_fixture(self.dir)
+        result = subprocess.run(['sh', '-c', functions + '\nbegin_install; switch_install; kill -KILL "$$"'],
+                                cwd=self.dir, text=True, capture_output=True, timeout=10)
+        self.assertEqual(result.returncode, -9, result.stderr)
+        result = self.boot(self.dir, '''
+mv() { [ "$1" != "$PWD/backups/42-interrupted/bin" ] || return 1; command mv "$@"; }
+''')
+        self.assertNotEqual(result.returncode, 0)
+        self.assertTrue((self.dir / '.installing').exists())
+        self.assertTrue((self.dir / '.install-transaction').exists())
         self.assertEqual((self.dir / 'backups/42-interrupted/bin/value').read_text(), 'old-bin')
-        self.assertEqual((self.dir / 'backups/retained/bin/user').read_text(), 'preserved-backups/retained/bin/user')
+        self.assertFalse((self.dir / 'boot-started').exists())
+        result = self.boot(self.dir)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertTrue((self.dir / 'boot-started').exists())
+
+    def test_quiesce_is_internal_and_does_not_create_a_user_stop_hold(self):
+        source = (ROOT / 'customize.sh').read_text()
+        function = source[source.index('quiesce_installed() {'):source.index('# Each successfully moved old entry')]
+        function = function.replace('"${TS_SCRIPTS_DIR}/foxytail.service" stop',
+                                    'sh "${TS_SCRIPTS_DIR}/foxytail.service" stop')
+        scripts = self.dir / 'scripts'
+        scripts.mkdir()
+        service = scripts / 'foxytail.service'
+        service.write_text('#!/bin/sh\n[ "$1:$2" = stop:--internal ] || { touch "$PWD/user-held"; exit 1; }\n')
+        service.chmod(0o755)
+        run_sh(function + '''
+TS_DIR="$PWD"; TS_SCRIPTS_DIR="$PWD/scripts"; _INSTALL_OWNER=fixture
+printf '%s\\n' "$_INSTALL_OWNER" >"$TS_DIR/.installing"
+installed_pids() { :; }
+quiesce_installed
+''', self.dir)
+        self.assertFalse((self.dir / 'user-held').exists())
 
     def test_backup_creation_and_journal_publish_failures_leave_old_tree_usable(self):
         for fault in ('mkdir', 'publish'):
@@ -473,7 +717,7 @@ _INSTALL_SWITCH_ACTIVE=0
                 functions, _ = self.installer_transaction_fixture(directory)
                 result = subprocess.run(['sh', '-c', functions + '''
 mkdir() {
-  if [ "$FAULT" = mkdir ] && [ "$2" = "$BACKUP" ]; then return 1; fi
+  if [ "$FAULT" = mkdir ] && [ "$1" = "$BACKUP" ]; then return 1; fi
   command mkdir "$@"
 }
 mv() {
@@ -489,7 +733,7 @@ begin_install || install_abort preparation
     def test_copytruncate_keeps_existing_writer_on_active_inode(self):
         settings = (ROOT / 'tailscale/settings.sh').read_text()
         function = settings[settings.index('rotate_log()'):settings.index('# Log with a per-call')]
-        function += (ROOT / 'tailscale/scripts/foxytail.lock.sh').read_text()
+        function += (ROOT / 'tailscale/scripts/foxytail.lock.sh').read_text() + '\n' + host_process_shell()
         run_sh(function + '''
 LOG_MAX_KB=1
 TS_RUN_DIR="$PWD"

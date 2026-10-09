@@ -169,9 +169,9 @@ _stats_stop() {
 
 do_start() {
   [ "${STATS:-on}" = on ] || return 0
-  daemon_claim_pidfile foxytail.stats || return 0
   _stats_running=1
   trap '_stats_stop' TERM INT
+  daemon_claim_pidfile foxytail.stats || { [ "$?" = 2 ] && return 0; return 1; }
   log Info "foxytail.stats started (pid $$, interval ${STATS_INTERVAL}s)"
   while [ "$_stats_running" = "1" ]; do
     load_runtime_conf || { log Error "stats: invalid runtime configuration"; break; }
@@ -180,16 +180,14 @@ do_start() {
     _int=$(effective_interval "${STATS_INTERVAL}" 5 300 900)
     isleep "$_int"
   done
-  rm -f "$PID_FILE"
+  daemon_release_pidfile foxytail.stats
   log Info "foxytail.stats stopped"
   return 0
 }
 
 do_status() {
-  _st_pid=$(cat "$PID_FILE" 2>/dev/null)
-  case "${_st_pid}" in '' | *[!0-9]*) _st_pid="" ;; esac
-  if [ -n "${_st_pid}" ] && kill -0 "${_st_pid}" 2>/dev/null; then
-    jqr -n -c --argjson r true --argjson p "${_st_pid}" \
+  if daemon_pid_alive foxytail.stats; then
+    jqr -n -c --argjson r true --argjson p "${_dpa_pid}" \
       --argjson i "${STATS_INTERVAL}" --arg d "$TS_STATS_DIR" \
       '{running:$r,pid:$p,interval:$i,dir:$d}'
   else
@@ -198,78 +196,75 @@ do_status() {
   fi
 }
 
-# Compute adjacent deltas before assigning buckets. A decrease or a known
-# generation change starts a new counter segment; the first sample is only a
-# baseline. The interval is attributed to its ending sample (including across
-# midnight). Missing/error samples are not fabricated as zero traffic.
-stats_deltas() {
-  for _sd_file in $(stats_recent_files); do cat "${_sd_file}"; done |
-    jqr -R -s -c '
+# Keep only last counters and aggregate buckets, never all retained samples.
+stats_summary() (
+  _sd_tmp=$(mktemp -d "${TS_RUN_DIR}/.stats-query.XXXXXX") || exit 1
+  trap 'rm -rf "${_sd_tmp}"' 0
+  trap 'exit 130' HUP INT TERM
+  {
+    for _sd_file in $(stats_recent_files); do cat "${_sd_file}" || exit 1; done
+    : >"${_sd_tmp}/input-complete"
+  } | "${TS_BIN_DIR}/foxyfiles" ordered-stats "${_sd_tmp}" >"${_sd_tmp}/ordered" || exit 1
+  [ -f "${_sd_tmp}/input-complete" ] || exit 1
+  jqr -R -n -c --arg d "${1:-$(date +%F)}" --arg mode "${2:-summary}" --argjson n "${3:-10}" '
       def delta($old; $new; $changed):
-        if $old == null then 0
-        elif $changed or $new < $old then $new
-        else $new - $old end;
+        if $old == null then 0 elif $changed or $new < $old then $new else $new - $old end;
       def pair($old; $new; $changed):
-        {rx:delta($old.rx; ($new.rx // 0); $changed),
-         tx:delta($old.tx; ($new.tx // 0); $changed)};
-      split("\n") | map(select(length>0) | fromjson? | select(type=="object")
-        | select(.error==null and (.ts|type)=="number")) | sort_by(.ts)
-      | reduce .[] as $s ({lastIface:null,lastPeers:{},lastUids:{},rows:[]};
-          . as $acc
-          | ($s.generation // {}) as $gen
-          | (if $s.iface == null then null else
-              pair(.lastIface.value; $s.iface;
-                .lastIface != null and ($gen.iface // "") != (.lastIface.gen // "")) end) as $iface
-          | [ $s.peers[]? | . as $p | ($acc.lastPeers[$p.id]) as $old
-              | pair($old.value; $p; $old != null and ($gen.peers // "") != ($old.gen // ""))
-                + {id:$p.id} ] as $peers
-          | [ $s.uids[]? | select($s.uidDirection == "tx") | . as $u
-              | ($acc.lastUids[$u.uid|tostring]) as $old
-              | pair($old.value; $u; $old != null and ($gen.uids // "") != ($old.gen // ""))
-                + {uid:($u.uid|tostring)} ] as $uids
-          | .rows += [{ts:$s.ts,iface:$iface,peers:$peers,uids:$uids}]
-          | if $s.iface != null then .lastIface={value:$s.iface,gen:$gen.iface} else . end
-          | reduce $s.peers[]? as $p (. ; .lastPeers[$p.id]={value:$p,gen:$gen.peers})
-          | if $s.uidDirection == "tx" then
-              reduce $s.uids[]? as $u (. ; .lastUids[$u.uid|tostring]={value:$u,gen:$gen.uids})
+        {rx:delta($old.rx; ($new.rx // 0); $changed),tx:delta($old.tx; ($new.tx // 0); $changed)};
+      reduce (inputs | fromjson? | select(type=="object" and .error==null and (.ts|type)=="number")) as $s
+        ({lastIface:null,lastPeers:{},lastUids:{},days:{},hours:{},peers:{},uids:{}};
+          . as $acc | ($s.generation // {}) as $gen
+          | ($s.ts | strflocaltime("%F")) as $day
+          | ($s.ts | strflocaltime("%H")) as $hour
+          | .days[$day] //= {date:$day,samples:0,rx:0,tx:0}
+          | if $day==$d then .hours[$hour] //= {hour:($hour|tonumber),samples:0,iface:{rx:0,tx:0},peers:{}} else . end
+          | if $s.iface != null then
+              pair(.lastIface.value; $s.iface; .lastIface!=null and ($gen.iface // "")!=(.lastIface.gen // "")) as $v
+              | .days[$day].samples+=1 | .days[$day].rx+=$v.rx | .days[$day].tx+=$v.tx
+              | if $day==$d then .hours[$hour].samples+=1 | .hours[$hour].iface.rx+=$v.rx | .hours[$hour].iface.tx+=$v.tx else . end
+              | .lastIface={value:$s.iface,gen:$gen.iface}
+            else . end
+          | reduce $s.peers[]? as $p (. ;
+              ($p.id|tostring) as $id | $acc.lastPeers[$id] as $old
+              | pair($old.value; $p; $old!=null and ($gen.peers // "")!=($old.gen // "")) as $v
+              | .peers[$id] //= {id:$id,rx:0,tx:0}
+              | .peers[$id].rx+=$v.rx | .peers[$id].tx+=$v.tx
+              | if $day==$d then
+                  .hours[$hour].peers[$id] //= {id:$id,rx:0,tx:0}
+                  | .hours[$hour].peers[$id].rx+=$v.rx | .hours[$hour].peers[$id].tx+=$v.tx
+                else . end
+              | .lastPeers[$id]={value:$p,gen:$gen.peers})
+          | if $s.uidDirection=="tx" then
+              reduce $s.uids[]? as $u (. ;
+                ($u.uid|tostring) as $id | $acc.lastUids[$id] as $old
+                | pair($old.value; $u; $old!=null and ($gen.uids // "")!=($old.gen // "")) as $v
+                | .uids[$id] //= {uid:$id,rx:0,tx:0} | .uids[$id].tx+=$v.tx
+                | .lastUids[$id]={value:$u,gen:$gen.uids})
             else . end)
-      | .rows'
-}
+      | . as $result
+      | {date:$d,attribution:"interval-end",direction:"tx",
+          days:(.days | [.[]] | sort_by(.date)),
+          hours:[range(0;24) | . as $h | ($h|tostring | if length==1 then "0"+. else . end) as $key
+            | ($result.hours[$key] // {hour:$h,samples:0,iface:{rx:0,tx:0},peers:{}}) | .peers |= [.[]]],
+          topn:(.peers | [.[] | select(.rx+.tx>0)] | sort_by([-(.rx+.tx),.id])),
+          uids:(.uids | [.[] | select(.tx>0)] | sort_by([-.tx,.uid]))}
+      | if $mode=="hourly" then {date,attribution,hours}
+        elif $mode=="daily" then {attribution,days}
+        elif $mode=="topn" then {topn:.topn[:$n]}
+        elif $mode=="uids" then {uids:.uids[:$n],direction}
+        else . end' "${_sd_tmp}/ordered"
+)
 
 query() {
-  _q="$1"; shift
-  case "$_q" in
-    hourly)
-      _d="$1"
-      stats_deltas | jqr -c --arg d "$_d" '
-        [ .[] | select((.ts|strflocaltime("%F"))==$d) ] as $s
-        | {date:$d,attribution:"interval-end",hours:[range(0;24) | . as $h
-            | [$s[] | select((.ts|strflocaltime("%H")|tonumber)==$h)] as $b
-            | {hour:$h,samples:([$b[]|select(.iface!=null)]|length),
-                iface:{rx:([$b[].iface.rx // 0]|add // 0),tx:([$b[].iface.tx // 0]|add // 0)},
-                peers:([$b[].peers[]] | group_by(.id) | map(
-                  {id:.[0].id,rx:(map(.rx)|add),tx:(map(.tx)|add)}))}]}'
-      ;;
-    daily)
-      stats_deltas | jqr -c '
-        group_by(.ts|strflocaltime("%F")) | {attribution:"interval-end",days:map(
-          {date:(.[0].ts|strflocaltime("%F")),samples:([.[]|select(.iface!=null)]|length),
-           rx:([.[].iface.rx // 0]|add // 0),tx:([.[].iface.tx // 0]|add // 0)})}'
-      ;;
+  case "$1" in
+    summary) stats_summary "$2" ;;
+    hourly) stats_summary "$2" hourly ;;
+    daily) stats_summary '' daily ;;
     topn|uids)
-      _n="$1"; case "$_n" in ""|*[!0-9]*) _n=10 ;; esac
-      stats_deltas | jqr -c --arg q "$_q" --argjson n "$_n" '
-        if $q == "topn" then
-          [.[].peers[]] | group_by(.id) | map(
-            {id:.[0].id,rx:(map(.rx)|add),tx:(map(.tx)|add)})
-          | map(select(.rx+.tx>0)) | sort_by(.rx+.tx) | reverse | {topn:.[0:$n]}
-        else
-          [.[].uids[]] | group_by(.uid) | map(
-            {uid:.[0].uid,rx:0,tx:(map(.tx)|add)})
-          | map(select(.tx>0)) | sort_by(.tx) | reverse | {uids:.[0:$n],direction:"tx"}
-        end'
+      _n="$2"; case "$_n" in ''|*[!0-9]*) _n=10 ;; esac
+      stats_summary '' "$1" "${_n}"
       ;;
-    *) echo "usage: $0 query {hourly <YYYY-MM-DD>|daily|topn <n>|uids <n>}" >&2; return 1 ;;
+    *) echo "usage: $0 query {summary [date]|hourly <date>|daily|topn <n>|uids <n>}" >&2; return 1 ;;
   esac
 }
 

@@ -1,5 +1,6 @@
 """Untrappable restore exits recover through the real shared configuration lock."""
 import base64
+import hashlib
 import json
 import shlex
 import unittest
@@ -19,6 +20,9 @@ class RestoreRecoveryTests(ApiTestCase):
             'conf/routes.conf': 'ROUTE_SCOPE=bypass\nUID_LIST="10002"\n',
             'conf/context.conf': 'cellular:-:exit-node:100.64.0.2\n',
         })
+        baseline = self.shell('conf_lock_acquire && _restore_baseline').stdout.strip()
+        self.restore_command = ('cmd_restore ' + shlex.quote(str(self.archive_path)) + ' ' +
+                                hashlib.sha256(self.archive_path.read_bytes()).hexdigest() + ' ' + baseline)
 
     def interrupt_restore(self, boundary):
         # Run the real rename first, then kill the actual shell executing the
@@ -40,7 +44,7 @@ mv() {
     sh -c 'kill -KILL "$PPID"'
   fi
 }
-cmd_restore ''' + shlex.quote(str(self.archive_path)), ok=False)
+''' + self.restore_command, ok=False)
         self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
 
     def test_uncommitted_boundaries_restore_prior_set_before_load_or_activation(self):

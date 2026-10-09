@@ -95,17 +95,34 @@ load_runtime_conf && exit 11
 exit 0
 ''')
 
+    def test_watchdog_claim_failure_is_not_a_successful_disabled_start(self):
+        source = (ROOT / 'tailscale/scripts/foxytail.watchdog').read_text()
+        start = source[source.index('_watchdog_stop() {'):source.index('do_status() {')]
+        result = self.shell(start + '''
+load_conf
+WATCHDOG=on
+daemon_claim_pidfile() { return 1; }
+do_start
+''', ok=False)
+        self.assertEqual(result.returncode, 1)
+        self.shell(start + '''
+load_conf
+WATCHDOG=on
+daemon_claim_pidfile() { return 2; }
+do_start
+''')
+
     def test_watchdog_quiet_rounds_do_not_scan_processes_or_rewrite_state(self):
         source = (ROOT / 'tailscale/scripts/foxytail.watchdog').read_text()
         check = source[source.index('check_once() {'):source.index('_watchdog_stop() {')]
         self.shell(check + '''
 load_conf; TS_MODE=proxy; MAGIC_DNS=off
-MANUAL_STOP_FILE="$TS_RUN_DIR/manual-stop"; BAD_COUNT_FILE="$TS_RUN_DIR/bad"; ROUTE_CACHE="$TS_RUN_DIR/route-cache"
+BAD_COUNT_FILE="$TS_RUN_DIR/bad"; ROUTE_CACHE="$TS_RUN_DIR/route-cache"
 ts_status_json() { echo '{"BackendState":"Running"}'; }
 pids_of_path() { echo unexpected >"$TS_RUN_DIR/process-scan"; }
 tailnet_reachable() { echo ping >>"$TS_RUN_DIR/probes"; }
 log() { :; }
-ip() { echo default dev "$network"; }
+network_snapshot() { jqr -nc --arg s "$network" '{known:true,signature:$s}'; }
 network=wlan0; check_once
 cp -p "$ROUTE_CACHE" "$ROUTE_CACHE.before"
 check_once
@@ -116,6 +133,26 @@ POWER_SAVE=off; WATCHDOG_PROBE=off; network=wlan2; check_once
 test ! -e "$TS_RUN_DIR/probes" || exit 3
 WATCHDOG_PROBE=on; network=wlan3; check_once
 test "$(cat "$TS_RUN_DIR/probes")" = ping
+''')
+
+    def test_watchdog_honors_both_holds_and_ignores_unknown_network(self):
+        source = (ROOT / 'tailscale/scripts/foxytail.watchdog').read_text()
+        check = source[source.index('check_once() {'):source.index('_watchdog_stop() {')]
+        self.shell(check + '''
+load_conf; TS_MODE=proxy; MAGIC_DNS=off
+BAD_COUNT_FILE="$TS_RUN_DIR/bad"; ROUTE_CACHE="$TS_RUN_DIR/route-cache"
+ts_status_json() { echo queried >>"$TS_RUN_DIR/queries"; echo '{"BackendState":"Running"}'; }
+for hold in manual-stop context-stop; do
+  touch "$TS_RUN_DIR/$hold"
+  check_once || exit 1
+  test ! -e "$TS_RUN_DIR/queries" || exit 2
+  rm "$TS_RUN_DIR/$hold"
+done
+network_snapshot() { echo '{"known":false}'; return 1; }
+echo accepted >"$ROUTE_CACHE"
+check_once || exit 3
+test "$(cat "$ROUTE_CACHE")" = accepted || exit 4
+test "$(cat "$TS_RUN_DIR/queries")" = queried
 ''')
 
     def test_log_monitor_backs_off_when_quiet_and_speeds_up_near_limit(self):

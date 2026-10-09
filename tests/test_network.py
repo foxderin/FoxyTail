@@ -8,6 +8,7 @@ import shutil
 import subprocess
 import tempfile
 import unittest
+from runtime_fixture import host_process_shell
 
 ROOT = Path(__file__).resolve().parents[1]
 MOCK = r'''#!/usr/bin/env python3
@@ -102,7 +103,11 @@ class NetworkRegression(unittest.TestCase):
   self.dir=Path(self.tmp.name);(self.dir/'scripts').mkdir();(self.dir/'bin').mkdir();(self.dir/'run').mkdir()
   for name in ('foxytail.route','foxytail.compat','foxytail.dns'):
    shutil.copy(ROOT/'tailscale/scripts'/name,self.dir/'scripts'/name)
-  (self.dir/'settings.sh').write_text('''TS_RUN_DIR="$TEST_DIR/run"
+  tables=self.dir/'ip6_tables_names';tables.write_text('filter\nmangle\n')
+  compat=self.dir/'scripts/foxytail.compat'
+  compat.write_text(compat.read_text().replace('/proc/net/ip6_tables_names',str(tables)))
+  (self.dir/'settings.sh').write_text('''TS_DIR="$TEST_DIR"
+TS_RUN_DIR="$TEST_DIR/run"
 TS_SCRIPTS_DIR="$TEST_DIR/scripts"
 TS_BIN_DIR="$TEST_DIR/bin"
 TS_PID_DIR="$TS_RUN_DIR/pids"
@@ -121,11 +126,14 @@ jqr() { jq "$@"; }
 have_jq() { return 0; }
 ''')
   settings=(ROOT/'tailscale/scripts/foxytail.lock.sh').read_text()
-  with (self.dir/'settings.sh').open('a') as f:f.write(settings[settings.index('_conf_pid_stamp() {'):])
+  with (self.dir/'settings.sh').open('a') as f:f.write(settings + host_process_shell())
   (self.dir/'bin/mock').write_text(MOCK);(self.dir/'bin/mock').chmod(0o755)
   for name in ('ip','iptables','ip6tables'):(self.dir/'bin'/name).symlink_to('mock')
   self.state=self.dir/'state.json';self.state.write_text(json.dumps({'calls':[],'chains':{},'routes':{},'rules':{}}))
   self.env={**os.environ,'TEST_DIR':str(self.dir),'MOCK_STATE':str(self.state),'PATH':str(self.dir/'bin')+os.pathsep+os.environ['PATH']}
+  exit_helper=self.dir/'scripts/foxytail.exitnode'
+  exit_helper.write_text('#!/bin/sh\ncat "$TEST_DIR/exit-snapshot.json"\n');exit_helper.chmod(0o755)
+  (self.dir/'exit-snapshot.json').write_text(json.dumps({'profile':'test','self':'self','pref':{'id':'','ip':'','auto':'','allowLAN':False},'backend':'Running','actual':None}))
   self.config()
  def config(self,**kw):
   c=dict(TS_MODE='bridge',ROUTE_SCOPE='selected',UID_LIST='10101 10102',ROUTE_SUBNETS='100.64.0.0/10 fd7a:115c:a1e0::/48',IPV6='on',ROUTE_TABLE='1052',FWMARK='0x40000000',FWMARK_MASK='0x40000000',MAGIC_DNS='on',DNS_PORT='1053');c.update(kw)
@@ -153,8 +161,55 @@ esac
   (self.dir/'bin/service').chmod(0o755)
   (self.dir/'bin/dumpsys').write_text('#!/bin/sh\nprintf "NetId: 102\\nNetId: 101\\nNetId: 102\\nNetId: -1\\nNetId: invalid\\nNetId: 999999\\n"\n')
   (self.dir/'bin/dumpsys').chmod(0o755)
+ def exit_snapshot(self,node='exit-a',actual='exit-a',online=True):
+  (self.dir/'exit-snapshot.json').write_text(json.dumps({'profile':'test','self':'self','pref':{'id':node,'ip':'','auto':'','allowLAN':False},'backend':'Running','actual':{'ID':actual,'Online':online} if actual else None}))
+ def test_exit_public_defaults_follow_selected_identity_and_clear(self):
+  self.config(ROUTE_SCOPE='all',IPV6='off',ROUTE_SUBNETS='100.64.0.0/10 0.0.0.0/0 ::/0')
+  self.run_script('foxytail.route','apply')
+  self.assertNotIn('0.0.0.0/0',[r[0] for r in self.read()['routes']['-4:1052']])
+  self.exit_snapshot(actual='other')
+  self.run_script('foxytail.route','apply')
+  self.assertNotIn('0.0.0.0/0',[r[0] for r in self.read()['routes']['-4:1052']])
+  self.exit_snapshot()
+  self.run_script('foxytail.route','apply')
+  self.assertIn('0.0.0.0/0',[r[0] for r in self.read()['routes']['-4:1052']])
+  self.assertEqual(self.read()['routes']['-6:1052'],[])
+  # Offline authority retains capture rather than silently leaking to local WAN.
+  self.exit_snapshot(online=False)
+  self.run_script('foxytail.route','check')
+  self.exit_snapshot(node='',actual=None)
+  self.run_script('foxytail.route','check',ok=False)
+  self.run_script('foxytail.route','apply')
+  self.assertNotIn('0.0.0.0/0',[r[0] for r in self.read()['routes']['-4:1052']])
+  self.assertTrue(all('1052' in call for call in self.read()['calls'] if call[0]=='ip' and 'route' in call and ('add' in call or 'del' in call)))
+ def test_exit_public_defaults_preserve_scope_and_exemptions(self):
+  self.exit_snapshot()
+  for scope in ('selected','bypass','all'):
+   with self.subTest(scope=scope):
+    self.config(ROUTE_SCOPE=scope)
+    self.run_script('foxytail.route','apply')
+    for family,cmd,default in (('-4','iptables','0.0.0.0/0'),('-6','ip6tables','::/0')):
+     state=self.read();rules=state['chains'][cmd+':mangle']['FOXY_MARK']
+     self.assertEqual(rules[0],['-m','owner','--uid-owner','0','-j','RETURN'])
+     self.assertEqual(rules[1],['-m','mark','!','--mark','0x0/0x1e000000','-j','RETURN'])
+     defaults=[r for r in rules if default in r]
+     self.assertEqual(len(defaults),2 if scope=='selected' else 1)
+     self.assertIn(default,[r[0] for r in state['routes'][family+':1052']])
+     if scope=='selected':self.assertEqual({r[r.index('--uid-owner')+1] for r in defaults},{'10101','10102'})
+     if scope=='bypass':
+      for uid in ('10101','10102'):
+       self.assertLess(rules.index(['-m','owner','--uid-owner',uid,'-j','RETURN']),rules.index(defaults[0]))
+  self.config(ROUTE_SCOPE='selected',UID_LIST='')
+  self.run_script('foxytail.route','apply')
+  self.assertNotIn('0.0.0.0/0',[r[0] for r in self.read()['routes']['-4:1052']])
+ def test_exit_snapshot_failure_does_not_mutate_installed_policy(self):
+  self.exit_snapshot();self.run_script('foxytail.route','apply')
+  before=self.read()
+  (self.dir/'exit-snapshot.json').unlink()
+  self.run_script('foxytail.route','apply',ok=False)
+  self.assertEqual(self.read(),before)
  def test_reserved_table_and_native_uid_refused_before_mutation(self):
-  for table in ('0','52','253','254','255','999','garbage'):
+  for table in ('0','52','253','254','255','999','1000','1053','65535','garbage'):
    self.config(ROUTE_TABLE=table);self.run_script('foxytail.route','apply',ok=False)
   self.config(TS_MODE='tun');self.run_script('foxytail.route','apply',ok=False)
   self.config(IPV6='on',ROUTE_SUBNETS='100.64.0.0/10');self.run_script('foxytail.route','apply',ok=False)
@@ -297,15 +352,26 @@ DNS_CONF="$TS_RUN_DIR/dnsmasq.conf"
 DNS_STATE_FILE="$TS_RUN_DIR/dnsmasq.state"
 DNS_REASON_FILE="$TS_RUN_DIR/dnsmasq.reason"
 DNS_CONTEXT_FILE="$TS_RUN_DIR/dnsmasq.context.json"
+LEGACY_OWNERSHIP="$TS_DIR/state/dnsmasq-connmark.jsonl"
+LEGACY_NETWORK="$TS_RUN_DIR/dnsmasq.network.json"
 DNS_HOSTS_DIR="$TEST_DIR/dns-hosts"
 DNS_HOSTS="$DNS_HOSTS_DIR/hosts"
 DNS_BIN="$TS_BIN_DIR/dnsmasq"
 DNS_LOG="$TS_RUN_DIR/dnsmasq.log"
 TS_SOCKET="$TS_RUN_DIR/tailscaled.sock"
 CHAIN_DNS=FOXY_DNS
-"""+dns[dns.index('set_state() {'):dns.index('\ncase "$1" in')]+ '\ndns_pids() { [ -f "$TEST_DIR/alive" ] && echo 123; }\nstop_by_pids() { [ "$FAIL_STOP" != 1 ] && rm -f "$TEST_DIR/alive"; }\ntmo() { cat "$TEST_DIR/current.json"; }\nipv6_module_boot() { echo test-boot; }\nipv6_nat_module_dirs() { :; }\ngetprop() { echo 1.1.1.1; }\nrotate_log() { :; }\n"$@"\n')
+"""+dns[dns.index('set_state() {'):dns.index('\ncase "$1" in')]+ '\ndns_pids() { [ -f "$TEST_DIR/alive" ] && echo 123; }\nstop_by_pids() { [ "$FAIL_STOP" != 1 ] && rm -f "$TEST_DIR/alive"; }\ntmo() { _fixture_tmo=$1; shift; case "$1" in */foxydns) "$@" ;; *) cat "$TEST_DIR/current.json" ;; esac; }\nnetwork_snapshot() { echo \'{"known":true,"signature":"101|wifi|wlan0|10.0.2.3","dns":["10.0.2.3"]}\'; }\nipv6_module_boot() { echo test-boot; }\nipv6_nat_module_dirs() { :; }\nrotate_log() { :; }\n"$@"\n')
   wrapper=self.dir/'bin/foxytail.compat';wrapper.write_text('#!/bin/sh\nexec sh "$TEST_DIR/scripts/foxytail.compat" "$@"\n');wrapper.chmod(0o755)
   daemon=self.dir/'bin/dnsmasq';daemon.write_text('#!/bin/sh\nprintf "start\\n" >>"$TEST_DIR/dns-starts"\ntouch "$TEST_DIR/alive"\n');daemon.chmod(0o755)
+  native=self.dir/'bin/foxydns';native.write_text('''#!/bin/sh
+action=$1; shift
+while [ "$#" -gt 0 ]; do case "$1" in --journal) journal=$2 ;; --port) port=$2 ;; esac; shift 2; done
+case "$action" in
+legacy-claim) printf '{"boot":"fixture","port":%s}\\n' "$port" >"$journal" ;;
+legacy-cleanup) rm -f "$journal" ;;
+*) exit 1 ;;
+esac
+''');native.chmod(0o755)
   (self.dir/'alive').touch()
   current={'MagicDNSSuffix':'example.ts.net','CurrentTailnet':{'Name':'example','MagicDNSEnabled':True},'Self':{'ID':'device1','DNSName':'phone.example.ts.net.','TailscaleIPs':['100.64.0.1']},'Peer':{'peer1':{'DNSName':'Laptop.example.ts.net.','TailscaleIPs':['100.64.0.2'],'Online':True}}}
   (self.dir/'current.json').write_text(json.dumps(current))

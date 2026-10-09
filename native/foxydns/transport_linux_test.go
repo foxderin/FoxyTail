@@ -11,6 +11,7 @@ import (
 	"net"
 	"net/netip"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -80,6 +81,12 @@ func observation(t *testing.T) (*Interceptor, nfqueue.Attribute, flowTuple) {
 	i := &Interceptor{flows: make(map[flowTuple]observedFlow), ifaces: map[int]interfaceState{7: {"tun0", true, 1}}, lookupRoute: func(flowTuple, uint32, uint32, uint8) (int, error) { return 7, nil }, lookupSocket: func(flowTuple) (socketIdentity, error) {
 		return socketIdentity{UID: 10001, Cookie: 123, Inode: 456}, nil
 	}}
+	journal, err := openFlowJournal(filepath.Join(t.TempDir(), "flows"), 1053)
+	if err != nil {
+		t.Fatal(err)
+	}
+	i.ownership = journal
+	t.Cleanup(func() { journal.close() })
 	a := nfqueue.Attribute{PacketID: ptr(uint32(1)), Hook: ptr(uint8(unix.NF_INET_LOCAL_OUT)), UID: ptr(uint32(10001)), GID: ptr(uint32(10001)), OutDev: ptr(uint32(7)), Payload: &packet, Ct: &ct}
 	return i, a, tuple
 }

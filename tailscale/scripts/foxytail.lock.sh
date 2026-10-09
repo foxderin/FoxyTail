@@ -23,15 +23,19 @@ _proc_starttime() {
 }
 
 _conf_pid_stamp() {
-  _proc_starttime "$1" || printf '%s' '-'
+  _proc_starttime "$1"
 }
+
+boot_identity() { cat /proc/sys/kernel/random/boot_id 2>/dev/null; }
 
 _conf_owner_alive() {
   _coa_pid=${1%%:*}
-  _coa_stamp=${1#*:}
-  case "${_coa_pid}" in '' | *[!0-9]*) return 0 ;; esac
-  kill -0 "${_coa_pid}" 2>/dev/null || return 1
-  [ "$(_conf_pid_stamp "${_coa_pid}")" = "${_coa_stamp}" ]
+  _coa_rest=${1#*:}
+  _coa_stamp=${_coa_rest%%:*}
+  _coa_boot=${_coa_rest#*:}
+  case "${_coa_pid}:${_coa_stamp}" in *[!0-9:]*|:*|*:) return 1 ;; esac
+  [ -n "${_coa_boot}" ] && [ "${_coa_boot}" = "$(boot_identity)" ] || return 1
+  [ "$(_proc_starttime "${_coa_pid}")" = "${_coa_stamp}" ]
 }
 
 # $$ can name the parent inside a shell subshell. Record the actual owner so
@@ -41,7 +45,9 @@ _lock_identity() {
   if [ -r /proc/self/stat ] && IFS= read -r _li_stat </proc/self/stat; then
     _li_pid=${_li_stat%% *}
   fi
-  _LOCK_TOKEN="${_li_pid}:$(_conf_pid_stamp "${_li_pid}")"
+  _li_stamp=$(_conf_pid_stamp "${_li_pid}") && _li_boot=$(boot_identity) || return 1
+  [ -n "${_li_stamp}" ] && [ -n "${_li_boot}" ] || return 1
+  _LOCK_TOKEN="${_li_pid}:${_li_stamp}:${_li_boot}"
 }
 
 # Lamport tickets serialize both ownership and stale-primary recovery. Each
@@ -50,6 +56,7 @@ _lock_identity() {
 # ponytail: O(waiters) scan; use a verified platform flock if contention grows.
 _owner_lock_acquire() {
   _ola_path="$1" _ola_token="$2" _ola_limit="$3" _ola_delay="$4"
+  _conf_owner_alive "${_ola_token}" || return 1
   _ola_dir="${_ola_path}.waiters"
   _ola_pid=${_ola_token%%:*}
   mkdir -p "${_ola_dir}" || return 1
@@ -109,7 +116,7 @@ _owner_lock_release() {
 }
 
 conf_lock_acquire() {
-  _lock_identity
+  _lock_identity || return 1
   _CONF_LOCK_TOKEN=${_LOCK_TOKEN}
   _owner_lock_acquire "${TS_RUN_DIR}/.conf-write-lock" "${_CONF_LOCK_TOKEN}" 100 0.1 || {
     echo 'configuration is busy; retry' >&2; return 1;

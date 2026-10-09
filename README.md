@@ -40,6 +40,8 @@ Flash either zip in Magisk Manager, KernelSU Manager or MMRL, then reboot (or us
 
 Requirements: arm or arm64 device, Magisk v20.4+ or KernelSU ≥ 10670. Upgrades preserve your state, config and hook files (see below).
 
+Both packages include the first-party `foxydns` and `foxyfiles` helpers for ARM/ARM64, verified against the bundled native manifest. Module-root recovery runs before replaceable settings/scripts at boot; interrupted upgrades restore only a transaction with matching backup ownership. Unproven or failed recovery retains its journal and backup and defers startup.
+
 ## Uninstall & reinstall
 
 Removing the module from Magisk/KernelSU runs `uninstall.sh`: every FoxyTail component is stopped, the routing/DNS chains are torn down, and `/data/adb/foxytail` is deleted — **but your Tailscale identity is not lost**. Before deletion, `tailscaled.state` is moved to `/data/adb/foxytail-state.backup`. On the next install, if no state exists yet, the installer restores that backup automatically (and prints a notice), so you come back as the same node, still logged in. Delete `/data/adb/foxytail-state.backup` manually if you want a fresh identity.
@@ -63,7 +65,7 @@ The installer no longer creates command shortcuts under `/dev`. Successful upgra
 Useful extras:
 
 ```sh
-su -c 'tailscale set --exit-node=<node>'   # route via an exit node
+su -c 'foxytail.exitnode set <node-id-or-ip>' # select an exit and reconcile local capture
 su -c 'foxytail.service mode tun'          # switch run mode + restart
 ```
 
@@ -76,9 +78,10 @@ All entry points live in `/data/adb/foxytail/scripts/` and are symlinked into `s
 | `foxytail.service` | `start` `stop` `restart` `status [summary\|peer\|exit-node\|all]` `log [daemon\|service]` `mode [bridge\|tun\|proxy]` `help [all]` | tailscaled lifecycle, colored status, mode switching |
 | `foxytail.tun` | `start` `stop` `restart` `status` | hev-socks5-tunnel → `tailscale0` interface (bridge mode); runs the `foxytail.tun.up` / `.tun.down` user hooks |
 | `foxytail.route` | `apply` `teardown` `reload` `status` | idempotent policy-routing engine (`FOXY_*` chains, table 1052, fwmark `0x40000000/0x40000000`) |
+| `foxytail.exitnode` | `set <node-id-or-ip>` `clear` `status` | coordinate profile exit preferences with actual mode/scope routing |
 | `foxytail.dns` | `start` `stop` `status` | MagicDNS local endpoint, transparent coexistence and legacy DNS control |
-| `foxytail.stats` | `start` `stop` `status` `collect-once` `query [hourly <date>\|daily\|topn <n>]` | traffic collector (per-peer Rx/Tx, per-UID counters) |
-| `foxytail.watchdog` | `start` `stop` `status` `check-once` | restart tailscaled on crash, rebind on default-route change (rate-limited) |
+| `foxytail.stats` | `start` `stop` `status` `collect-once` `query [summary [date]\|hourly <date>\|daily\|topn <n>\|uids <n>]` | traffic collector and chronological streaming aggregation |
+| `foxytail.watchdog` | `start` `stop` `status` `check-once` | restart tailscaled on crash, rebind on Android default-network changes (rate-limited) |
 | `foxytail.context` | `start` `stop` `status` `check-once` | apply `context.conf` rules on SSID / cellular changes |
 | `foxytail.compat` | `probe` `check` `check-dns-hijack` `suggest` | detect coexisting proxy/firewall/VPN tools; verify `FOXY_*` chains survive |
 | `foxytail.diag` | `collect [output-dir]` | one-shot diagnostics tar.gz (default `/sdcard/Download`) |
@@ -95,7 +98,9 @@ The WebUI is built in: it lives in `webroot/` (zero-build static HTML/JS, backed
 
 For Funnel, choose a supported public listener: HTTPS, TCP or TLS-terminated TCP on port 443, 8443 or 10000. A local HTTP service such as `http://localhost:3000` normally uses a public **HTTPS** listener; the target's protocol and port are independent of the public listener. Plain HTTP listeners remain available for private Serve mappings.
 
-Taildrop reception counts only newly received files. Automatic and manual exports preserve existing Download files, try numbered names through `-99`, and fail without removing the inbox copy when no safe destination is available. Filenames containing spaces are preserved. Clearing the inbox includes hidden files but leaves directories intact. Inline downloads support files up to and including 8 MiB; larger files must be exported. Download encoding uses a private temporary file, removed on ordinary completion or failure, rather than command-line payload arguments.
+The pinned Android CLI receives directly into `/sdcard/Download/Taildrop`. **Import received files** copies completed regular files into the private inbox without waiting for a buffered `tailscale file get`; originals remain in shared storage. Private receipts prevent repeated imports, partial/deleted files and symlinks are excluded, and startup mode is bound to the owned daemon identity. If shared storage was unavailable at launch, unlock it and restart FoxyTail. Sends bind the selected stable peer ID to its current IP, including IPv6; duplicate hostnames are not destinations.
+
+Automatic and manual exports preserve existing Download files, try numbered names through `-99`, and fail without removing the inbox copy when no safe destination is available. Clearing the inbox includes hidden regular files but preserves private receipts and directories. Inline downloads support files up to and including 8 MiB; larger files must be exported. Encoding uses a private temporary file, not command-line payload arguments.
 
 <!-- Screenshots: docs/screenshots/*.png (to be added, see Roadmap) -->
 
@@ -108,7 +113,7 @@ The WebUI source lives in `webui/` (Vite + SolidJS, native controls with Materia
 - `pnpm --dir webui build` — production build into `../webroot/` (commit the result)
 - `pnpm --dir webui typecheck` / `check:i18n` / `smoke` — TypeScript check, zh/en key parity, jsdom smoke (13 routes + task adoption + no-root banner)
 
-Contract: `webui/src/api.ts` is the only consumer of `tailscale/scripts/foxytail.webapi.sh`; its JSON contract is frozen.
+Contract: frontend and backend JSON schemas ship together. Restore requires the selected archive SHA256 and saved-configuration baseline SHA256; stale previews must be repeated. Trial status reports monotonic remaining seconds, and exit status separates selected preference from effective routing.
 
 Runtime layout: `settings.sh` initializes shared helpers; `scripts/foxytail.config.sh` owns configuration defaults, validation and applied snapshots; `scripts/foxytail.lock.sh` owns process locks. `foxytail.webapi.sh` dispatches commands to four sibling modules for request handling, networking, configuration/backup and tools. These sourced files are shipped with the scripts directory.
 
@@ -122,9 +127,11 @@ An explicit `bash .github/tools/build.sh --update-checksums` creates a candidate
 
 Apply saved settings through the WebUI restart action or `/data/adb/foxytail/scripts/start.sh reload`, which refreshes resident helpers as well as the network service. `foxytail.service restart` affects the network service only. Upgrades preserve received files, supplied dnsmasq, configuration and identity, stop the old components before switching, and retain rollback journals on failure.
 
-Startup requires both an owned daemon and an answering LocalAPI; a leftover socket is insufficient, while `NeedsLogin` is a valid ready state. A failed automatic restart remains watchdog-recoverable; an explicit Stop continues to suppress recovery. Installation publishes its journal only after preparing the rollback directory. Restored identity and DNS ownership files are staged privately and published only after complete copies, with identity last so failures remain retryable.
+Startup requires an owned daemon and answering LocalAPI; a leftover socket is insufficient, while `NeedsLogin` is a valid ready state. Resident records and controller locks validate PID, process start time, boot identity and exact command arguments. User Stop and context-down holds are separate: context-up cannot undo a user Stop, and internal restarts do not create one. Restored identity and DNS ownership files are staged privately and published only after complete copies.
 
-Settings also offers a **timed configuration trial** using saved settings with an optional mode override. After startup checks pass, confirm within 30–300 seconds or the previous runtime configuration is restored. The backend timer survives closing the WebUI and preserves settings saved afterward. These checks cover local components; test actual destinations before confirming. Backup restore now selects a file from Download, previews configuration changes and verifies the same archive contents before restoring. Hooks remain parked for review.
+**Timed configuration trials** use saved settings with an optional mode override. Confirm within 30–300 monotonic seconds after startup checks or restore the accepted runtime baseline. Reboot expires unconfirmed trials; subsequent boots do not reapply the rejected saved candidate. Owned exit-preference side effects are restored only for the original profile and unchanged expected preference; newer manual choices win. These are local readiness checks, not an end-to-end connectivity guarantee.
+
+Backup restore previews both archive contents and the current saved configuration. The native reader allows only three configuration files and two review-only hooks, with limits of 1 MiB compressed, 2 MiB expanded, 512 KiB per member and 16 physical headers; links, metadata extensions and trailing archives are rejected. Staging is supervised and cancellable. An atomic phase gate rejects cancellation once commit begins; restore and settings/service tasks survive page navigation, retain real late results after cancellation failure and allow cancellation retry without duplicate mutations.
 
 Configuration restore journals directory replacement before changing live files. After an interrupted process, the next configuration-lock acquisition restores the prior set if uncommitted, or keeps the complete candidate if committed. Recovery errors block configuration access for retry instead of treating missing configuration as defaults; already-applied runtime snapshots remain separate.
 
@@ -142,7 +149,7 @@ Three files in `/data/adb/foxytail/conf/`, installed **only if missing** — you
 | `DNS_PORT` | `1053` | Local DNS port; must be unused by other resolvers |
 | `MAGIC_DNS` | `off` | Enable Tailnet name resolution in the selected mode |
 | `IPV6` | `off` | dual-stack tailscale0 + ip6tables symmetry |
-| `ROUTE_TABLE` | `1052` | dedicated policy routing table (1000–65535) |
+| `ROUTE_TABLE` | `1052` | fixed dedicated policy routing table; foreign resources block application |
 | `FWMARK` / `FWMARK_MASK` | `0x40000000` | fixed shared mark bit; legacy 0xF7 migrates on read |
 | `WATCHDOG` / `WATCHDOG_INTERVAL` | `on` / `30` | crash restart + rebind, seconds between checks |
 | `WATCHDOG_RESTART_LIMIT` / `WATCHDOG_RESTART_WINDOW` | `5` / `600` | restarts allowed inside the window (seconds) before the watchdog cools down |
@@ -189,6 +196,8 @@ The two controls have different scopes: accepting routes lets Tailscale use perm
 
 Native TUN receives routes through tailscaled; adding a custom CIDR is useful when it must also follow FoxyTail's local routing priority. Bridge mode needs the target CIDR in the custom list and remains subject to the selected application scope. Proxy mode handles traffic sent through its SOCKS5 listener and does not install an Android system route. Exit-node default routes are managed on the Exit page.
 
+Bridge public defaults require a matching selected and actual exit identity and remain limited to `all`/`selected`/`bypass` scope. UID 0 and Tailscale-marked traffic stay exempt; IPv6-off leaves IPv6 uncovered. Proxy mode covers explicit proxy clients only; native TUN is daemon-owned and not claimed as independently verified. The Exit page reports failed/unknown policy separately from a saved selection. Use the coordinated exit helper rather than raw `tailscale set` when immediate bridge reconciliation is required.
+
 Custom CIDRs are normalized to network addresses (`192.168.1.42/24` becomes `192.168.1.0/24`) and duplicates are removed. IPv6 CIDRs may be saved before enabling IPv6; the page explicitly reports that those destinations are not applied until IPv6 is enabled in Settings.
 
 ### `context.conf` (network-context rules)
@@ -202,6 +211,8 @@ cellular:-:no-exit-node       # clear exit node on mobile data
 ```
 
 Actions: `up`, `down`, `exit-node <arg>`, `no-exit-node`.
+
+ConnectivityService's active default network and its LinkProperties supply network identity, transport, interface and DNS. Main-table default routes are not authoritative on Android. Unknown, VPN and Ethernet snapshots never masquerade as cellular; context and watchdog observe the same snapshot.
 
 Advanced Settings supports adding, editing and reordering rules visually, with a raw-text editor that preserves comments and unrecognized lines. Invalid rules are still rejected by the backend. The latest execution result reports the outcome of the full matching action group; saving rules alone does not confirm successful execution.
 
@@ -226,7 +237,7 @@ Switch with `foxytail.service mode <mode>` (writes `TS_MODE` and restarts). Swit
 `foxytail.route` keeps **everything** off the beaten path so other modules stay intact:
 
 - all rules live in dedicated chains: `FOXY_MARK` (mangle) and `FOXY_STAT` (filter, counters for stats); built-in chains get exactly one jump each
-- policy routing uses dedicated table **1052** (1000–65535, no foreign resources) with fixed mark/mask **`0x40000000/0x40000000`**; other mark bits are preserved and whole tables are never flushed
+- policy routing uses fixed dedicated table **1052** with mark/mask **`0x40000000/0x40000000`**; foreign resources block application, other mark bits are preserved and whole tables are never flushed
 - `check` verifies configuration, both families, OUTPUT jumps and route snapshots; `apply` repairs drift, and `teardown` removes exact policy rules and protocol-186 routes on tailscale0 only
 - Legacy MagicDNS adds `FOXY_DNS` (nat) for the port-53 redirect, skipped when another module already hijacks port 53
 
@@ -258,9 +269,13 @@ Transparent mode requires root, NFQUEUE, conntrack, INET_DIAG, strict route quer
 
 The Android 16 / FlClash test device passed local UDP/TCP and IPv6 DNS checks, but its kernel lacks `CONFIG_NETFILTER_NETLINK_GLUE_CT` and existing OEM mark rules also prevent transparent capture. NFQUEUE and standalone conntrack support alone are insufficient. This device uses local mode and still needs Tailnet split-DNS configuration in the consuming resolver; automatic transparent coexistence was not established. The full transparent path passed a separate strict Linux kernel test.
 
-Legacy mode selects `/data/adb/foxytail/bin/dnsmasq`, `/system/bin/dnsmasq`, then `/vendor/bin/dnsmasq`; supply a trusted binary if none is available. Its previous public fallback behavior is unchanged.
+Legacy mode selects `/data/adb/foxytail/bin/dnsmasq`, `/system/bin/dnsmasq`, then `/vendor/bin/dnsmasq`; supply a trusted binary if none is available. Public upstreams come only from the current Android default-network snapshot and are refreshed on change. Unknown upstreams disable interception and report degradation instead of using a hard-coded public fallback.
 
 Legacy aliases use exact hosts records, so a peer named `dev` does not intercept unrelated `*.dev` names. To support system dnsmasq 2.51 after its privilege drop, only the peer-name/address mappings are stored at `/dev/foxytail-dns/hosts`: a root-owned `0755` directory and world-readable `0644` file. No `/data/adb` permissions are widened. Successful cleanup removes the mappings and the directory when empty. If either family's redirect removal fails, the listener and mappings remain available in degraded state until cleanup can be retried.
+
+Removing redirect rules does not retire existing DNAT connections. Transparent capture journals exact flows before issuing its marked verdict, quiesces the queue, then deletes only matching original/reply tuples and conntrack IDs in zone zero. Legacy capture reserves a separate connmark bit `0x20000000` after checking foreign masks and existing use; cleanup requires its boot/port claim and exact redirected DNS tuple. Neither path flushes the connection table. Failed cleanup retains ownership and the old listener for retry; pre-upgrade unmarked flows remain `reconnect-needed` until they expire or clients reconnect. Queue failure remains repair-needed after rules are gone. DNS conflict scanning treats all-port, ranges, negations, multiport, ambiguous matches and failed inventories conservatively.
+
+Current isolated Android validation covers real journaled/connmark cleanup, same-source UDP reuse across port changes and stop, stale-ID rejection, unrelated-flow preservation and unmarked-flow retention. This emulator lacks `CONFIG_NETFILTER_NETLINK_GLUE_CT`, so the updated full NFQUEUE forwarding path still requires the separate Linux kernel gate; capability rejection is not counted as successful transparent forwarding.
 
 ## IPv6
 
@@ -273,6 +288,7 @@ When the module is absent or cannot load, the fallback retains IPv6 tunnel routi
 ## Traffic analytics & diagnostics
 
 - `foxytail.stats` samples per-peer Rx/Tx and dual-stack TUN OUTPUT per-UID transmit counters every `STATS_INTERVAL` seconds into `/data/adb/foxytail/run/stats/YYYY-MM-DD.jsonl` (7-day ring by default via `STATS_RETENTION_DAYS`, screen-off throttling). Query with `foxytail.stats query hourly <date> | daily | topn <n>`.
+- Each Traffic refresh obtains one summary for charts, peer totals and UID totals. A private 1 MiB-chunk stable external sort preserves timestamp order across clock changes; streaming reduction retains only last counters and aggregate buckets. Oversized rows fail explicitly at 512 KiB, and supervised timeout/cancellation covers descendant processes.
 - The Diagnostics page provides on-demand service, tunnel, route and DNS summaries with links to relevant tools. Device details can test IPv4/IPv6 separately and report actual ping latency and direct/relay paths.
 - `foxytail.diag collect` bundles log tails, status, netcheck, routes and configuration into `/sdcard/Download/foxytail-diag-<timestamp>.tar.gz`. Sharing mode consistently aliases collected accounts, device names, SSIDs and addresses; review custom logs before sharing. `foxytail.diag collect /sdcard/Download local` retains details for private troubleshooting; the WebUI offers the same explicit choice.
 

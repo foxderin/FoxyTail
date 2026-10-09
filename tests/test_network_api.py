@@ -8,6 +8,26 @@ from api_fixture import ApiTestCase, ROOT
 
 
 class NetworkApiTests(ApiTestCase):
+    def test_exit_mutations_preserve_failure_payload_and_exact_identity(self):
+        helper = self.scripts / 'foxytail.exitnode'
+        helper.write_text('#!/bin/sh\nprintf "%s\\n" "$*" >>"$TS_DIR/exit-calls"\n'
+                          'echo \'{"ok":false,"error":"route-apply-failed","exitRouting":{"known":true,"selected":{"id":"node-b"},"effective":"not-effective"}}\'\nexit 1\n')
+        helper.chmod(0o755)
+        prefix = 'load_conf; export TS_DIR; _op_exec() { test "$1" = 90 || return 9; shift; "$@"; }; '
+        for command in ('cmd_exitnode_set node-b', 'cmd_exitnode_clear'):
+            result = json.loads(self.shell(prefix + command).stdout)
+            self.assertFalse(result['ok'])
+            self.assertEqual(result['exitRouting']['effective'], 'not-effective')
+            self.assertEqual(result['error'], 'route-apply-failed')
+        self.assertEqual((self.base / 'exit-calls').read_text().splitlines(), ['set node-b', 'clear'])
+
+    def test_exit_empty_controller_result_is_error(self):
+        helper = self.scripts / 'foxytail.exitnode'
+        helper.write_text('#!/bin/sh\nexit 1\n')
+        helper.chmod(0o755)
+        result = self.shell('load_conf; _op_exec() { shift; "$@"; }; cmd_exitnode_clear', ok=False)
+        self.assertFalse(json.loads(result.stdout)['ok'])
+
     def dns_account_fixture(self, fail=False):
         script = self.scripts / 'foxytail.dns'
         script.write_text('#!/bin/sh\n' +

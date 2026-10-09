@@ -7,6 +7,8 @@ import tempfile
 import time
 import unittest
 
+from runtime_fixture import host_process_shell
+
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -19,7 +21,8 @@ class LockRecoveryTests(unittest.TestCase):
         self.lock = self.directory / '.lock'
         self.waiters = self.directory / '.lock.waiters'
         source = (ROOT / 'tailscale/scripts/foxytail.lock.sh').read_text()
-        self.functions = source
+        self.production_functions = source
+        self.functions = source + host_process_shell()
         self.preamble = '''
 TS_RUN_DIR="$1"
 lock="$TS_RUN_DIR/.lock"
@@ -279,11 +282,12 @@ test ! -L "$lock.waiters/$_LOCK_TOKEN"
             (proc / pid).mkdir(parents=True)
             (proc / pid / 'stat').write_text(
                 '4242 (worker (subshell)) ' + ' '.join(['S'] + ['0'] * 18 + ['123456', '0']) + '\n')
-        functions = self.functions.replace('/proc/', str(proc) + '/')
+        functions = self.production_functions.replace('/proc/', str(proc) + '/')
+        functions += '\nboot_identity() { echo fixture-boot; }\n'
         output = self.finish(self.start('''
 ( _lock_identity; printf '%s\n' "$_LOCK_TOKEN" )
 ''', functions=functions))
-        self.assertEqual(output, '4242:123456')
+        self.assertEqual(output, '4242:123456:fixture-boot')
 
     def test_pid_reuse_does_not_keep_old_primary_or_ticket_alive(self):
         live = self.start('printf "%s\\n" "$$" >"$TS_RUN_DIR/live.ready"; IFS= read -r proceed')
@@ -292,10 +296,15 @@ test ! -L "$lock.waiters/$_LOCK_TOKEN"
         proc.mkdir(parents=True)
         (proc / 'stat').write_text(
             pid + ' (reused pid) ' + ' '.join(['S'] + ['0'] * 18 + ['200', '0']) + '\n')
-        self.lock.symlink_to(pid + ':100')
+        self.lock.symlink_to(pid + ':100:fixture-boot')
         self.waiters.mkdir()
-        (self.waiters / (pid + ':100')).symlink_to('1')
-        functions = self.functions.replace('/proc/', str(self.directory / 'proc') + '/')
+        (self.waiters / (pid + ':100:fixture-boot')).symlink_to('1')
+        for own in ('self', '4242'):
+            (self.directory / 'proc' / own).mkdir()
+            (self.directory / 'proc' / own / 'stat').write_text(
+                '4242 (controller) ' + ' '.join(['S'] + ['0'] * 18 + ['300', '0']) + '\n')
+        functions = self.production_functions.replace('/proc/', str(self.directory / 'proc') + '/')
+        functions += '\nboot_identity() { echo fixture-boot; }\n'
         self.finish(self.start('''
 _lock_identity
 _owner_lock_acquire "$lock" "$_LOCK_TOKEN" 100 .005 || exit 11

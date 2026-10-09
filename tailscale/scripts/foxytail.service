@@ -146,8 +146,8 @@ start_service() {
   fi
   if is_running; then
     log Info "tailscaled is already running; reconciling companion layers."
+    restore_trial_preference || return 1
     load_runtime_conf || return 1
-    rm -f "${TS_RUN_DIR}/manual-stop"
     reconcile_companions
     return $?
   fi
@@ -162,11 +162,12 @@ start_service() {
     load_runtime_conf || return 1
   fi
   log Info "Starting tailscaled service (mode: ${TS_MODE})."
-  rm -f "${TS_RUN_DIR}/manual-stop"
 
   mkdir -p "${TS_DIR}/state"
   rotate_log "${TS_LOG_FILE}"
 
+  # Shared storage may be unavailable before unlock; networking must still start.
+  taildrop_prepare_direct || log Warning 'Taildrop direct receive unavailable for this daemon launch'
   _ss_cmd=$(build_daemon_cmd)
   log Debug "daemon command: ${_ss_cmd}"
   # shellcheck disable=SC2086 # intentional: split daemon command into argv
@@ -197,11 +198,20 @@ start_service() {
   # shellcheck disable=SC2086 # intentional: one PID per word
   set -- ${_ss_real}
   echo "$1" >"${PID_FILE}"
+  taildrop_record_direct "$1" || log Warning 'Taildrop direct receive mode could not be recorded'
+  restore_trial_preference || return 1
 
   update_mod_desc running
   log Success "tailscaled started (PID: $(cat "${PID_FILE}" 2>/dev/null))."
 
   reconcile_companions
+}
+
+restore_trial_preference() {
+  case "${_TRIAL_RESTORE:-0}:$(cat "${TS_DIR}/state/config-trial/status" 2>/dev/null)" in
+    1:*|*:rolled-back|*:rollback-failed)
+      "${TS_SCRIPTS_DIR}/foxytail.exitnode" trial-restore "${TS_DIR}/state/config-trial" || return 1 ;;
+  esac
 }
 
 reconcile_companions() {
@@ -245,11 +255,12 @@ stop_service() {
   ensure_run_dirs
   load_runtime_conf || :
   log Info "Stopping tailscaled service."
-  # Only the public Stop command records user intent. Internal teardown must
-  # remain recoverable even if a companion fails and restart aborts.
-  if [ "${1:-manual}" != internal ]; then
-    date +%s >"${TS_RUN_DIR}/manual-stop"
-  fi
+  case "${1:-user}" in
+    user) date +%s >"${TS_RUN_DIR}/manual-stop" || return 1 ;;
+    context) date +%s >"${TS_RUN_DIR}/context-stop" || return 1 ;;
+    internal) ;;
+    *) return 1 ;;
+  esac
 
   # Finish all cleanup attempts, but preserve failure for restart/upgrade.
   _st_failed=0
@@ -605,7 +616,7 @@ service_unlock() {
 
 service_lock() {
   ensure_run_dirs
-  _lock_identity
+  _lock_identity || return 1
   _SERVICE_LOCK_TOKEN=${_LOCK_TOKEN}
   _owner_lock_acquire "${TS_RUN_DIR}/.service-lock" "${_SERVICE_LOCK_TOKEN}" 120 0.5 || {
     log Error "service controller busy"; return 1;
@@ -615,12 +626,12 @@ service_lock() {
 }
 
 case "$1" in
-  start|stop|restart|mode|recover|trial) service_lock || exit 1 ;;
+  start|stop|restart|mode|recover|trial|context) service_lock || exit 1 ;;
 esac
 
 if conf_trial_active; then
   case "$1:${2:-}" in
-    stop:*) [ -f "${TS_DIR}/.installing" ] || "${TS_SCRIPTS_DIR}/foxytail.trial" supersede || exit 1 ;;
+    stop:) [ -f "${TS_DIR}/.installing" ] || "${TS_SCRIPTS_DIR}/foxytail.trial" supersede || exit 1 ;;
     restart:*|mode:*|start:)
       log Error 'configuration trial active; confirm or revert it before applying another configuration'
       exit 1 ;;
@@ -632,11 +643,25 @@ case "$1" in
     _TRIAL_ID="$2"
     _SERVICE_CANDIDATE=$("${TS_SCRIPTS_DIR}/foxytail.trial" prepare "$2" "$3") || exit 1
     "${TS_SCRIPTS_DIR}/start.sh" pause-residents || exit 1
+    # Candidate context holds must not strand rollback; user holds stay authoritative.
+    rm -f "${TS_RUN_DIR}/context-stop"
+    [ "$3" != previous ] || _TRIAL_RESTORE=1
     restart_service || exit 1
     "${TS_SCRIPTS_DIR}/start.sh" resume-residents
     ;;
+  context)
+    case "$2" in
+      down) stop_service context ;;
+      up)
+        rm -f "${TS_RUN_DIR}/context-stop" || exit 1
+        [ ! -f "${TS_RUN_DIR}/manual-stop" ] || exit 0
+        _SERVICE_RECOVERY=1
+        start_service ;;
+      *) exit 1 ;;
+    esac
+    ;;
   recover)
-    [ -f "${TS_RUN_DIR}/manual-stop" ] && exit 0
+    service_stop_held && exit 0
     _SERVICE_RECOVERY=1
     case "$2" in
       start|reconcile) start_service ;;
@@ -646,16 +671,22 @@ case "$1" in
     ;;
   start)
     case "${2:-}" in
-      '') ;;
-      --applied) _SERVICE_RECOVERY=1 ;;
+      '') rm -f "${TS_RUN_DIR}/manual-stop" "${TS_RUN_DIR}/context-stop" || exit 1 ;;
+      --applied) _SERVICE_RECOVERY=1; service_stop_held && exit 0 ;;
+      --boot) service_stop_held && exit 0 ;;
       *) exit 1 ;;
     esac
     start_service
     ;;
   stop)
-    stop_service
+    case "${2:-}" in
+      '') stop_service user ;;
+      --internal) stop_service internal ;;
+      *) exit 1 ;;
+    esac
     ;;
   restart)
+    rm -f "${TS_RUN_DIR}/manual-stop" "${TS_RUN_DIR}/context-stop" || exit 1
     restart_service
     ;;
   status)
@@ -666,6 +697,7 @@ case "$1" in
     log_service "$2"
     ;;
   mode)
+    rm -f "${TS_RUN_DIR}/manual-stop" "${TS_RUN_DIR}/context-stop" || exit 1
     set_mode "$2"
     ;;
   help)

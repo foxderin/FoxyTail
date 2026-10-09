@@ -1,3 +1,18 @@
+import { createSignal } from 'solid-js';
+
+const [savedConfigRevision, setSavedConfigRevision] = createSignal(0);
+export { savedConfigRevision };
+export function markSavedConfigChanged(): void {
+  setSavedConfigRevision(revision => revision + 1);
+}
+
+/* Once launched, these transactions must report their real commit outcome. */
+export const NONCANCELLABLE_COMMANDS: Readonly<Record<string, true>> = {
+  control: true, 'mode-set': true, 'routes-set': true, 'subnet-routes-set': true,
+  'settings-set': true, 'context-set': true, backup: true,
+  'trial-start': true, 'trial-confirm': true, 'trial-revert': true,
+};
+
 export const DATA_DIR = '/data/adb/foxytail';
 export const WEBAPI = DATA_DIR + '/scripts/foxytail.webapi.sh';
 
@@ -21,14 +36,15 @@ export const COMMAND_TIMEOUTS: Record<string, number> = {
   'trial-start': 120000,
   'trial-revert': 120000,
   'restore-preview': 30000,
+  restore: 120000,
   'speedtest-exitnodes': 90000,
   'derp-speedtest': 60000,
   // Profile DNS restoration precedes teardown; keep the asynchronous request
   // alive through its bounded CLI calls instead of reporting a false timeout.
   control: 120000,
   'mode-set': 120000,
-  'exitnode-set': 25000,
-  'exitnode-clear': 25000,
+  'exitnode-set': 100000,
+  'exitnode-clear': 100000,
   login: 95000,
   'login-authkey': 130000,
   logout: 95000,

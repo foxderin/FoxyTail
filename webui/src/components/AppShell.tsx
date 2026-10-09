@@ -39,6 +39,9 @@ const TASK_DESTINATIONS: Record<string, { route: string; label: I18nKey; icon: I
   'file-send': { route: 'files', label: 'files_send', icon: 'send' },
   'file-receive': { route: 'files', label: 'files_receive', icon: 'download' },
   backup: { route: 'settings', label: 'set_backup', icon: 'backup' },
+  restore: { route: 'settings', label: 'set_restore', icon: 'backup' },
+  'settings-save': { route: 'settings', label: 'set_title', icon: 'settings' },
+  'service-control': { route: 'dashboard', label: 'shell_services', icon: 'sync' },
   'subnet-routes': { route: 'routing', label: 'tools_subnet_accept', icon: 'alt_route' },
 };
 
@@ -66,7 +69,12 @@ function TaskMenu(): JSX.Element {
       <Show when={tasks().length} fallback={<p class="task-menu-empty">{t('shell_no_tasks')}</p>}>
         <For each={tasks()}>{(task) => <a class="task-menu-item" href={'#/' + destination(task).route} onClick={() => { menu.open = false; menu.querySelector('summary')?.focus(); }}>
           <span class="task-menu-icon"><MdIcon name={destination(task).icon} size={20} /></span>
-          <span class="task-menu-item-copy"><strong>{t(destination(task).label)}</strong><span>{t(('shell_task_' + task.status) as I18nKey)}</span></span>
+          <span class="task-menu-item-copy"><strong>{t(destination(task).label)}</strong><span>{t(task.status === 'running'
+            ? task.call.cancellation === 'requested' ? 'task_cancel_pending'
+              : task.call.cancellation === 'failed' ? 'task_cancel_failed' : 'shell_task_running'
+            : ('shell_task_' + task.status) as I18nKey)}</span>
+            <Show when={task.status === 'running' && task.call.timedOut}><span>{t('task_timeout_running')}</span></Show>
+          </span>
           <span class={'dot ' + (task.status === 'done' ? 'on' : task.status === 'running' ? 'warn' : 'off')} aria-hidden="true" />
         </a>}</For>
       </Show>

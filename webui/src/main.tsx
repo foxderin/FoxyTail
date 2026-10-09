@@ -82,6 +82,11 @@ if (typeof document !== 'undefined' && document.getElementById('app')) {
 /* Minimal test handle for the jsdom smoke harness (task adoption case). */
 import { startTask, getTask, cancelTask } from './tasks';
 import { refreshStatus } from './state';
+import { createApiScope } from './api';
+import { ServiceControls } from './components/ServiceControls';
 if (import.meta.env.MODE === 'smoke' && typeof window !== 'undefined') {
-  (window as unknown as Record<string, unknown>).__foxy = { startTask, getTask, cancelTask, refreshStatus };
+  (window as unknown as Record<string, unknown>).__foxy = {
+    startTask, getTask, cancelTask, refreshStatus, createApiScope,
+    mountServiceControls: (target: HTMLElement) => render(() => <ServiceControls />, target),
+  };
 }

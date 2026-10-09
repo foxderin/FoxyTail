@@ -175,6 +175,8 @@ get_state() { echo running; }
 dns_pids() { echo 123; }
 current_dns_context() { echo '{}'; }
 dns_context_matches() { return 0; }
+legacy_upstream_matches() { return 0; }
+legacy_connmark_safe() { return 0; }
 redirect_present() { return 0; }
 dns_hijack_conflict() { return 1; }
 native_dns_present() { return 1; }

@@ -13,12 +13,13 @@ import (
 
 // Config is private module state. Listen is deliberately restricted to loopback.
 type Config struct {
-	Listen      string
-	IPv6        bool
-	Mode        string
-	Queue       uint16
-	ContextFile string
-	StateFile   string
+	Listen        string
+	IPv6          bool
+	Mode          string
+	Queue         uint16
+	ContextFile   string
+	StateFile     string
+	OwnershipFile string
 }
 
 func readConfig(path string) (Config, error) {
@@ -60,6 +61,12 @@ func (c Config) validate() error {
 	}
 	if c.StateFile != "" && !filepath.IsAbs(c.StateFile) {
 		return errors.New("stateFile must be absolute")
+	}
+	if c.Mode == "transparent" && !filepath.IsAbs(c.OwnershipFile) {
+		return errors.New("transparent mode requires an absolute ownershipFile")
+	}
+	if c.Mode == "transparent" && !filepath.IsAbs(c.StateFile) {
+		return errors.New("transparent mode requires an absolute stateFile for quiescence")
 	}
 	return nil
 }

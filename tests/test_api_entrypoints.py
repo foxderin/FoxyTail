@@ -9,6 +9,7 @@ import time
 import unittest
 
 from api_fixture import ApiTestCase, ROOT
+from runtime_fixture import host_process_shell
 
 
 class ApiEntrypointTests(ApiTestCase):
@@ -21,30 +22,9 @@ class ApiEntrypointTests(ApiTestCase):
 
     def entry_fixture(self):
         source = (ROOT / 'tailscale/scripts/foxytail.webapi.sh').read_text()
-        if not Path('/proc/self/stat').exists():
-            # macOS has no procfs. Substitute only the platform readers: actual
-            # registration, descendant capture, signals, timeout and dispatch run.
-            source = source.replace('# --- dispatch', '''
-_op_children() {
-  for _test_child in $(ps -axo pid=,ppid= | awk -v p="$1" '$2==p {print $1}'); do
-    _test_start=$(_op_starttime "${_test_child}") || continue
-    [ "$(ps -p "${_test_child}" -o ppid= | tr -d ' ')" = "$1" ] || continue
-    printf '%s:%s\\n' "${_test_child}" "${_test_start}"
-  done
-}
-# --- dispatch''')
-            with (self.base / 'settings.sh').open('a') as settings:
-                settings.write('''
-_proc_starttime() {
-  _test_stat=$(ps -p "$1" -o stat=) || return 1
-  case "${_test_stat}" in ''|*Z*) return 1 ;; esac
-  _test_start=$(ps -p "$1" -o lstart=) || return 1
-  [ -n "${_test_start}" ] || return 1
-  printf '%s' "${_test_start}" | cksum | awk '{print $1}'
-}
-''')
+        source = source.replace('# --- dispatch', host_process_shell() + '\n# --- dispatch', 1)
         self.api = self.script('scripts/foxytail.webapi.sh', source.replace(
-            '/sdcard/', str(self.sdcard) + '/').replace('#!/system/bin/sh\n', '', 1))
+            '/sdcard', str(self.sdcard)).replace('#!/system/bin/sh\n', '', 1))
         for path in self.scripts.glob('foxytail.webapi-*.sh'):
             path.write_text(path.read_text()
                 .replace('then "${TS_SCRIPTS_DIR}/start.sh"', 'then sh "${TS_SCRIPTS_DIR}/start.sh"')
@@ -85,7 +65,9 @@ _proc_starttime() {
                     self.assertIn('invalid configuration', self.entry(*args, ok=False)['error'])
                 self.assertFalse((self.base / 'start-calls').exists())
                 self.assertEqual((self.base / 'service-calls').read_text().splitlines()[-1], 'stop')
-                self.entry('restore', str(archive))
+                import hashlib
+                baseline = self.shell('_restore_baseline').stdout.strip()
+                self.entry('restore', str(archive), hashlib.sha256(archive.read_bytes()).hexdigest(), baseline)
                 self.assertEqual(self.snapshot(), good)
         self.assertEqual((self.base / 'service-calls').read_text().splitlines(), ['stop', 'stop'])
 
@@ -156,10 +138,6 @@ printf '{"state":"stopped","suffix":"","port":%s,"mode":"%s"}' "$DNS_PORT" "$DNS
             resumed = stamp()
             self.assertEqual(stopped.stdout, before.stdout)
             self.assertEqual(resumed.stdout, before.stdout)
-            if not Path('/proc/self/stat').exists():
-                zombie = stamp("ps() { case \"$*\" in *stat=*) printf ' Z  '; ;; *) command ps \"$@\"; ;; esac; }; ")
-                self.assertNotEqual(zombie.returncode, 0)
-                self.assertEqual(zombie.stdout, '')
         finally:
             self.terminate(process)
 
