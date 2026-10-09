@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## v1.3.11
 
 - 修复 Android 系统 `connmark_mangle_*` 链名被误判为 connmark 保留位冲突：仅解析规则中的 `-j CONNMARK` / `-m connmark`，保留真实位掩码冲突检查，避免关闭 MagicDNS 后旧 DNS 清理仍阻断启动。
 
