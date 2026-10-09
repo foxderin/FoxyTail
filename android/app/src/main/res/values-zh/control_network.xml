@@ -5,6 +5,7 @@
     <string name="network_exits">出口节点</string>
     <string name="network_tunnel">隧道与 DNS</string>
     <string name="network_unknown">未知 — 请刷新检查</string>
+    <string name="network_hint_unknown">状态未确认，详情见上方提示；刷新以读取实际服务状态。</string>
     <string name="network_stale">读取失败。下方保留的旧值已过期，不能代表当前状态。</string>
     <string name="network_refresh">刷新</string>
     <string name="network_connected">已连接</string>

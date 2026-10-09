@@ -20,6 +20,7 @@ import org.json.JSONObject;
 import java.io.*;
 import java.lang.ref.WeakReference;
 import java.util.ArrayDeque;
+import java.util.ArrayList;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.function.Consumer;
@@ -44,9 +45,7 @@ public final class ControlActivity extends AppCompatActivity {
     private com.google.android.material.materialswitch.MaterialSwitch serviceSwitch;
     private MaterialChoice serviceModes;
     private ImageButton stripRestart;
-    private JSONObject stripSnapshot;
-    private boolean stripFresh, stripReading, syncing, stripBound;
-    private int stripSequence;
+    private boolean syncing, stripBound;
     private final Handler stripPoller = new Handler(Looper.getMainLooper());
     /* Bottom navigation destinations, WebUI PRIMARY_NAV order. */
     static final String[] PRIMARY = {"overview", "peers", "exitnodes", "traffic", "more"};
@@ -84,7 +83,7 @@ public final class ControlActivity extends AppCompatActivity {
         brand.addView(mark, new LinearLayout.LayoutParams(ControlUi.dp(this, 32), ControlUi.dp(this, 32)));
         LinearLayout names = new LinearLayout(this); names.setOrientation(LinearLayout.VERTICAL);
         TextView appName = ControlUi.text(this, getString(R.string.app_name), 17); appName.setTypeface(null, android.graphics.Typeface.BOLD); appName.setPadding(0, 0, 0, 0); appName.setSingleLine(true);
-        TextView tagline = ControlUi.muted(this, getString(R.string.app_tagline), 11); tagline.setPadding(0, 0, 0, 0); tagline.setSingleLine(true);
+        TextView tagline = ControlUi.muted(this, getString(R.string.app_tagline), R.dimen.ft_caption); tagline.setPadding(0, 0, 0, 0); tagline.setSingleLine(true);
         names.addView(appName); names.addView(tagline);
         LinearLayout.LayoutParams namesParams = new LinearLayout.LayoutParams(-2, -2); namesParams.setMarginStart(ControlUi.dp(this, 12));
         brand.addView(names, namesParams);
@@ -92,12 +91,12 @@ public final class ControlActivity extends AppCompatActivity {
         toolbar.getMenu().add(0, 1, 0, R.string.refresh).setIcon(R.drawable.ic_refresh).setShowAsAction(android.view.MenuItem.SHOW_AS_ACTION_ALWAYS);
         android.graphics.drawable.Drawable refreshIcon = toolbar.getMenu().getItem(0).getIcon();
         if (refreshIcon != null) refreshIcon.mutate().setTint(MaterialColors.getColor(toolbar, com.google.android.material.R.attr.colorOnSurfaceVariant));
-        toolbar.setOnMenuItemClickListener(item -> { refreshAvailability(); stripRefresh(); if (page != null) page.load(); return true; });
+        toolbar.setOnMenuItemClickListener(item -> { refreshAvailability(); refreshStatus(); if (page != null) page.load(); return true; });
         root.addView(toolbar, new LinearLayout.LayoutParams(-1, ControlUi.dp(this, 64)));
         /* WebUI fixed top strip: service switch, mode, restart — operable on every page. */
         LinearLayout strip = new LinearLayout(this); strip.setOrientation(LinearLayout.HORIZONTAL); strip.setGravity(android.view.Gravity.CENTER_VERTICAL);
         strip.setPadding(ControlUi.dp(this, 20), 0, ControlUi.dp(this, 8), 0);
-        TextView serviceLabel = ControlUi.muted(this, getString(R.string.network_service), 14); serviceLabel.setPadding(0, 0, 0, 0);
+        TextView serviceLabel = ControlUi.muted(this, getString(R.string.network_service), R.dimen.ft_body); serviceLabel.setPadding(0, 0, 0, 0);
         strip.addView(serviceLabel, new LinearLayout.LayoutParams(-2, -2));
         serviceSwitch = new com.google.android.material.materialswitch.MaterialSwitch(this);
         serviceSwitch.setOnCheckedChangeListener((button, checked) -> { if (!stripBound) stripControl(checked ? "start" : "stop", null); });
@@ -123,7 +122,9 @@ public final class ControlActivity extends AppCompatActivity {
         scrollBody.addView(heading);
         status = ControlUi.text(this, "", 12); status.setPadding(ControlUi.dp(this, 20), 0, ControlUi.dp(this, 20), ControlUi.dp(this, 8));
         status.setAccessibilityLiveRegion(View.ACCESSIBILITY_LIVE_REGION_POLITE);
-        /* Long guidance must not fill the viewport; tap expands. */
+        /* Long guidance must not fill the viewport; tap expands. Not selectable:
+         * selectable text swallows the tap before onClick. */
+        status.setTextIsSelectable(false);
         status.setMaxLines(3); status.setEllipsize(android.text.TextUtils.TruncateAt.END);
         status.setOnClickListener(v -> {
             status.setMaxLines(status.getMaxLines() == 3 ? Integer.MAX_VALUE : 3);
@@ -166,7 +167,7 @@ public final class ControlActivity extends AppCompatActivity {
     @Override protected void onNewIntent(Intent intent) { super.onNewIntent(intent); setIntent(intent); navigate("overview"); }
     @Override protected void onResume() {
         super.onResume(); resumed = true; client.addListener(operationChanged); refreshAvailability();
-        stripRefresh(); stripPoller.removeCallbacks(stripPoll); stripPoller.postDelayed(stripPoll, 15000);
+        refreshStatus(); stripPoller.removeCallbacks(stripPoll); stripPoller.postDelayed(stripPoll, 15000);
         if (page != null) page.resume();
         BackupImport.get(this).observe(importChanged); deliverImport();
     }
@@ -177,7 +178,7 @@ public final class ControlActivity extends AppCompatActivity {
     private final Runnable stripPoll = new Runnable() {
         @Override public void run() {
             if (!resumed) return;
-            if (autoRefresh) stripRefresh();
+            if (autoRefresh) refreshStatus();
             stripPoller.postDelayed(this, powerSave ? 30000 : 15000);
         }
     };
@@ -199,6 +200,7 @@ public final class ControlActivity extends AppCompatActivity {
     }
     private void showPage(String name) {
         if (page != null) page.close();
+        statusListeners.clear();
         destination = name;
         switch (name) {
             case "peers": page = new PeersPage(this); break;
@@ -219,6 +221,12 @@ public final class ControlActivity extends AppCompatActivity {
             default: destination = "overview"; page = new OverviewPage(this);
         }
         pageHost.removeAllViews(); pageHost.addView(page.content); scroll.scrollTo(0, 0); heading.setText(page.title()); showMessage("");
+        /* WebUI ft-page-in: 160ms fade + 5px rise; honor reduced motion. */
+        float animatorScale = android.provider.Settings.Global.getFloat(getContentResolver(), android.provider.Settings.Global.ANIMATOR_DURATION_SCALE, 1f);
+        if (animatorScale > 0) {
+            page.content.setAlpha(0.5f); page.content.setTranslationY(ControlUi.dp(this, 5));
+            page.content.animate().alpha(1f).translationY(0).setDuration(160).start();
+        }
         syncing = true;
         int primary = java.util.Arrays.asList(PRIMARY).indexOf(destination);
         bottomNav.getMenu().getItem(primary >= 0 ? primary : PRIMARY.length - 1).setChecked(true);
@@ -226,10 +234,25 @@ public final class ControlActivity extends AppCompatActivity {
         if (resumed) page.start();
     }
     void openFiles() { startActivity(new Intent(this, MainActivity.class)); }
-    /* Fixed service strip: status reads independent of the active page. */
-    private void stripRefresh() {
-        if (stripReading || isDestroyed()) return;
-        stripReading = true; final int token = ++stripSequence;
+    /* Shared status store (WebUI state.ts): the only source of visible service
+     * state. The strip, the overview and every listener render from the same
+     * snapshot; mutations verify against the next shared read. */
+    private JSONObject sharedStatus;
+    private String statusError;
+    private boolean statusFresh, statusLoading, statusEverLoaded;
+    private int statusSequence;
+    private final ArrayList<java.util.function.Consumer<JSONObject>> statusListeners = new ArrayList<>();
+    JSONObject statusSnapshot() { return sharedStatus; }
+    String statusError() { return statusError; }
+    boolean statusFresh() { return statusFresh; }
+    boolean statusEverLoaded() { return statusEverLoaded; }
+    void addStatusListener(java.util.function.Consumer<JSONObject> listener) {
+        statusListeners.add(listener);
+        if (statusEverLoaded || statusError != null) listener.accept(sharedStatus);
+    }
+    void refreshStatus() {
+        if (statusLoading || isDestroyed()) return;
+        statusLoading = true; final int token = ++statusSequence;
         Context context = getApplicationContext();
         WeakReference<ControlActivity> owner = new WeakReference<>(this);
         FILES.execute(() -> {
@@ -237,50 +260,56 @@ public final class ControlActivity extends AppCompatActivity {
                 JSONObject result = RootApi.json(context, null, null, null, 30, new RootApi.Call(), "status");
                 new Handler(Looper.getMainLooper()).post(() -> {
                     ControlActivity current = owner.get();
-                    if (current == null || current.isDestroyed() || token != current.stripSequence) return;
-                    current.stripReading = false; current.stripFresh = true; current.stripSnapshot = result; current.renderStrip();
+                    if (current == null || current.isDestroyed() || token != current.statusSequence) return;
+                    current.statusLoading = false; current.statusFresh = true; current.statusEverLoaded = true;
+                    current.statusError = null; current.sharedStatus = result; current.publishStatus();
                 });
             } catch (Exception e) {
                 new Handler(Looper.getMainLooper()).post(() -> {
                     ControlActivity current = owner.get();
-                    if (current == null || current.isDestroyed() || token != current.stripSequence) return;
-                    current.stripReading = false; current.stripFresh = false; current.renderStrip();
+                    if (current == null || current.isDestroyed() || token != current.statusSequence) return;
+                    current.statusLoading = false; current.statusFresh = false; current.statusEverLoaded = true;
+                    current.statusError = RootApi.message(e); current.publishStatus();
                 });
             }
         });
     }
+    private void publishStatus() {
+        renderStrip();
+        for (java.util.function.Consumer<JSONObject> listener : new ArrayList<>(statusListeners)) listener.accept(sharedStatus);
+    }
     private void renderStrip() {
-        boolean known = stripFresh && OverviewPage.serviceKnown(stripSnapshot);
-        boolean running = known && "running".equals(stripSnapshot.optString("daemon"));
+        boolean known = statusFresh && OverviewPage.serviceKnown(sharedStatus);
+        boolean running = known && "running".equals(sharedStatus.optString("daemon"));
         boolean busy = client.busy();
         stripBound = true;
         serviceSwitch.setChecked(running);
         /* Unknown state: switch stays disabled (no misleading on/off), but the
          * recovery restart stays reachable while the daemon may still be alive. */
         serviceSwitch.setEnabled(known && !busy);
-        String mode = known ? stripSnapshot.optString("mode") : "tun";
+        String mode = known ? sharedStatus.optString("mode") : "tun";
         int index = java.util.Arrays.asList(OverviewPage.MODES).indexOf(mode);
         serviceModes.setSelection(Math.max(0, index));
         serviceModes.setEnabled(known && !busy);
         stripBound = false;
-        stripRestart.setEnabled(!busy && (known ? running : OverviewPage.stopAvailable(stripSnapshot, stripFresh)));
+        stripRestart.setEnabled(!busy && (known ? running : OverviewPage.stopAvailable(sharedStatus, statusFresh)));
     }
     private void stripMode(int index) {
         if (stripBound) return;
         stripControl("mode", OverviewPage.MODES[index]);
     }
     private void stripControl(String action, String nextMode) {
-        boolean known = stripFresh && OverviewPage.serviceKnown(stripSnapshot);
+        boolean known = statusFresh && OverviewPage.serviceKnown(sharedStatus);
         boolean allowed;
         switch (action) {
             case "start": case "mode": allowed = known; break;
-            default: allowed = OverviewPage.stopAvailable(stripSnapshot, stripFresh);
+            default: allowed = OverviewPage.stopAvailable(sharedStatus, statusFresh);
         }
         if (client.busy() || !allowed) { renderStrip(); return; }
-        String expectedMode = nextMode == null ? stripSnapshot == null ? "" : stripSnapshot.optString("mode") : nextMode;
+        String expectedMode = nextMode == null ? sharedStatus == null ? "" : sharedStatus.optString("mode") : nextMode;
         Runnable run = () -> client.submit(getString(R.string.network_service), result -> {
             showMessage(result.optBoolean("ok") ? getString(R.string.network_unverified) : getString(R.string.network_failed, result.optString("error", getString(R.string.network_unknown))));
-            stripRefresh();
+            refreshStatus();
         }, "mode".equals(action) ? new String[]{"mode-set", expectedMode} : new String[]{"control", action});
         if ("start".equals(action)) run.run();
         else new MaterialAlertDialogBuilder(this).setTitle(R.string.network_service).setMessage(R.string.network_interrupt)
@@ -311,7 +340,7 @@ public final class ControlActivity extends AppCompatActivity {
         boolean active = client.busy();
         String completed = client.lastCommand();
         if (operationWasBusy && !active && resumed && page != null) page.operationFinished(completed);
-        if (operationWasBusy && !active) stripRefresh();
+        if (operationWasBusy && !active) refreshStatus();
         operationWasBusy = active;
         renderStrip();
     }

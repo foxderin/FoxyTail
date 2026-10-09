@@ -35,9 +35,9 @@ final class PeersPage extends ControlPage {
         search = input(toolbar, s(R.string.network_search), activity.drafts.getString("network.peerSearch", ""), InputType.TYPE_CLASS_TEXT);
         filter = activity.drafts.getInt("network.peerFilter", 0);
         tab = activity.drafts.getInt("network.peerTab", 0);
-        choice(toolbar, new String[]{s(R.string.network_all), s(R.string.network_online), s(R.string.network_offline)}, filter,
+        ControlUi.chips(toolbar, new String[]{s(R.string.network_all), s(R.string.network_online), s(R.string.network_offline)}, filter,
                 selected -> { filter = selected; activity.drafts.putInt("network.peerFilter", selected); render(); });
-        choice(toolbar, new String[]{s(R.string.network_list), s(R.string.network_topology)}, tab,
+        ControlUi.chips(toolbar, new String[]{s(R.string.network_list), s(R.string.network_topology)}, tab,
                 selected -> { tab = selected; activity.drafts.putInt("network.peerTab", selected); render(); });
         button(toolbar, s(R.string.network_refresh), this::refresh);
         inventory = section();

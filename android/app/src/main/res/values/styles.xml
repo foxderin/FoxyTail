@@ -37,6 +37,7 @@
         <item name="materialButtonTonalStyle">@style/Widget.FoxyTail.Button.Tonal</item>
         <item name="textInputOutlinedStyle">@style/Widget.FoxyTail.TextInput</item>
         <item name="textInputOutlinedExposedDropdownMenuStyle">@style/Widget.FoxyTail.TextInput.Exposed</item>
+        <item name="bottomNavigationStyle">@style/Widget.FoxyTail.NavBar</item>
         <item name="android:windowLightStatusBar">@bool/foxy_light_bars</item>
         <item name="colorControlNormal">?attr/colorOnSurfaceVariant</item>
         <item name="android:statusBarColor">@android:color/transparent</item>
@@ -68,6 +69,22 @@
     </style>
     <style name="Widget.FoxyTail.Button.Tonal" parent="Widget.Material3.Button.TonalButton">
         <item name="shapeAppearance">@style/ShapeAppearance.FoxyTail.Small</item>
+    </style>
+    <style name="Widget.FoxyTail.NavBar" parent="Widget.Material3.BottomNavigationView">
+        <item name="itemActiveIndicatorStyle">@style/Widget.FoxyTail.NavBar.Indicator</item>
+        <item name="itemTextAppearanceInactive">@style/TextAppearance.FoxyTail.NavLabel</item>
+        <item name="itemTextAppearanceActive">@style/TextAppearance.FoxyTail.NavLabel.Active</item>
+    </style>
+    <style name="Widget.FoxyTail.NavBar.Indicator" parent="Widget.Material3.BottomNavigationView.ActiveIndicator">
+        <item name="android:width">@dimen/ft_nav_pill_w</item>
+        <item name="android:height">@dimen/ft_nav_pill_h</item>
+    </style>
+    <style name="TextAppearance.FoxyTail.NavLabel" parent="">
+        <item name="android:textSize">@dimen/ft_nav_label</item>
+        <item name="android:fontFamily">sans-serif-medium</item>
+    </style>
+    <style name="TextAppearance.FoxyTail.NavLabel.Active" parent="TextAppearance.FoxyTail.NavLabel">
+        <item name="android:textStyle">bold</item>
     </style>
     <style name="Widget.FoxyTail.TextInput" parent="Widget.Material3.TextInputLayout.OutlinedBox">
         <item name="shapeAppearance">@style/ShapeAppearance.FoxyTail.Input</item>
