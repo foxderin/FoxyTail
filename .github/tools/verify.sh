@@ -23,6 +23,8 @@ export FOXYFILES_TEST_BINARY="$build_dir/foxyfiles"
   go build -mod=readonly -o "$FOXYFILES_TEST_BINARY" .)
 bash .github/tools/build-native.sh "$build_dir/native"
 python3 .github/tools/native-notices.py --check
+bash .github/tools/build-android.sh debug "$build_dir/FoxyTail-debug.apk"
+android/gradlew --no-daemon -p android :app:lintDebug
 python3 -m unittest discover -s tests -p 'test_*.py' -v
 pnpm --dir webui typecheck
 pnpm --dir webui check:i18n

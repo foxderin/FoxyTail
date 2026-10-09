@@ -36,7 +36,6 @@ const TASK_DESTINATIONS: Record<string, { route: string; label: I18nKey; icon: I
   'derp-speedtest': { route: 'tunnel', label: 'tun_derp', icon: 'network_check' },
   diag: { route: 'diag', label: 'diag_run', icon: 'bug_report' },
   'diag-check': { route: 'diag', label: 'diag_check', icon: 'network_check' },
-  'file-send': { route: 'files', label: 'files_send', icon: 'send' },
   'file-receive': { route: 'files', label: 'files_receive', icon: 'download' },
   backup: { route: 'settings', label: 'set_backup', icon: 'backup' },
   restore: { route: 'settings', label: 'set_restore', icon: 'backup' },

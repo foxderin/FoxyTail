@@ -1,6 +1,9 @@
 /* Development-only fixture. Vite builds index.html exclusively, so neither
  * this bridge nor its simulated data can enter the shipped WebUI. */
 import type { CoexistCheck, CoexistInfo } from '../src/coexistence';
+import type { Transfer } from '../src/types';
+const transfers: Transfer[] = [];
+let transferSequence = 0;
 const peers = [
   { id: 'studio', hostname: 'studio-mac', ip: '100.74.12.8', ips: ['100.74.12.8', 'fd7a:115c:a1e0::8'], os: 'macOS', relay: '', online: true, rxBytes: 1468203023, txBytes: 346820302, exitNodeOption: false },
   { id: 'nas', hostname: 'home-server', ip: '100.80.42.16', os: 'linux', relay: '', online: true, rxBytes: 3496221452, txBytes: 2102323420, exitNodeOption: true },
@@ -107,6 +110,62 @@ function result(cmd:string,args:string[]) {
     case 'context-get':return {ok:true,rules:''};
     case 'logs':return {ok:true,lines:scenario==='empty'?[]:logs};
     case 'files-inbox':return {ok:true,files:scenario==='empty'?[]:[{name:'network-notes.pdf',size:248928,mtime:1788912000},{name:'camera-roll.zip',size:15687204,mtime:1788896200}]};
+    case 'taildrop-targets': return scenario === 'error' || scenario === 'login'
+      ? {ok:false,error:'Preview: sign in and start Tailscale to find receiving devices'}
+      : {ok:true,peers:scenario==='empty'?[]:peers.map(peer=>({id:peer.id,hostname:peer.hostname,ips:peer.ips || [peer.ip],online:peer.online}))};
+    case 'files-browse': {
+      if (scenario === 'error') return {ok:false,error:'Preview: shared storage is locked or permission was denied'};
+      const path = args[0] === '-' ? '' : args[0];
+      if (!['', 'Download', 'Pictures'].includes(path)) return {ok:false,error:'Preview: directory not found'};
+      const entries = path === '' ? [
+        {name:'Download',path:'/sdcard/Download',directory:true,size:0,mtime:1788912000},
+        {name:'Pictures',path:'/sdcard/Pictures',directory:true,size:0,mtime:1788912000},
+      ] : [{name:path === 'Download'?'network-notes.pdf':'photo.jpg',path:'/sdcard/'+path+'/'+(path === 'Download'?'network-notes.pdf':'photo.jpg'),directory:false,size:248928,mtime:1788912000},
+        {name:'camera-roll.zip',path:'/sdcard/'+path+'/camera-roll.zip',directory:false,size:15687204,mtime:1788896200}];
+      return {ok:true,path,entries:scenario==='empty'?[]:entries,truncated:false};
+    }
+    case 'file-send-start': {
+      const peer = peers.find(peer => peer.id === args[0] && (peer.ips || [peer.ip]).includes(args[1]));
+      const paths: unknown = JSON.parse(args[2]);
+      if (!peer || !Array.isArray(paths) || !paths.length || paths.length > 32 || paths.some(path => typeof path !== 'string' || !path.startsWith('/sdcard/')))
+        return {ok:false,error:'Preview: invalid receiving device or selection'};
+      if (transfers.some(job => job.status === 'queued' || job.status === 'sending')) return {ok:false,error:'Preview: a transfer is already active'};
+      const now = Math.floor(Date.now()/1000);
+      const job: Transfer = {id:(++transferSequence).toString(16),peerId:peer.id,peerName:peer.hostname,peerIp:args[1],selfId:'preview-self',status:'queued',startedAt:now,updatedAt:now,
+        files:paths.map((path, index)=>({id:(++transferSequence).toString(16),name:path.split('/').pop()!,path,size:index?15687204:248928,sentBytes:0,progressKnown:false,bytesPerSecond:0,status:'queued'}))};
+      transfers.unshift(job);
+      transfers.splice(100);
+      return {ok:true,transfer:job};
+    }
+    case 'file-send-status': {
+      const job = transfers.find(job=>job.id===args[0]);
+      if (!job) return {ok:false,error:'Preview: transfer not found'};
+      if (job.status === 'queued' || job.status === 'sending') {
+        const file = job.files.find(file=>file.status === 'queued' || file.status === 'sending');
+        if (file) {
+          if (file.status === 'queued') file.status = 'sending';
+          else {
+            file.progressKnown = true;
+            file.sentBytes = Math.min(file.size,file.sentBytes+Math.ceil(file.size/3));
+            file.bytesPerSecond = Math.ceil(file.size/4.5);
+            if (file.sentBytes === file.size) {file.status = 'completed';file.bytesPerSecond = 0;}
+          }
+        }
+        job.status = job.files.every(file=>file.status==='completed') ? 'completed' : 'sending';
+        job.updatedAt = Math.floor(Date.now()/1000);
+      }
+      return {ok:true,transfer:job};
+    }
+    case 'file-send-cancel': {
+      const job = transfers.find(job=>job.id===args[0]);
+      if (!job) return {ok:false,error:'Preview: transfer not found'};
+      if (job.status === 'queued' || job.status === 'sending') {
+        job.status = 'cancelled';job.updatedAt = Math.floor(Date.now()/1000);
+        for (const file of job.files) if (file.status === 'queued' || file.status === 'sending') {file.status = 'cancelled';file.bytesPerSecond = 0;}
+      }
+      return {ok:true,transfer:job};
+    }
+    case 'file-send-history': return scenario === 'error' ? {ok:false,error:'Preview: transfer history is unavailable'} : {ok:true,transfers};
     case 'serve-list':case 'funnel-list':return {ok:true,status:{}};
     case 'speedtest-exitnodes':return {ok:true,results:peers.filter(p=>p.exitNodeOption).map((p,i)=>({id:p.id,hostname:p.hostname,ip:p.ip,latencyMs:18+i*32,ok:true}))};
     case 'derp-speedtest':return {ok:true,preferred:'tok',relays:[{code:'tok',latencyMs:28},{code:'sin',latencyMs:56},{code:'hkg',latencyMs:33}]};

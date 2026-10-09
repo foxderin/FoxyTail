@@ -150,7 +150,7 @@ _op_init() {
   trap 'exit 130' HUP INT TERM
   _op_cancelled && jerr 'request was cancelled'
   case "$2" in
-    control | mode-set | routes-set | subnet-routes-set | settings-set | context-set | backup | trial-start | trial-confirm | trial-revert)
+    control | mode-set | routes-set | subnet-routes-set | settings-set | context-set | backup | trial-start | trial-confirm | trial-revert | file-send-start | file-send-cancel)
       _op_commit_begin || jerr 'request was cancelled before committing changes' ;;
   esac
 }

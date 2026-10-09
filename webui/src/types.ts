@@ -47,6 +47,46 @@ export interface InboxFile {
   mtime: number;
 }
 
+export interface TaildropTarget {
+  id: string;
+  hostname: string;
+  ips: string[];
+  online: boolean;
+}
+
+export interface BrowseEntry extends InboxFile {
+  path: string;
+  directory: boolean;
+}
+
+export type TransferFileStatus = 'queued' | 'sending' | 'completed' | 'failed' | 'cancelled';
+export type TransferStatus = TransferFileStatus | 'interrupted';
+
+export interface TransferFile {
+  id: string;
+  name: string;
+  path: string;
+  size: number;
+  sentBytes: number;
+  progressKnown: boolean;
+  bytesPerSecond: number;
+  status: TransferFileStatus;
+  error?: string;
+}
+
+export interface Transfer {
+  id: string;
+  peerId: string;
+  peerName: string;
+  peerIp: string;
+  selfId: string;
+  status: TransferStatus;
+  startedAt: number;
+  updatedAt: number;
+  files: TransferFile[];
+  error?: string;
+}
+
 export interface AccountEntry {
   name: string;
   label?: string;

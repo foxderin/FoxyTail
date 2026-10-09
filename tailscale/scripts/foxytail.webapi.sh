@@ -26,6 +26,8 @@ ensure_run_dirs
 . "${DIR}/foxytail.webapi-tools.sh"
 # shellcheck source=foxytail.webapi-coexist.sh
 . "${DIR}/foxytail.webapi-coexist.sh"
+# shellcheck source=foxytail.webapi-taildrop.sh
+. "${DIR}/foxytail.webapi-taildrop.sh"
 
 # --- dispatch -------------------------------------------------------------------
 
@@ -36,11 +38,12 @@ if [ "$1" = --request-id ]; then
 fi
 case "$1:$2" in
   logs:* | control:stop | restore:* | cancel:* | diag-check:* | trial-status:* | trial-confirm:* | trial-revert:* | backup-list:* | restore-preview:*) ;;
+  taildrop-targets:* | files-browse:* | file-send-start:* | file-send-status:* | file-send-cancel:* | file-send-history:* | file-stage:* | file-stage-delete:* | file-read:*) ;;
   status:* | tun:* | dns:* | dns-probe:* | coexist-info:* | coexist-check:*) load_runtime_conf || jerr 'invalid runtime configuration; inspect the service log' ;;
   *) load_conf || jerr 'invalid configuration; inspect the service log' ;;
 esac
 case "$1" in
-  control | mode-set | exitnode-set | exitnode-clear | login | login-authkey | logout | switch | serve-set | serve-del | funnel-set | funnel-del | routes-set | subnet-routes-set | settings-set | context-set | file-send | file-receive | file-delete | file-clear | file-export | restore | trial-start | trial-confirm | trial-revert | dns-probe)
+  control | mode-set | exitnode-set | exitnode-clear | login | login-authkey | logout | switch | serve-set | serve-del | funnel-set | funnel-del | routes-set | subnet-routes-set | settings-set | context-set | file-send-start | file-stage | file-stage-delete | file-receive | file-delete | file-clear | file-export | restore | trial-start | trial-confirm | trial-revert | dns-probe)
     [ ! -f "${TS_DIR}/.installing" ] || jerr 'an upgrade is in progress; retry after it completes' ;;
 esac
 
@@ -88,7 +91,15 @@ case "$1" in
   diag) shift; cmd_diag "$1" ;;
   diag-check) cmd_diag_check ;;
   files-inbox) cmd_files_inbox ;;
-  file-send) shift; cmd_file_send "$1" "$2" "$3" ;;
+  taildrop-targets) cmd_taildrop_targets ;;
+  files-browse) shift; cmd_files_browse "$1" ;;
+  file-send-start) shift; cmd_file_send_start "$@" ;;
+  file-send-status) shift; cmd_file_send_status "$1" ;;
+  file-send-cancel) shift; cmd_file_send_cancel "$1" ;;
+  file-send-history) cmd_file_send_history ;;
+  file-stage) shift; cmd_file_stage "$@" ;;
+  file-stage-delete) shift; cmd_file_stage_delete "$1" ;;
+  file-read) shift; cmd_file_read "$1" ;;
   file-receive) cmd_file_receive ;;
   file-delete) shift; cmd_file_delete "$1" ;;
   file-clear) cmd_file_clear ;;

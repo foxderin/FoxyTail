@@ -201,26 +201,6 @@ cp() { return 1; }
         self.assertEqual((receipts / 'receipt').read_text(), 'private')
         self.assertEqual(outside.read_text(), 'secret')
 
-    def test_send_uses_peer_id_and_exact_current_address_not_hostname(self):
-        target = self.sdcard / 'hello.txt'
-        target.write_text('payload')
-        status = {'Peer': {
-            'a': {'ID': 'node-a', 'HostName': 'duplicate', 'TailscaleIPs': ['100.96.0.31']},
-            'b': {'ID': 'node-b', 'HostName': 'duplicate', 'TailscaleIPs': ['fd7a:115c:a1e0::2']}}}
-        prefix = 'ts_status_json() { printf %s ' + shlex.quote(json.dumps(status)) + '; }\n'
-        prefix += 'ts_cli() { printf "%s\\n" "$@" >"$TS_RUN_DIR/send-calls"; }\n'
-        for peer, address, destination in [('node-a', '100.96.0.31', '100.96.0.31:'),
-                                            ('node-b', 'fd7a:115c:a1e0::2', '[fd7a:115c:a1e0::2]:')]:
-            result = self.shell(prefix + 'cmd_file_send ' + shlex.quote(str(target)) + ' ' + peer + ' ' + address)
-            self.assertTrue(json.loads(result.stdout)['ok'])
-            self.assertEqual((self.run / 'send-calls').read_text().splitlines(),
-                             ['300', 'file', 'cp', str(target), destination])
-        (self.run / 'send-calls').unlink()
-        for peer, address in [('duplicate', '100.96.0.31'), ('node-a', 'fd7a:115c:a1e0::2'),
-                              ('node-b', '100.96.0.99'), ('bad;rm -rf /', '100.96.0.31')]:
-            result = self.shell(prefix + 'cmd_file_send ' + shlex.quote(str(target)) + ' ' + shlex.quote(peer) + ' ' + address, ok=False)
-            self.assertNotEqual(result.returncode, 0)
-            self.assertFalse((self.run / 'send-calls').exists())
 
     def test_direct_mode_marker_requires_same_owned_daemon_identity(self):
         result = self.shell('''

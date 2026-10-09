@@ -127,11 +127,15 @@ for binary in tailscaled-arm tailscaled-arm64 jq-arm jq-arm64 hev-socks5-tunnel-
 
 NATIVE_DIR="${WORK_DIR}/native"
 bash .github/tools/build-native.sh "$NATIVE_DIR"
+COMPANION_APK="${WORK_DIR}/FoxyTail.apk"
+bash .github/tools/build-android.sh release "$COMPANION_APK"
 
 # An explicit shipping allowlist prevents tests, local evidence, dependency
 # caches or future development directories from entering a root module ZIP.
 PACKAGE_DIR="${WORK_DIR}/package"
 mkdir -p "$PACKAGE_DIR/tailscale/bin"
+mkdir -p "$PACKAGE_DIR/system/app/FoxyTail"
+cp "$COMPANION_APK" "$PACKAGE_DIR/system/app/FoxyTail/FoxyTail.apk"
 cp -R META-INF webroot "$PACKAGE_DIR/"
 cp customize.sh service.sh install-recovery.sh uninstall.sh module.prop update.json LICENSE "$PACKAGE_DIR/"
 cp native/foxydns/THIRD_PARTY_NOTICES.txt "$PACKAGE_DIR/THIRD_PARTY_NOTICES.txt"

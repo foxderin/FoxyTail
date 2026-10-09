@@ -40,6 +40,11 @@ for helper in foxydns foxyfiles; do
   done
 done
 ''')
+        (self.root / '.github/tools/build-android.sh').write_text('''#!/usr/bin/env bash
+set -euo pipefail
+test "$1" = release
+printf 'signed-companion-fixture\\n' >"$2"
+''')
         shutil.copy(ROOT / 'tailscale/VERSIONS', self.root / 'tailscale/VERSIONS')
         for relative in ['customize.sh', 'service.sh', 'install-recovery.sh', 'uninstall.sh', 'update.json', 'LICENSE',
                          'tailscale/settings.sh', 'webroot/index.html',
@@ -93,6 +98,7 @@ bash .github/tools/build.sh "$@"
                 self.assertIn('tailscale/scripts/' + path.name, names)
             self.assertEqual(archive.read('THIRD_PARTY_NOTICES.txt'), b'fixture\n')
             self.assertEqual(archive.read('install-recovery.sh'), b'fixture\n')
+            self.assertEqual(archive.read('system/app/FoxyTail/FoxyTail.apk'), b'signed-companion-fixture\n')
             self.assertFalse(any('unwanted' in x or '.github' in x or 'native/foxydns' in x for x in names))
             self.assertEqual(sorted(x for x in names if '/bin/' in x),
                              sorted('tailscale/bin/' + x for x in NATIVE_BINARIES))
@@ -100,6 +106,7 @@ bash .github/tools/build.sh "$@"
         with zipfile.ZipFile(self.root / 'dist/FoxyTail-v1.0.3-full.zip') as archive:
             self.assertEqual(archive.read('THIRD_PARTY_NOTICES.txt'), b'fixture\n')
             self.assertEqual(archive.read('install-recovery.sh'), b'fixture\n')
+            self.assertEqual(archive.read('system/app/FoxyTail/FoxyTail.apk'), b'signed-companion-fixture\n')
             self.assertTrue(all('tailscale/bin/' + x in archive.namelist() for x in BINARIES + NATIVE_BINARIES))
             self.check_native_manifest(archive)
         self.assertFalse((self.root / 'tailscale/native-checksums.txt').exists())
@@ -124,6 +131,12 @@ bash .github/tools/build.sh "$@"
         self.assertNotEqual(result.returncode, 0)
         self.assertFalse(list((self.root / 'dist').glob('*.zip')))
         self.assertEqual((self.root / 'tailscale/checksums.txt').read_text(), self.manifest)
+
+    def test_companion_signing_failure_never_creates_a_package(self):
+        (self.root / '.github/tools/build-android.sh').write_text('#!/bin/sh\nexit 42\n')
+        result = self.build()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertFalse(list((self.root / 'dist').glob('*.zip')))
 
     def test_missing_native_architecture_never_creates_a_package(self):
         for binary in NATIVE_BINARIES:

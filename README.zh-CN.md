@@ -1,6 +1,6 @@
 # FoxyTail
 
-**在 Android 上以 Magisk/KernelSU 模块运行的 Tailscale  mesh VPN** —— `tailscaled` 原生运行在设备上，支持三种运行模式、策略路由、流量分析、MagicDNS 分流 DNS、与代理/防火墙模块的共存探针、看门狗、网络环境感知、一键诊断包，以及一个内置的 WebUI 管理界面。
+**在 Android 上以 Magisk/KernelSU 模块运行的 Tailscale mesh VPN** —— 原生 `tailscaled`、三种运行模式、策略路由、流量分析、MagicDNS 分流、代理共存向导、看门狗与网络场景，以及 WebUI 控制面和原生 Android Taildrop 附属应用。
 
 数据目录：`/data/adb/foxytail`（二进制、脚本、配置、状态、备份）。
 模块配置：[tailscale/conf/foxytail.conf](tailscale/conf/foxytail.conf)、[routes.conf](tailscale/conf/routes.conf)、[context.conf](tailscale/conf/context.conf)。
@@ -27,6 +27,8 @@ FoxyTail 的灵感来自 [anasfanani/Magisk-Tailscaled](https://github.com/anasf
 | 一键诊断包（`foxytail.diag`） | ✅ | tar.gz 输出到 `/sdcard/Download` |
 | 管理器开关联动 | ✅ | inotify 监听 disable 标志 |
 | WebUI（12 页） | ✅ | 仅 KernelSU/MMRL（Magisk 官方管理器不支持 WebUI），见下文 |
+| Taildrop 批量传输与持久历史 | 已实现 | 文件浏览、真实字节进度、取消与仅重试未成功项 |
+| Android 附属应用 `dev.foxderin.tail` | 已实现 | Android 8.0+；系统分享、SAF、收件箱/发送/历史 |
 | light/full 双 zip、`update.json` OTA | ✅ | |
 
 ## 安装
@@ -41,6 +43,10 @@ FoxyTail 的灵感来自 [anasfanani/Magisk-Tailscaled](https://github.com/anasf
 要求：arm 或 arm64 设备，Magisk v20.4+ 或 KernelSU ≥ 10670。升级时保留你的状态、配置与钩子文件（见下文）。
 
 两种包均内置 ARM/ARM64 的 `foxydns` 和 `foxyfiles`，按随包 native 清单校验。开机先由模块根目录的稳定代码恢复中断升级，再加载可替换的 settings/scripts；仅恢复与备份所有权一致的事务。记录无法证明或恢复失败时保留日志与备份、推迟启动，不猜测恢复对象。
+
+两种包也包含 `system/app/FoxyTail/FoxyTail.apk`，重启后在桌面出现 **FoxyTail** 附属应用（Android 8.0+，包名 `dev.foxderin.tail`）。它是普通非特权应用，首次使用需在 Magisk/KernelSU 授予 root，不占用 VPN 槽位。APK 必须签名才能安装/升级；正式包使用稳定的私有签名，不使用公开 debug key。手动安装 debug APK 后不能直接覆盖成不同签名的正式 APK。
+
+**v1.4.0 升级**：从 v1.3.x 直接刷入并重启，不需要清除 Tailscale 身份或配置。若已手动安装不同签名的 debug 附属应用，应先卸载该 debug 应用，再使用正式包；不要为此卸载 FoxyTail 模块。附属 App 暂不迁移登录、路由、DNS 等管理功能。
 
 ## 卸载与重装
 
@@ -94,17 +100,36 @@ WebUI 已内置：位于 `webroot/`（纯静态零构建，后端为 `foxytail.w
 
 - 从 **KernelSU 管理器** 或 **MMRL** 打开。**Magisk 官方管理器不支持模块 WebUI**——那里不会出现入口按钮。
 - 共 12 页（底部导航 +「更多」分组）：Dashboard · Peers（列表 + 拓扑图：直连/中继路径）· Exit Nodes · Account · Tunnel · Routing · Traffic · Serve · Files（Taildrop）· Logs · Settings · Diagnostics。
-- 无第三方依赖；中/英 i18n 与深浅色主题。
+- 构建产物自包含；中/英 i18n 与深浅色主题。
 
 固定的 Android CLI 直接收件至 `/sdcard/Download/Taildrop`。**导入已接收文件**只复制已完成的普通文件到私有收件箱，不等待缓冲模式的 `tailscale file get`，共享存储原件保留。私有收据防止重复导入，排除 partial/deleted 文件和软链接；模式记录绑定启动时所属 daemon 的身份。若启动时共享存储不可用，请解锁后重启 FoxyTail。发送使用稳定节点 ID 与其当前 IP（含 IPv6），不会把重名主机当成目标身份。
 
 自动与手动导出保留 Download 现有文件，依次尝试编号至 `-99`，耗尽时失败但不删除私有副本。清空包含隐藏普通文件，保留收据和目录。内联下载支持不超过 8 MiB 的文件，更大文件请导出；编码使用退出时清理的私有临时文件，不把文件内容放进命令行参数。
 
+### Taildrop 日常使用与 Android 附属应用
+
+- **WebUI**：文件页可逐层浏览 `/sdcard`，勾选最多 32 个文件（每个 ≤2 GiB），选择实际支持 Taildrop 的节点后发送；单目录最多列出 1000 项并提示截断，不再要求手输路径。
+- **Android**：提供收件箱、发送、历史三个原生页面。系统文件选择器支持多选；文件管理器“分享 → FoxyTail”支持单文件/多文件。分享只打开待发送列表，选择设备并确认后才开始读取与发送。
+- **收件**：tailscaled 继续直接接收到 `Download/Taildrop`。点击“导入已接收文件”后可在私有收件箱浏览、打开、分享或用系统“保存副本”选择目的地；导入不等待新文件，不删除共享存储原件。Android 二进制读取不受 WebUI 内联下载的 8 MiB 限制，应用单文件限制为 2 GiB。
+- **进度与历史**：模块同一时间接受一个批次，逐文件发送。进度取自 tailscaled LocalAPI `OutgoingFiles.Sent`，按唯一文件 ID 和节点 ID 关联；事件不可用时明确显示未知，不估算百分比。本地 URI 暂存进度与网络发送进度分开。仅真实上传 HTTP 成功响应标记完成；失败项保留错误，可以仅重试未成功文件。
+- **后台与取消**：已接受的发送由模块工作进程持有，退出页面、关闭 App 不停止发送；重新打开历史可接管。应用仅工作时运行前台通知，拒绝通知权限仍可在应用内查看或取消。取消是请求，等待工作进程确认；已被对端接受的字节无法撤回。服务停止/升级会先等待工作进程释放所有权。
+- **数据边界**：Android 以自身 `ContentResolver` 读取授权 `content://` URI，经 `su` 的二进制 stdin 写入私有暂存，不把大文件放入命令参数，不接受 root 读取外部 Intent 指定的任意路径，也不开放 root HTTP 服务。只读导出 URI 限时 24 小时。已发送暂存立即删除；未使用/失败副本超过 24 小时后在下次 Taildrop 操作时清理，活动任务除外；历史最多保留 100 条，暂存最多 256 项。不会删除原始文件。
+
+这一阶段保留 WebUI 处理登录、路由、DNS 等控制功能，不在 App 中重复实现。接收导入仍绑定启动时的 daemon 身份；首次开机存储未解锁时须解锁并重启模块。
+
+### Android 构建与签名
+
+`android/` 使用 JDK 21、Gradle 9.7.1（wrapper SHA256 固定）、AGP 9.3.2、SDK `platforms;android-37.0` / `build-tools;36.0.0`；最低 API 26、目标 API 36。版本号直接来自 `module.prop`。
+
+设置 `JAVA_HOME` 与 `ANDROID_HOME` 后运行 `bash .github/tools/build-android.sh debug dist/FoxyTail-debug.apk`。正式构建把 `debug` 改为 `release`，必须提供 `FOXYTAIL_KEYSTORE_PATH`、`FOXYTAIL_KEYSTORE_PASSWORD`、`FOXYTAIL_KEY_ALIAS`、`FOXYTAIL_KEY_PASSWORD`；缺失即失败，不回退到临时签名。签名文件不入仓库，应离线备份；丢失后不能无损升级已安装应用。CI 仅可信打包任务读取签名 secrets，PR 只构建 debug。
+
+原生 App 仪器回归：`android/gradlew -p android :app:assembleDebugAndroidTest`，安装应用与测试 APK 后执行 `adb -s <设备> shell am instrument -w dev.foxderin.tail.test/dev.foxderin.tail.BridgeInstrumentation`。本轮实际验证使用独立 Android 15 模拟器、真实 Magisk su 和两个固定版本 tailscaled，覆盖二进制/空文件批量传输、系统多文件分享、SAF、收件导入/另存、旋转保持、任务接管、真实字节事件与取消；这不是 OEM 真机或 KernelSU 授权/后台限制验证。
+
 <!-- 截图占位：docs/screenshots/*.png（待补充，见 Roadmap） -->
 
 ## WebUI 开发
 
-WebUI 源码位于 `webui/`（Vite + SolidJS + Material Web 3 组件 + `kernelsu` npm 桥接）。构建产物已提交进 `webroot/`，模块自包含，使用者无需安装 Node 工具链。
+WebUI 源码位于 `webui/`（Vite + SolidJS、原生控件及 Material Design 3 样式、`kernelsu` npm 桥接）。构建产物已提交进 `webroot/`，模块自包含，使用者无需安装 Node 工具链。
 
 - `pnpm --dir webui install --frozen-lockfile` —— 安装依赖（一次性）
 - `pnpm --dir webui dev` —— Vite 开发服务器（无 root 桥环境，界面显示 no-root 横幅）
@@ -115,7 +140,7 @@ WebUI 源码位于 `webui/`（Vite + SolidJS + Material Web 3 组件 + `kernelsu
 
 ## 验证与发布
 
-开发工具链固定为 Node 22.14.0、pnpm 10.30.3、Go 1.27.1，WebUI 要求 Android WebView 109+。安装依赖后执行 `bash .github/tools/verify.sh`，统一检查 ShellCheck、隔离后端回归、类型、国际化、smoke、版本元数据和生产产物一致性；前端改动后先执行 `pnpm --dir webui build` 更新 `webroot/`。
+开发工具链固定为 Node 22.14.0、pnpm 10.30.3、Go 1.27.1，以及上述 Android 工具链；WebUI 要求 Android WebView 109+。安装依赖后执行 `bash .github/tools/verify.sh`，统一检查 ShellCheck、隔离后端回归、Android debug 构建/lint、类型、国际化、smoke、版本元数据和生产产物一致性；前端改动后先执行 `pnpm --dir webui build` 更新 `webroot/`。
 
 发布前运行 `.github/tools/version-bump.sh`，提交版本元数据与前端产物后创建版本标签。分支推送执行 Verify 和 Linux 内核测试，通过后按已审阅的 `tailscale/checksums.txt` 构建两种 ZIP 并保存 30 天。Release 仅复用同仓库、标签对应完整提交 SHA 的成功 Verify 产物，排除 PR 产物；验证进行中则等待，没有可复用产物则对现有标签触发一次 Verify。同一提交的并发请求复用成功产物，失败门禁阻止发布，上传前再次核对下载包的校验和与版本。手动 Release 走同一路径。
 

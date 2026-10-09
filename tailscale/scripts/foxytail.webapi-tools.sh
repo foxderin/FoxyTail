@@ -205,7 +205,7 @@ cmd_files_inbox() {
   mkdir -p "${FILES_DIR}" 2>/dev/null
   ls -A "${FILES_DIR}" 2>/dev/null | while IFS= read -r _fi_name; do
     _fi_path="${FILES_DIR}/${_fi_name}"
-    [ "${_fi_name}" != .taildrop ] && [ -f "${_fi_path}" ] && [ ! -L "${_fi_path}" ] || continue
+    [ "${_fi_name}" != .taildrop ] && [ "${_fi_name}" != .outgoing ] && [ -f "${_fi_path}" ] && [ ! -L "${_fi_path}" ] || continue
     _fi_size=$(stat -c %s "${_fi_path}" 2>/dev/null)
     _fi_mtime=$(stat -c %Y "${_fi_path}" 2>/dev/null)
     case "${_fi_size}" in '' | *[!0-9]*) _fi_size=0 ;; esac
@@ -216,33 +216,6 @@ cmd_files_inbox() {
   done | jqr -s -c 'sort_by(-.mtime) | {ok:true,files:.}'
 }
 
-cmd_file_send() {
-  [ -n "$1" ] && [ -n "$2" ] || jerr "file-send: expected <path> <peer>"
-  # /sdcard is a symlink to /storage/emulated/0 on Android: validate the raw
-  # input first, then require the resolved path to stay in shared storage.
-  case "$1" in
-    /sdcard/*) ;;
-    *) jerr "file-send: path must live under /sdcard/" ;;
-  esac
-  _fs_path=$(realpath "$1" 2>/dev/null)
-  case "${_fs_path}" in
-    /sdcard/* | /storage/emulated/*) ;;
-    *) jerr "file-send: path must live under /sdcard/" ;;
-  esac
-  [ -f "${_fs_path}" ] || jerr "file-send: no such file: ${_fs_path}"
-  [ -n "$3" ] || jerr 'file-send: select a current peer and address'
-  _fs_status=$(ts_status_json ts_cli 10 status --json) || jerr 'file-send: current peers unavailable'
-  _fs_peer=$(printf '%s' "${_fs_status}" | jqr -e -r --arg id "$2" --arg ip "$3" '
-    [.Peer // {} | .[] | select(.ID==$id and ((.TailscaleIPs // []) | index($ip))!=null)]
-    | select(length==1) | $ip') || jerr 'file-send: peer address changed; refresh the device list'
-  case "${_fs_peer}" in *:*) _fs_peer="[${_fs_peer}]" ;; esac
-  _fs_out=$(ts_cli 300 file cp "${_fs_path}" "${_fs_peer}:" 2>&1)
-  if [ $? -eq 0 ]; then
-    jqr -n -c --arg p "${_fs_path}" --arg t "$2" '{ok:true,path:$p,peer:$t}'
-  else
-    jerr "file-send failed: ${_fs_out:-timeout}"
-  fi
-}
 
 cmd_file_receive() {
   taildrop_direct_ready || jerr 'Taildrop direct receive mode is unknown or shared storage was unavailable at startup; unlock shared storage and restart FoxyTail'
@@ -268,7 +241,7 @@ EOF_FILES
 # strictly inside the inbox directory.
 _file_inbox_path() {
   case "$1" in
-    '' | . | .. | .taildrop | */* | *\\*) return 1 ;;
+    '' | . | .. | .taildrop | .outgoing | */* | *\\*) return 1 ;;
   esac
   [ ! -L "${FILES_DIR}/$1" ] || return 1
   printf '%s/%s' "${FILES_DIR}" "$1"
@@ -286,7 +259,7 @@ cmd_file_clear() {
   mkdir -p "${FILES_DIR}" 2>/dev/null
   _fc_removed=0
   for _fc_path in "${FILES_DIR}"/* "${FILES_DIR}"/.[!.]* "${FILES_DIR}"/..?*; do
-    [ "${_fc_path##*/}" != .taildrop ] && [ -f "${_fc_path}" ] && [ ! -L "${_fc_path}" ] || continue
+    [ "${_fc_path##*/}" != .taildrop ] && [ "${_fc_path##*/}" != .outgoing ] && [ -f "${_fc_path}" ] && [ ! -L "${_fc_path}" ] || continue
     rm -f "${_fc_path}" && _fc_removed=$((_fc_removed + 1))
   done
   jqr -n -c --argjson r "${_fc_removed}" '{ok:true,removed:$r}'

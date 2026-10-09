@@ -1,0 +1,48 @@
+plugins { id 'com.android.application' }
+
+def moduleVersion = new Properties()
+rootProject.file('../module.prop').withInputStream { moduleVersion.load(it) }
+def signingValues = ['FOXYTAIL_KEYSTORE_PATH', 'FOXYTAIL_KEYSTORE_PASSWORD', 'FOXYTAIL_KEY_ALIAS', 'FOXYTAIL_KEY_PASSWORD'].collectEntries { [(it): System.getenv(it)] }
+def hasReleaseSigning = signingValues.values().every { it != null && !it.isEmpty() }
+
+android {
+    namespace 'dev.foxderin.tail'
+    compileSdk {
+        version = release(37) { minorApiLevel = 0 }
+    }
+    buildToolsVersion '36.0.0'
+    defaultConfig {
+        applicationId 'dev.foxderin.tail'
+        minSdk 26
+        targetSdk 36
+        versionCode moduleVersion.getProperty('versionCode').toInteger()
+        versionName moduleVersion.getProperty('version').replaceFirst('^v', '')
+        testInstrumentationRunner 'dev.foxderin.tail.BridgeInstrumentation'
+    }
+    signingConfigs {
+        release {
+            if (hasReleaseSigning) {
+                storeFile file(signingValues.FOXYTAIL_KEYSTORE_PATH)
+                storePassword signingValues.FOXYTAIL_KEYSTORE_PASSWORD
+                keyAlias signingValues.FOXYTAIL_KEY_ALIAS
+                keyPassword signingValues.FOXYTAIL_KEY_PASSWORD
+            }
+        }
+    }
+    buildTypes {
+        release {
+            signingConfig signingConfigs.release
+            minifyEnabled false
+        }
+    }
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+}
+
+gradle.taskGraph.whenReady { graph ->
+    if (graph.allTasks.any { it.project == project && it.name.toLowerCase().contains('release') } && !hasReleaseSigning) {
+        throw new GradleException('Release signing requires FOXYTAIL_KEYSTORE_PATH, FOXYTAIL_KEYSTORE_PASSWORD, FOXYTAIL_KEY_ALIAS and FOXYTAIL_KEY_PASSWORD; unsigned release artifacts are forbidden.')
+    }
+}

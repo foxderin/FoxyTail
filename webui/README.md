@@ -23,6 +23,8 @@ smoke 覆盖页面切换、无 root 桥、首屏加载失败与重试、请求�
 
 代理共存向导预览位于 `#/tunnel`，支持 `state=coexist-bridge|coexist-proxy|coexist-tun|coexist-failed|coexist-unready|coexist-empty|coexist-stale|coexist-error`。`Coexistence` 仅显式请求 `coexist-info` / `coexist-check`，不新增后台轮询；`src/coexistence.ts` 生成只读 YAML 合并片段。前者返回已应用端点和当前节点快照，后者接受快照、节点 ID、当前 IP、TCP 端口与可选回环 DNS 端口，前后重新核对身份，返回独立探测项。模拟数据只能验证界面状态；真实 DNS/SOCKS 行为由 native 测试及隔离实际运行验证。
 
+文件页的 `FilesSend` 使用 `files-browse` 与 `taildrop-targets` 选择来源和节点，通过 `file-send-start` 提交模块持久任务；不再使用同步 `file-send` 或页面任务注册表拥有发送进程。`file-send-history` 在进入页面时接管，只有可见且存在活动任务时每 1.5 秒读取状态，隐藏/空闲不轮询。离开页面仅取消观察请求，不取消原生发送任务；取消使用明确的任务 ID。Android 附属应用共用相同后端契约，URI 暂存走二进制 stdin，不经过 WebUI base64。
+
 `src/config.ts` 集中数据目录和 API 超时，`src/settings.ts` 定义设置字段与范围；`SettingsMaintenance`、`SubnetRoutes`、`RoutingApps` 分别负责维护、子网发现和应用选择。
 
 页面结构由 `navigation.ts` 和 `AppShell` 统一组织，页面各自负责业务交互；`components/Basics.tsx` 提供状态卡、指标卡、骨架与错误重试，`components/ui.tsx` 提供原生按钮、输入与弹窗。`style.css` 管理通用 token、布局和控件，`pages/network.css` 汇总公共网络、设备、流量样式及响应式覆盖，`pages/tools.css` 负责工具页布局。新增文案按领域存放在 `i18n-*.ts`，中心词典统一导入；词条检查会递归验证对象展开、重复键、空值及中英文对应关系。

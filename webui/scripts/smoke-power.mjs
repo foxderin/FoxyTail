@@ -151,6 +151,33 @@ export async function checkPower() {
     [...w.document.querySelectorAll('#view button')].find(button => /^(Refresh|刷新)$/.test(button.textContent))?.click();
     await flush();
     assert(count('logs') === pausedLogs + 1 && timers.size === 0, 'explicit refresh remains available with the global refresh switch off');
+    await nav('files');
+    const idleTransferReads = count('file-send-status'), idleHistoryReads = count('file-send-history');
+    await advance(60000);
+    assert(count('file-send-status') === idleTransferReads && count('file-send-history') === idleHistoryReads && timers.size === 0, 'idle Taildrop history never polls or leaves a timer');
+    const sendingTransfer = { id: 'bbcc', peerId: 'file-peer', peerName: 'receiving-device', peerIp: '100.64.0.8', selfId: 'self', status: 'sending', startedAt: 1700000000, updatedAt: 1700000001,
+      files: [{ id: 'ddaa', name: 'power.zip', path: '/sdcard/power.zip', size: 100, sentBytes: 0, progressKnown: false, bytesPerSecond: 0, status: 'sending' }] };
+    fixtures['file-send-history'] = { ok: true, transfers: [sendingTransfer] };
+    fixtures['file-send-status'] = { ok: true, transfer: sendingTransfer };
+    await nav('more'); await nav('files');
+    assert(w.document.querySelector('[data-transfer-id="bbcc"]') && timers.size === 1, 'entry adopts the backend active send and schedules only its observation timer');
+    const activeTransferReads = count('file-send-status');
+    await advance(3000);
+    assert(count('file-send-status') === activeTransferReads + 2, 'an active visible transfer polls status every 1.5 seconds');
+    await visible(false);
+    const hiddenTransferReads = count('file-send-status');
+    await advance(60000);
+    assert(count('file-send-status') === hiddenTransferReads && timers.size === 0, 'hidden active transfers have no observation reads or timers');
+    fixtures['file-send-status'] = { ok: true, transfer: { ...sendingTransfer, updatedAt: 1700000002, files: [{ ...sendingTransfer.files[0], sentBytes: 40, progressKnown: true, bytesPerSecond: 20 }] } };
+    await visible(true);
+    const progress = w.document.querySelector('[data-transfer-id="bbcc"] progress');
+    assert(count('file-send-status') === hiddenTransferReads + 1 && progress?.value === 40 && progress?.max === 100, 'resume performs one read and shows the exact daemon byte fraction');
+    fixtures['file-send-status'] = { ok: true, transfer: { ...sendingTransfer, status: 'completed', updatedAt: 1700000003, files: [{ ...sendingTransfer.files[0], status: 'completed', sentBytes: 100, progressKnown: true }] } };
+    await advance(1500);
+    const completedTransferReads = count('file-send-status');
+    await advance(60000);
+    assert(count('file-send-status') === completedTransferReads && timers.size === 0, 'completed native sends stop polling immediately');
+    fixtures['file-send-history'] = { ok: true, transfers: [] };
     const trial = { id: 'power_trial', status: 'running', remaining: 120, reason: '',
       previous: { mode: 'bridge', dnsMode: 'legacy', routeScope: 'all' }, candidate: { mode: 'proxy', dnsMode: 'local', routeScope: 'all' } };
     fixtures['trial-status'] = { ok: true, trial };

@@ -125,6 +125,9 @@ const canned = {
   'settings-set': { ok: true, saved: true, applied: false, restartRequired: true },
   control: { ok: true, applied: true, restartRequired: false },
   'files-inbox': { ok: true, files: [{ name: 'a.txt', size: 10, mtime: 1700000000 }] },
+  'taildrop-targets': { ok: true, peers: [{ id: 'file-peer', hostname: 'receiving-device', ips: ['100.64.0.8'], online: true }] },
+  'files-browse': { ok: true, path: '', entries: [{ name: 'send.zip', path: '/sdcard/send.zip', directory: false, size: 100, mtime: 1700000000 }], truncated: false },
+  'file-send-history': { ok: true, transfers: [] },
 };
 
 /* Per-command bridge overrides: webapi subcommand -> [errno, stdout, stderr].

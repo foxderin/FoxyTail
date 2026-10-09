@@ -1,6 +1,6 @@
 /*
  * Session-level task registry for user-initiated heavy operations
- * (speedtest-exitnodes, derp-speedtest, diag, file-receive, file-send).
+ * (speedtest-exitnodes, derp-speedtest, diag, file-receive).
  *
  * Tasks belong to the SESSION, not the page: navigating away never cancels
  * them; re-entering the originating page adopts the running progress state

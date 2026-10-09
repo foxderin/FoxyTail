@@ -1,10 +1,21 @@
 # Changelog
 
-## Unreleased
+## v1.4.0 — 2026-10-09
 
 - 隧道页新增只读代理共存向导：基于已应用模式、当前 Tailnet、实际 DNS/SOCKS 端口生成 mihomo/Clash.Meta 合并片段，区分 fake-IP 黑名单、规则模式与 redir-host，拒绝未经审阅的白名单转换；不覆盖外部配置。
 - 新增按需 UDP/TCP DNS 精确地址验证与节点 TCP/SOCKS 连接探针，错误逐项保留；当前节点身份、配置快照和前后状态校验防止旧预览或账号切换后误报成功。新 helper 随原有 native 构建打包，无新增依赖版本。
 - 稳定原生探针回归的测试夹具：成对分配 TCP/UDP 监听端口，仅对临时端口占用重新分配，并等待 DNS 服务退出；TCP 夹具等待实际连接关闭后再拆除监听，避免并发验证出现假失败。
+- Taildrop 文件页改为共享存储浏览与批量选择，最多 32 文件/2 GiB 每文件；新增模块持久发送队列、实际 daemon 字节进度、历史、取消与仅重试未成功项，删除旧同步 file-send 入口。
+- 新增原生 Android 附属应用 `dev.foxderin.tail`：系统单/多文件分享、SAF 文件选择、确认发送、收件导入/浏览/打开/分享/另存与历史；前台服务只负责活动任务，保留 WebUI 的其余控制面。
+- 使用私有 rooted 文件访问、stdin 二进制暂存和精确传输 ID 关联；成功仅以实际上传响应为准，未知进度不估算。发送任务跨 App/页面退出保留，停止/升级等待取消确认，私有暂存按需过期清理。
+- Android APK 使用稳定私有签名并随 light/full 包挂载为普通 system/app 应用，不授予特权；加入 Android 构建/lint、签名和版本校验、原生传输与文件边界回归。
+
+### 升级与验证边界
+
+- 从 v1.3.x 直接刷入 light/full 包并重启；两者均内置 Android 8.0+ 附属应用。首次使用在 Magisk/KernelSU 授予 root；登录、路由、DNS 等控制面仍留在 WebUI。
+- 应用使用稳定正式签名；已有不同签名的 debug 应用需先移除该 debug 应用，再安装正式版本，勿卸载模块来处理签名冲突。
+- 已覆盖 378 项隔离后端回归、658 项 WebUI smoke 断言、原生 race/vet、Android 构建/lint/仪器检查，以及独立 Android 15 模拟器上真实 Magisk 与两个 tailscaled 的系统分享、字节核验、收件导出、进度、取消和任务接管。
+- 模拟器数据面验证不等同于 OEM 真机或 KernelSU 授权弹窗、SELinux enforcing 与后台限制验证；这些组合仍需实机确认。
 
 ## v1.3.12
 

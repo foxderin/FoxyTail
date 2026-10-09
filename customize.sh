@@ -90,6 +90,7 @@ if ! unzip -qqo "$ZIPFILE" -d "$MODPATH" \
   'tailscale/VERSIONS'; then
   abort "! Failed to extract module files (corrupt zip?)"
 fi
+[ -f "$MODPATH/system/app/FoxyTail/FoxyTail.apk" ] || abort '! Companion APK is missing from module package'
 
 # Publish recovery in both roots before touching shared software. An interrupted
 # modules_update install may never become the active module at the next boot.
@@ -476,6 +477,7 @@ set_perm "$MODPATH/install-recovery.sh" 0 0 0755 "u:object_r:system_file:s0"
 set_perm "$MODPATH/uninstall.sh" 0 0 0755 "u:object_r:system_file:s0"
 [ -d "$MODPATH/webroot" ] &&
   set_perm_recursive "$MODPATH/webroot" 0 0 0755 0644 "u:object_r:system_file:s0"
+set_perm_recursive "$MODPATH/system/app/FoxyTail" 0 0 0755 0644 "u:object_r:system_file:s0"
 
 # --- Symlinks into the systemless PATH ---------------------------------------
 
@@ -533,6 +535,8 @@ ui_print "- Starting FoxyTail service and resident helpers in background"
 
 # --- Quickstart --------------------------------------------------------------
 
+ui_print "- Companion: dev.foxderin.tail (FoxyTail); available after reboot."
+ui_print "- Grant root when requested by the app; no privileged system permissions are granted."
 ui_print "-----------------------------------------------------------"
 ui_print " Quick start"
 ui_print "-----------------------------------------------------------"

@@ -11,6 +11,7 @@ export const NONCANCELLABLE_COMMANDS: Readonly<Record<string, true>> = {
   control: true, 'mode-set': true, 'routes-set': true, 'subnet-routes-set': true,
   'settings-set': true, 'context-set': true, backup: true,
   'trial-start': true, 'trial-confirm': true, 'trial-revert': true,
+  'file-send-start': true, 'file-send-cancel': true,
 };
 
 export const DATA_DIR = '/data/adb/foxytail';
@@ -28,6 +29,7 @@ export const STATUS_POLL_STARTING_MS = 5000;
 export const LOGS_POLL_MS = 5000;
 export const TRIAL_POLL_MS = 3000;
 export const TRIAL_COUNTDOWN_MS = 1000;
+export const TAILDROP_POLL_MS = 1500;
 export const LOGIN_REFRESH_DELAY_MS = 1500;
 
 export const COMMAND_TIMEOUTS: Record<string, number> = {
@@ -65,7 +67,12 @@ export const COMMAND_TIMEOUTS: Record<string, number> = {
   'subnet-routes-set': 35000,
   'context-set': 45000,
   'context-get': 20000,
-  'file-send': 320000,
+  'taildrop-targets': 20000,
+  'files-browse': 20000,
+  'file-send-start': 30000,
+  'file-send-status': 15000,
+  'file-send-cancel': 15000,
+  'file-send-history': 20000,
   'file-receive': 70000,
   diag: 130000,
   backup: 60000,

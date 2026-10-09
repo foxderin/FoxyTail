@@ -12,3 +12,11 @@ webui/.smoke/
 # Host regression test bytecode
 __pycache__/
 *.py[cod]
+
+# Android companion build output and private signing material
+android/.gradle/
+android/**/build/
+android/local.properties
+*.keystore
+*.jks
+*.p12

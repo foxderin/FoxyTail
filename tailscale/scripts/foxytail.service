@@ -264,6 +264,12 @@ stop_service() {
 
   # Finish all cleanup attempts, but preserve failure for restart/upgrade.
   _st_failed=0
+  if [ -d "${TS_DIR}/state/taildrop" ]; then
+    if [ ! -x "${TS_BIN_DIR}/foxyfiles" ] || ! "${TS_BIN_DIR}/foxyfiles" send-stop --root "${TS_DIR}"; then
+      log Error 'Taildrop worker did not stop; cleanup remains incomplete'
+      _st_failed=1
+    fi
+  fi
   if [ -x "${TS_SCRIPTS_DIR}/foxytail.dns" ]; then
     "${TS_SCRIPTS_DIR}/foxytail.dns" stop || _st_failed=1
   fi

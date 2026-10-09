@@ -95,7 +95,7 @@ func TestTaildropRepairsPublicationWithoutReceipt(t *testing.T) {
 
 func TestTaildropSkipsIncompleteAndUnsafeEntries(t *testing.T) {
 	shared, incoming, inbox := taildropFixture(t)
-	for _, name := range []string{"x.partial", "x.deleted", ".taildrop", "line\nbreak"} {
+	for _, name := range []string{"x.partial", "x.deleted", ".taildrop", ".outgoing", "line\nbreak"} {
 		if err := os.WriteFile(filepath.Join(incoming, name), []byte("skip"), 0600); err != nil {
 			t.Fatal(err)
 		}

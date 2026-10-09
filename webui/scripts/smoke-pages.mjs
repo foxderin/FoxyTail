@@ -335,25 +335,67 @@ export async function checkPages() {
   await flush();
   assert(!window.document.querySelectorAll('#view .card')[1].textContent.includes('/api'), 'a stale refresh cannot resurrect a deleted service mapping');
 
-  const originalFilePeers = canned.peers;
-  canned.peers = { ok: true, peers: [
-    { id: 'file-v4', hostname: 'same-host', ip: '100.64.0.8', ips: ['100.64.0.8'], online: true },
-    { id: 'file-v6', hostname: 'same-host', ip: 'fd7a:115c:a1e0::9', ips: ['fd7a:115c:a1e0::9'], online: true },
+  console.log('Taildrop browse, durable jobs and unsuccessful-only retries');
+  const originalFileTargets = canned['taildrop-targets'];
+  canned['taildrop-targets'] = { ok: true, peers: [
+    { id: 'file-v4', hostname: 'same-host', ips: ['100.64.0.8'], online: true },
+    { id: 'file-v6', hostname: 'same-host', ips: ['fd7a:115c:a1e0::9'], online: true },
   ] };
+  const browseBefore = commandLog.filter(entry => entry.sub === 'files-browse').length;
   nav('files');
   await flush();
+  assert(commandLog.filter(entry => entry.sub === 'files-browse').length === browseBefore, 'shared storage is not scanned until the browser is explicitly opened');
   const filePeer = window.document.querySelector('#view select');
-  assert(filePeer?.options.length === 2 && new Set([...filePeer.options].map(option => option.value)).size === 2, 'duplicate hostnames retain distinct device options');
+  assert(filePeer?.options.length === 2 && new Set([...filePeer.options].map(option => option.value)).size === 2, 'send-capable duplicate hostnames retain distinct device options');
   filePeer.value = 'file-v6';
   filePeer.dispatchEvent(new window.Event('change', { bubbles: true }));
-  const filePath = window.document.querySelector('#view input[placeholder="/sdcard/Download/example.zip"]');
-  filePath.value = '/sdcard/Download/send.zip';
-  filePath.dispatchEvent(new window.Event('input', { bubbles: true }));
-  canned['file-send'] = { ok: true };
+  const browserEntries = Array.from({ length: 33 }, (_, index) => ({ name: `send-${index}.zip`, path: `/sdcard/send-${index}.zip`, directory: false, size: 100, mtime: 1700000000 }));
+  canned['files-browse'] = { ok: true, path: '', entries: [{ name: 'escape', path: '/data/adb/private', directory: false, size: 1, mtime: 1700000000 }], truncated: false };
+  window.document.querySelector('#view button[aria-controls="taildrop-browser"]')?.click();
+  await flush();
+  assert(commandLog.findLast(entry => entry.sub === 'files-browse')?.args[0] === '-', 'browser uses the rooted directory API rather than a typed absolute path');
+  assert(/Invalid Taildrop|无效数据/.test(window.document.querySelector('#taildrop-browser').textContent) && !window.document.querySelector('#taildrop-browser input[type="checkbox"]'), 'malformed out-of-root browse responses cannot become selected sources');
+  overrides['files-browse'] = [1, JSON.stringify({ ok: false, error: 'storage permission denied' }), ''];
+  [...window.document.querySelectorAll('#taildrop-browser button')].find(button => /^(Refresh|刷新)$/.test(button.textContent.trim()))?.click();
+  await flush();
+  assert(window.document.querySelector('#taildrop-browser').textContent.includes('storage permission denied'), 'browse permission failures retain actionable retry feedback');
+  delete overrides['files-browse'];
+  canned['files-browse'] = { ok: true, path: '', entries: browserEntries, truncated: true };
+  [...window.document.querySelectorAll('#taildrop-browser button')].find(button => /^(Refresh|刷新)$/.test(button.textContent.trim()))?.click();
+  await flush();
+  const selectionBoxes = [...window.document.querySelectorAll('#taildrop-browser input[type="checkbox"]')];
+  selectionBoxes.slice(0, 32).forEach(input => input.click());
+  assert(selectionBoxes.length === 33 && selectionBoxes[32].disabled, 'selection is capped at 32 without silently dropping a chosen file');
+  assert(/1000/.test(window.document.querySelector('#taildrop-browser').textContent), 'truncated directories disclose the limit');
+  selectionBoxes.slice(2, 32).forEach(input => input.click());
+  const queuedTransfer = { id: 'aabb', peerId: 'file-v6', peerName: 'same-host', peerIp: 'fd7a:115c:a1e0::9', selfId: 'self', status: 'queued', startedAt: 1700000000, updatedAt: 1700000000,
+    files: browserEntries.slice(0, 2).map((file, index) => ({ id: `aa${index}`, name: file.name, path: file.path, size: file.size, sentBytes: 0, progressKnown: false, bytesPerSecond: 0, status: 'queued' })) };
+  canned['file-send-start'] = { ok: true, transfer: queuedTransfer };
+  canned['file-send-status'] = { ok: true, transfer: { ...queuedTransfer, status: 'sending', files: queuedTransfer.files.map((file, index) => ({ ...file, status: index ? 'queued' : 'sending' })) } };
   [...window.document.querySelectorAll('#view button')].find(button => /^(Send|发送)$/.test(button.textContent.trim()))?.click();
   await flush();
-  assert(commandLog.findLast(entry => entry.sub === 'file-send')?.args.join('|') === '/sdcard/Download/send.zip|file-v6|fd7a:115c:a1e0::9', 'Taildrop sends the selected identity and IPv6 address instead of its duplicate hostname');
-  canned.peers = originalFilePeers;
+  assert(commandLog.findLast(entry => entry.sub === 'file-send-start')?.args.join('|') === 'file-v6|fd7a:115c:a1e0::9|["/sdcard/send-0.zip","/sdcard/send-1.zip"]', 'batch submission preserves selected stable identity, IPv6 address and JSON paths');
+  assert(/unknown|未知/.test(window.document.querySelector('[data-transfer-id="aabb"]').textContent) && !window.document.querySelector('[data-transfer-id="aabb"] progress'), 'missing daemon events display unknown progress rather than a fabricated fraction');
+  assert(!window.__foxy.getTask('file-send-start'), 'accepted native jobs are not misrepresented as completed session tasks');
+  canned['file-send-history'] = { ok: true, transfers: [canned['file-send-status'].transfer] };
+  const cancellationBefore = commandLog.filter(entry => entry.sub === 'cancel').length;
+  nav('serve'); await flush(); nav('files'); await flush();
+  assert(window.document.querySelector('[data-transfer-id="aabb"]') && commandLog.filter(entry => entry.sub === 'cancel').length === cancellationBefore, 'remount adopts native active history without cancelling the accepted send');
+  canned['file-send-cancel'] = { ok: true, transfer: canned['file-send-status'].transfer };
+  [...window.document.querySelectorAll('#view button')].find(button => /^(Cancel send|取消发送)$/.test(button.textContent.trim()))?.click();
+  await flush();
+  assert(commandLog.findLast(entry => entry.sub === 'file-send-cancel')?.args[0] === 'aabb' && /Cancellation requested|已请求取消/.test(window.document.querySelector('#view').textContent), 'cancellation remains pending until backend acknowledgement');
+  const failedTransfer = { ...queuedTransfer, status: 'failed', updatedAt: 1700000002, files: queuedTransfer.files.map((file, index) => ({ ...file, status: index ? 'failed' : 'completed', sentBytes: index ? 0 : file.size, progressKnown: !index, ...(index ? { error: 'peer rejected file' } : {}) })) };
+  canned['file-send-history'] = { ok: true, transfers: [failedTransfer] };
+  nav('serve'); await flush(); nav('files'); await flush();
+  assert(window.document.querySelector('[data-transfer-id="aabb"]').textContent.includes('peer rejected file'), 'ok:true failed transfer displays the per-file backend error');
+  canned['file-send-start'] = { ok: true, transfer: { ...failedTransfer, id: 'aacc', status: 'completed', files: [{ ...failedTransfer.files[1], status: 'completed', sentBytes: 100, progressKnown: true, error: undefined }] } };
+  [...window.document.querySelectorAll('#view button')].find(button => /Retry failed or cancelled|仅重试失败或取消/.test(button.textContent))?.click();
+  await flush();
+  assert(commandLog.findLast(entry => entry.sub === 'file-send-start')?.args[2] === '["/sdcard/send-1.zip"]', 'retry submits only the unsuccessful path and leaves accepted files untouched');
+  canned['taildrop-targets'] = originalFileTargets;
+  canned['file-send-history'] = { ok: true, transfers: [] };
+  canned['files-browse'] = { ok: true, path: '', entries: browserEntries.slice(0, 1), truncated: false };
   holdNext.add('files-inbox');
   const inboxCard = window.document.querySelector('#view .card');
   [...inboxCard.querySelectorAll('button')].find(button => /^(Refresh|刷新)$/.test(button.textContent))?.click();

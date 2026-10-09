@@ -124,7 +124,7 @@ func importTaildrop(source, destination string) (taildropResult, error) {
 }
 
 func taildropCompletedName(name string) bool {
-	return name != "." && name != ".." && name != ".taildrop" &&
+	return name != "." && name != ".." && name != ".taildrop" && name != ".outgoing" &&
 		!strings.HasSuffix(name, ".partial") && !strings.HasSuffix(name, ".deleted") &&
 		!strings.ContainsAny(name, "/\\\r\n\x00")
 }

@@ -1,41 +1,33 @@
 import { DATA_DIR } from '../config';
-/* Taildrop operations stay in the session task registry across navigation. */
+/* Inbox imports stay in the session task registry across navigation. */
 import { createEffect, createMemo, createSignal, For, on, onMount, Show, type JSX } from 'solid-js';
 import { createApiScope, hasRoot } from '../api';
 import { t } from '../i18n';
 import { getTask, startTask } from '../tasks';
 import { fmtBytes, fmtTime } from '../format';
 import { Card, SkeletonRows, EmptyState, ErrorState, MetricCard } from '../components/Basics';
-import { LoadGate } from '../components/LoadGate';
 import { copyWithToast } from '../clipboard';
-import { TaskButton, TaskProgress } from '../components/TaskProgress';
+import { TaskProgress } from '../components/TaskProgress';
 import { showToast } from '../components/Toast';
 import { MdIcon } from '../icons';
-import { Button, IconButton, Select, TextField } from '../components/ui';
-import type { InboxFile, Peer } from '../types';
+import { Button, IconButton, TextField } from '../components/ui';
+import type { InboxFile } from '../types';
+import FilesSend from './FilesSend';
 import './tools.css';
 import { createQueuedRefresh } from './tools-refresh';
 const RECV_KEY = 'file-receive';
-const SEND_KEY = 'file-send';
 export default function Files(): JSX.Element {
   const scope = createApiScope();
   const [files, setFiles] = createSignal<InboxFile[] | null>(null);
   const [loadError, setLoadError] = createSignal<string | null>(null);
   const [loading, setLoading] = createSignal(false);
   const [filter, setFilter] = createSignal('');
-  const [path, setPath] = createSignal('');
-  const [peer, setPeer] = createSignal('');
-  const [peers, setPeers] = createSignal<Peer[] | null>(null);
-  const [peerError, setPeerError] = createSignal<string | null>(null);
   const recvTask = () => getTask(RECV_KEY);
-  const sendTask = () => getTask(SEND_KEY);
   const visibleFiles = createMemo(() =>
     (files() ?? []).filter((file) =>
       file.name.toLocaleLowerCase().includes(filter().toLocaleLowerCase()),
     ),
   );
-  const pathValid = () =>
-    path().trim().startsWith('/sdcard/') && path().trim().length > '/sdcard/'.length;
   const loadInbox = createQueuedRefresh(
     () => scope.api('files-inbox'),
     (res) => {
@@ -46,23 +38,6 @@ export default function Files(): JSX.Element {
     },
     setLoading,
   );
-  async function loadPeers() {
-    setPeerError(null);
-    const res = await scope.api('peers');
-    if (res.cancelled) return;
-    if (!res.ok) {
-      setPeers([]);
-      setPeerError(res.error || t('error'));
-      return;
-    }
-    const list = (Array.isArray(res.peers) ? res.peers : [])
-      .filter((node): node is Peer => !!node && typeof node.id === 'string' && node.id.length > 0 &&
-        typeof node.ip === 'string' && node.ip.length > 0 && typeof node.hostname === 'string' &&
-        Array.isArray(node.ips) && node.ips.includes(node.ip))
-      .sort((a, b) => Number(b.online) - Number(a.online) || a.hostname.localeCompare(b.hostname) || a.id.localeCompare(b.id));
-    setPeers(list);
-    if (!list.some((node) => node.id === peer())) setPeer(list[0]?.id ?? '');
-  }
   async function downloadFile(name: string) {
     const res = await scope.api('file-download', name);
     if (!res.ok) {
@@ -112,7 +87,6 @@ export default function Files(): JSX.Element {
 
   onMount(() => {
     void loadInbox();
-    void loadPeers();
   });
   createEffect(
     on(
@@ -122,14 +96,6 @@ export default function Files(): JSX.Element {
           showToast(t('files_received'), 'ok');
           void loadInbox();
         }
-      },
-    ),
-  );
-  createEffect(
-    on(
-      () => sendTask()?.status,
-      (value, previous) => {
-        if (value === 'done' && previous === 'running') showToast(t('files_sent'), 'ok');
       },
     ),
   );
@@ -251,73 +217,7 @@ export default function Files(): JSX.Element {
           </Button>
         </div>
       </Card>
-      <Card title={t('files_send')} icon="send">
-        <div class="tool-form">
-          <TextField
-            label={t('files_path')}
-            placeholder={t('files_path_hint')}
-            value={path()}
-            disabled={sendTask()?.status === 'running'}
-            onInput={(e) => setPath((e.target as HTMLInputElement).value)}
-          />
-          <Show when={path().trim() && !pathValid()}>
-            <p class="tool-hint lat-bad" role="alert">
-              {t('tools_files_path_invalid')}
-            </p>
-          </Show>
-          <LoadGate
-            ready={peers() !== null}
-            error={peerError()}
-            onRetry={() => void loadPeers()}
-            skeleton={<SkeletonRows rows={1} />}
-            hasContent={(peers()?.length ?? 0) > 0}
-            empty={
-              <div>
-                <EmptyState text={t('tools_no_peers')} icon="group" />
-                <Button variant="text" onClick={() => void loadPeers()}>
-                  {t('tools_retry')}
-                </Button>
-              </div>
-            }
-          >
-                <Select
-                  label={t('files_peer')}
-                  value={peer()}
-                  disabled={sendTask()?.status === 'running'}
-                  onChange={(e) => setPeer((e.target as HTMLSelectElement).value)}
-                >
-                  <For each={peers()!}>
-                    {(node) => (
-                      <option value={node.id}>
-                        {node.hostname} · {node.ip}
-                        {node.online ? '' : ' (' + t('offline') + ')'}
-                      </option>
-                    )}
-                  </For>
-                </Select>
-          </LoadGate>
-          <TaskProgress taskKey={SEND_KEY} />
-          <Show when={sendTask()?.status === 'done'}>
-            <div class="alert ok" role="status">
-              <MdIcon name="check_circle" size={18} />
-              {t('files_sent')}
-            </div>
-          </Show>
-          <Show when={sendTask()?.status === 'error'}>
-            <ErrorState text={sendTask()?.result?.error || t('error')} />
-          </Show>
-          <div>
-            <TaskButton
-              taskKey={SEND_KEY}
-              cmd="file-send"
-              args={[path().trim(), peer(), peers()?.find(node => node.id === peer())?.ip ?? '']}
-              label={t('files_send_btn')}
-              icon={<MdIcon name="send" size={18} />}
-              disabled={!pathValid() || !peers()?.some(node => node.id === peer()) || !hasRoot}
-            />
-          </div>
-        </div>
-      </Card>
+      <FilesSend />
     </div>
   );
 }
