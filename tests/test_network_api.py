@@ -35,7 +35,9 @@ class NetworkApiTests(ApiTestCase):
             'echo "$1" >>' + shlex.quote(str(self.base / 'dns-actions')) + '\n' +
             ('[ "$1" != stop ]\n' if fail else 'exit 0\n'))
         script.chmod(0o755)
-        return '''load_conf; DNS_MODE=transparent
+        # Keep the capture pipe open until the detached DNS restart exits.
+        return '''exec 3>&1
+load_conf; DNS_MODE=transparent
 _op_exec() { shift; "$@"; }
 daemon_up() { return 0; }
 ts_cli() { test -L "$TS_RUN_DIR/dns-account-transition" || return 9; echo "$*" >>"$TS_DIR/account-actions"; }
