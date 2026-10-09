@@ -38,8 +38,6 @@ jobs:
       - run: sdkmanager 'platforms;android-37.0' 'build-tools;36.0.0'
       - run: sudo apt-get update && sudo apt-get install -y shellcheck jq mksh
       - run: bash .github/tools/verify.sh
-        env:
-          FOXYTAIL_NATIVE_IN_PACKAGE: ${{ github.event_name != 'pull_request' && '1' || '0' }}
   native-kernel:
     runs-on: ubuntu-latest
     steps:

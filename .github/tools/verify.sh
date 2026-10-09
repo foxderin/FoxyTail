@@ -24,10 +24,8 @@ export FOXYFILES_TEST_BINARY="$build_dir/foxyfiles"
 export FOXYDNS_TEST_BINARY="$build_dir/foxydns"
 (cd native/foxydns && GOTOOLCHAIN=local GOENV=off GOWORK=off GOFLAGS='' \
   go build -mod=readonly -o "$FOXYDNS_TEST_BINARY" .)
-# Non-PR CI packages and validates these same static ELFs after verification.
-if [ "${FOXYTAIL_NATIVE_IN_PACKAGE:-0}" != 1 ]; then
-  bash .github/tools/build-native.sh "$build_dir/native"
-fi
+# Cross-compile and validate the same static ELFs on every push and PR.
+bash .github/tools/build-native.sh "$build_dir/native"
 python3 .github/tools/native-notices.py --check
 bash .github/tools/build-android.sh debug "$build_dir/FoxyTail-debug.apk"
 javac -d "$build_dir/settings-check" android/app/src/main/java/dev/foxderin/tail/SettingsRules.java android/app/src/test/java/dev/foxderin/tail/SettingsRulesTest.java
