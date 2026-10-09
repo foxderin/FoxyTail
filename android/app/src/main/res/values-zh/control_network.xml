@@ -13,11 +13,8 @@
     <string name="network_machine_auth">等待管理员批准设备</string>
     <string name="network_starting">正在启动或确定连接状态</string>
     <string name="network_service">服务</string>
-    <string name="network_start">启动</string>
-    <string name="network_stop">停止</string>
     <string name="network_restart">重启</string>
     <string name="network_mode">模式</string>
-    <string name="network_apply_mode">应用模式</string>
     <string name="network_interrupt">此操作会改变网络连接，可能中断正在进行的传输。是否继续？</string>
     <string name="network_verified">已从模块重新读取并确认请求的服务状态。</string>
     <string name="network_unverified">操作已结束，但尚未确认请求的状态。重试前请刷新。</string>
@@ -25,6 +22,10 @@
     <string name="network_failed">操作失败：%1$s</string>
     <string name="network_self">本机</string>
     <string name="network_runtime">运行时间：%1$s 秒</string>
+    <string name="network_uptime">运行时间</string>
+    <string name="network_offline_count">%1$d 个离线</string>
+    <string name="network_enabled">已启用</string>
+    <string name="network_disabled">已停用</string>
     <string name="network_counts">在线：%1$d · 离线：%2$d</string>
     <string name="network_key_expiry">密钥到期：%1$s</string>
     <string name="network_key_soon">注意：密钥将在七天内到期或已经过期。</string>

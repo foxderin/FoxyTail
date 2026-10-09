@@ -108,9 +108,15 @@ public final class MainActivity extends AppCompatActivity {
     private MaterialButton button(int label, Runnable action) {
         return ControlUi.button(this, getString(label), action);
     }
+    private MaterialButton button(int label, int icon, Runnable action) {
+        return ControlUi.button(this, getString(label), icon, action);
+    }
     private MaterialButton primaryButton(int label, Runnable action) {
         MaterialButton view = new MaterialButton(this); view.setText(label); view.setAllCaps(false); view.setMinHeight(dp(48));
         view.setSingleLine(false); view.setOnClickListener(v -> action.run()); return view;
+    }
+    private MaterialButton primaryButton(int label, int icon, Runnable action) {
+        MaterialButton view = primaryButton(label, action); view.setIconResource(icon); return view;
     }
     private LinearLayout section() {
         LinearLayout view = new LinearLayout(this); view.setOrientation(LinearLayout.VERTICAL); view.setPadding(0, dp(8), 0, dp(12)); return view;
@@ -143,11 +149,11 @@ public final class MainActivity extends AppCompatActivity {
         ScrollView scroll = new ScrollView(this); scroll.setFillViewport(true);
         LinearLayout content = section(); content.setPadding(dp(16), dp(8), dp(16), dp(16)); scroll.addView(content);
         message = text("", 14); message.setAccessibilityLiveRegion(View.ACCESSIBILITY_LIVE_REGION_POLITE); content.addView(message);
-        content.addView(button(R.string.refresh, this::refresh));
-        if (page == 0) content.addView(primaryButton(R.string.import_files, this::importFiles));
+        content.addView(button(R.string.refresh, R.drawable.ic_refresh, this::refresh));
+        if (page == 0) content.addView(primaryButton(R.string.import_files, R.drawable.ic_add, this::importFiles));
         if (page == 1) {
-            content.addView(primaryButton(R.string.pick_files, this::pickFiles));
-            content.addView(button(R.string.files_browse, this::browseFiles));
+            content.addView(primaryButton(R.string.pick_files, R.drawable.ic_add, this::pickFiles));
+            content.addView(button(R.string.files_browse, R.drawable.ic_folder, this::browseFiles));
         }
         cancelControl = button(R.string.cancel, () -> startService(new Intent(this, TransferService.class).setAction(TransferService.CANCEL)));
         content.addView(cancelControl);
@@ -183,12 +189,12 @@ public final class MainActivity extends AppCompatActivity {
                 long size = Models.number(item, "size"), modified = Models.number(item, "mtime");
                 LinearLayout card = ControlUi.card(inboxRows, name);
                 card.addView(text(Models.bytes(this, size) + " · " + timestamp(modified), 14));
-                card.addView(button(R.string.open, () -> export(name, "open")));
-                card.addView(button(R.string.share, () -> export(name, "share")));
-                card.addView(button(R.string.save, () -> export(name, "save")));
-                card.addView(button(R.string.files_export_download, () -> confirmFileAction(R.string.files_export_download, getString(R.string.files_export_confirm, name), "file-export", name)));
-                card.addView(button(R.string.files_delete, () -> confirmFileAction(R.string.files_delete, getString(R.string.files_delete_confirm, name), "file-delete", name)));
-                card.addView(button(R.string.files_copy_path, () -> {
+                card.addView(button(R.string.open, R.drawable.ic_open_in_new, () -> export(name, "open")));
+                card.addView(button(R.string.share, R.drawable.ic_send, () -> export(name, "share")));
+                card.addView(button(R.string.save, R.drawable.ic_download, () -> export(name, "save")));
+                card.addView(button(R.string.files_export_download, R.drawable.ic_download, () -> confirmFileAction(R.string.files_export_download, getString(R.string.files_export_confirm, name), "file-export", name)));
+                card.addView(button(R.string.files_delete, R.drawable.ic_delete, () -> confirmFileAction(R.string.files_delete, getString(R.string.files_delete_confirm, name), "file-delete", name)));
+                card.addView(button(R.string.files_copy_path, R.drawable.ic_content_copy, () -> {
                     getSystemService(ClipboardManager.class).setPrimaryClip(ClipData.newPlainText(name, "/data/adb/foxytail/files/" + name));
                     toast(getString(R.string.files_copied));
                 }));

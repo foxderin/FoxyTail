@@ -13,11 +13,8 @@
     <string name="network_machine_auth">Waiting for administrator approval</string>
     <string name="network_starting">Starting / determining connection state</string>
     <string name="network_service">Service</string>
-    <string name="network_start">Start</string>
-    <string name="network_stop">Stop</string>
     <string name="network_restart">Restart</string>
     <string name="network_mode">Mode</string>
-    <string name="network_apply_mode">Apply mode</string>
     <string name="network_interrupt">This changes network connectivity and may interrupt active transfers. Continue?</string>
     <string name="network_verified">The requested service state was read back from the module.</string>
     <string name="network_unverified">The operation finished, but the requested state is not yet verified. Refresh before retrying.</string>
@@ -25,6 +22,10 @@
     <string name="network_failed">Operation failed: %1$s</string>
     <string name="network_self">This device</string>
     <string name="network_runtime">Uptime: %1$s seconds</string>
+    <string name="network_uptime">Uptime</string>
+    <string name="network_offline_count">%1$d offline</string>
+    <string name="network_enabled">Enabled</string>
+    <string name="network_disabled">Disabled</string>
     <string name="network_counts">Online: %1$d · Offline: %2$d</string>
     <string name="network_key_expiry">Key expiry: %1$s</string>
     <string name="network_key_soon">Warning: key expires within seven days or has expired.</string>

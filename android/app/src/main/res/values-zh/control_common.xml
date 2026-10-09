@@ -16,6 +16,16 @@
     <string name="control_backup">备份与恢复</string>
     <string name="control_files">Taildrop 文件</string>
     <string name="control_menu">导航</string>
+    <string name="nav_group_network">网络</string>
+    <string name="nav_group_services">服务</string>
+    <string name="nav_group_manage">管理</string>
+    <string name="control_more">更多</string>
+    <string name="app_tagline">网络控制台</string>
+    <string name="nav_quick_access">快捷入口</string>
+    <string name="quick_peers_desc">查找设备并复制地址</string>
+    <string name="quick_routing_desc">管理应用与网段范围</string>
+    <string name="quick_tunnel_desc">检查隧道与 DNS</string>
+    <string name="quick_logs_desc">查看活动与错误</string>
     <string name="control_reconnect">核验操作</string>
     <string name="control_acknowledge">确认未知状态</string>
     <string name="control_unknown_title">尚未确认实际结果</string>

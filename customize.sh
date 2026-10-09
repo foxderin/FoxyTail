@@ -6,7 +6,7 @@
 # are provided by the manager).
 #
 # Layout produced by this installer:
-#   $MODPATH/                  boot scripts, companion APK and symlinks
+#   $MODPATH/                  boot scripts and symlinks
 #   $MODPATH/system/bin/       symlinks into $TS_DIR (mounted systemlessly)
 #   /data/adb/foxytail/        $TS_DIR: bin/ scripts/ conf/ state/ backups/
 
@@ -90,7 +90,6 @@ if ! unzip -qqo "$ZIPFILE" -d "$MODPATH" \
   'tailscale/VERSIONS'; then
   abort "! Failed to extract module files (corrupt zip?)"
 fi
-[ -f "$MODPATH/companion/FoxyTail.apk" ] && [ -f "$MODPATH/companion/FoxyTail.apk.sha256" ] || abort '! Companion APK is missing from module package'
 
 # Publish recovery in both roots before touching shared software. An interrupted
 # modules_update install may never become the active module at the next boot.
@@ -477,10 +476,11 @@ set_perm "$MODPATH/install-recovery.sh" 0 0 0755 "u:object_r:system_file:s0"
 set_perm "$MODPATH/uninstall.sh" 0 0 0755 "u:object_r:system_file:s0"
 # Remove the retired manager UI when upgrading an extracted module in place.
 [ ! -e "$MODPATH/webroot" ] || rm -rf "$MODPATH/webroot" || install_abort 'cannot remove retired WebUI'
-set_perm "$MODPATH/install-companion.sh" 0 0 0755 "u:object_r:system_file:s0"
-set_perm_recursive "$MODPATH/companion" 0 0 0755 0644 "u:object_r:system_file:s0"
 # v1.4.0 mounted the APK where KernelSU could hide it from its own process.
 [ ! -e "$MODPATH/system/app/FoxyTail" ] || rm -rf "$MODPATH/system/app/FoxyTail" || install_abort 'cannot remove obsolete companion overlay'
+# v1.5.x bundled and auto-installed the companion APK; it now ships separately.
+[ ! -e "$MODPATH/companion" ] || rm -rf "$MODPATH/companion" || install_abort 'cannot remove retired companion bundle'
+[ ! -e "$MODPATH/install-companion.sh" ] || rm -f "$MODPATH/install-companion.sh" || install_abort 'cannot remove retired companion installer'
 
 # --- Symlinks into the systemless PATH ---------------------------------------
 

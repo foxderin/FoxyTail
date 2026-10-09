@@ -5,7 +5,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: 'Existing, reviewed version tag to release (e.g. v1.0.3)'
+        description: 'Existing version tag to release (e.g. v1.6.0)'
         required: true
         type: string
       prerelease:
@@ -14,54 +14,120 @@ on:
         default: false
 permissions:
   contents: write
-  actions: write
 concurrency:
   group: release-${{ inputs.tag || github.ref_name }}
   cancel-in-progress: false
 jobs:
-  release:
+  verify:
     runs-on: ubuntu-latest
-    timeout-minutes: 40
     env:
       RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-      - name: Resolve the existing release commit
-        id: source
+          ref: ${{ inputs.tag || github.sha }}
+      - name: Tag must name a reviewed version commit
         run: |
           [[ "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-rc\.[0-9]+)?$ ]] || exit 1
           git show-ref --verify "refs/tags/$RELEASE_TAG"
           test "$RELEASE_TAG" = "$(git show "refs/tags/$RELEASE_TAG:module.prop" | sed -n 's/^version=//p')"
-          echo "sha=$(git rev-parse "refs/tags/$RELEASE_TAG^{commit}")" >> "$GITHUB_OUTPUT"
-      - name: Reuse or request exact-source verification and packaging
-        id: verified
-        env:
-          GH_TOKEN: ${{ github.token }}
-          SOURCE_SHA: ${{ steps.source.outputs.sha }}
-        run: |
-          run=$(python3 .github/tools/verified-artifact.py ensure "$SOURCE_SHA" "$RELEASE_TAG")
-          echo "run=$run" >> "$GITHUB_OUTPUT"
-      - uses: actions/download-artifact@v4
+      - uses: actions/setup-go@v5
         with:
-          name: verified-${{ steps.source.outputs.sha }}
-          run-id: ${{ steps.verified.outputs.run }}
-          github-token: ${{ github.token }}
-          path: dist
-      - name: Check downloaded bytes and the release tag
+          go-version-file: native/foxydns/go.mod
+          cache-dependency-path: |
+            native/*/go.mod
+            native/*/go.sum
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+      - name: Cache Gradle dependencies only
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches/modules-2
+            ~/.gradle/wrapper/dists
+          key: ${{ runner.os }}-java21-gradle-deps-${{ hashFiles('android/**/*.gradle', 'android/gradle/wrapper/gradle-wrapper.properties') }}
+          restore-keys: ${{ runner.os }}-java21-gradle-deps-
+      - uses: android-actions/setup-android@v3
+        with:
+          packages: platform-tools
+      - run: sdkmanager 'platforms;android-37.0' 'build-tools;36.0.0'
+      - run: sudo apt-get update && sudo apt-get install -y shellcheck jq mksh
+      - run: bash .github/tools/verify.sh
+  native-kernel:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag || github.sha }}
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: native/foxydns/go.mod
+          cache-dependency-path: |
+            native/*/go.mod
+            native/*/go.sum
+      - run: sudo apt-get update && sudo apt-get install -y iptables
+      - name: Verify real DNS paths in an isolated Linux network
         env:
-          SOURCE_SHA: ${{ steps.source.outputs.sha }}
+          FOXYTAIL_REQUIRE_PRIVILEGED_TESTS: '1'
+        run: bash .github/tools/verify-native-linux.sh
+  release:
+    needs: [verify, native-kernel]
+    runs-on: ubuntu-latest
+    env:
+      RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ inputs.tag || github.sha }}
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: native/foxydns/go.mod
+          cache-dependency-path: |
+            native/*/go.mod
+            native/*/go.sum
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+      - name: Cache Gradle dependencies only
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches/modules-2
+            ~/.gradle/wrapper/dists
+          key: ${{ runner.os }}-java21-gradle-deps-${{ hashFiles('android/**/*.gradle', 'android/gradle/wrapper/gradle-wrapper.properties') }}
+          restore-keys: ${{ runner.os }}-java21-gradle-deps-
+      - uses: android-actions/setup-android@v3
+        with:
+          packages: platform-tools
+      - run: sdkmanager 'platforms;android-37.0' 'build-tools;36.0.0'
+      - run: sudo apt-get update && sudo apt-get install -y zip jq
+      - name: Build the module packages and companion APK
+        env:
+          FOXYTAIL_KEYSTORE_BASE64: ${{ secrets.FOXYTAIL_KEYSTORE_BASE64 }}
+          FOXYTAIL_KEYSTORE_PASSWORD: ${{ secrets.FOXYTAIL_KEYSTORE_PASSWORD }}
+          FOXYTAIL_KEY_ALIAS: ${{ secrets.FOXYTAIL_KEY_ALIAS }}
+          FOXYTAIL_KEY_PASSWORD: ${{ secrets.FOXYTAIL_KEY_PASSWORD }}
         run: |
-          python3 .github/tools/verified-artifact.py check "$RELEASE_TAG" dist
-          git fetch --force origin "refs/tags/$RELEASE_TAG:refs/tags/$RELEASE_TAG"
-          test "$SOURCE_SHA" = "$(git rev-parse "refs/tags/$RELEASE_TAG^{commit}")"
+          export FOXYTAIL_KEYSTORE_PATH="$RUNNER_TEMP/foxytail-companion.p12"
+          trap 'rm -f "$FOXYTAIL_KEYSTORE_PATH"' EXIT
+          test -n "$FOXYTAIL_KEYSTORE_BASE64"
+          umask 077
+          printf '%s' "$FOXYTAIL_KEYSTORE_BASE64" | base64 --decode > "$FOXYTAIL_KEYSTORE_PATH"
+          unset FOXYTAIL_KEYSTORE_BASE64
+          bash .github/tools/build.sh
+          test -z "$(git status --porcelain --untracked-files=no)"
       - name: Publish the verified packages
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ inputs.tag || github.ref_name }}
           files: |
             dist/*.zip
+            dist/*.apk
             dist/SHA256SUMS
           generate_release_notes: true
           prerelease: ${{ inputs.prerelease || contains(inputs.tag || github.ref_name, '-rc.') }}

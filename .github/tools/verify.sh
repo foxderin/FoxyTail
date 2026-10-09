@@ -5,7 +5,7 @@ cd "$(dirname "$0")/../.."
 for cmd in shellcheck python3 jq go sha256sum; do
   command -v "$cmd" >/dev/null || { echo "missing verifier: $cmd" >&2; exit 1; }
 done
-scripts=(customize.sh service.sh install-recovery.sh install-companion.sh uninstall.sh tailscale/settings.sh META-INF/com/google/android/update-binary)
+scripts=(customize.sh service.sh install-recovery.sh uninstall.sh tailscale/settings.sh META-INF/com/google/android/update-binary)
 for file in tailscale/scripts/*; do
   case "$file" in *.yaml) ;; *) scripts+=("$file") ;; esac
 done

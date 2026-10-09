@@ -25,12 +25,55 @@
         <item name="colorOnError">@color/foxy_on_error</item>
         <item name="colorErrorContainer">@color/foxy_error_container</item>
         <item name="colorOnErrorContainer">@color/foxy_on_error_container</item>
-        <item name="android:colorBackground">@color/foxy_surface</item>
-        <item name="android:windowBackground">@color/foxy_surface</item>
+        <item name="colorSurfaceContainerLowest">@color/foxy_surface</item>
+        <item name="android:colorBackground">@color/foxy_background</item>
+        <item name="android:windowBackground">@color/foxy_background</item>
+        <item name="shapeAppearanceSmallComponent">@style/ShapeAppearance.FoxyTail.Small</item>
+        <item name="shapeAppearanceMediumComponent">@style/ShapeAppearance.FoxyTail.Medium</item>
+        <!-- WebUI is flat: borders, not tint overlays -->
+        <item name="elevationOverlayEnabled">false</item>
+        <item name="materialButtonStyle">@style/Widget.FoxyTail.Button</item>
+        <item name="materialButtonOutlinedStyle">@style/Widget.FoxyTail.Button.Outlined</item>
+        <item name="materialButtonTonalStyle">@style/Widget.FoxyTail.Button.Tonal</item>
+        <item name="textInputOutlinedStyle">@style/Widget.FoxyTail.TextInput</item>
+        <item name="textInputOutlinedExposedDropdownMenuStyle">@style/Widget.FoxyTail.TextInput.Exposed</item>
         <item name="android:windowLightStatusBar">@bool/foxy_light_bars</item>
+        <item name="colorControlNormal">?attr/colorOnSurfaceVariant</item>
         <item name="android:statusBarColor">@android:color/transparent</item>
-        <item name="android:navigationBarColor">@color/foxy_surface</item>
+        <item name="android:navigationBarColor">@color/foxy_background</item>
     </style>
     <bool name="foxy_light_bars">true</bool>
+    <!-- WebUI geometry: buttons 11px, panels 16px, dialogs 18px -->
+    <style name="ShapeAppearance.FoxyTail.Small" parent="ShapeAppearance.Material3.SmallComponent">
+        <item name="cornerFamily">rounded</item>
+        <item name="cornerSize">11dp</item>
+    </style>
+    <style name="ShapeAppearance.FoxyTail.Medium" parent="ShapeAppearance.Material3.MediumComponent">
+        <item name="cornerFamily">rounded</item>
+        <item name="cornerSize">16dp</item>
+    </style>
+    <!-- Material3 1.14 pins button/input shapes to its own appearances;
+         the component-level attrs are no-ops there, so override the widget styles. -->
+    <style name="ShapeAppearance.FoxyTail.Input" parent="">
+        <item name="cornerFamily">rounded</item>
+        <item name="cornerSize">12dp</item>
+    </style>
+    <style name="Widget.FoxyTail.Button" parent="Widget.Material3.Button">
+        <item name="shapeAppearance">@style/ShapeAppearance.FoxyTail.Small</item>
+    </style>
+    <style name="Widget.FoxyTail.Button.Outlined" parent="Widget.Material3.Button.OutlinedButton">
+        <item name="shapeAppearance">@style/ShapeAppearance.FoxyTail.Small</item>
+        <item name="android:textColor">@color/foxy_outlined_button_text</item>
+        <item name="iconTint">@color/foxy_outlined_button_text</item>
+    </style>
+    <style name="Widget.FoxyTail.Button.Tonal" parent="Widget.Material3.Button.TonalButton">
+        <item name="shapeAppearance">@style/ShapeAppearance.FoxyTail.Small</item>
+    </style>
+    <style name="Widget.FoxyTail.TextInput" parent="Widget.Material3.TextInputLayout.OutlinedBox">
+        <item name="shapeAppearance">@style/ShapeAppearance.FoxyTail.Input</item>
+    </style>
+    <style name="Widget.FoxyTail.TextInput.Exposed" parent="Widget.Material3.TextInputLayout.OutlinedBox.ExposedDropdownMenu">
+        <item name="shapeAppearance">@style/ShapeAppearance.FoxyTail.Input</item>
+    </style>
     <style name="AppTheme" parent="AppThemeBase" />
 </resources>

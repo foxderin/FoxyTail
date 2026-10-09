@@ -83,6 +83,9 @@ abstract class ControlPage {
     LinearLayout section(String heading) {
         return ControlUi.card(content, heading);
     }
+    LinearLayout section() {
+        return ControlUi.card(content, null);
+    }
     LinearLayout row(LinearLayout parent) {
         LinearLayout row = new LinearLayout(activity); row.setOrientation(LinearLayout.HORIZONTAL);
         parent.addView(row, new LinearLayout.LayoutParams(-1, -2)); return row;
@@ -95,8 +98,38 @@ abstract class ControlPage {
     TextView mono(LinearLayout parent, String text) {
         TextView view = label(parent, text); view.setTypeface(Typeface.MONOSPACE); view.setTextSize(13); return view;
     }
+    TextView badge(LinearLayout parent, String text, int tone) {
+        TextView view = ControlUi.badge(activity, text, tone);
+        LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(-2, -2);
+        if (parent.getOrientation() == LinearLayout.HORIZONTAL) params.setMarginEnd(dp(8)); else params.bottomMargin = dp(4);
+        parent.addView(view, params); return view;
+    }
     Button button(LinearLayout parent, String text, Runnable action) {
-        Button view = ControlUi.button(activity, text, () -> { if (isCurrent()) action.run(); });
+        return place(parent, ControlUi.button(activity, text, () -> { if (isCurrent()) action.run(); }));
+    }
+    Button button(LinearLayout parent, String text, int icon, Runnable action) {
+        return place(parent, ControlUi.button(activity, text, icon, () -> { if (isCurrent()) action.run(); }));
+    }
+    Button primary(LinearLayout parent, String text, Runnable action) {
+        return place(parent, ControlUi.primaryButton(activity, text, () -> { if (isCurrent()) action.run(); }));
+    }
+    Button primary(LinearLayout parent, String text, int icon, Runnable action) {
+        return place(parent, ControlUi.primaryButton(activity, text, icon, () -> { if (isCurrent()) action.run(); }));
+    }
+    Button tonal(LinearLayout parent, String text, Runnable action) {
+        return place(parent, ControlUi.tonalButton(activity, text, () -> { if (isCurrent()) action.run(); }));
+    }
+    ControlUi.MetricTile metric(LinearLayout row, int icon, String caption) { return ControlUi.metric(row, icon, caption); }
+    LinearLayout entryRow(LinearLayout parent, int icon, String title, String description, Runnable action) {
+        return ControlUi.entryRow(parent, icon, title, description, () -> { if (isCurrent()) action.run(); });
+    }
+    LinearLayout linkRow(LinearLayout parent, int icon, String label, Runnable action) {
+        return ControlUi.linkRow(parent, icon, label, () -> { if (isCurrent()) action.run(); });
+    }
+    LinearLayout quickCard(LinearLayout row, int icon, String title, String description, Runnable action) {
+        return ControlUi.quickCard(row, icon, title, description, () -> { if (isCurrent()) action.run(); });
+    }
+    private Button place(LinearLayout parent, Button view) {
         parent.addView(view, new LinearLayout.LayoutParams(parent.getOrientation() == LinearLayout.HORIZONTAL ? 0 : -1, -2, parent.getOrientation() == LinearLayout.HORIZONTAL ? 1 : 0)); return view;
     }
     EditText input(LinearLayout parent, String hint, String initial, int inputType) {

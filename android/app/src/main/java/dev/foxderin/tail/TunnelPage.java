@@ -16,16 +16,16 @@ final class TunnelPage extends ControlPage {
     TunnelPage(ControlActivity activity) {
         super(activity);
         LinearLayout actions = section(s(R.string.network_tunnel));
-        button(actions, s(R.string.network_refresh), this::refresh);
-        button(actions, s(R.string.network_derp_test), this::measureDerp);
+        button(actions, s(R.string.network_refresh), R.drawable.ic_refresh, this::refresh);
+        button(actions, s(R.string.network_derp_test), R.drawable.ic_speed, this::measureDerp);
         tunState = label(actions, s(R.string.network_unknown));
         tunBox = section(s(R.string.network_tunnel));
-        socks = button(actions, s(R.string.network_socks_check), this::checkSocks);
+        socks = button(actions, s(R.string.network_socks_check), R.drawable.ic_network_check, this::checkSocks);
         socks.setEnabled(false);
         socksResult = label(actions, s(R.string.network_unchecked));
         LinearLayout dnsActions = section(s(R.string.network_dns));
         dnsState = label(dnsActions, s(R.string.network_unchecked));
-        button(dnsActions, s(R.string.network_dns_check), this::checkDns);
+        button(dnsActions, s(R.string.network_dns_check), R.drawable.ic_check_circle, this::checkDns);
         button(dnsActions, s(R.string.network_dns_probe), () -> probe(s(R.string.network_dns_probe), result -> {
             if (!result.optBoolean("ok")) notice(s(R.string.network_failed, result.optString("error", s(R.string.network_unknown))));
             else if (Boolean.FALSE.equals(result.opt("transparentAvailable"))) notice(result.optString("transparentUnavailableReason", s(R.string.network_dns_inactive)));
@@ -33,9 +33,10 @@ final class TunnelPage extends ControlPage {
         }, "dns-probe"));
         dnsBox = section(s(R.string.network_dns));
         derpBox = section(s(R.string.network_derp_test));
-        button(content, s(R.string.network_coexist), () -> activity.navigate("coexist"));
-        button(content, s(R.string.network_routing), () -> activity.navigate("routing"));
-        button(content, s(R.string.network_settings), () -> activity.navigate("settings"));
+        LinearLayout related = section(s(R.string.nav_quick_access));
+        linkRow(related, R.drawable.ic_network_check, s(R.string.network_coexist), () -> activity.navigate("coexist"));
+        linkRow(related, R.drawable.ic_alt_route, s(R.string.network_routing), () -> activity.navigate("routing"));
+        linkRow(related, R.drawable.ic_settings, s(R.string.network_settings), () -> activity.navigate("settings"));
         repeat(this::refresh, 15000);
     }
     @Override String title() { return s(R.string.network_tunnel); }

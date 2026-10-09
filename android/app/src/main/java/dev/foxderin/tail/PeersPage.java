@@ -30,7 +30,7 @@ final class PeersPage extends ControlPage {
 
     PeersPage(ControlActivity activity) {
         super(activity);
-        LinearLayout toolbar = section(s(R.string.network_peers));
+        LinearLayout toolbar = section();
         state = label(toolbar, s(R.string.network_unknown));
         search = input(toolbar, s(R.string.network_search), activity.drafts.getString("network.peerSearch", ""), InputType.TYPE_CLASS_TEXT);
         filter = activity.drafts.getInt("network.peerFilter", 0);
@@ -40,7 +40,7 @@ final class PeersPage extends ControlPage {
         choice(toolbar, new String[]{s(R.string.network_list), s(R.string.network_topology)}, tab,
                 selected -> { tab = selected; activity.drafts.putInt("network.peerTab", selected); render(); });
         button(toolbar, s(R.string.network_refresh), this::refresh);
-        inventory = section(s(R.string.network_peers));
+        inventory = section();
         search.addTextChangedListener(new TextWatcher() {
             public void beforeTextChanged(CharSequence value, int start, int count, int after) { }
             public void onTextChanged(CharSequence value, int start, int before, int count) {
@@ -100,11 +100,28 @@ final class PeersPage extends ControlPage {
             inventory.addView(new PeerTopologyView(activity, self, exitId, visible, this::showDetail));
         } else for (JSONObject peer : visible) {
             LinearLayout card = row(inventory); card.setOrientation(LinearLayout.VERTICAL);
-            button(card, peer.optString("hostname") + " · " + s(pathLabel(peer)), () -> showDetail(peer));
+            LinearLayout head = row(card); head.setGravity(android.view.Gravity.CENTER_VERTICAL);
+            android.widget.ImageView osIcon = new android.widget.ImageView(activity);
+            osIcon.setImageResource(osIcon(peer.optString("os"))); osIcon.setColorFilter(com.google.android.material.color.MaterialColors.getColor(osIcon, com.google.android.material.R.attr.colorOnSurfaceVariant));
+            LinearLayout.LayoutParams iconParams = new LinearLayout.LayoutParams(dp(22), dp(22)); iconParams.setMarginEnd(dp(8));
+            head.addView(osIcon, iconParams);
+            boolean online = peer.optBoolean("online");
+            badge(head, s(online ? R.string.network_online : R.string.network_offline), online ? ControlUi.BADGE_OK : ControlUi.BADGE_NEUTRAL);
+            button(head, peer.optString("hostname") + " · " + s(pathLabel(peer)), () -> showDetail(peer));
             label(card, peer.optString("os", "—") + " · " + peer.optString("relay", "—"));
-            for (String ip : addresses(peer)) button(card, s(R.string.network_copy, ip), () -> copy(ip, ip));
+            for (String ip : addresses(peer)) button(card, s(R.string.network_copy, ip), R.drawable.ic_content_copy, () -> copy(ip, ip));
             label(card, s(R.string.network_rx) + ": " + peer.optLong("rxBytes") + " B · " + s(R.string.network_tx) + ": " + peer.optLong("txBytes") + " B");
         }
+    }
+    /* Same OS → icon mapping as the WebUI OsIcon component. */
+    static int osIcon(String os) {
+        String name = os == null ? "" : os.trim().toLowerCase(Locale.ROOT);
+        if (name.contains("android")) return R.drawable.ic_android;
+        if (name.contains("windows")) return R.drawable.ic_desktop_windows;
+        if (name.contains("ios") || name.contains("ipados") || name.contains("iphone") || name.contains("ipad")) return R.drawable.ic_mobile_2;
+        if (name.contains("mac") || name.contains("darwin")) return R.drawable.ic_laptop_mac;
+        if (name.contains("linux") || name.contains("bsd")) return R.drawable.ic_terminal;
+        return R.drawable.ic_devices;
     }
     private void showDetail(JSONObject peer) {
         if (detail != null) detail.dismiss();

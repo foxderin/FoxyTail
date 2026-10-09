@@ -1,6 +1,5 @@
 """Exercise the real packager with local synthetic release assets."""
 import hashlib
-import importlib.util
 import json
 import os
 from pathlib import Path
@@ -8,15 +7,11 @@ import shutil
 import subprocess
 import tempfile
 import unittest
-from unittest.mock import patch
 import zipfile
 
 ROOT = Path(__file__).resolve().parents[1]
 BINARIES = [f'{name}-{arch}' for name in ['tailscaled', 'jq', 'hev-socks5-tunnel'] for arch in ['arm', 'arm64']]
 NATIVE_BINARIES = [f'{name}-{arch}' for name in ['foxydns', 'foxyfiles'] for arch in ['arm', 'arm64']]
-SPEC = importlib.util.spec_from_file_location('verified_artifact', ROOT / '.github/tools/verified-artifact.py')
-verified_artifact = importlib.util.module_from_spec(SPEC)
-SPEC.loader.exec_module(verified_artifact)
 
 
 class ReleaseTests(unittest.TestCase):
@@ -46,7 +41,7 @@ test "$1" = release
 printf 'signed-companion-fixture\\n' >"$2"
 ''')
         shutil.copy(ROOT / 'tailscale/VERSIONS', self.root / 'tailscale/VERSIONS')
-        for relative in ['customize.sh', 'service.sh', 'install-recovery.sh', 'install-companion.sh', 'uninstall.sh', 'update.json', 'LICENSE',
+        for relative in ['customize.sh', 'service.sh', 'install-recovery.sh', 'uninstall.sh', 'update.json', 'LICENSE',
                          'tailscale/settings.sh', 'webroot/index.html',
                          'native/foxydns/THIRD_PARTY_NOTICES.txt',
                          'unwanted/private-data']:
@@ -99,12 +94,9 @@ bash .github/tools/build.sh "$@"
                 self.assertIn('tailscale/scripts/' + path.name, names)
             self.assertEqual(archive.read('THIRD_PARTY_NOTICES.txt'), b'fixture\n')
             self.assertEqual(archive.read('install-recovery.sh'), b'fixture\n')
-            self.assertEqual(archive.read('companion/FoxyTail.apk'), b'signed-companion-fixture\n')
-            self.assertEqual(archive.read('companion/FoxyTail.apk.sha256').decode().strip(), hashlib.sha256(b'signed-companion-fixture\n').hexdigest())
+            self.assertFalse(any('companion' in x or 'install-companion' in x for x in names))
             self.assertNotIn('system/app/FoxyTail/FoxyTail.apk', names)
             self.assertFalse(any(x.startswith('webroot/') or x.startswith('webui/') for x in names))
-            self.assertEqual((archive.getinfo('companion/FoxyTail.apk').external_attr >> 16) & 0o777, 0o644)
-            self.assertEqual(archive.read('install-companion.sh'), b'fixture\n')
             self.assertFalse(any('unwanted' in x or '.github' in x or 'native/foxydns' in x for x in names))
             self.assertEqual(sorted(x for x in names if '/bin/' in x),
                              sorted('tailscale/bin/' + x for x in NATIVE_BINARIES))
@@ -112,11 +104,18 @@ bash .github/tools/build.sh "$@"
         with zipfile.ZipFile(self.root / 'dist/FoxyTail-v1.0.3-full.zip') as archive:
             self.assertEqual(archive.read('THIRD_PARTY_NOTICES.txt'), b'fixture\n')
             self.assertEqual(archive.read('install-recovery.sh'), b'fixture\n')
-            self.assertEqual(archive.read('companion/FoxyTail.apk'), b'signed-companion-fixture\n')
+            self.assertFalse(any('companion' in x for x in archive.namelist()))
             self.assertNotIn('system/app/FoxyTail/FoxyTail.apk', archive.namelist())
             self.assertTrue(all('tailscale/bin/' + x in archive.namelist() for x in BINARIES + NATIVE_BINARIES))
             self.check_native_manifest(archive)
         self.assertFalse((self.root / 'tailscale/native-checksums.txt').exists())
+        self.assertEqual((self.root / 'dist/FoxyTail-v1.0.3.apk').read_bytes(), b'signed-companion-fixture\n')
+        sums = (self.root / 'dist/SHA256SUMS').read_text().splitlines()
+        self.assertEqual(sorted(line.split()[1] for line in sums),
+                         ['FoxyTail-v1.0.3-full.zip', 'FoxyTail-v1.0.3.apk', 'FoxyTail-v1.0.3.zip'])
+        for line in sums:
+            name, digest = line.split()[1], line.split()[0]
+            self.assertEqual(hashlib.sha256((self.root / 'dist' / name).read_bytes()).hexdigest(), digest)
         first_light = (self.root / 'dist/FoxyTail-v1.0.3.zip').read_bytes()
         first = (self.root / 'dist/FoxyTail-v1.0.3-full.zip').read_bytes()
         result = self.build(timezone="Asia/Shanghai")
@@ -193,91 +192,6 @@ abort() { echo "$*" >&2; exit 1; }
 verify_native_bin "$2"
 ''', 'native-installer-test', directory, name], text=True, capture_output=True, timeout=10)
                         self.assertEqual(result.returncode == 0, case == 'valid', result.stdout + result.stderr)
-
-
-class VerifiedArtifactTests(unittest.TestCase):
-    sha = 'a' * 40
-    repository = 'example/FoxyTail'
-
-    def test_artifacts_require_a_successful_trusted_exact_source_run(self):
-        run = {'id': 12, 'head_sha': self.sha, 'event': 'push', 'status': 'completed',
-               'conclusion': 'success', 'path': '.github/workflows/shellcheck.yml',
-               'head_repository': {'full_name': self.repository}}
-        artifact = {'name': 'verified-' + self.sha, 'expired': False,
-                    'workflow_run': {'id': 12, 'head_sha': self.sha}}
-        cases = [
-            (run, artifact, ('ready', '12')),
-            ({**run, 'event': 'workflow_dispatch'}, artifact, ('ready', '12')),
-            ({**run, 'event': 'pull_request'}, artifact, ('missing', '')),
-            ({**run, 'head_sha': 'b' * 40}, artifact, ('missing', '')),
-            ({**run, 'head_repository': {'full_name': 'someone/fork'}}, artifact, ('missing', '')),
-            ({**run, 'path': '.github/workflows/other.yml'}, artifact, ('missing', '')),
-            ({**run, 'conclusion': 'failure'}, artifact, ('failed', '12')),
-            ({**run, 'status': 'in_progress'}, artifact, ('pending', '12')),
-            (run, {**artifact, 'expired': True}, ('missing', '12')),
-            (run, {**artifact, 'workflow_run': {'id': 12, 'head_sha': 'b' * 40}}, ('missing', '12')),
-            (run, {**artifact, 'workflow_run': {'id': 99, 'head_sha': self.sha}}, ('missing', '12')),
-        ]
-        for candidate, asset, expected in cases:
-            with self.subTest(candidate=candidate, asset=asset), patch.object(
-                    verified_artifact, 'api', side_effect=[[{'workflow_runs': [candidate]}], [{'artifacts': [asset]}]]):
-                self.assertEqual(verified_artifact.lookup(self.repository, self.sha), expected)
-        # A newer failure must not fall back to an older successful package.
-        with patch.object(verified_artifact, 'api', return_value=[{'workflow_runs': [
-                {**run, 'id': 13, 'conclusion': 'failure'}, run]}]):
-            self.assertEqual(verified_artifact.lookup(self.repository, self.sha), ('failed', '13'))
-        with patch.object(verified_artifact, 'api', return_value=[{'workflow_runs': [run]}]):
-            self.assertEqual(verified_artifact.lookup(self.repository, self.sha, exclude='12'), ('missing', ''))
-        with patch.object(verified_artifact, 'api', side_effect=[
-                [{'workflow_runs': [{**run, 'id': 14, 'status': 'queued'}, run]}],
-                [{'artifacts': [artifact]}]]):
-            self.assertEqual(verified_artifact.lookup(self.repository, self.sha, exclude='13'), ('ready', '12'))
-        with patch.object(verified_artifact, 'api', side_effect=[
-                [{'workflow_runs': [{**run, 'id': 13}, run]}],
-                [{'artifacts': []}], [{'artifacts': [artifact]}]]):
-            self.assertEqual(verified_artifact.lookup(self.repository, self.sha), ('ready', '12'))
-
-    def test_release_waits_or_dispatches_once_and_never_bypasses_failed_gates(self):
-        scenarios = [
-            ([('ready', '12')], 0),
-            ([('pending', '12'), ('ready', '12')], 0),
-            ([('missing', ''), ('missing', ''), ('pending', '12'), ('ready', '12')], 1),
-            ([('missing', '11'), ('pending', '12'), ('ready', '12')], 1),
-        ]
-        for states, dispatches in scenarios:
-            with self.subTest(states=states), patch.object(verified_artifact, 'lookup', side_effect=states), \
-                    patch.object(verified_artifact, 'api') as api, patch.object(verified_artifact.time, 'sleep'):
-                self.assertEqual(verified_artifact.ensure(self.repository, self.sha, 'v1.3.1'), '12')
-                self.assertEqual(api.call_count, dispatches)
-                if dispatches:
-                    self.assertEqual(api.call_args.kwargs, {'ref': 'v1.3.1'})
-        for states in [[('failed', '12')], [('missing', ''), ('missing', '12')]]:
-            with self.subTest(states=states), patch.object(verified_artifact, 'lookup', side_effect=states), \
-                    patch.object(verified_artifact, 'api'), patch.object(verified_artifact.time, 'sleep'):
-                with self.assertRaises(RuntimeError):
-                    verified_artifact.ensure(self.repository, self.sha, 'v1.3.1')
-        with self.assertRaisesRegex(RuntimeError, 'within 0 seconds'):
-            verified_artifact.ensure(self.repository, self.sha, 'v1.3.1', timeout=0)
-
-    def test_downloaded_packages_must_match_checksums_and_tag(self):
-        with tempfile.TemporaryDirectory() as temporary:
-            directory = Path(temporary)
-            for version, changed, duplicate in [('v1.3.1', False, False), ('v1.3.0', False, False),
-                                                ('v1.3.1', True, False), ('v1.3.1', False, True)]:
-                checksums = []
-                for suffix in ('', '-full'):
-                    path = directory / ('FoxyTail-v1.3.1' + suffix + '.zip')
-                    with zipfile.ZipFile(path, 'w') as archive:
-                        archive.writestr('module.prop', 'version=' + version + '\n')
-                    checksums.append(hashlib.sha256(path.read_bytes()).hexdigest() + '  ' + path.name)
-                if changed:
-                    path.write_bytes(b'changed after upload')
-                (directory / 'SHA256SUMS').write_text('\n'.join(checksums + checksums[:int(duplicate)]) + '\n')
-                if version == 'v1.3.1' and not changed and not duplicate:
-                    verified_artifact.check_packages(directory, 'v1.3.1')
-                else:
-                    with self.assertRaises(ValueError):
-                        verified_artifact.check_packages(directory, 'v1.3.1')
 
 
 if __name__ == '__main__':

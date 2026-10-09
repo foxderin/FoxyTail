@@ -128,18 +128,15 @@ for binary in tailscaled-arm tailscaled-arm64 jq-arm jq-arm64 hev-socks5-tunnel-
 
 NATIVE_DIR="${WORK_DIR}/native"
 bash .github/tools/build-native.sh "$NATIVE_DIR"
-COMPANION_APK="${WORK_DIR}/FoxyTail.apk"
-bash .github/tools/build-android.sh release "$COMPANION_APK"
+# The companion APK is a sibling release artifact; the module never installs it.
+bash .github/tools/build-android.sh release "${DIST_DIR}/FoxyTail-${VERSION}.apk"
 
 # An explicit shipping allowlist prevents tests, local evidence, dependency
 # caches or future development directories from entering a root module ZIP.
 PACKAGE_DIR="${WORK_DIR}/package"
 mkdir -p "$PACKAGE_DIR/tailscale/bin"
-mkdir -p "$PACKAGE_DIR/companion"
-cp "$COMPANION_APK" "$PACKAGE_DIR/companion/FoxyTail.apk"
-(cd "$PACKAGE_DIR/companion" && sha256sum FoxyTail.apk | cut -d' ' -f1 >FoxyTail.apk.sha256)
 cp -R META-INF "$PACKAGE_DIR/"
-cp customize.sh service.sh install-recovery.sh install-companion.sh uninstall.sh module.prop update.json LICENSE "$PACKAGE_DIR/"
+cp customize.sh service.sh install-recovery.sh uninstall.sh module.prop update.json LICENSE "$PACKAGE_DIR/"
 cp native/foxydns/THIRD_PARTY_NOTICES.txt "$PACKAGE_DIR/THIRD_PARTY_NOTICES.txt"
 cp -R tailscale/scripts tailscale/conf "$PACKAGE_DIR/tailscale/"
 cp tailscale/settings.sh tailscale/VERSIONS tailscale/checksums.txt "$PACKAGE_DIR/tailscale/"
@@ -169,5 +166,5 @@ for name in os.listdir(sys.argv[1]):
     os.utime(os.path.join(sys.argv[1], name), (stamp, stamp))
 PYTIME
 (cd "$PACKAGE_DIR" && LC_ALL=C find . -type f | LC_ALL=C sort | zip -X -9 "${DIST_DIR}/FoxyTail-${VERSION}-full.zip" -@ >/dev/null)
-(cd "$DIST_DIR" && sha256sum "FoxyTail-${VERSION}.zip" "FoxyTail-${VERSION}-full.zip" >SHA256SUMS)
+(cd "$DIST_DIR" && sha256sum "FoxyTail-${VERSION}.zip" "FoxyTail-${VERSION}-full.zip" "FoxyTail-${VERSION}.apk" >SHA256SUMS)
 echo "Build complete: ${DIST_DIR} (reviewed manifest unchanged)"

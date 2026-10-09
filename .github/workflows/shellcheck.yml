@@ -6,30 +6,11 @@ on:
   workflow_dispatch:
 permissions:
   contents: read
-  actions: read
-# A branch push and a release dispatch may arrive together. The second run
-# checks for the first run's artifact after acquiring this exact-SHA slot.
 concurrency:
   group: verify-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || github.sha }}
-  cancel-in-progress: false
+  cancel-in-progress: true
 jobs:
-  reuse:
-    runs-on: ubuntu-latest
-    outputs:
-      run: ${{ steps.artifact.outputs.run }}
-    steps:
-      - uses: actions/checkout@v4
-      - name: Find a verified artifact from this exact source commit
-        if: github.event_name != 'pull_request'
-        id: artifact
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          run=$(python3 .github/tools/verified-artifact.py find "$GITHUB_SHA")
-          echo "run=$run" >> "$GITHUB_OUTPUT"
   verify:
-    needs: reuse
-    if: needs.reuse.outputs.run == ''
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -60,8 +41,6 @@ jobs:
         env:
           FOXYTAIL_NATIVE_IN_PACKAGE: ${{ github.event_name != 'pull_request' && '1' || '0' }}
   native-kernel:
-    needs: reuse
-    if: needs.reuse.outputs.run == ''
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -76,56 +55,3 @@ jobs:
         env:
           FOXYTAIL_REQUIRE_PRIVILEGED_TESTS: '1'
         run: bash .github/tools/verify-native-linux.sh
-  package:
-    needs: [reuse, verify, native-kernel]
-    if: github.event_name != 'pull_request' && needs.reuse.outputs.run == ''
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
-        with:
-          go-version-file: native/foxydns/go.mod
-          cache-dependency-path: |
-            native/*/go.mod
-            native/*/go.sum
-      - uses: actions/setup-java@v4
-        with:
-          distribution: temurin
-          java-version: '21'
-      - name: Cache Gradle dependencies only
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.gradle/caches/modules-2
-            ~/.gradle/wrapper/dists
-          key: ${{ runner.os }}-java21-gradle-deps-${{ hashFiles('android/**/*.gradle', 'android/gradle/wrapper/gradle-wrapper.properties') }}
-          restore-keys: ${{ runner.os }}-java21-gradle-deps-
-      - uses: android-actions/setup-android@v3
-        with:
-          packages: platform-tools
-      - run: sdkmanager 'platforms;android-37.0' 'build-tools;36.0.0'
-      - run: sudo apt-get update && sudo apt-get install -y zip jq
-      - name: Build once after both verification gates
-        env:
-          FOXYTAIL_KEYSTORE_BASE64: ${{ secrets.FOXYTAIL_KEYSTORE_BASE64 }}
-          FOXYTAIL_KEYSTORE_PASSWORD: ${{ secrets.FOXYTAIL_KEYSTORE_PASSWORD }}
-          FOXYTAIL_KEY_ALIAS: ${{ secrets.FOXYTAIL_KEY_ALIAS }}
-          FOXYTAIL_KEY_PASSWORD: ${{ secrets.FOXYTAIL_KEY_PASSWORD }}
-        run: |
-          export FOXYTAIL_KEYSTORE_PATH="$RUNNER_TEMP/foxytail-companion.p12"
-          trap 'rm -f "$FOXYTAIL_KEYSTORE_PATH"' EXIT
-          test -n "$FOXYTAIL_KEYSTORE_BASE64"
-          umask 077
-          printf '%s' "$FOXYTAIL_KEYSTORE_BASE64" | base64 --decode > "$FOXYTAIL_KEYSTORE_PATH"
-          unset FOXYTAIL_KEYSTORE_BASE64
-          bash .github/tools/build.sh
-          test -z "$(git status --porcelain --untracked-files=no)"
-      - uses: actions/upload-artifact@v4
-        with:
-          name: verified-${{ github.sha }}
-          path: |
-            dist/*.zip
-            dist/SHA256SUMS
-          if-no-files-found: error
-          retention-days: 30
-          overwrite: true

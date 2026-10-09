@@ -5,10 +5,8 @@ import androidx.activity.OnBackPressedCallback;
 import androidx.core.view.ViewCompat;
 import androidx.core.view.WindowCompat;
 import androidx.core.view.WindowInsetsCompat;
-import androidx.core.view.GravityCompat;
-import androidx.drawerlayout.widget.DrawerLayout;
 import com.google.android.material.appbar.MaterialToolbar;
-import com.google.android.material.navigation.NavigationView;
+import com.google.android.material.bottomnavigation.BottomNavigationView;
 import com.google.android.material.dialog.MaterialAlertDialogBuilder;
 import com.google.android.material.color.MaterialColors;
 import android.content.*;
@@ -37,13 +35,21 @@ public final class ControlActivity extends AppCompatActivity {
     private String destination = "overview", saveId, saveName;
     private final ArrayDeque<String> back = new ArrayDeque<>();
     private LinearLayout root;
-    private TextView status, feedback;
+    private TextView status, feedback, heading;
     private MaterialToolbar toolbar;
-    private DrawerLayout drawer;
-    private NavigationView navigation;
-    private LinearLayout operationActions;
+    private BottomNavigationView bottomNav;
+    private LinearLayout operationActions, pageHost;
     private Button cancel, acknowledge;
     private ScrollView scroll;
+    private com.google.android.material.materialswitch.MaterialSwitch serviceSwitch;
+    private MaterialChoice serviceModes;
+    private ImageButton stripRestart;
+    private JSONObject stripSnapshot;
+    private boolean stripFresh, stripReading, syncing, stripBound;
+    private int stripSequence;
+    private final Handler stripPoller = new Handler(Looper.getMainLooper());
+    /* Bottom navigation destinations, WebUI PRIMARY_NAV order. */
+    static final String[] PRIMARY = {"overview", "peers", "exitnodes", "traffic", "more"};
     private boolean resumed, autoRefresh = true, powerSave, operationWasBusy;
     private Consumer<String> importCallback;
     private ControlPage importOwner;
@@ -64,51 +70,95 @@ public final class ControlActivity extends AppCompatActivity {
         client = ControlClient.get(this);
         observedAccountRevision = saved == null ? client.accountRevision() : saved.getLong("accountRevision", -1);
         WindowCompat.setDecorFitsSystemWindows(getWindow(), false);
-        drawer = new DrawerLayout(this);
         root = new LinearLayout(this); root.setOrientation(LinearLayout.VERTICAL);
-        root.setBackgroundColor(MaterialColors.getColor(root, com.google.android.material.R.attr.colorSurface));
-        drawer.addView(root, new DrawerLayout.LayoutParams(-1, -1));
-        ViewCompat.setOnApplyWindowInsetsListener(root, (view, insets) -> {
-            androidx.core.graphics.Insets bars = insets.getInsets(WindowInsetsCompat.Type.systemBars() | WindowInsetsCompat.Type.displayCutout());
-            view.setPadding(bars.left, bars.top, bars.right, bars.bottom); return insets;
-        });
-        toolbar = new MaterialToolbar(this); toolbar.setNavigationIcon(R.drawable.ic_menu);
-        toolbar.setNavigationContentDescription(R.string.control_menu); toolbar.setNavigationOnClickListener(v -> menu());
+        root.setBackgroundColor(MaterialColors.getColor(root, android.R.attr.colorBackground));
+        toolbar = new MaterialToolbar(this);
+        LinearLayout brand = new LinearLayout(this); brand.setOrientation(LinearLayout.HORIZONTAL); brand.setGravity(android.view.Gravity.CENTER_VERTICAL);
+        ImageView mark = new ImageView(this); mark.setImageResource(R.drawable.ic_hub);
+        mark.setColorFilter(androidx.core.content.ContextCompat.getColor(this, R.color.foxy_accent));
+        android.graphics.drawable.GradientDrawable tile = new android.graphics.drawable.GradientDrawable();
+        tile.setCornerRadius(ControlUi.dp(this, 10));
+        tile.setColor(MaterialColors.getColor(mark, com.google.android.material.R.attr.colorPrimaryContainer));
+        mark.setBackground(tile);
+        int tilePad = ControlUi.dp(this, 6); mark.setPadding(tilePad, tilePad, tilePad, tilePad);
+        brand.addView(mark, new LinearLayout.LayoutParams(ControlUi.dp(this, 32), ControlUi.dp(this, 32)));
+        LinearLayout names = new LinearLayout(this); names.setOrientation(LinearLayout.VERTICAL);
+        TextView appName = ControlUi.text(this, getString(R.string.app_name), 17); appName.setTypeface(null, android.graphics.Typeface.BOLD); appName.setPadding(0, 0, 0, 0); appName.setSingleLine(true);
+        TextView tagline = ControlUi.muted(this, getString(R.string.app_tagline), 11); tagline.setPadding(0, 0, 0, 0); tagline.setSingleLine(true);
+        names.addView(appName); names.addView(tagline);
+        LinearLayout.LayoutParams namesParams = new LinearLayout.LayoutParams(-2, -2); namesParams.setMarginStart(ControlUi.dp(this, 12));
+        brand.addView(names, namesParams);
+        toolbar.addView(brand, new MaterialToolbar.LayoutParams(-2, -2));
         toolbar.getMenu().add(0, 1, 0, R.string.refresh).setIcon(R.drawable.ic_refresh).setShowAsAction(android.view.MenuItem.SHOW_AS_ACTION_ALWAYS);
-        toolbar.setOnMenuItemClickListener(item -> { refreshAvailability(); if (page != null) page.load(); return true; });
+        android.graphics.drawable.Drawable refreshIcon = toolbar.getMenu().getItem(0).getIcon();
+        if (refreshIcon != null) refreshIcon.mutate().setTint(MaterialColors.getColor(toolbar, com.google.android.material.R.attr.colorOnSurfaceVariant));
+        toolbar.setOnMenuItemClickListener(item -> { refreshAvailability(); stripRefresh(); if (page != null) page.load(); return true; });
         root.addView(toolbar, new LinearLayout.LayoutParams(-1, ControlUi.dp(this, 64)));
+        /* WebUI fixed top strip: service switch, mode, restart — operable on every page. */
+        LinearLayout strip = new LinearLayout(this); strip.setOrientation(LinearLayout.HORIZONTAL); strip.setGravity(android.view.Gravity.CENTER_VERTICAL);
+        strip.setPadding(ControlUi.dp(this, 20), 0, ControlUi.dp(this, 8), 0);
+        TextView serviceLabel = ControlUi.muted(this, getString(R.string.network_service), 14); serviceLabel.setPadding(0, 0, 0, 0);
+        strip.addView(serviceLabel, new LinearLayout.LayoutParams(-2, -2));
+        serviceSwitch = new com.google.android.material.materialswitch.MaterialSwitch(this);
+        serviceSwitch.setOnCheckedChangeListener((button, checked) -> { if (!stripBound) stripControl(checked ? "start" : "stop", null); });
+        LinearLayout.LayoutParams switchParams = new LinearLayout.LayoutParams(-2, -2); switchParams.setMarginStart(ControlUi.dp(this, 8));
+        strip.addView(serviceSwitch, switchParams);
+        serviceModes = new MaterialChoice(this, OverviewPage.MODES, 0, this::stripMode);
+        LinearLayout.LayoutParams modesParams = new LinearLayout.LayoutParams(0, -2, 1);
+        modesParams.setMarginStart(ControlUi.dp(this, 8)); modesParams.setMarginEnd(ControlUi.dp(this, 4));
+        strip.addView(serviceModes, modesParams);
+        stripRestart = new ImageButton(this); stripRestart.setImageResource(R.drawable.ic_restart_alt);
+        stripRestart.setColorFilter(MaterialColors.getColor(stripRestart, com.google.android.material.R.attr.colorOnSurfaceVariant));
+        android.util.TypedValue touch = new android.util.TypedValue();
+        getTheme().resolveAttribute(android.R.attr.selectableItemBackgroundBorderless, touch, true);
+        stripRestart.setBackgroundResource(touch.resourceId);
+        stripRestart.setContentDescription(getString(R.string.network_restart));
+        stripRestart.setOnClickListener(v -> stripControl("restart", null));
+        strip.addView(stripRestart, new LinearLayout.LayoutParams(ControlUi.dp(this, 44), ControlUi.dp(this, 44)));
+        root.addView(strip, new LinearLayout.LayoutParams(-1, -2));
+        scroll = new ScrollView(this); scroll.setFillViewport(true);
+        LinearLayout scrollBody = new LinearLayout(this); scrollBody.setOrientation(LinearLayout.VERTICAL);
+        scroll.addView(scrollBody, new ScrollView.LayoutParams(-1, -2));
+        heading = ControlUi.pageTitle(this, ""); heading.setPadding(ControlUi.dp(this, 20), ControlUi.dp(this, 10), ControlUi.dp(this, 20), ControlUi.dp(this, 8));
+        scrollBody.addView(heading);
         status = ControlUi.text(this, "", 12); status.setPadding(ControlUi.dp(this, 20), 0, ControlUi.dp(this, 20), ControlUi.dp(this, 8));
-        status.setAccessibilityLiveRegion(View.ACCESSIBILITY_LIVE_REGION_POLITE); root.addView(status);
+        status.setAccessibilityLiveRegion(View.ACCESSIBILITY_LIVE_REGION_POLITE);
+        /* Long guidance must not fill the viewport; tap expands. */
+        status.setMaxLines(3); status.setEllipsize(android.text.TextUtils.TruncateAt.END);
+        status.setOnClickListener(v -> {
+            status.setMaxLines(status.getMaxLines() == 3 ? Integer.MAX_VALUE : 3);
+            status.setEllipsize(status.getMaxLines() == 3 ? android.text.TextUtils.TruncateAt.END : null);
+        });
+        scrollBody.addView(status);
         operationActions = new LinearLayout(this); operationActions.setPadding(ControlUi.dp(this, 16), 0, ControlUi.dp(this, 16), 0);
         cancel = ControlUi.button(this, getString(R.string.cancel), client::cancelCurrent); operationActions.addView(cancel, new LinearLayout.LayoutParams(0, -2, 1));
         Button reconnect = ControlUi.button(this, getString(R.string.control_reconnect), () -> { client.reconnect(); refreshAvailability(); }); operationActions.addView(reconnect, new LinearLayout.LayoutParams(0, -2, 1));
         acknowledge = ControlUi.button(this, getString(R.string.control_acknowledge), () -> new MaterialAlertDialogBuilder(this)
                 .setTitle(R.string.control_unknown_title).setMessage(R.string.control_unknown_warning)
                 .setNegativeButton(android.R.string.cancel, null).setPositiveButton(android.R.string.ok, (d, w) -> { client.acknowledgeUnknown(); if (page != null) page.load(); }).show()); operationActions.addView(acknowledge, new LinearLayout.LayoutParams(0, -2, 1));
-        root.addView(operationActions);
+        scrollBody.addView(operationActions);
         feedback = ControlUi.text(this, "", 14); feedback.setPadding(ControlUi.dp(this, 20), ControlUi.dp(this, 4), ControlUi.dp(this, 20), ControlUi.dp(this, 4));
-        feedback.setAccessibilityLiveRegion(View.ACCESSIBILITY_LIVE_REGION_POLITE); feedback.setVisibility(View.GONE); root.addView(feedback);
-        scroll = new ScrollView(this); scroll.setFillViewport(true); root.addView(scroll, new LinearLayout.LayoutParams(-1, 0, 1));
-        navigation = new NavigationView(this); navigation.setFitsSystemWindows(true);
-        TextView branding = ControlUi.text(this, getString(R.string.app_name), 28); branding.setPadding(ControlUi.dp(this, 24), ControlUi.dp(this, 48), ControlUi.dp(this, 24), ControlUi.dp(this, 24)); navigation.addHeaderView(branding);
-        ViewCompat.setOnApplyWindowInsetsListener(navigation, (view, insets) -> {
+        feedback.setAccessibilityLiveRegion(View.ACCESSIBILITY_LIVE_REGION_POLITE); feedback.setVisibility(View.GONE); scrollBody.addView(feedback);
+        pageHost = new LinearLayout(this); pageHost.setOrientation(LinearLayout.VERTICAL); scrollBody.addView(pageHost, new LinearLayout.LayoutParams(-1, -2));
+        root.addView(scroll, new LinearLayout.LayoutParams(-1, 0, 1));
+        bottomNav = new BottomNavigationView(this);
+        bottomNav.setItemActiveIndicatorColor(android.content.res.ColorStateList.valueOf(androidx.core.content.ContextCompat.getColor(this, R.color.foxy_primary_container)));
+        bottomNav.setItemIconTintList(androidx.core.content.ContextCompat.getColorStateList(this, R.color.nav_item_text));
+        bottomNav.setItemTextColor(androidx.core.content.ContextCompat.getColorStateList(this, R.color.nav_item_text));
+        int[] navIcons = {R.drawable.nav_dashboard, R.drawable.nav_group, R.drawable.nav_logout, R.drawable.nav_monitoring, R.drawable.nav_more_horiz};
+        int[] navLabels = {R.string.control_overview, R.string.control_peers, R.string.control_exitnodes, R.string.control_traffic, R.string.control_more};
+        for (int i = 0; i < PRIMARY.length; i++) bottomNav.getMenu().add(0, i, i, navLabels[i]).setIcon(navIcons[i]);
+        bottomNav.setOnItemSelectedListener(item -> {
+            if (syncing) return true;
+            navigate(PRIMARY[item.getItemId()]); return true;
+        });
+        root.addView(bottomNav, new LinearLayout.LayoutParams(-1, -2));
+        ViewCompat.setOnApplyWindowInsetsListener(root, (view, insets) -> {
             androidx.core.graphics.Insets bars = insets.getInsets(WindowInsetsCompat.Type.systemBars() | WindowInsetsCompat.Type.displayCutout());
-            branding.setPadding(ControlUi.dp(this, 24), bars.top + ControlUi.dp(this, 24), ControlUi.dp(this, 24), ControlUi.dp(this, 24));
-            view.setPadding(0, 0, 0, bars.bottom); return insets;
+            view.setPadding(bars.left, bars.top, bars.right, 0);
+            bottomNav.setPadding(0, 0, 0, bars.bottom); return insets;
         });
-        for (int i = 0; i < PAGES.length; i++) navigation.getMenu().add(0, 100 + i, i, TITLES[i]).setCheckable(true);
-        navigation.getMenu().setGroupCheckable(0, true, true);
-        navigation.getMenu().add(1, 200, 20, R.string.control_files);
-        navigation.getMenu().add(1, 201, 21, R.string.control_appearance);
-        navigation.setNavigationItemSelectedListener(item -> {
-            drawer.closeDrawer(GravityCompat.START);
-            if (item.getItemId() == 200) openFiles();
-            else if (item.getItemId() == 201) appearance();
-            else navigate(PAGES[item.getItemId() - 100]);
-            return true;
-        });
-        DrawerLayout.LayoutParams navParams = new DrawerLayout.LayoutParams(ControlUi.dp(this, 304), -1); navParams.gravity = GravityCompat.START; drawer.addView(navigation, navParams);
-        setContentView(drawer); ViewCompat.requestApplyInsets(root); showPage(destination); showOperation();
+        setContentView(root); ViewCompat.requestApplyInsets(root); showPage(destination); showOperation();
         getOnBackPressedDispatcher().addCallback(this, new OnBackPressedCallback(true) {
             @Override public void handleOnBackPressed() { goBack(); }
         });
@@ -116,12 +166,21 @@ public final class ControlActivity extends AppCompatActivity {
     @Override protected void onNewIntent(Intent intent) { super.onNewIntent(intent); setIntent(intent); navigate("overview"); }
     @Override protected void onResume() {
         super.onResume(); resumed = true; client.addListener(operationChanged); refreshAvailability();
+        stripRefresh(); stripPoller.removeCallbacks(stripPoll); stripPoller.postDelayed(stripPoll, 15000);
         if (page != null) page.resume();
         BackupImport.get(this).observe(importChanged); deliverImport();
     }
     @Override protected void onPause() {
-        resumed = false; if (page != null) page.pause(); client.removeListener(operationChanged); BackupImport.get(this).remove(importChanged); super.onPause();
+        resumed = false; stripPoller.removeCallbacks(stripPoll);
+        if (page != null) page.pause(); client.removeListener(operationChanged); BackupImport.get(this).remove(importChanged); super.onPause();
     }
+    private final Runnable stripPoll = new Runnable() {
+        @Override public void run() {
+            if (!resumed) return;
+            if (autoRefresh) stripRefresh();
+            stripPoller.postDelayed(this, powerSave ? 30000 : 15000);
+        }
+    };
     @Override protected void onDestroy() { if (page != null) page.close(); importCallback = null; super.onDestroy(); }
     @Override protected void onSaveInstanceState(Bundle state) {
         state.putString("page", destination); state.putBundle("drafts", drafts); state.putString("saveId", saveId); state.putString("saveName", saveName);
@@ -129,12 +188,10 @@ public final class ControlActivity extends AppCompatActivity {
         state.putStringArray("back", back.toArray(new String[0])); super.onSaveInstanceState(state);
     }
     private void goBack() {
-        if (drawer.isDrawerOpen(GravityCompat.START)) { drawer.closeDrawer(GravityCompat.START); return; }
         if (!back.isEmpty()) showPage(back.removeLast());
         else if (!"overview".equals(destination)) showPage("overview");
         else finish();
     }
-    private void menu() { drawer.openDrawer(GravityCompat.START); }
     void navigate(String name) {
         if ("files".equals(name)) { openFiles(); return; }
         if (!destination.equals(name)) back.addLast(destination);
@@ -158,13 +215,78 @@ public final class ControlActivity extends AppCompatActivity {
             case "logs": page = new LogsPage(this); break;
             case "diagnostics": page = new DiagnosticsPage(this); break;
             case "backup": page = new BackupPage(this); break;
+            case "more": page = new MorePage(this); break;
             default: destination = "overview"; page = new OverviewPage(this);
         }
-        scroll.removeAllViews(); scroll.addView(page.content); scroll.scrollTo(0, 0); toolbar.setTitle(page.title()); showMessage("");
-        int selected = java.util.Arrays.asList(PAGES).indexOf(destination); if (selected >= 0) navigation.setCheckedItem(100 + selected);
+        pageHost.removeAllViews(); pageHost.addView(page.content); scroll.scrollTo(0, 0); heading.setText(page.title()); showMessage("");
+        syncing = true;
+        int primary = java.util.Arrays.asList(PRIMARY).indexOf(destination);
+        bottomNav.getMenu().getItem(primary >= 0 ? primary : PRIMARY.length - 1).setChecked(true);
+        syncing = false;
         if (resumed) page.start();
     }
     void openFiles() { startActivity(new Intent(this, MainActivity.class)); }
+    /* Fixed service strip: status reads independent of the active page. */
+    private void stripRefresh() {
+        if (stripReading || isDestroyed()) return;
+        stripReading = true; final int token = ++stripSequence;
+        Context context = getApplicationContext();
+        WeakReference<ControlActivity> owner = new WeakReference<>(this);
+        FILES.execute(() -> {
+            try {
+                JSONObject result = RootApi.json(context, null, null, null, 30, new RootApi.Call(), "status");
+                new Handler(Looper.getMainLooper()).post(() -> {
+                    ControlActivity current = owner.get();
+                    if (current == null || current.isDestroyed() || token != current.stripSequence) return;
+                    current.stripReading = false; current.stripFresh = true; current.stripSnapshot = result; current.renderStrip();
+                });
+            } catch (Exception e) {
+                new Handler(Looper.getMainLooper()).post(() -> {
+                    ControlActivity current = owner.get();
+                    if (current == null || current.isDestroyed() || token != current.stripSequence) return;
+                    current.stripReading = false; current.stripFresh = false; current.renderStrip();
+                });
+            }
+        });
+    }
+    private void renderStrip() {
+        boolean known = stripFresh && OverviewPage.serviceKnown(stripSnapshot);
+        boolean running = known && "running".equals(stripSnapshot.optString("daemon"));
+        boolean busy = client.busy();
+        stripBound = true;
+        serviceSwitch.setChecked(running);
+        /* Unknown state: switch stays disabled (no misleading on/off), but the
+         * recovery restart stays reachable while the daemon may still be alive. */
+        serviceSwitch.setEnabled(known && !busy);
+        String mode = known ? stripSnapshot.optString("mode") : "tun";
+        int index = java.util.Arrays.asList(OverviewPage.MODES).indexOf(mode);
+        serviceModes.setSelection(Math.max(0, index));
+        serviceModes.setEnabled(known && !busy);
+        stripBound = false;
+        stripRestart.setEnabled(!busy && (known ? running : OverviewPage.stopAvailable(stripSnapshot, stripFresh)));
+    }
+    private void stripMode(int index) {
+        if (stripBound) return;
+        stripControl("mode", OverviewPage.MODES[index]);
+    }
+    private void stripControl(String action, String nextMode) {
+        boolean known = stripFresh && OverviewPage.serviceKnown(stripSnapshot);
+        boolean allowed;
+        switch (action) {
+            case "start": case "mode": allowed = known; break;
+            default: allowed = OverviewPage.stopAvailable(stripSnapshot, stripFresh);
+        }
+        if (client.busy() || !allowed) { renderStrip(); return; }
+        String expectedMode = nextMode == null ? stripSnapshot == null ? "" : stripSnapshot.optString("mode") : nextMode;
+        Runnable run = () -> client.submit(getString(R.string.network_service), result -> {
+            showMessage(result.optBoolean("ok") ? getString(R.string.network_unverified) : getString(R.string.network_failed, result.optString("error", getString(R.string.network_unknown))));
+            stripRefresh();
+        }, "mode".equals(action) ? new String[]{"mode-set", expectedMode} : new String[]{"control", action});
+        if ("start".equals(action)) run.run();
+        else new MaterialAlertDialogBuilder(this).setTitle(R.string.network_service).setMessage(R.string.network_interrupt)
+                .setNegativeButton(android.R.string.cancel, (d, w) -> renderStrip())
+                .setPositiveButton(android.R.string.ok, (d, w) -> run.run()).show();
+    }
     void openUrl(String value) {
         try {
             Uri uri = Uri.parse(value);
@@ -173,6 +295,7 @@ public final class ControlActivity extends AppCompatActivity {
         } catch (Exception e) { showMessage(RootApi.message(e)); }
     }
     void showMessage(String text) {
+        if (text != null && text.contentEquals(status.getText())) text = "";
         if (!isDestroyed()) { feedback.setText(text); feedback.setVisibility(text == null || text.isEmpty() ? View.GONE : View.VISIBLE); }
     }
     private void showOperation() {
@@ -181,13 +304,16 @@ public final class ControlActivity extends AppCompatActivity {
             observedAccountRevision = client.accountRevision(); invalidateAccountState();
             if (resumed && page != null && ("peers".equals(destination) || "exitnodes".equals(destination) || "coexist".equals(destination))) showPage(destination);
         }
-        status.setText(client.message()); cancel.setVisibility(client.canCancel() ? View.VISIBLE : View.GONE);
+        status.setText(client.message());
+        if (feedback.getText().toString().contentEquals(status.getText())) { feedback.setText(""); feedback.setVisibility(View.GONE); } cancel.setVisibility(client.canCancel() ? View.VISIBLE : View.GONE);
         acknowledge.setVisibility(client.isUnknown() ? View.VISIBLE : View.GONE);
         operationActions.setVisibility(client.busy() ? View.VISIBLE : View.GONE);
         boolean active = client.busy();
         String completed = client.lastCommand();
         if (operationWasBusy && !active && resumed && page != null) page.operationFinished(completed);
+        if (operationWasBusy && !active) stripRefresh();
         operationWasBusy = active;
+        renderStrip();
     }
     void refreshAvailability() {
         client.refreshAvailability();
@@ -215,7 +341,7 @@ public final class ControlActivity extends AppCompatActivity {
         }
     }
     int accountRevision() { return accountRevision; }
-    private void appearance() {
+    void appearance() {
         String[] options = {getString(R.string.control_language), getString(R.string.control_theme)};
         new MaterialAlertDialogBuilder(this).setTitle(R.string.control_appearance).setItems(options, (d, which) -> {
             String key = which == 0 ? "language" : "theme";

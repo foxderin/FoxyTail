@@ -16,6 +16,16 @@
     <string name="control_backup">Backup and restore</string>
     <string name="control_files">Taildrop files</string>
     <string name="control_menu">Navigate</string>
+    <string name="nav_group_network">Network</string>
+    <string name="nav_group_services">Services</string>
+    <string name="nav_group_manage">Manage</string>
+    <string name="control_more">More</string>
+    <string name="app_tagline">Network console</string>
+    <string name="nav_quick_access">Quick access</string>
+    <string name="quick_peers_desc">Find devices and copy addresses</string>
+    <string name="quick_routing_desc">Manage apps and subnet scope</string>
+    <string name="quick_tunnel_desc">Check the tunnel and DNS</string>
+    <string name="quick_logs_desc">Inspect activity and errors</string>
     <string name="control_reconnect">Check operation</string>
     <string name="control_acknowledge">Acknowledge unknown</string>
     <string name="control_unknown_title">The result is not confirmed</string>

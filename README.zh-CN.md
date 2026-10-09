@@ -44,11 +44,11 @@ FoxyTail 的灵感来自 [anasfanani/Magisk-Tailscaled](https://github.com/anasf
 
 两种包均内置 ARM/ARM64 的 `foxydns` 和 `foxyfiles`，按随包 native 清单校验。开机先由模块根目录的稳定代码恢复中断升级，再加载可替换的 settings/scripts；仅恢复与备份所有权一致的事务。记录无法证明或恢复失败时保留日志与备份、推迟启动，不猜测恢复对象。
 
-两种包均包含 `companion/FoxyTail.apk`。Android 8.0+ 开机后通过包管理器安装/更新为普通应用 `dev.foxderin.tail`，保留同签名 App 数据；不再挂载到 `system/app`，避免 KernelSU 默认卸载模块后桌面或 App 自身读不到 APK 资源。安装失败记录于 `/data/adb/foxytail/run/companion-install.log`，不会阻断网络服务或自动卸载原 App。首次使用请在 Magisk/KernelSU **单独允许 FoxyTail 的 root 权限**；ADB 获得 root 不等于 App 获得 root。应用不会自动改写 root 授权或全局隐藏设置。
+签名 APK `dev.foxderin.tail` 作为独立发版产物（`FoxyTail-<版本>.apk`，纳入 `SHA256SUMS`），不再打进模块 ZIP。请在 Android 中自行安装或更新；模块不再触碰 App 安装。v1.6.0 起停用开机自动安装器：App 是 `/data/app` 下的普通用户应用，KernelSU 卸载模块永远不会影响它。首次使用请在 Magisk/KernelSU **单独允许 FoxyTail 的 root 权限**；ADB 获得 root 不等于 App 获得 root。应用不会自动改写 root 授权或全局隐藏设置。
 
 已在 Android 16/OPlus + ReSukiSU 真机确认 v1.4.0 故障原因：桌面和 App 的挂载命名空间缺少 systemless APK，资源读取 ENOENT；ADB namespace 中权限正常并不能证明 App 可读。修复安装脚本已通过同签名 `pm install -r` 在该机更新，网络服务保持运行；不为此修改全局卸载模块策略。
 
-**v1.5.0 控制面切换**：随模块更新配套 APK 并重启，不清除 Tailscale 身份、配置或文件。原 WebUI 和管理器 JS 桥已移除，日常管理从桌面 FoxyTail 打开；CLI 救援入口仍保留。App 最低 Android 8.0，旧系统只保留模块 CLI。不同签名 debug App 需由用户先卸载，模块不会替用户删除数据绕过签名检查；不兼容协议会禁用 App 写操作。
+**v1.5.0 控制面切换**：升级模块，并从同一发版页手动安装配套签名 APK，然后重启；不清除 Tailscale 身份、配置或文件。原 WebUI 和管理器 JS 桥已移除，日常管理从桌面 FoxyTail 打开；CLI 救援入口仍保留。App 最低 Android 8.0，旧系统只保留模块 CLI。不同签名 debug App 需由用户先卸载，模块不会替用户删除数据绕过签名检查；不兼容协议会禁用 App 写操作。
 
 ## 卸载与重装
 
@@ -129,7 +129,7 @@ App 区分 root 启动失败、授权不足、模块不可读、协议不兼容�
 
 设置 `JAVA_HOME` 与 `ANDROID_HOME` 后运行 `bash .github/tools/build-android.sh debug dist/FoxyTail-debug.apk`。正式构建把 `debug` 改为 `release`，必须提供 `FOXYTAIL_KEYSTORE_PATH`、`FOXYTAIL_KEYSTORE_PASSWORD`、`FOXYTAIL_KEY_ALIAS`、`FOXYTAIL_KEY_PASSWORD`；缺失即失败，不回退到临时签名。签名文件不入仓库，应离线备份；丢失后不能无损升级已安装应用。CI 仅可信打包任务读取签名 secrets，PR 只构建 debug。
 
-原生 App 仪器回归：debug 构建同时生成测试 APK，安装两者后执行 `adb -s <设备> shell am instrument -w dev.foxderin.tail.test/dev.foxderin.tail.BridgeInstrumentation`。覆盖 root 错误/回执、CIDR/场景、协议/端口、共存片段、传输状态、二进制与只读导出边界。实际界面和 root 后端仍需设备 smoke；构建/lint 或主机测试不能替代 App UID 授权、OEM 后台限制和真实网络验收。
+原生 App 仪器回归：先执行 `./gradlew :app:assembleDebugAndroidTest` 生成测试 APK，安装两者后运行 `adb -s <设备> shell am instrument -w dev.foxderin.tail.test/dev.foxderin.tail.BridgeInstrumentation`。覆盖 root 错误/回执、CIDR/场景、协议/端口、共存片段、传输状态、二进制与只读导出边界。实际界面和 root 后端仍需设备 smoke；构建或主机测试不能替代 App UID 授权、OEM 后台限制和真实网络验收。
 
 <!-- 截图占位：docs/screenshots/*.png（待补充，见 Roadmap） -->
 
@@ -145,11 +145,11 @@ App 区分 root 启动失败、授权不足、模块不可读、协议不兼容�
 
 ## 验证与发布
 
-开发工具链为 Go 1.27.1、Python、ShellCheck 及上述 Android 工具链，不再需要 Node/pnpm/WebView。运行 `bash .github/tools/verify.sh`，检查 shell、隔离后端回归、native race/vet、Android debug/测试 APK 构建与 lint、设置纯逻辑回归、原生二进制和版本元数据。
+开发工具链为 Go 1.27.1、Python、ShellCheck 及上述 Android 工具链，不再需要 Node/pnpm/WebView。运行 `bash .github/tools/verify.sh`，检查 shell、隔离后端回归、native race/vet、Android debug APK 构建、设置纯逻辑回归、原生二进制和版本元数据。
 
-CI 对独立 Python 测试模块最多四路并行，保留全部测试及失败状态；Android debug 构建和 lint 共用一次 Gradle 调用。Go 与 Gradle 依赖缓存不含签名密钥/发布产物。非 PR CI 的 ARM/ARM64 构建与静态 ELF 校验只在打包阶段执行一次，PR 和本地验证仍保留交叉编译；native race 与独立 Linux 内核门禁不跳过。
+CI 对独立 Python 测试模块最多四路并行，保留全部测试及失败状态。Go 与 Gradle 依赖缓存不含签名密钥/发布产物。发版工作流在一次运行内完成验证、打包与发布：模块 ZIP 加独立 APK 产物，全部纳入 SHA256SUMS；native race 与独立 Linux 内核门禁不跳过。
 
-发布前运行 `.github/tools/version-bump.sh`，提交版本元数据后创建版本标签。分支推送执行 Verify 和 Linux 内核测试，通过后按已审阅的 `tailscale/checksums.txt` 构建两种 ZIP 并保存 30 天。Release 仅复用同仓库、标签对应完整提交 SHA 的成功 Verify 产物，排除 PR 产物；验证进行中则等待，没有可复用产物则对现有标签触发一次 Verify。失败门禁阻止发布，上传前再次核对校验和与版本；手动 Release 走同一路径。
+发布前运行 `.github/tools/version-bump.sh`，提交版本元数据后创建版本标签。推送标签触发一条 Release 工作流：验证门禁（shell、后端回归、native race/vet、Android debug 构建）与独立 Linux 内核门禁通过后，同一运行按已审阅的 `tailscale/checksums.txt` 构建并签名模块 ZIP 与配套 APK，连同 SHA256SUMS 一并发布。门禁失败即停止发布，不存在跨运行的产物复用；对现有标签手动触发 Release 走同一路径。
 
 更新依赖时显式运行 `bash .github/tools/build.sh --update-checksums` 生成候选文件，核对上游来源后再审阅、替换并提交；该模式不打包。
 
