@@ -290,8 +290,8 @@ test ! -L "$lock.waiters/$_LOCK_TOKEN"
         self.assertEqual(output, '4242:123456:fixture-boot')
 
     def test_pid_reuse_does_not_keep_old_primary_or_ticket_alive(self):
-        live = self.start('printf "%s\\n" "$$" >"$TS_RUN_DIR/live.ready"; IFS= read -r proceed')
-        pid = self.wait_for('live.ready').read_text().strip()
+        live = self.start('IFS= read -r proceed')
+        pid = str(live.pid)
         proc = self.directory / 'proc' / pid
         proc.mkdir(parents=True)
         (proc / 'stat').write_text(

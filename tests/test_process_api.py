@@ -86,6 +86,21 @@ _op_exec 3 sh -c 'printf ready; exit 7' ''', ok=False)
         self.assertEqual(result.returncode, 7)
         self.assertLess(time.monotonic() - start, 1.5, 'completed CLI waited for its timeout monitor')
 
+    def test_fast_cli_waits_for_monitor_trap_before_stopping_it(self):
+        start = time.monotonic()
+        result = self.shell('''command -v shopt >/dev/null && shopt -s expand_aliases
+register_trap() { command sleep 0.2; trap "$@"; }
+alias trap=register_trap
+. "$TS_SCRIPTS_DIR/foxytail.webapi-common.sh"
+unalias trap
+trap 'exit 99' TERM INT HUP
+_op_starttime() { kill -0 "$1" 2>/dev/null && printf 100; }
+fast_cli() { printf ready; return 7; }
+_op_exec 3 fast_cli''', ok=False)
+        self.assertEqual(result.stdout, 'ready')
+        self.assertEqual(result.returncode, 7)
+        self.assertLess(time.monotonic() - start, 1.5, 'completed CLI waited for its timeout monitor')
+
     def test_multicall_cli_is_not_mistaken_for_daemon(self):
         proc = self.base / 'proc'
         for pid, name in [('101', 'tailscaled'), ('102', 'tailscale')]:

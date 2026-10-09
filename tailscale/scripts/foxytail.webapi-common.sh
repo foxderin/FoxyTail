@@ -204,11 +204,14 @@ _op_exec() {
   [ -z "${_OP_DIR:-}" ] || _oe_record="${_OP_DIR}/child.${_oe_pid}"
   printf '%s %s\n' "${_oe_pid}" "${_oe_start}" >"${_oe_record}"
   _oe_timeout="${_oe_record}.timeout"
+  _oe_ready="${_oe_record}.ready"
+  rm -f "${_oe_ready}"
   _op_cancelled && _op_signal "${_oe_record}" TERM
   (
     sleep "${_oe_seconds}" &
     _oe_sleep=$!
     trap 'kill "${_oe_sleep}" 2>/dev/null; exit 0' TERM INT HUP
+    : >"${_oe_ready}"
     wait "${_oe_sleep}" 2>/dev/null
     if _op_pid_alive "${_oe_record}"; then
       : >"${_oe_timeout}"
@@ -218,6 +221,8 @@ _op_exec() {
     fi
   ) >/dev/null 2>&1 &
   _oe_timer=$!
+  # Fast children can exit before the timer installs its signal handler.
+  while [ ! -f "${_oe_ready}" ] && kill -0 "${_oe_timer}" 2>/dev/null; do sleep 0.01; done
   wait "${_oe_pid}"
   _oe_rc=$?
   kill "${_oe_timer}" 2>/dev/null
@@ -233,7 +238,7 @@ _op_exec() {
     done
     rm -f "${_oe_child}"
   done
-  rm -f "${_oe_record}" "${_oe_timeout}"
+  rm -f "${_oe_record}" "${_oe_timeout}" "${_oe_ready}"
   _op_cancelled && return 130
   return "${_oe_rc}"
 }
