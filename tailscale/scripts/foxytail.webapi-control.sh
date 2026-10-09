@@ -189,8 +189,11 @@ cmd_operation_start() {
     jerr 'cannot claim operation; check operation-status before another change'
   fi
   # Fork retains arguments only in memory, and no app descriptor in the worker.
+  # The explicit subshell is required: dash keeps the caller's stdout open when
+  # a function is backgrounded directly, starving the caller's pipe until the
+  # operation finishes.
   trap '' HUP
-  _control_worker "${_cs_dir}" "$@" </dev/null >/dev/null 2>&1 &
+  ( _control_worker "${_cs_dir}" "$@" ) </dev/null >/dev/null 2>&1 &
   _cs_i=0
   while [ ! -f "${_cs_dir}/accepted" ] && [ "${_cs_i}" -lt 100 ]; do
     sleep 0.02
