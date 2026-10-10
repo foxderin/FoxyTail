@@ -53,7 +53,7 @@ final class ToolsData {
             if (!v6) { String[] octets = address.split("\\.", -1); if (octets.length != 4) throw new IllegalArgumentException("Invalid IPv4 address"); for (String octet : octets) if (!octet.matches("0|[1-9][0-9]{0,2}") || Integer.parseInt(octet) > 255) throw new IllegalArgumentException("Invalid IPv4 address"); }
             InetAddress parsed = InetAddress.getByName(address); byte[] raw = parsed.getAddress();
             if (parsed.isAnyLocalAddress() || parsed.isLoopbackAddress() || parsed.isLinkLocalAddress() || parsed.isMulticastAddress() || (v6 && raw.length != 16) || (!v6 && ((raw[0] & 255) == 0 || (raw[0] & 255) >= 224))) throw new IllegalArgumentException("Address must be unicast");
-            cidrs.add(parsed.getHostAddress() + (v6 ? "/128" : "/32"));
+            cidrs.add(SettingsRules.cidr(address + (v6 ? "/128" : "/32")));
         }
         if (cidrs.isEmpty()) throw new IllegalArgumentException("No current addresses");
         String proxy = "FoxyTail-Tailnet"; StringBuilder text = new StringBuilder("dns:\n  enable: true\n  nameserver-policy:\n    ").append(JSONObject.quote("+." + suffix)).append(": ").append(JSONObject.quote("tcp://127.0.0.1:" + dns.getInt("port") + "#DIRECT")).append("\n  direct-nameserver-follow-policy: true\n");

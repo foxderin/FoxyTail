@@ -202,19 +202,24 @@ cmd_diag() {
 
 # --- taildrop files ---------------------------------------------------------------
 
+_file_name_valid() {
+  _fn_checked=$(jqr -n -e -r --arg n "$1" '$n | select(length > 0 and utf8bytelength <= 255 and . != "." and . != ".." and . != ".taildrop" and . != ".outgoing" and ((contains("/") or contains("\\")) | not) and all(explode[]; . >= 32 and (. < 127 or . > 159)))' 2>/dev/null) || return 1
+  [ "${_fn_checked}" = "$1" ]
+}
+
 cmd_files_inbox() {
   mkdir -p "${FILES_DIR}" 2>/dev/null
-  ls -A "${FILES_DIR}" 2>/dev/null | while IFS= read -r _fi_name; do
-    _fi_path="${FILES_DIR}/${_fi_name}"
+  for _fi_path in "${FILES_DIR}"/* "${FILES_DIR}"/.[!.]* "${FILES_DIR}"/..?*; do
+    _fi_name=${_fi_path##*/}
     [ "${_fi_name}" != .taildrop ] && [ "${_fi_name}" != .outgoing ] && [ -f "${_fi_path}" ] && [ ! -L "${_fi_path}" ] || continue
+    if ! _file_name_valid "${_fi_name}"; then printf '%s\n' '{"ignored":1}'; continue; fi
     _fi_size=$(stat -c %s "${_fi_path}" 2>/dev/null)
     _fi_mtime=$(stat -c %Y "${_fi_path}" 2>/dev/null)
     case "${_fi_size}" in '' | *[!0-9]*) _fi_size=0 ;; esac
     case "${_fi_mtime}" in '' | *[!0-9]*) _fi_mtime=0 ;; esac
-    _fi_name=$(printf '%s' "${_fi_name}" | _sanitize_text)
     jqr -n -c --arg n "${_fi_name}" --argjson s "${_fi_size}" --argjson m "${_fi_mtime}" \
       '{name:$n,size:$s,mtime:$m}'
-  done | jqr -s -c 'sort_by(-.mtime) | {ok:true,files:.}'
+  done | jqr -s -c '{ok:true,files:(map(select(has("name"))) | sort_by(-.mtime)),ignored:(map(.ignored // 0) | add // 0)} | if .ignored == 0 then del(.ignored) else . end'
 }
 
 
@@ -223,9 +228,10 @@ cmd_file_receive() {
   mkdir -p "${FILES_DIR}" || jerr 'file-receive: cannot create private inbox'
   _fr_out=$(_op_exec 60 "${TS_BIN_DIR}/foxyfiles" receive --source /sdcard --destination "${FILES_DIR}" 2>&1) ||
     jerr "file-receive failed: ${_fr_out:-cancelled}"
-  printf '%s' "${_fr_out}" | jqr -e '.ok==true and (.received|type=="number") and (.received>=0) and (.files|type=="array") and (.received==(.files|length)) and all(.files[]; type=="string" and length>0 and .!=".taildrop" and .!="." and .!=".." and ((contains("/") or contains("\\") or contains("\r") or contains("\n"))|not))' >/dev/null || jerr 'invalid Taildrop import response'
+  printf '%s' "${_fr_out}" | jqr -e '.ok==true and (.received|type=="number") and (.received>=0) and (.received==(.received|floor)) and ((.ignored // 0)|type=="number") and ((.ignored // 0)>=0) and ((.ignored // 0)==((.ignored // 0)|floor)) and (.files|type=="array") and (.received==(.files|length)) and all(.files[]; type=="string" and length>0 and utf8bytelength<=255 and .!=".taildrop" and .!=".outgoing" and .!="." and .!=".." and ((contains("/") or contains("\\"))|not) and all(explode[]; .>=32 and (. < 127 or . > 159)))' >/dev/null || jerr 'invalid Taildrop import response'
   _fr_names=$(printf '%s' "${_fr_out}" | jqr -r '.files[]') || jerr 'invalid Taildrop import response'
   _fr_count=$(printf '%s' "${_fr_out}" | jqr -r '.received') || jerr 'invalid Taildrop import response'
+  _fr_ignored=$(printf '%s' "${_fr_out}" | jqr -r '.ignored // 0') || jerr 'invalid Taildrop import response'
   _fr_exported=0
   while IFS= read -r _fr_name; do
     [ -n "${_fr_name}" ] || continue
@@ -233,17 +239,15 @@ cmd_file_receive() {
   done <<EOF_FILES
 ${_fr_names}
 EOF_FILES
-  jqr -n -c --argjson count "${_fr_count}" --argjson exported "${_fr_exported}" \
-    '{ok:true,received:$count,exported:$exported}'
+  jqr -n -c --argjson count "${_fr_count}" --argjson exported "${_fr_exported}" --argjson ignored "${_fr_ignored}" \
+    '{ok:true,received:$count,exported:$exported} + (if $ignored > 0 then {ignored:$ignored} else {} end)'
 }
 
 # Inbox item operations: delete one, clear all, export one to Download, or
 # print one for the webapi caller to download. Names are validated to live
 # strictly inside the inbox directory.
 _file_inbox_path() {
-  case "$1" in
-    '' | . | .. | .taildrop | .outgoing | */* | *\\*) return 1 ;;
-  esac
+  _file_name_valid "$1" || return 1
   [ ! -L "${FILES_DIR}/$1" ] || return 1
   printf '%s/%s' "${FILES_DIR}" "$1"
 }
@@ -258,12 +262,13 @@ cmd_file_delete() {
 
 cmd_file_clear() {
   mkdir -p "${FILES_DIR}" 2>/dev/null
-  _fc_removed=0
+  _fc_removed=0 _fc_ignored=0
   for _fc_path in "${FILES_DIR}"/* "${FILES_DIR}"/.[!.]* "${FILES_DIR}"/..?*; do
     [ "${_fc_path##*/}" != .taildrop ] && [ "${_fc_path##*/}" != .outgoing ] && [ -f "${_fc_path}" ] && [ ! -L "${_fc_path}" ] || continue
+    if ! _file_name_valid "${_fc_path##*/}"; then _fc_ignored=$((_fc_ignored + 1)); continue; fi
     rm -f "${_fc_path}" && _fc_removed=$((_fc_removed + 1))
   done
-  jqr -n -c --argjson r "${_fc_removed}" '{ok:true,removed:$r}'
+  jqr -n -c --argjson r "${_fc_removed}" --argjson ignored "${_fc_ignored}" '{ok:true,removed:$r} + (if $ignored > 0 then {ignored:$ignored} else {} end)'
 }
 
 # Both automatic and manual exports use exclusive creation. The destination

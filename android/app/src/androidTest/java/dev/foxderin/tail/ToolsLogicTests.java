@@ -6,6 +6,11 @@ import java.util.*;
 public final class ToolsLogicTests {
     public static void run() throws Exception {
         require(ToolsData.port("1") && ToolsData.port("65535") && !ToolsData.port("0") && !ToolsData.port("65536") && !ToolsData.port("-1") && !ToolsData.port("1;id"), "Port trust boundary");
+        require(WebFormat.bytes(1023).equals("1023 B") && WebFormat.bytes(1024).equals("1.0 KiB") && WebFormat.bytes(1048576).equals("1.0 MiB") && WebFormat.bytes(1073741824).equals("1.00 GiB"), "Binary unit boundaries retain baseline precision");
+        require(WebFormat.uptime(59).equals("59s") && WebFormat.uptime(60).equals("1m") && WebFormat.uptime(3599).equals("59m") && WebFormat.uptime(3600).equals("1h 0m") && WebFormat.uptime(86400).equals("1d 0h"), "Uptime boundaries do not round into the next unit");
+        java.util.TimeZone previousZone = java.util.TimeZone.getDefault();
+        try { java.util.TimeZone.setDefault(java.util.TimeZone.getTimeZone("GMT+08:00")); require(WebFormat.time(0).equals("-") && WebFormat.time(1).equals("1970-01-01 08:00"), "File timestamp uses local minute precision and missing sentinel"); }
+        finally { java.util.TimeZone.setDefault(previousZone); }
         JSONObject serve = new JSONObject("{\"TCP\":{\"443\":{\"HTTP\":true},\"8443\":{\"HTTPS\":true},\"10000\":{\"TCPForward\":\"localhost:22\",\"TerminateTLS\":\"node.test.ts.net\"}},\"Web\":{\"node:443\":{\"Handlers\":{\"/exact\":{\"Proxy\":\"http://localhost:3000\"}}},\"node:8443\":{\"Handlers\":{\"/a/b\":{\"Text\":\"hello\"}}},\"node:1234\":{\"Handlers\":{\"/unknown\":{\"Path\":\"/tmp\"}}}},\"AllowFunnel\":{\"node:8443\":true,\"node:10000\":true}}");
         List<ToolsData.Mapping> mappings = ToolsData.mappings(serve);
         require(mappings.size() == 4, "All protocol shapes retained");

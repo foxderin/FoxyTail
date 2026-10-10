@@ -100,7 +100,7 @@
     <string name="cs_trial_confirm">Confirm current trial</string>
     <string name="cs_trial_revert">Revert / retry failed rollback</string>
     <string name="cs_trial_none">No trial is recorded by the module.</string>
-    <string name="cs_trial_state">Trial %1$s\nState: %2$s\nRemaining: %3$d seconds (module countdown)\nPrevious: %4$s\nCandidate: %5$s\nReason: %6$s</string>
+    <string name="cs_trial_state">Trial %1$s\nState: %2$s\nRemaining: %3$d seconds (local estimate; module enforces expiry)\nPrevious: %4$s\nCandidate: %5$s\nReason: %6$s</string>
     <string name="cs_trial_confirm_warning">Keep this candidate? Confirm only after checking real connectivity. A successful service start is not a health proof.</string>
     <string name="cs_trial_revert_warning">Restore the configuration captured before this trial? Unsaved editor drafts remain in the app.</string>
     <string name="cs_context_limit">Scenario text exceeds the 48 KiB UTF-8 command limit. The draft is preserved and was not sent.</string>

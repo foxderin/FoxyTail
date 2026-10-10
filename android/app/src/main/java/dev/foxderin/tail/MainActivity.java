@@ -5,32 +5,30 @@ import android.content.*;
 import android.content.pm.PackageManager;
 import android.net.Uri;
 import android.os.*;
-import android.text.format.DateFormat;
 import android.view.*;
 import android.widget.*;
-import androidx.appcompat.app.AppCompatActivity;
-import androidx.core.view.WindowCompat;
-import com.google.android.material.appbar.MaterialToolbar;
 import com.google.android.material.button.MaterialButton;
 import com.google.android.material.dialog.MaterialAlertDialogBuilder;
 import com.google.android.material.progressindicator.LinearProgressIndicator;
-import com.google.android.material.tabs.TabLayout;
 import org.json.*;
 import java.io.*;
 import java.util.*;
 import java.util.concurrent.*;
 
-public final class MainActivity extends AppCompatActivity {
+public final class MainActivity extends ControlActivity {
     private static final int PICK = 10, SAVE = 11, NOTIFY = 12;
-    private final ExecutorService io = Executors.newSingleThreadExecutor();
+    private final ExecutorService io = Executors.newFixedThreadPool(3);
     private final ExecutorService fileIo = Executors.newSingleThreadExecutor();
     private final ArrayList<Models.Source> selection = new ArrayList<>();
     private final ArrayList<Models.Peer> peers = new ArrayList<>();
     private final ArrayList<Models.Transfer> history = new ArrayList<>();
     private JSONArray inbox = new JSONArray();
-    private LinearLayout body, selectedRows, progressRows;
+    private int inboxIgnored;
+    private LinearLayout inboxSection, sendSection, targetRows, historySection, selectedRows, browserHost;
+    private FilesBrowser browser;
+    private MaterialButton browseControl;
     private TextView message;
-    private Button cancelControl;
+    private Button cancelControl, sendControl;
     private MaterialChoice target;
     private String selectedPeer, saveName;
     private String inboxSearch = "", browseDirectory = "";
@@ -39,22 +37,21 @@ public final class MainActivity extends AppCompatActivity {
     private final Runnable controlUpdates = this::updateProgress;
     private java.util.function.Consumer<JSONObject> fileCompletion;
     private Uri saveSource;
-    private int page, generation;
-    private boolean resumed, receiverRegistered, loading, targetsLoaded;
-    private String pageError = "";
+    private int inboxGeneration, targetsGeneration, historyGeneration, historyRevision;
+    private boolean resumed, receiverRegistered, targetsLoaded;
+    private boolean inboxLoading, targetsLoading, historyLoading, inboxQueued, targetsQueued, historyQueued;
+    private String inboxError = "", targetsError = "", historyError = "", operationMessage = "";
+    private String focusSection = "";
     private final BroadcastReceiver updates = new BroadcastReceiver() {
         @Override public void onReceive(Context context, Intent intent) {
             updateProgress();
-            if (!TransferService.isRunning() && (page == 0 || page == 2)) refresh();
+            if (!TransferService.isRunning()) { refreshInbox(); refreshHistory(); }
         }
     };
-    @Override protected void attachBaseContext(Context base) { super.attachBaseContext(ControlUi.localized(base)); }
     @Override public void onCreate(Bundle saved) {
-        ControlUi.appearance(this);
         super.onCreate(saved);
-        WindowCompat.setDecorFitsSystemWindows(getWindow(), false);
         if (saved != null) {
-            page = saved.getInt("page", 0); selectedPeer = saved.getString("peer");
+            selectedPeer = saved.getString("peer"); focusSection = saved.getString("focusSection", "");
             saveName = saved.getString("saveName");
             inboxSearch = saved.getString("inboxSearch", ""); browseDirectory = saved.getString("browseDirectory", "");
             ArrayList<String> paths = saved.getStringArrayList("sharedSelection");
@@ -70,11 +67,11 @@ public final class MainActivity extends AppCompatActivity {
                 resolveUris(restored, false);
             }
         } else acceptIntent(getIntent());
-        showPage(page);
+        renderInbox(); renderTargets(); renderSelection(); focusRequestedSection();
     }
-    @Override protected void onNewIntent(Intent intent) { super.onNewIntent(intent); setIntent(intent); acceptIntent(intent); showPage(page); refresh(); }
+    @Override protected void onNewIntent(Intent intent) { super.onNewIntent(intent); setIntent(intent); acceptIntent(intent); focusRequestedSection(); }
     @Override protected void onSaveInstanceState(Bundle state) {
-        super.onSaveInstanceState(state); state.putInt("page", page); state.putString("peer", selectedPeer);
+        super.onSaveInstanceState(state); state.putString("peer", selectedPeer); state.putString("focusSection", focusSection);
         ArrayList<String> uris = new ArrayList<>(), paths = new ArrayList<>(); ArrayList<Long> sizes = new ArrayList<>();
         for (Models.Source source : selection) {
             if (source.uri != null) uris.add(source.uri.toString());
@@ -86,13 +83,12 @@ public final class MainActivity extends AppCompatActivity {
         if (saveSource != null) state.putString("saveSource", saveSource.toString());
     }
     @Override protected void onResume() {
-        super.onResume(); resumed = true;
-        ControlClient client = ControlClient.get(this); client.addListener(controlUpdates); client.refreshAvailability(); client.reconnect();
+        resumed = true; super.onResume();
+        client.addListener(controlUpdates); client.reconnect();
         IntentFilter filter = new IntentFilter(TransferService.UPDATE);
         registerReceiver(updates, filter, "dev.foxderin.tail.INTERNAL", null,
                 Build.VERSION.SDK_INT >= 33 ? RECEIVER_NOT_EXPORTED : 0);
-        receiverRegistered = true; updateProgress(); refresh();
-        if (!TransferService.isRunning()) adoptHistory();
+        receiverRegistered = true; updateProgress(); recoverTransfer(); focusRequestedSection();
     }
     @Override protected void onPause() {
         resumed = false;
@@ -100,234 +96,350 @@ public final class MainActivity extends AppCompatActivity {
         if (receiverRegistered) { unregisterReceiver(updates); receiverRegistered = false; }
         super.onPause();
     }
-    @Override protected void onDestroy() { fileCompletion = null; io.shutdown(); fileIo.shutdown(); super.onDestroy(); }
+    @Override protected void onDestroy() { fileCompletion = null; if (browser != null) browser.close(); io.shutdown(); fileIo.shutdown(); super.onDestroy(); }
     private int dp(int value) { return ControlUi.dp(this, value); }
     private TextView text(String value, int sp) {
         TextView view = ControlUi.text(this, value, sp); view.setTextIsSelectable(true); view.setPadding(0, dp(6), 0, dp(6)); return view;
     }
     private MaterialButton button(int label, Runnable action) {
-        return ControlUi.button(this, getString(label), action);
-    }
-    private MaterialButton button(int label, int icon, Runnable action) {
-        return ControlUi.button(this, getString(label), icon, action);
-    }
-    private MaterialButton primaryButton(int label, Runnable action) {
-        MaterialButton view = new MaterialButton(this); view.setText(label); view.setAllCaps(false); view.setMinHeight(dp(48));
-        view.setSingleLine(false); view.setOnClickListener(v -> action.run()); return view;
-    }
-    private MaterialButton primaryButton(int label, int icon, Runnable action) {
-        MaterialButton view = primaryButton(label, action); view.setIconResource(icon); return view;
+        MaterialButton view = ControlUi.textButton(this, getString(label), action);
+        view.setLayoutParams(new LinearLayout.LayoutParams(-2, -2)); return view;
     }
     private LinearLayout section() {
-        LinearLayout view = new LinearLayout(this); view.setOrientation(LinearLayout.VERTICAL); view.setPadding(0, dp(8), 0, dp(12)); return view;
+        LinearLayout view = new LinearLayout(this); view.setOrientation(LinearLayout.VERTICAL); return view;
     }
-    private void showPage(int destination) {
-        page = destination; generation++; loading = false; pageError = "";
-        if (page == 1) { peers.clear(); targetsLoaded = false; }
-        LinearLayout root = section(); root.setPadding(0, 0, 0, 0);
-        root.setOnApplyWindowInsetsListener((view, insets) -> {
-            if (Build.VERSION.SDK_INT >= 30) {
-                android.graphics.Insets bars = insets.getInsets(WindowInsets.Type.systemBars() | WindowInsets.Type.displayCutout());
-                view.setPadding(bars.left, bars.top, bars.right, bars.bottom);
-            } else view.setPadding(insets.getSystemWindowInsetLeft(), insets.getSystemWindowInsetTop(), insets.getSystemWindowInsetRight(), insets.getSystemWindowInsetBottom());
-            return insets;
-        });
-        MaterialToolbar toolbar = new MaterialToolbar(this); toolbar.setTitle(R.string.app_name);
-        toolbar.setNavigationIcon(R.drawable.ic_arrow_back); toolbar.setNavigationContentDescription(R.string.files_control_home);
-        toolbar.setNavigationOnClickListener(v -> startActivity(new Intent(this, ControlActivity.class).addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP | Intent.FLAG_ACTIVITY_SINGLE_TOP)));
-        root.addView(toolbar, new LinearLayout.LayoutParams(-1, -2));
-        TabLayout tabs = new TabLayout(this); tabs.setTabMode(TabLayout.MODE_FIXED); tabs.setTabGravity(TabLayout.GRAVITY_FILL); tabs.setMinimumHeight(dp(48));
-        int[] labels = {R.string.inbox, R.string.send, R.string.history};
-        for (int label : labels) tabs.addTab(tabs.newTab().setText(label));
-        tabs.selectTab(tabs.getTabAt(page));
-        tabs.addOnTabSelectedListener(new TabLayout.OnTabSelectedListener() {
-            @Override public void onTabSelected(TabLayout.Tab tab) { showPage(tab.getPosition()); refresh(); }
-            @Override public void onTabUnselected(TabLayout.Tab tab) { }
-            @Override public void onTabReselected(TabLayout.Tab tab) { }
-        });
-        root.addView(tabs, new LinearLayout.LayoutParams(-1, -2));
-        ScrollView scroll = new ScrollView(this); scroll.setFillViewport(true);
-        LinearLayout content = section(); content.setPadding(dp(16), dp(8), dp(16), dp(16)); scroll.addView(content);
-        message = text("", 14); message.setAccessibilityLiveRegion(View.ACCESSIBILITY_LIVE_REGION_POLITE); content.addView(message);
-        content.addView(button(R.string.refresh, R.drawable.ic_refresh, this::refresh));
-        if (page == 0) content.addView(primaryButton(R.string.import_files, R.drawable.ic_add, this::importFiles));
-        if (page == 1) {
-            content.addView(primaryButton(R.string.pick_files, R.drawable.ic_add, this::pickFiles));
-            content.addView(button(R.string.files_browse, R.drawable.ic_folder, this::browseFiles));
+    @Override protected String initialDestination() { return "files"; }
+    @Override protected ControlPage createFilesPage() { return new FilesPage(); }
+    @Override void navigate(String name) {
+        if ("files".equals(name)) openFiles();
+        else startActivity(new Intent(this, ControlActivity.class).putExtra(DESTINATION, controlDestination(name))
+                .addFlags(Intent.FLAG_ACTIVITY_REORDER_TO_FRONT | Intent.FLAG_ACTIVITY_SINGLE_TOP));
+    }
+    @Override void openFiles() { scrollToSection(inboxSection); }
+    private final class FilesPage extends ControlPage {
+        FilesPage() { super(MainActivity.this); buildPage(content); }
+        @Override String title() { return getString(R.string.web_files_title); }
+        @Override void load() {
+            if (!isCurrent()) return;
+            refreshInbox(); refreshTargets(); refreshHistory();
         }
+        @Override void onPause() {
+            inboxGeneration++; targetsGeneration++; historyGeneration++;
+            inboxLoading = targetsLoading = historyLoading = false;
+            inboxQueued = targetsQueued = historyQueued = false;
+        }
+    }
+    private void buildPage(LinearLayout content) {
+        message = text("", 13); message.setAccessibilityLiveRegion(View.ACCESSIBILITY_LIVE_REGION_POLITE); content.addView(message);
         cancelControl = button(R.string.cancel, () -> startService(new Intent(this, TransferService.class).setAction(TransferService.CANCEL)));
         content.addView(cancelControl);
-        body = section(); content.addView(body); root.addView(scroll, new LinearLayout.LayoutParams(-1, 0, 1));
-        setContentView(root); root.requestApplyInsets(); render(); updateProgress();
+        inboxSection = section(); content.addView(inboxSection);
+        sendSection = section(); content.addView(sendSection);
+        historySection = section(); content.addView(historySection);
+        renderInbox(); buildSend(); renderHistory(); updateProgress();
     }
-    private void render() {
-        body.removeAllViews(); selectedRows = null; progressRows = null; target = null; inboxRows = null;
-        if (page == 0) renderInbox(); else if (page == 1) renderSend(); else renderHistory();
+    private void focusRequestedSection() {
+        if (!resumed || sendSection == null || focusSection.isEmpty() || inboxLoading || targetsLoading || historyLoading) return;
+        scrollToSection("history".equals(focusSection) ? historySection : sendSection);
+        focusSection = "";
     }
     private void renderInbox() {
-        body.addView(text(getString(R.string.inbox_hint), 14));
-        EditText search = ControlUi.input(body, getString(R.string.files_search), inboxSearch, android.text.InputType.TYPE_CLASS_TEXT);
-        search.setSingleLine(true); search.setContentDescription(getString(R.string.files_search));
-        Button clear = button(R.string.files_clear, () -> confirmFileAction(R.string.files_clear, getString(R.string.files_clear_confirm), "file-clear"));
-        clear.setEnabled(inboxLoaded && inbox.length() > 0); body.addView(clear);
-        inboxRows = section(); body.addView(inboxRows); renderInboxRows();
-        search.addTextChangedListener(new android.text.TextWatcher() {
+        inboxSection.removeAllViews();
+        if (inboxLoaded) {
+            LinearLayout metrics = new LinearLayout(this); inboxSection.addView(metrics);
+            ControlUi.MetricTile count = ControlUi.metric(metrics, R.drawable.ic_folder, getString(R.string.web_files_inbox));
+            count.value.setText(Integer.toString(inbox.length())); count.sub.setText(R.string.web_tools_file_count); count.sub.setVisibility(View.VISIBLE);
+            long bytes = 0;
+            for (int i = 0; i < inbox.length(); i++) bytes += inbox.optJSONObject(i).optLong("size");
+            ControlUi.metric(metrics, R.drawable.ic_download, getString(R.string.web_tools_total_size)).value.setText(WebFormat.bytes(bytes));
+        }
+        LinearLayout card = ControlUi.card(inboxSection, getString(R.string.web_files_inbox), R.drawable.ic_folder, null);
+        Button refresh = button(inboxLoading ? R.string.web_loading : R.string.web_tools_refresh, this::refreshInbox);
+        refresh.setEnabled(!inboxLoading); ControlUi.cardAction(card, refresh);
+        if (!inboxError.isEmpty()) ControlUi.banner(card, R.drawable.ic_error, inboxError, ControlUi.TONE_ERROR);
+        if (inboxLoaded && inboxIgnored > 0) ControlUi.hint(card, getString(R.string.repair_files_ignored_inbox, inboxIgnored));
+        EditText search = null;
+        if (inboxLoaded && inbox.length() > 0) {
+            LinearLayout controls = new LinearLayout(this); controls.setGravity(Gravity.BOTTOM); card.addView(controls);
+            LinearLayout field = new LinearLayout(this); field.setOrientation(LinearLayout.VERTICAL); controls.addView(field, new LinearLayout.LayoutParams(0, -2, 1));
+            search = ControlUi.input(field, getString(R.string.web_tools_file_search), inboxSearch, android.text.InputType.TYPE_CLASS_TEXT);
+            search.setSingleLine(true); search.setContentDescription(getString(R.string.web_tools_file_search));
+            controls.addView(button(R.string.web_files_clear, () -> confirmFileAction(R.string.web_files_clear, getString(R.string.files_clear_confirm), "file-clear")));
+        }
+        inboxRows = section(); card.addView(inboxRows); renderInboxRows();
+        ControlUi.hint(card, getString(R.string.web_files_receive_hint));
+        card.addView(ControlUi.tonalButton(this, getString(R.string.web_files_receive), R.drawable.ic_download, this::importFiles));
+        if (search != null) search.addTextChangedListener(new android.text.TextWatcher() {
             public void beforeTextChanged(CharSequence s, int start, int count, int after) { }
             public void onTextChanged(CharSequence s, int start, int before, int count) { inboxSearch = s.toString(); renderInboxRows(); }
             public void afterTextChanged(android.text.Editable s) { }
         });
     }
+    private LinearLayout fileRow(LinearLayout parent, String name, String detail, int icon) {
+        LinearLayout row = new LinearLayout(this); row.setGravity(Gravity.CENTER_VERTICAL); row.setPadding(0, dp(14), 0, dp(14));
+        row.setMinimumHeight(dp(56)); parent.addView(row, new LinearLayout.LayoutParams(-1, -2));
+        if (icon != 0) {
+            ImageView image = new ImageView(this); image.setImageResource(icon);
+            image.setColorFilter(com.google.android.material.color.MaterialColors.getColor(image, com.google.android.material.R.attr.colorOnSurfaceVariant));
+            LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(dp(20), dp(20)); params.setMarginEnd(dp(12)); row.addView(image, params);
+        }
+        LinearLayout main = new LinearLayout(this); main.setOrientation(LinearLayout.VERTICAL); row.addView(main, new LinearLayout.LayoutParams(0, -2, 1));
+        TextView title = ControlUi.text(this, name, 14); title.setTypeface(null, android.graphics.Typeface.BOLD); title.setTextIsSelectable(true); main.addView(title);
+        TextView sub = ControlUi.muted(this, detail, R.dimen.ft_body_small); sub.setTextSize(12); sub.setPadding(0, dp(3), 0, 0); sub.setTextIsSelectable(true); main.addView(sub);
+        return row;
+    }
     private void renderInboxRows() {
         if (inboxRows == null) return;
         inboxRows.removeAllViews(); int visible = 0;
-        if (!inboxLoaded) { inboxRows.addView(text(getString(R.string.files_not_loaded), 17)); return; }
+        if (!inboxLoaded) { if (inboxError.isEmpty()) inboxRows.addView(text(getString(R.string.web_loading), 14)); return; }
         for (int i = 0; i < inbox.length(); i++) {
             try {
                 JSONObject item = inbox.getJSONObject(i); String name = Models.required(item, "name"); Models.requireName(name);
                 if (!name.toLowerCase(Locale.ROOT).contains(inboxSearch.toLowerCase(Locale.ROOT))) continue;
-                visible++;
+                if (visible++ > 0) ControlUi.divider(inboxRows);
                 long size = Models.number(item, "size"), modified = Models.number(item, "mtime");
-                LinearLayout card = ControlUi.card(inboxRows, name);
-                card.addView(text(Models.bytes(this, size) + " · " + timestamp(modified), 14));
-                card.addView(button(R.string.open, R.drawable.ic_open_in_new, () -> export(name, "open")));
-                card.addView(button(R.string.share, R.drawable.ic_send, () -> export(name, "share")));
-                card.addView(button(R.string.save, R.drawable.ic_download, () -> export(name, "save")));
-                card.addView(button(R.string.files_export_download, R.drawable.ic_download, () -> confirmFileAction(R.string.files_export_download, getString(R.string.files_export_confirm, name), "file-export", name)));
-                card.addView(button(R.string.files_delete, R.drawable.ic_delete, () -> confirmFileAction(R.string.files_delete, getString(R.string.files_delete_confirm, name), "file-delete", name)));
-                card.addView(button(R.string.files_copy_path, R.drawable.ic_content_copy, () -> {
+                LinearLayout row = fileRow(inboxRows, name, WebFormat.bytes(size) + " · " + WebFormat.time(modified), R.drawable.ic_article);
+                LinearLayout actions = new LinearLayout(this); actions.setGravity(Gravity.END); row.addView(actions);
+                actions.addView(ControlUi.iconButton(this, R.drawable.ic_content_copy, getString(R.string.web_tools_copy_path) + " " + name, () -> {
                     getSystemService(ClipboardManager.class).setPrimaryClip(ClipData.newPlainText(name, "/data/adb/foxytail/files/" + name));
                     toast(getString(R.string.files_copied));
                 }));
-            } catch (Exception e) { inboxRows.addView(text(getString(R.string.invalid_response), 14)); }
+                actions.addView(ControlUi.iconButton(this, R.drawable.ic_download, getString(R.string.web_files_download) + " " + name, () -> export(name, "save")));
+                actions.addView(ControlUi.iconButton(this, R.drawable.ic_open_in_new, getString(R.string.web_files_export) + " " + name, () -> confirmFileAction(R.string.web_files_export, getString(R.string.files_export_confirm, name), "file-export", name)));
+                actions.addView(ControlUi.iconButton(this, R.drawable.ic_delete, getString(R.string.web_files_delete) + " " + name, () -> confirmFileAction(R.string.web_files_delete, getString(R.string.files_delete_confirm, name), "file-delete", name)));
+                LinearLayout nativeActions = new LinearLayout(this); nativeActions.setGravity(Gravity.END); inboxRows.addView(nativeActions);
+                nativeActions.addView(button(R.string.open, () -> export(name, "open")));
+                nativeActions.addView(button(R.string.share, () -> export(name, "share")));
+            } catch (Exception e) { inboxRows.addView(text(getString(R.string.web_files_invalid_response), 14)); }
         }
-        if (visible == 0) inboxRows.addView(text(getString(inbox.length() == 0 ? R.string.empty_inbox : R.string.files_no_matches), 17));
+        if (visible == 0) inboxRows.addView(text(getString(inboxSearch.isEmpty() ? R.string.web_files_empty : R.string.web_empty), 14));
     }
-    private void renderSend() {
-        body.addView(text(getString(R.string.send_hint), 14));
-        LinearLayout destination = ControlUi.card(body, getString(R.string.choose_target));
+    private void buildSend() {
+        LinearLayout card = ControlUi.card(sendSection, getString(R.string.web_files_send), R.drawable.ic_send, null);
+        ControlUi.hint(card, getString(R.string.web_files_send_hint));
+        targetRows = section(); card.addView(targetRows); renderTargets();
+        browseControl = ControlUi.tonalButton(this, getString(R.string.web_files_choose), R.drawable.ic_folder, this::browseFiles);
+        browseControl.setLayoutParams(new LinearLayout.LayoutParams(-2, -2)); card.addView(browseControl);
+        card.addView(button(R.string.pick_files, this::pickFiles));
+        browserHost = section(); browserHost.setVisibility(View.GONE); card.addView(browserHost);
+        selectedRows = section(); card.addView(selectedRows);
+        sendControl = ControlUi.primaryButton(this, getString(R.string.web_files_send_btn), R.drawable.ic_send, this::confirmSend);
+        card.addView(sendControl, new LinearLayout.LayoutParams(-2, -2)); renderSelection();
+    }
+    private void renderTargets() {
+        targetRows.removeAllViews();
+        if (!targetsError.isEmpty()) ControlUi.banner(targetRows, R.drawable.ic_error, targetsError, ControlUi.TONE_ERROR);
         ArrayList<String> names = new ArrayList<>(); int selected = 0;
         for (int i = 0; i < peers.size(); i++) {
             Models.Peer peer = peers.get(i);
-            names.add(peer.name + " · " + peer.ip + (peer.online ? "" : " · " + getString(R.string.offline)));
+            names.add(peer.name + " · " + peer.ip + (peer.online ? "" : " (" + getString(R.string.web_offline) + ")"));
             if (peer.id.equals(selectedPeer)) selected = i;
         }
-        if (names.isEmpty()) names.add(getString(targetPlaceholder(targetsLoaded, !pageError.isEmpty())));
+        if (names.isEmpty()) names.add(getString(targetPlaceholder(targetsLoaded, !targetsError.isEmpty())));
         target = new MaterialChoice(this, names.toArray(new String[0]), selected, position -> {
             if (position >= 0 && position < peers.size()) selectedPeer = peers.get(position).id;
         });
-        target.setEnabled(!peers.isEmpty()); target.setContentDescription(getString(R.string.choose_target));
+        target.setHint(getString(R.string.web_files_peer)); target.setEnabled(!peers.isEmpty() && !TransferService.isRunning()); target.setContentDescription(getString(R.string.web_files_peer));
         if (!peers.isEmpty()) selectedPeer = peers.get(selected).id;
-        destination.addView(target); selectedRows = section(); body.addView(selectedRows); renderSelection();
-        Button send = primaryButton(R.string.send, this::confirmSend); send.setEnabled(targetsLoaded && !peers.isEmpty()); body.addView(send);
-        progressRows = section(); body.addView(progressRows); renderProgress();
+        targetRows.addView(target);
+        Button refresh = button(targetsLoading ? R.string.web_loading : R.string.web_files_refresh_targets, this::refreshTargets);
+        refresh.setEnabled(!targetsLoading && !TransferService.isRunning()); targetRows.addView(refresh);
+        renderSelection();
     }
     static int targetPlaceholder(boolean loaded, boolean failed) {
-        return failed ? R.string.targets_failed : loaded ? R.string.no_targets : R.string.loading;
+        return failed ? R.string.targets_failed : loaded ? R.string.web_tools_no_peers : R.string.web_loading;
     }
     private void renderSelection() {
         if (selectedRows == null) return;
-        selectedRows.removeAllViews();
+        selectedRows.removeAllViews(); long bytes = 0; boolean known = true;
+        for (Models.Source source : selection) { if (source.size < 0) known = false; else bytes += source.size; }
+        ControlUi.hint(selectedRows, getString(R.string.web_files_selected) + " " + selection.size() + "/32 · " + (known ? WebFormat.bytes(bytes) : "—"));
+        if (selection.isEmpty()) ControlUi.hint(selectedRows, getString(R.string.web_files_selection_empty));
         for (Models.Source source : selection) {
-            LinearLayout item = ControlUi.card(selectedRows, source.name);
-            if (source.size >= 0) item.addView(text(Models.bytes(this, source.size), 16));
-            Button remove = button(R.string.remove, () -> { selection.remove(source); renderSelection(); });
-            remove.setContentDescription(getString(R.string.remove) + " " + source.name); item.addView(remove);
+            String location = source.path == null ? source.uri.toString() : source.path;
+            LinearLayout row = fileRow(selectedRows, source.name, location + " · " + (source.size < 0 ? "—" : WebFormat.bytes(source.size)), 0);
+            View remove = ControlUi.iconButton(this, android.R.drawable.ic_menu_close_clear_cancel, getString(R.string.web_files_remove_selection) + " " + source.name, () -> { selection.remove(source); renderSelection(); });
+            remove.setEnabled(!TransferService.isRunning()); row.addView(remove);
         }
+        if (sendControl != null) sendControl.setEnabled(targetsLoaded && targetsError.isEmpty() && historyLoaded && historyError.isEmpty() && !peers.isEmpty() && !selection.isEmpty() && !TransferService.isRunning() && history.stream().noneMatch(item -> Models.active(item.status)));
+        if (browser != null) browser.updateSelection();
+    }
+    private String transferState(String status) {
+        return getString(switch (status) {
+            case "queued" -> R.string.web_files_queued; case "sending" -> R.string.web_files_sending;
+            case "completed" -> R.string.web_files_completed; case "failed" -> R.string.web_files_failed;
+            case "cancelled" -> R.string.web_files_cancelled; default -> R.string.web_files_interrupted;
+        });
     }
     private void renderHistory() {
-        if (history.isEmpty()) body.addView(text(getString(historyLoaded ? R.string.empty_history : R.string.files_not_loaded), 17));
-        for (Models.Transfer transfer : history) {
-            LinearLayout card = ControlUi.card(body, transfer.peerName + " · " + Models.state(this, transfer.status));
-            card.addView(text(timestamp(transfer.started), 14)); addFiles(card, transfer);
-            if (!transfer.error.isEmpty()) card.addView(text(transfer.error, 14));
-            if (Models.active(transfer.status)) card.addView(button(R.string.cancel, () -> cancelJob(transfer.id)));
-            else if (transfer.retryPaths().length() > 0) card.addView(button(R.string.retry, () -> confirmRetry(transfer)));
+        historySection.removeAllViews();
+        LinearLayout card = ControlUi.card(historySection, getString(R.string.web_files_history), R.drawable.ic_send, null);
+        Button refresh = button(historyLoading ? R.string.web_loading : R.string.web_tools_refresh, this::refreshHistory);
+        refresh.setEnabled(!historyLoading); ControlUi.cardAction(card, refresh);
+        if (!historyError.isEmpty()) ControlUi.banner(card, R.drawable.ic_error, historyError, ControlUi.TONE_ERROR);
+        if (history.isEmpty() && historyError.isEmpty()) card.addView(text(getString(historyLoaded ? R.string.web_files_history_empty : R.string.web_loading), 14));
+        for (int i = 0; i < history.size(); i++) {
+            if (i > 0) ControlUi.divider(card);
+            addTransfer(card, history.get(i));
+        }
+    }
+    private void addTransfer(LinearLayout container, Models.Transfer transfer) {
+        TextView title = text((transfer.peerName.isEmpty() ? transfer.peerId : transfer.peerName) + " · " + transfer.peerIp, 16); title.setTypeface(null, android.graphics.Typeface.BOLD); container.addView(title);
+        long completed = transfer.files.stream().filter(file -> "completed".equals(file.status)).count();
+        ControlUi.hint(container, WebFormat.time(transfer.started) + " · " + getString(R.string.web_files_completed_count) + " " + completed + "/" + transfer.files.size());
+        TextView status = text(transferState(transfer.status), 14); status.setAccessibilityLiveRegion(View.ACCESSIBILITY_LIVE_REGION_POLITE); container.addView(status);
+        if (Models.active(transfer.status)) ControlUi.hint(container, getString(R.string.web_files_accepted_hint));
+        if (!transfer.error.isEmpty()) ControlUi.banner(container, R.drawable.ic_error, transfer.error, ControlUi.TONE_ERROR);
+        addFiles(container, transfer);
+        if (Models.active(transfer.status)) container.addView(button(R.string.web_files_cancel_send, () -> cancelJob(transfer.id)));
+        else {
+            long unsuccessful = transfer.files.stream().filter(file -> "failed".equals(file.status) || "cancelled".equals(file.status)).count();
+            if (unsuccessful > 0) {
+                MaterialButton retry = ControlUi.tonalButton(this, getString(R.string.web_files_retry_unsuccessful) + " (" + unsuccessful + ")", () -> confirmRetry(transfer));
+                retry.setEnabled(historyLoaded && historyError.isEmpty() && targetsError.isEmpty() && !TransferService.isRunning() && history.stream().noneMatch(item -> Models.active(item.status)) && peers.stream().anyMatch(peer -> peer.id.equals(transfer.peerId)));
+                container.addView(retry, new LinearLayout.LayoutParams(-2, -2));
+                if (targetsLoaded && peers.stream().noneMatch(peer -> peer.id.equals(transfer.peerId))) ControlUi.hint(container, getString(R.string.web_files_retry_target_missing));
+            }
         }
     }
     private void addFiles(LinearLayout container, Models.Transfer transfer) {
         for (Models.FileState file : transfer.files) {
-            container.addView(text(file.name + " · " + Models.state(this, file.status), 16));
-            container.addView(text(Models.progress(this, file), 14));
-            if (file.known && file.size > 0) {
-                LinearProgressIndicator bar = new LinearProgressIndicator(this); bar.setMax(1000); bar.setProgress((int) (1000.0 * file.sent / file.size)); bar.setContentDescription(file.name + " " + Models.progress(this, file)); container.addView(bar);
+            LinearLayout row = fileRow(container, file.name, transferState(file.status) + " · " + WebFormat.bytes(file.size), 0);
+            LinearLayout main = (LinearLayout) row.getChildAt(0);
+            if ("sending".equals(file.status)) {
+                if (file.known) {
+                    String progress = WebFormat.bytes(file.sent) + " / " + WebFormat.bytes(file.size) + " · " + WebFormat.bytes(file.speed) + "/s";
+                    ControlUi.hint(main, progress);
+                    LinearProgressIndicator bar = new LinearProgressIndicator(this); bar.setMax(1000); bar.setProgress(file.size == 0 ? 0 : (int) (1000.0 * file.sent / file.size));
+                    bar.setContentDescription(getString(R.string.web_files_sending) + " " + file.name + " " + progress); main.addView(bar);
+                } else ControlUi.hint(main, getString(R.string.web_files_progress_unknown));
             }
-            if (!file.error.isEmpty()) container.addView(text(file.error, 14));
+            if (!file.error.isEmpty()) {
+                TextView error = text(file.error, 13); error.setTextColor(com.google.android.material.color.MaterialColors.getColor(error, androidx.appcompat.R.attr.colorError)); main.addView(error);
+            }
         }
     }
-    private void renderProgress() {
-        if (progressRows == null) return;
-        progressRows.removeAllViews();
-        String json = TransferService.state(this).getString("snapshot", null);
-        if (json != null) try { Models.Transfer transfer = new Models.Transfer(new JSONObject(json)); addFiles(ControlUi.card(progressRows, Models.state(this, transfer.status)), transfer); } catch (Exception ignored) { }
-    }
+    private String observedSnapshot;
     private void updateProgress() {
         if (message == null) return;
         if (!ControlClient.get(this).busy()) fileCompletion = null;
-        String controlMessage = ControlClient.get(this).message();
-        message.setText(!pageError.isEmpty() ? pageError : loading ? getString(R.string.loading) : !TransferService.isRunning() && !controlMessage.isEmpty() ? controlMessage : TransferService.state(this).getString("message", ""));
+        String notice = !operationMessage.isEmpty() ? operationMessage : TransferService.state(this).getString("message", "");
+        message.setText(client.hasNotice() && notice.equals(client.message()) ? "" : notice);
+        message.setVisibility(message.length() == 0 ? View.GONE : View.VISIBLE);
         if (cancelControl != null) cancelControl.setVisibility(TransferService.isRunning() ? View.VISIBLE : View.GONE);
-        renderProgress();
-        if (page == 2 && TransferService.isRunning()) {
-            String json = TransferService.state(this).getString("snapshot", null);
-            if (json != null) try {
-                Models.Transfer update = new Models.Transfer(new JSONObject(json));
-                for (int i = 0; i < history.size(); i++) if (history.get(i).id.equals(update.id)) { history.set(i, update); render(); break; }
-            } catch (Exception ignored) { }
-        }
+        if (target != null) target.setEnabled(!peers.isEmpty() && !TransferService.isRunning());
+        if (browseControl != null) browseControl.setEnabled(!TransferService.isRunning());
+        String snapshot = TransferService.state(this).getString("snapshot", null);
+        if (snapshot != null && !snapshot.equals(observedSnapshot)) try {
+            Models.Transfer update = new Models.Transfer(new JSONObject(snapshot));
+            observedSnapshot = snapshot;
+            Models.Transfer existing = history.stream().filter(item -> item.id.equals(update.id)).findFirst().orElse(null);
+            if (existing == null || (existing.json.optLong("updatedAt") <= update.json.optLong("updatedAt") && (Models.active(existing.status) || !Models.active(update.status)))) {
+                history.removeIf(item -> item.id.equals(update.id)); history.add(update);
+                history.sort(Comparator.comparingLong((Models.Transfer item) -> item.started).reversed());
+                if (history.size() > 100) history.remove(history.size() - 1);
+                historyRevision++; renderHistory();
+            }
+        } catch (Exception ignored) { }
+        renderSelection();
     }
-    private void refresh() {
-        if (loading) return;
-        final int requestPage = page, token = generation;
-        loading = true; pageError = "";
-        if (requestPage == 1) { peers.clear(); targetsLoaded = false; render(); }
-        updateProgress();
+    private void refreshInbox() {
+        if (inboxLoading) { inboxQueued = true; return; }
+        final int token = ++inboxGeneration;
+        inboxLoading = true; renderInbox();
         io.execute(() -> {
             try {
-                JSONObject result = RootApi.json(this, requestPage == 0 ? "files-inbox" : requestPage == 1 ? "taildrop-targets" : "file-send-history");
-                JSONArray array = result.getJSONArray(requestPage == 0 ? "files" : requestPage == 1 ? "peers" : "transfers");
-                ArrayList<Models.Peer> loadedPeers = new ArrayList<>(); ArrayList<Models.Transfer> loadedHistory = new ArrayList<>();
-                if (array.length() > (requestPage == 2 ? 100 : 10000)) throw new IOException(getString(R.string.invalid_response));
+                Models.Inbox loaded = new Models.Inbox(RootApi.json(this, "files-inbox"));
+                runOnUiThread(() -> {
+                    if (isDestroyed() || token != inboxGeneration) return;
+                    inbox = loaded.files; inboxIgnored = loaded.ignored; inboxLoaded = true; inboxError = ""; finishInbox();
+                });
+            } catch (Exception error) { runOnUiThread(() -> {
+                if (isDestroyed() || token != inboxGeneration) return;
+                inboxError = RootApi.message(error); finishInbox();
+            }); }
+        });
+    }
+    private void finishInbox() {
+        inboxLoading = false; renderInbox();
+        if (inboxQueued) { inboxQueued = false; refreshInbox(); }
+        focusRequestedSection();
+    }
+    private void refreshTargets() {
+        if (targetsLoading) { targetsQueued = true; return; }
+        final int token = ++targetsGeneration;
+        targetsLoading = true; renderTargets();
+        io.execute(() -> {
+            try {
+                JSONArray array = RootApi.json(this, "taildrop-targets").getJSONArray("peers");
+                if (array.length() > 10000) throw new IOException(getString(R.string.web_files_invalid_response));
+                ArrayList<Models.Peer> loaded = new ArrayList<>(); Set<String> ids = new HashSet<>();
                 for (int i = 0; i < array.length(); i++) {
-                    if (requestPage == 0) {
-                        JSONObject item = array.getJSONObject(i); Models.requireName(Models.required(item, "name")); Models.number(item, "size"); Models.number(item, "mtime");
-                    }
-                    if (requestPage == 1) loadedPeers.add(new Models.Peer(array.getJSONObject(i)));
-                    if (requestPage == 2) loadedHistory.add(new Models.Transfer(array.getJSONObject(i)));
+                    Models.Peer peer = new Models.Peer(array.getJSONObject(i));
+                    if (!ids.add(peer.id)) throw new IOException(getString(R.string.web_files_invalid_response));
+                    loaded.add(peer);
+                }
+                loaded.sort(Comparator.comparing((Models.Peer peer) -> !peer.online).thenComparing(peer -> peer.name, java.text.Collator.getInstance()).thenComparing(peer -> peer.id));
+                runOnUiThread(() -> {
+                    if (isDestroyed() || token != targetsGeneration) return;
+                    peers.clear(); peers.addAll(loaded); targetsLoaded = true; targetsError = ""; finishTargets();
+                });
+            } catch (Exception error) { runOnUiThread(() -> {
+                if (isDestroyed() || token != targetsGeneration) return;
+                targetsError = RootApi.message(error); finishTargets();
+            }); }
+        });
+    }
+    private void finishTargets() {
+        targetsLoading = false; renderTargets(); renderHistory();
+        if (targetsQueued) { targetsQueued = false; refreshTargets(); }
+        focusRequestedSection();
+    }
+    private void refreshHistory() {
+        if (historyLoading) { historyQueued = true; return; }
+        final int token = ++historyGeneration, revision = historyRevision;
+        historyLoading = true; renderHistory(); renderSelection();
+        io.execute(() -> {
+            try {
+                JSONArray array = RootApi.json(this, "file-send-history").getJSONArray("transfers");
+                if (array.length() > 100) throw new IOException(getString(R.string.web_files_invalid_response));
+                ArrayList<Models.Transfer> loaded = new ArrayList<>(); Set<String> ids = new HashSet<>(); int active = 0;
+                for (int i = 0; i < array.length(); i++) {
+                    Models.Transfer transfer = new Models.Transfer(array.getJSONObject(i));
+                    if (!ids.add(transfer.id) || (Models.active(transfer.status) && ++active > 1)) throw new IOException(getString(R.string.web_files_invalid_response));
+                    loaded.add(transfer);
                 }
                 runOnUiThread(() -> {
-                    if (isDestroyed() || token != generation) return;
-                    loading = false;
-                    if (requestPage == 0) { inbox = array; inboxLoaded = true; }
-                    else if (requestPage == 1) { peers.clear(); peers.addAll(loadedPeers); targetsLoaded = true; }
-                    else { history.clear(); history.addAll(loadedHistory); historyLoaded = true; }
-                    render(); updateProgress();
+                    if (isDestroyed() || token != historyGeneration) return;
+                    if (revision == historyRevision) { history.clear(); history.addAll(loaded); historyLoaded = true; historyError = ""; recoverTransfer(); }
+                    else historyQueued = true;
+                    finishHistory();
                 });
-            } catch (Exception e) { runOnUiThread(() -> { if (!isDestroyed() && token == generation) { loading = false; pageError = RootApi.message(e); if (requestPage == 1) { peers.clear(); targetsLoaded = false; render(); } updateProgress(); } }); }
+            } catch (Exception error) { runOnUiThread(() -> {
+                if (isDestroyed() || token != historyGeneration) return;
+                historyError = RootApi.message(error); finishHistory();
+            }); }
         });
     }
-    private void adoptHistory() {
-        io.execute(() -> {
-            try {
-                JSONArray transfers = RootApi.json(this, "file-send-history").getJSONArray("transfers");
-                for (int i = 0; i < transfers.length(); i++) {
-                    Models.Transfer transfer = new Models.Transfer(transfers.getJSONObject(i));
-                    if (Models.active(transfer.status)) {
-                        runOnUiThread(() -> { if (resumed && !isDestroyed() && !TransferService.isRunning()) launch(new Intent(this, TransferService.class).setAction(TransferService.ADOPT).putExtra("job", transfer.id)); });
-                        return;
-                    }
-                }
-                if (TransferService.state(this).contains("request") || TransferService.state(this).contains("staged") || TransferService.state(this).getBoolean("preparing", false)) {
-                    runOnUiThread(() -> { if (resumed && !isDestroyed() && !TransferService.isRunning()) launch(new Intent(this, TransferService.class).setAction(TransferService.RECOVER)); });
-                }
-            } catch (Exception ignored) { /* The visible page reports root/module failures; history is retried on resume. */ }
-        });
+    private void finishHistory() {
+        historyLoading = false; renderHistory(); renderSelection();
+        if (historyQueued) { historyQueued = false; refreshHistory(); }
+        focusRequestedSection();
+    }
+    private void recoverTransfer() {
+        if (!resumed || isDestroyed() || TransferService.isRunning()) return;
+        for (Models.Transfer transfer : history) if (Models.active(transfer.status)) {
+            launch(new Intent(this, TransferService.class).setAction(TransferService.ADOPT).putExtra("job", transfer.id)); return;
+        }
+        if (TransferService.state(this).contains("request") || TransferService.state(this).contains("staged") || TransferService.state(this).getBoolean("preparing", false))
+            launch(new Intent(this, TransferService.class).setAction(TransferService.RECOVER));
     }
     private void acceptIntent(Intent intent) {
         if (intent == null) return;
-        if (intent.getBooleanExtra("history", false)) page = 2;
+        if (intent.getBooleanExtra("history", false)) focusSection = "history";
         String action = intent.getAction();
         if (!Intent.ACTION_SEND.equals(action) && !Intent.ACTION_SEND_MULTIPLE.equals(action)) return;
-        page = 1;
+        focusSection = "send";
         try { resolveUris(sharedUris(intent), true); }
         catch (RuntimeException e) { error(getString(R.string.invalid_uri)); }
     }
@@ -388,12 +500,14 @@ public final class MainActivity extends AppCompatActivity {
     }
     private void confirmSend() {
         if (TransferService.isRunning()) { error(getString(R.string.busy)); return; }
+        if (!targetsLoaded || !targetsError.isEmpty() || !historyLoaded || !historyError.isEmpty() || history.stream().anyMatch(item -> Models.active(item.status))) return;
         int index = target == null ? -1 : target.getSelectedItemPosition();
         if (selection.isEmpty() || index < 0 || index >= peers.size()) { error(getString(R.string.choose_first)); return; }
         Models.Peer peer = peers.get(index); ArrayList<Uri> uris = new ArrayList<>(); ArrayList<String> paths = new ArrayList<>(); StringBuilder names = new StringBuilder();
         for (Models.Source source : selection) { if (source.uri != null) uris.add(source.uri); else paths.add(source.path); names.append('\n').append(source.name); }
         new MaterialAlertDialogBuilder(this).setTitle(R.string.send).setMessage(getString(R.string.send_confirm, selection.size(), peer.name) + names)
                 .setNegativeButton(R.string.cancel, null).setPositiveButton(R.string.send, (dialog, which) -> {
+                    if (TransferService.isRunning() || !targetsError.isEmpty() || !historyError.isEmpty() || history.stream().anyMatch(item -> Models.active(item.status))) { error(getString(R.string.busy)); return; }
                     Intent intent = new Intent(this, TransferService.class).setAction(TransferService.START).putExtra("peer", peer.id).putExtra("ip", peer.ip).putParcelableArrayListExtra("uris", uris).putStringArrayListExtra("paths", paths);
                     if (!uris.isEmpty()) {
                         ClipData clip = ClipData.newRawUri("Taildrop", uris.get(0)); for (int i = 1; i < uris.size(); i++) clip.addItem(new ClipData.Item(uris.get(i)));
@@ -404,28 +518,39 @@ public final class MainActivity extends AppCompatActivity {
     }
     private void confirmRetry(Models.Transfer transfer) {
         if (TransferService.isRunning()) { error(getString(R.string.busy)); return; }
+        if (!historyLoaded || !historyError.isEmpty() || !targetsError.isEmpty() || history.stream().anyMatch(item -> Models.active(item.status))) return;
         io.execute(() -> {
             try {
                 JSONArray targets = RootApi.json(this, "taildrop-targets").getJSONArray("peers"); Models.Peer current = null;
                 for (int i = 0; i < targets.length(); i++) { Models.Peer peer = new Models.Peer(targets.getJSONObject(i)); if (peer.id.equals(transfer.peerId)) current = peer; }
-                if (current == null) throw new IOException(getString(R.string.no_targets));
+                if (current == null) throw new IOException(getString(R.string.web_files_retry_target_missing));
                 Models.Peer peer = current;
                 runOnUiThread(() -> {
                     if (isDestroyed()) return;
                     new MaterialAlertDialogBuilder(this).setTitle(R.string.retry).setMessage(getString(R.string.retry_confirm, peer.name)).setNegativeButton(R.string.cancel, null)
-                            .setPositiveButton(R.string.send, (dialog, which) -> { requestNotifications(); launch(new Intent(this, TransferService.class).setAction(TransferService.START).putExtra("peer", peer.id).putExtra("ip", peer.ip).putExtra("retry", transfer.id)); }).show();
+                            .setPositiveButton(R.string.send, (dialog, which) -> {
+                                if (TransferService.isRunning() || !historyError.isEmpty() || !targetsError.isEmpty() || history.stream().anyMatch(item -> Models.active(item.status))) { error(getString(R.string.busy)); return; }
+                                requestNotifications(); launch(new Intent(this, TransferService.class).setAction(TransferService.START).putExtra("peer", peer.id).putExtra("ip", peer.ip).putExtra("retry", transfer.id));
+                            }).show();
                 });
             } catch (Exception e) { runOnUiThread(() -> error(RootApi.message(e))); }
         });
     }
     private void browseFiles() {
-        new FilesBrowser(this, io, browseDirectory, source -> {
+        if (TransferService.isRunning()) return;
+        if (browser != null) {
+            browser.close(); browser = null; browserHost.removeAllViews(); browserHost.setVisibility(View.GONE);
+            browseControl.setText(R.string.web_files_choose); return;
+        }
+        browserHost.setVisibility(View.VISIBLE); browseControl.setText(R.string.web_files_close_browser);
+        browser = new FilesBrowser(this, io, browserHost, browseDirectory, source -> {
+            if (TransferService.isRunning()) return false;
             if (selection.stream().anyMatch(existing -> existing.key().equals(source.key()))) return true;
             if (selection.size() >= 32) return false;
             selection.add(source); renderSelection(); return true;
         }, path -> selection.stream().anyMatch(source -> path.equals(source.path)), path -> {
-            selection.removeIf(source -> path.equals(source.path)); renderSelection();
-        }, directory -> browseDirectory = directory);
+            if (!TransferService.isRunning()) { selection.removeIf(source -> path.equals(source.path)); renderSelection(); }
+        }, directory -> browseDirectory = directory, () -> TransferService.isRunning(), () -> selection.size() < 32);
     }
     private void confirmFileAction(int title, String prompt, String... command) {
         java.lang.ref.WeakReference<MainActivity> owner = new java.lang.ref.WeakReference<>(this);
@@ -438,8 +563,11 @@ public final class MainActivity extends AppCompatActivity {
                         if (activity == null || activity.isDestroyed()) return;
                         activity.fileCompletion = null;
                         if (!result.optBoolean("ok")) { activity.error(result.optString("error", activity.getString(R.string.backend_failed))); return; }
-                        activity.toast(command[0].equals("file-export") ? activity.getString(R.string.files_exported, result.optString("path")) : activity.getString(R.string.files_action_done));
-                        activity.refresh();
+                        String notice = command[0].equals("file-export") ? activity.getString(R.string.web_files_exported_to) + " " + result.optString("path")
+                                : command[0].equals("file-clear") ? activity.getString(R.string.web_files_cleared) + " (" + result.optInt("removed") + ")" : activity.getString(R.string.web_files_deleted);
+                        if (command[0].equals("file-clear") && result.optInt("ignored") > 0) notice += "\n" + activity.getString(R.string.repair_files_ignored_clear, result.optInt("ignored"));
+                        activity.toast(notice);
+                        activity.refreshInbox();
                     };
                     client.submit(getString(title), fileCompletion, command);
                     if (!client.busy()) fileCompletion = null;
@@ -447,14 +575,14 @@ public final class MainActivity extends AppCompatActivity {
     }
     private void cancelJob(String id) {
         if (TransferService.isRunning()) { startService(new Intent(this, TransferService.class).setAction(TransferService.CANCEL)); return; }
-        io.execute(() -> { try { RootApi.json(this, "file-send-cancel", id); runOnUiThread(() -> { toast(getString(R.string.cancel_requested)); refresh(); }); } catch (Exception e) { runOnUiThread(() -> error(RootApi.message(e))); } });
+        io.execute(() -> { try { RootApi.json(this, "file-send-cancel", id); runOnUiThread(() -> { if (!isDestroyed()) { toast(getString(R.string.web_files_cancel_requested)); refreshHistory(); } }); } catch (Exception e) { runOnUiThread(() -> error(RootApi.message(e))); } });
     }
     private void importFiles() {
         if (TransferService.isRunning()) { error(getString(R.string.busy)); return; }
         requestNotifications(); launch(new Intent(this, TransferService.class).setAction(TransferService.IMPORT));
     }
     private void launch(Intent intent) {
-        try { startForegroundService(intent); pageError = ""; updateProgress(); }
+        try { startForegroundService(intent); operationMessage = ""; updateProgress(); }
         catch (RuntimeException e) { error(RootApi.message(e)); }
     }
     private void requestNotifications() {
@@ -465,13 +593,13 @@ public final class MainActivity extends AppCompatActivity {
         if (request == NOTIFY && (results.length == 0 || results[0] != PackageManager.PERMISSION_GRANTED)) toast(getString(R.string.notifications_hint));
     }
     private void export(String name, String action) {
-        pageError = getString(R.string.loading); updateProgress();
+        operationMessage = getString(R.string.web_loading); updateProgress();
         fileIo.execute(() -> {
             try {
                 Uri uri = ExportProvider.export(this, name);
                 runOnUiThread(() -> {
                     if (isDestroyed() || !resumed) return;
-                    pageError = ""; updateProgress();
+                    operationMessage = ""; updateProgress();
                     try {
                         if (action.equals("save")) {
                             saveSource = uri; saveName = name;
@@ -486,10 +614,9 @@ public final class MainActivity extends AppCompatActivity {
                         }
                     } catch (ActivityNotFoundException e) { error(getString(R.string.no_viewer)); }
                 });
-            } catch (Exception e) { runOnUiThread(() -> { pageError = ""; updateProgress(); error(RootApi.message(e)); }); }
+            } catch (Exception e) { runOnUiThread(() -> { operationMessage = ""; updateProgress(); error(RootApi.message(e)); }); }
         });
     }
-    private String timestamp(long seconds) { return DateFormat.getDateFormat(this).format(new Date(seconds * 1000)) + " " + DateFormat.getTimeFormat(this).format(new Date(seconds * 1000)); }
     private void error(String text) { if (!isDestroyed() && !isFinishing()) new MaterialAlertDialogBuilder(this).setTitle(R.string.error_title).setMessage(text).setPositiveButton(R.string.close, null).show(); }
     private void toast(String text) { if (!isDestroyed()) Toast.makeText(this, text, Toast.LENGTH_LONG).show(); }
 }

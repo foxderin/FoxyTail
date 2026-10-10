@@ -247,6 +247,23 @@ ts_cli() { printf 'leaked input: %s\\n' "$*"; return 9; }
         self.entry('operation-start', self.request('full'), 'diag-check', ok=False)
         self.assertEqual(registry.stat().st_mode & 0o777, 0o700)
 
+    def test_status_does_not_evict_valid_receipt_at_capacity(self):
+        registry = self.run / 'operations'
+        registry.mkdir(exist_ok=True)
+        aged = int(time.time()) - 1000
+        requested = f'{aged}_queried'
+        for index in range(128):
+            request = requested if index == 0 else f'{aged}_capacity_{index}'
+            directory = registry / request
+            directory.mkdir()
+            (directory / 'durable').touch()
+            (directory / 'command').write_text('diag-check')
+            (directory / 'result.json').write_text(
+                '{"ok":true,"operation":{"id":"%s","command":"diag-check",'
+                '"state":"completed","result":{"ok":true}}}' % request)
+        self.assertEqual(self.entry('operation-status', requested)['operation']['id'], requested)
+        self.assertTrue((registry / requested).is_dir())
+
     def test_fixed_capability_and_readonly_hooks(self):
         self.script('bin/iptables', 'printf "%s\\n" "$*" >>"$TEST_DIR/iptables.calls"\n')
         self.assertTrue(self.entry('owner-capability')['available'])

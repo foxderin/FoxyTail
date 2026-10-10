@@ -41,7 +41,9 @@ _control_alive() {
   return 1
 }
 
-# Caller holds the registry lock. Never evict a live worker or a reusable ID.
+# Caller holds the registry lock. Expiry cleanup is safe for status queries;
+# capacity-slot eviction is kept in _control_capacity_gc so reads never evict
+# an unrelated receipt while answering a requested status.
 _control_gc() {
   _cg_now=$(date +%s)
   _cg_count=0
@@ -54,18 +56,23 @@ _control_gc() {
       rm -rf "${_cg_dir}"
     else _cg_count=$((_cg_count + 1)); fi
   done
-  if [ "${_cg_count}" -ge 128 ]; then
-    for _cg_dir in "${TS_RUN_DIR}/operations/"*; do
-      [ -d "${_cg_dir}" ] && [ ! -L "${_cg_dir}" ] && [ -f "${_cg_dir}/result.json" ] || continue
-      _cg_id=${_cg_dir##*/}
-      _op_valid_id "${_cg_id}" || continue
-      [ "${_cg_id%%_*}" -lt $((_cg_now - 930)) ] || continue
-      _control_alive "${_cg_dir}" && continue
-      rm -rf "${_cg_dir}"
-      _cg_count=$((_cg_count - 1))
-      [ "${_cg_count}" -ge 128 ] || break
-    done
-  fi
+}
+
+# Caller holds the registry lock. Creation only: never evict a live worker or
+# a reusable ID, and never let the private receipt registry exceed 128 slots.
+_control_capacity_gc() {
+  [ "${_cg_count:-0}" -ge 128 ] || return 0
+  _ccg_now=$(date +%s)
+  for _ccg_dir in "${TS_RUN_DIR}/operations/"*; do
+    [ -d "${_ccg_dir}" ] && [ ! -L "${_ccg_dir}" ] && [ -f "${_ccg_dir}/result.json" ] || continue
+    _ccg_id=${_ccg_dir##*/}
+    _op_valid_id "${_ccg_id}" || continue
+    [ "${_ccg_id%%_*}" -lt $((_ccg_now - 930)) ] || continue
+    _control_alive "${_ccg_dir}" && continue
+    rm -rf "${_ccg_dir}"
+    _cg_count=$((_cg_count - 1))
+    [ "${_cg_count}" -ge 128 ] || break
+  done
 }
 
 _control_publish() (
@@ -178,7 +185,12 @@ cmd_operation_start() {
     _control_response "${_cs_dir}"
     return
   fi
-  if ! _op_recent_id "${_cs_id}" || [ "${_cg_count}" -ge 128 ]; then
+  if ! _op_recent_id "${_cs_id}"; then
+    _control_unlock
+    jerr 'operation ID expired or private receipt capacity reached; no work started'
+  fi
+  _control_capacity_gc
+  if [ "${_cg_count}" -ge 128 ]; then
     _control_unlock
     jerr 'operation ID expired or private receipt capacity reached; no work started'
   fi

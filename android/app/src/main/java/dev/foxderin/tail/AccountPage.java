@@ -12,8 +12,8 @@ import org.json.JSONObject;
 import java.net.URI;
 
 final class AccountPage extends ControlPage {
-    private final LinearLayout accounts;
-    private final TextView state, accountState;
+    private final LinearLayout accounts, loginResult, logout;
+    private final TextView state, accountState, urlText;
     private final EditText key, server;
     private String loginUrl;
     private boolean awaitingBrowser, checking, loading, reload;
@@ -22,78 +22,87 @@ final class AccountPage extends ControlPage {
 
     AccountPage(ControlActivity activity) {
         super(activity);
-        LinearLayout status = section();
-        state = label(status, s(R.string.network_unknown));
-        button(status, s(R.string.network_refresh), this::load);
-        accountState = label(status, s(R.string.network_unknown));
-        accounts = section(s(R.string.network_account));
-        LinearLayout login = section(s(R.string.network_login));
-        button(login, s(R.string.network_login), () -> guarded(() -> browserLogin(null)));
-        reopen = button(login, s(R.string.network_open_login), () -> {
+        LinearLayout accountCard = section(s(R.string.web_acc_accounts), R.drawable.ic_person, s(R.string.web_tools_account_list_desc));
+        ControlUi.cardAction(accountCard, textButton(accountCard, s(R.string.web_tools_refresh), this::load));
+        accountState = label(accountCard, ""); accountState.setVisibility(View.GONE);
+        accounts = new LinearLayout(activity); accounts.setOrientation(LinearLayout.VERTICAL); accountCard.addView(accounts);
+        LinearLayout login = section(s(R.string.web_acc_login), R.drawable.ic_login, null);
+        state = label(login, ""); state.setVisibility(View.GONE);
+        loginResult = new LinearLayout(activity); loginResult.setOrientation(LinearLayout.VERTICAL); login.addView(loginResult); loginResult.setVisibility(View.GONE);
+        urlText = mono(loginResult, "");
+        LinearLayout urlActions = row(loginResult);
+        tonal(urlActions, s(R.string.web_copy), () -> { if (loginUrl != null) copy(s(R.string.web_copy), loginUrl); });
+        reopen = primary(urlActions, s(R.string.web_open_browser), () -> {
             if (loginUrl != null) { awaitingBrowser = true; activity.openUrl(loginUrl); }
         });
-        reopen.setVisibility(View.GONE);
-        button(login, s(R.string.network_copy_login), () -> { if (loginUrl != null) copy(s(R.string.network_copy_login), loginUrl); else notice(s(R.string.network_unchecked)); });
-        label(login, s(R.string.network_secret_hint));
-        key = input(login, s(R.string.network_authkey), "", InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_PASSWORD);
+        primary(login, s(R.string.web_acc_login), R.drawable.ic_login, () -> guarded(() -> browserLogin(null)));
+        LinearLayout advancedBody = ControlUi.disclosure(content, s(R.string.web_tools_advanced_login), R.drawable.ic_vpn_key);
+        LinearLayout auth = ControlUi.card(advancedBody, s(R.string.web_acc_authkey), R.drawable.ic_vpn_key, null);
+        key = input(auth, s(R.string.web_acc_authkey), "", InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_PASSWORD);
+        key.setHint(s(R.string.web_acc_authkey_hint));
         key.setSaveEnabled(false);
         if (android.os.Build.VERSION.SDK_INT >= 26) key.setImportantForAutofill(View.IMPORTANT_FOR_AUTOFILL_NO_EXCLUDE_DESCENDANTS);
-        button(login, s(R.string.network_authkey_login), () -> {
-            if (key.getText().toString().trim().isEmpty()) { key.setError(s(R.string.network_authkey)); return; }
+        tonal(auth, s(R.string.web_acc_login_authkey), () -> {
+            if (key.getText().toString().trim().isEmpty()) { key.setError(s(R.string.web_acc_authkey)); return; }
             guarded(() -> {
                 String authkey = key.getText().toString().trim(); key.setText("");
                 if (!authkey.isEmpty()) accountMutation("login-authkey", authkey);
             });
         });
-        server = input(login, s(R.string.network_headscale), activity.drafts.getString("account.server", ""), InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_URI);
+        LinearLayout headscale = ControlUi.card(advancedBody, s(R.string.web_acc_headscale), R.drawable.ic_dns, null);
+        server = input(headscale, s(R.string.web_acc_headscale), activity.drafts.getString("account.server", ""), InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_URI);
+        server.setHint(s(R.string.web_acc_headscale_hint));
         server.addTextChangedListener(new TextWatcher() {
             public void beforeTextChanged(CharSequence value, int start, int count, int after) { }
             public void onTextChanged(CharSequence value, int start, int before, int count) { activity.drafts.putString("account.server", value.toString()); }
             public void afterTextChanged(Editable value) { }
         });
-        button(login, s(R.string.network_server_login), () -> {
+        tonal(headscale, s(R.string.web_acc_login_server), () -> {
             String url = server.getText().toString().trim();
-            if (!validServer(url)) { server.setError(s(R.string.network_server_invalid)); return; }
+            if (!validServer(url)) { server.setError(s(R.string.web_tools_server_invalid)); return; }
             guarded(() -> browserLogin(url));
         });
-        button(login, s(R.string.network_logout), () -> guarded(() -> accountMutation("logout")));
-        button(login, s(R.string.network_files), activity::openFiles);
+        logout = ControlUi.dangerCard(content, s(R.string.web_acc_logout), R.drawable.ic_logout);
+        hint(logout, s(R.string.web_tools_logout_desc));
+        button(logout, s(R.string.web_acc_logout), () -> confirm(s(R.string.web_acc_logout), s(R.string.web_acc_logout_confirm), () -> guarded(() -> accountMutation("logout"))));
+        ControlUi.setCardVisible(logout, false);
     }
-    @Override String title() { return s(R.string.network_account); }
+    @Override String title() { return s(R.string.web_acc_title); }
     @Override void load() {
         if (awaitingBrowser) { awaitingBrowser = false; activity.invalidateAccountState(); }
         if (loading) { reload = true; return; }
-        loading = true; pendingReads = 2;
-        read(result -> {
-            state.setText(s(OverviewPage.connectionLabel(result)) + " · " + result.optString("backend", s(R.string.network_unknown)));
-            readFinished();
-        }, failure -> { state.setText(s(R.string.network_stale)); error(failure); readFinished(); }, "status");
+        loading = true; pendingReads = 1;
         read(result -> {
             try {
             JSONArray list = result.optJSONArray("accounts");
-            if (list == null) { accountState.setText(s(R.string.network_stale)); error(new IllegalArgumentException(s(R.string.network_invalid_result))); return; }
+            if (list == null) { accountState.setVisibility(View.VISIBLE); accountState.setText(s(R.string.network_stale)); error(new IllegalArgumentException(s(R.string.network_invalid_result))); return; }
             for (int i = 0; i < list.length(); i++) {
                 JSONObject account = list.optJSONObject(i);
                 if (account == null || !(account.opt("name") instanceof String) || account.optString("name").isEmpty() || !(account.opt("current") instanceof Boolean)) {
-                    accountState.setText(s(R.string.network_stale)); error(new IllegalArgumentException(s(R.string.network_invalid_result))); return;
+                    accountState.setVisibility(View.VISIBLE); accountState.setText(s(R.string.network_stale)); error(new IllegalArgumentException(s(R.string.network_invalid_result))); return;
                 }
             }
-            accounts.removeAllViews(); accountState.setText("");
-            if (list.length() == 0) label(accounts, s(R.string.network_no_accounts));
+            accounts.removeAllViews(); accountState.setVisibility(View.GONE); accountState.setText(""); boolean current = false;
+            if (list.length() == 0) label(accounts, s(R.string.web_acc_not_logged_in));
             for (int i = 0; i < list.length(); i++) {
                 JSONObject account = list.optJSONObject(i);
-                String name = account.optString("name");
-                label(accounts, account.optString("label", name) + (account.optBoolean("current") ? " · " + s(R.string.network_current) : ""));
-                android.widget.Button change = button(accounts, s(R.string.network_switch), () -> guarded(() -> accountMutation("switch", name)));
-                change.setEnabled(!account.optBoolean("current"));
+                String name = account.optString("name"), display = account.optString("label");
+                LinearLayout entry = row(accounts); entry.setGravity(android.view.Gravity.CENTER_VERTICAL);
+                LinearLayout main = new LinearLayout(activity); main.setOrientation(LinearLayout.VERTICAL); entry.addView(main, new LinearLayout.LayoutParams(0, -2, 1));
+                label(main, display.isEmpty() ? name : display);
+                if (account.optBoolean("current")) { current = true; badge(main, s(R.string.web_acc_current_badge), ControlUi.TONE_OK); }
+                android.widget.Button change = ControlUi.button(activity, s(R.string.web_acc_switch), () -> guarded(() -> accountMutation("switch", name)));
+                entry.addView(change); change.setEnabled(!account.optBoolean("current") && activity.client.canWrite() && !activity.client.busy());
             }
+            ControlUi.setCardVisible(logout, current);
             } finally { readFinished(); }
-        }, failure -> { accountState.setText(s(R.string.network_stale)); error(failure); readFinished(); }, "accounts");
+        }, failure -> { accountState.setVisibility(View.VISIBLE); accountState.setText(s(R.string.network_stale)); error(failure); readFinished(); }, "accounts");
     }
     private void readFinished() {
         if (--pendingReads == 0) { loading = false; if (reload) { reload = false; load(); } }
     }
     private void guarded(Runnable action) {
+        if (!activity.client.canWrite()) { notice(activity.client.message()); return; }
         if (checking || loading || activity.client.busy()) { notice(s(R.string.network_unknown)); return; }
         confirm(title(), s(R.string.network_account_interrupt), () -> {
             if (checking || loading || activity.client.busy()) return;
@@ -110,27 +119,28 @@ final class AccountPage extends ControlPage {
         });
     }
     private void browserLogin(String customServer) {
-        checking = true; loginUrl = null; reopen.setVisibility(View.GONE);
+        if (!activity.client.canWrite() || activity.client.busy()) { notice(activity.client.message()); return; }
+        checking = true; loginUrl = null; loginResult.setVisibility(View.GONE); state.setText(s(R.string.web_acc_waiting)); state.setVisibility(View.VISIBLE);
         java.util.function.Consumer<JSONObject> completed = result -> {
-            checking = false; activity.invalidateAccountState();
+            checking = false; state.setVisibility(View.GONE); activity.invalidateAccountState();
             Object url = result.opt("url");
             if (url instanceof String && validServer((String) url)) {
-                loginUrl = (String) url; reopen.setVisibility(View.VISIBLE);
-                awaitingBrowser = true; activity.openUrl(loginUrl);
-            } else if (Boolean.TRUE.equals(result.opt("already"))) { notice(s(R.string.network_already)); load(); }
+                loginUrl = (String) url; urlText.setText(loginUrl); loginResult.setVisibility(View.VISIBLE);
+            } else if (Boolean.TRUE.equals(result.opt("already"))) { state.setText(s(R.string.web_acc_already)); state.setVisibility(View.VISIBLE); load(); }
             else error(new IllegalArgumentException(s(R.string.network_invalid_result)));
         };
         java.util.function.Consumer<Exception> failed = failure -> {
-            checking = false; activity.invalidateAccountState(); error(failure); load();
+            checking = false; state.setVisibility(View.GONE); activity.invalidateAccountState(); error(failure); load();
         };
         if (customServer == null) read(completed, failed, "login");
         else read(completed, failed, "login", "--login-server=" + customServer);
     }
     private void accountMutation(String... command) {
-        loginUrl = null; reopen.setVisibility(View.GONE);
+        loginUrl = null; loginResult.setVisibility(View.GONE);
         mutate(title(), result -> {
             activity.invalidateAccountState();
             if (!result.optBoolean("ok")) notice(s(R.string.network_failed, result.optString("error", s(R.string.network_unknown))));
+            else notice(s("logout".equals(command[0]) ? R.string.web_acc_logged_out : "switch".equals(command[0]) ? R.string.web_acc_switched : R.string.web_acc_logged_in));
             load();
         }, command);
     }

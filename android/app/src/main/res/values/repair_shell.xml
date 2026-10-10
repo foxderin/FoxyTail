@@ -1,0 +1,4 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="repair_shell_stop">Stop service</string>
+</resources>

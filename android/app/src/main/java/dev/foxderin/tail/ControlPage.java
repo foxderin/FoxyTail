@@ -25,12 +25,14 @@ abstract class ControlPage {
     private static final ExecutorService READS = Executors.newFixedThreadPool(4);
     final ControlActivity activity;
     final LinearLayout content;
+    final LinearLayout stickyActions;
     private final Handler main = new Handler(Looper.getMainLooper());
     private final ArrayList<RootApi.Call> calls = new ArrayList<>();
     private final ArrayList<Poll> polls = new ArrayList<>();
     private final ArrayList<Consumer<JSONObject>> callbacks = new ArrayList<>();
     private final Set<String> reading = new HashSet<>();
     private final Map<String, PendingRead> queuedReads = new LinkedHashMap<>();
+    private final Map<ControlPage, Boolean> embedded = new LinkedHashMap<>();
     private static final class PendingRead {
         final String[] command;
         final ArrayList<Consumer<JSONObject>> success = new ArrayList<>();
@@ -44,7 +46,10 @@ abstract class ControlPage {
     ControlPage(ControlActivity activity) {
         this.activity = activity;
         content = new LinearLayout(activity); content.setOrientation(LinearLayout.VERTICAL);
-        content.setPadding(dp(16), dp(8), dp(16), dp(24));
+        int inset = activity.getResources().getConfiguration().screenWidthDp < 380 ? 16 : activity.getResources().getConfiguration().screenWidthDp >= 960 ? 36 : activity.getResources().getConfiguration().screenWidthDp >= 640 ? 28 : 20;
+        content.setPadding(dp(inset), 0, dp(inset), dp(30));
+        stickyActions = new LinearLayout(activity); stickyActions.setOrientation(LinearLayout.VERTICAL);
+        stickyActions.setPadding(dp(16), dp(4), dp(16), dp(8));
     }
     abstract String title();
     abstract void load();
@@ -53,6 +58,7 @@ abstract class ControlPage {
     void operationFinished(String command) {
         refreshAfterRead = true;
         refreshWhenIdle();
+        for (Map.Entry<ControlPage, Boolean> entry : embedded.entrySet()) if (entry.getValue()) entry.getKey().operationFinished(command);
     }
     private void refreshWhenIdle() {
         if (refreshAfterRead && reading.isEmpty() && isCurrent()) { refreshAfterRead = false; load(); }
@@ -63,6 +69,7 @@ abstract class ControlPage {
         visible = true;
         for (Poll poll : polls) { main.removeCallbacks(poll); main.postDelayed(poll, poll.millis); }
         load();
+        for (Map.Entry<ControlPage, Boolean> entry : embedded.entrySet()) if (entry.getValue()) entry.getKey().resume();
     }
     final void pause() {
         visible = false; generation++;
@@ -70,12 +77,29 @@ abstract class ControlPage {
         for (RootApi.Call call : new ArrayList<>(calls)) call.cancel();
         calls.clear(); reading.clear(); queuedReads.clear();
         onPause();
+        for (ControlPage child : embedded.keySet()) child.pause();
     }
     final void close() {
         if (closed) return;
         closed = true; pause(); callbacks.clear();
         if (dialog != null) dialog.dismiss();
+        for (ControlPage child : embedded.keySet()) child.close();
         onClose();
+    }
+    final void embed(ControlPage child) { embed(child, content); }
+    final void embed(ControlPage child, LinearLayout host) {
+        embedded.put(child, true); child.content.setPadding(0, 0, 0, 0);
+        host.addView(child.content, new LinearLayout.LayoutParams(-1, -2));
+        if (child.stickyActions.getChildCount() > 0) host.addView(child.stickyActions, new LinearLayout.LayoutParams(-1, -2));
+        if (isCurrent()) child.resume();
+    }
+    final void setEmbeddedVisible(ControlPage child, boolean shown) {
+        if (!embedded.containsKey(child)) throw new IllegalArgumentException("Page is not embedded");
+        boolean wasShown = embedded.put(child, shown);
+        child.content.setVisibility(shown ? View.VISIBLE : View.GONE);
+        child.stickyActions.setVisibility(shown ? View.VISIBLE : View.GONE);
+        if (wasShown == shown) return;
+        if (shown && isCurrent()) child.resume(); else child.pause();
     }
     boolean isCurrent() { return !closed && visible && !activity.isDestroyed(); }
     String s(int resource, Object... args) { return activity.getString(resource, args); }
@@ -86,13 +110,16 @@ abstract class ControlPage {
     LinearLayout section() {
         return ControlUi.card(content, null);
     }
+    LinearLayout section(String heading, int icon, String description) { return ControlUi.card(content, heading, icon, description); }
+    TextView hint(LinearLayout parent, String value) { return ControlUi.hint(parent, value); }
+    Button textButton(LinearLayout parent, String value, Runnable action) { return place(parent, ControlUi.textButton(activity, value, () -> { if (isCurrent()) action.run(); })); }
     LinearLayout row(LinearLayout parent) {
-        LinearLayout row = new LinearLayout(activity); row.setOrientation(LinearLayout.HORIZONTAL);
+        LinearLayout row = new LinearLayout(activity); row.setOrientation(LinearLayout.HORIZONTAL); row.setBaselineAligned(false); row.setGravity(android.view.Gravity.CENTER_VERTICAL);
         parent.addView(row, new LinearLayout.LayoutParams(-1, -2)); return row;
     }
     TextView label(LinearLayout parent, String text) {
-        TextView view = ControlUi.text(activity, text, 16);
-        view.setTextIsSelectable(true); view.setPadding(0, dp(6), 0, dp(6));
+        TextView view = ControlUi.textRes(activity, text, R.dimen.ft_body);
+        view.setTextIsSelectable(true); view.setPadding(0, dp(4), 0, dp(4));
         parent.addView(view, new LinearLayout.LayoutParams(-1, -2)); return view;
     }
     TextView mono(LinearLayout parent, String text) {
@@ -120,17 +147,15 @@ abstract class ControlPage {
         return place(parent, ControlUi.tonalButton(activity, text, () -> { if (isCurrent()) action.run(); }));
     }
     ControlUi.MetricTile metric(LinearLayout row, int icon, String caption) { return ControlUi.metric(row, icon, caption); }
-    LinearLayout entryRow(LinearLayout parent, int icon, String title, String description, Runnable action) {
-        return ControlUi.entryRow(parent, icon, title, description, () -> { if (isCurrent()) action.run(); });
-    }
-    LinearLayout linkRow(LinearLayout parent, int icon, String label, Runnable action) {
-        return ControlUi.linkRow(parent, icon, label, () -> { if (isCurrent()) action.run(); });
-    }
     LinearLayout quickCard(LinearLayout row, int icon, String title, String description, Runnable action) {
         return ControlUi.quickCard(row, icon, title, description, () -> { if (isCurrent()) action.run(); });
     }
     private Button place(LinearLayout parent, Button view) {
-        parent.addView(view, new LinearLayout.LayoutParams(parent.getOrientation() == LinearLayout.HORIZONTAL ? 0 : -1, -2, parent.getOrientation() == LinearLayout.HORIZONTAL ? 1 : 0)); return view;
+        boolean horizontal = parent.getOrientation() == LinearLayout.HORIZONTAL;
+        LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(-2, -2);
+        if (horizontal && parent.getChildCount() > 0) params.setMarginStart(dp(10));
+        else if (!horizontal) params.topMargin = dp(16);
+        parent.addView(view, params); return view;
     }
     EditText input(LinearLayout parent, String hint, String initial, int inputType) {
         return ControlUi.input(parent, hint, initial, inputType);
@@ -140,9 +165,9 @@ abstract class ControlPage {
         parent.addView(view); return view;
     }
     CompoundButton toggle(LinearLayout parent, String label, boolean checked, Consumer<Boolean> change) {
-        MaterialSwitch view = new MaterialSwitch(activity); view.setText(label); view.setChecked(checked); view.setMinHeight(dp(48));
-        parent.addView(view, new LinearLayout.LayoutParams(-1, -2));
-        view.setOnCheckedChangeListener((button, value) -> { if (isCurrent()) change.accept(value); }); return view;
+        CompoundButton view = ControlUi.switchView(activity, checked, value -> { if (isCurrent()) change.accept(value); });
+        view.setText(label); view.setContentDescription(label);
+        parent.addView(view, new LinearLayout.LayoutParams(-1, -2)); return view;
     }
     void confirm(String title, String message, Runnable confirmed) {
         if (!isCurrent()) return;

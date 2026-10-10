@@ -3,6 +3,7 @@ package main
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -111,12 +112,63 @@ func TestTaildropSkipsIncompleteAndUnsafeEntries(t *testing.T) {
 		t.Fatal(err)
 	}
 	result, err := importTaildrop(shared, inbox)
-	if err != nil || result.Received != 0 {
+	if err != nil || result.Received != 0 || result.Ignored != 3 {
 		t.Fatalf("unsafe import: %+v %v", result, err)
 	}
 	entries, err := os.ReadDir(inbox)
 	if err != nil || len(entries) != 1 || entries[0].Name() != ".taildrop" {
 		t.Fatal("unsafe files published", err)
+	}
+}
+
+func TestTaildropNamesMatchInboxBoundary(t *testing.T) {
+	for _, name := range []string{"", ".", "..", ".taildrop", ".outgoing", "a/b", "a\\b", strings.Repeat("a", 256), strings.Repeat("界", 86), "invalid\xff"} {
+		if taildropCompletedName(name) {
+			t.Errorf("accepted incompatible name %q", name)
+		}
+	}
+	for character := rune(0); character <= 0x9f; character++ {
+		if character > 0x1f && character < 0x7f {
+			continue
+		}
+		if taildropCompletedName("file" + string(character) + ".txt") {
+			t.Errorf("accepted ISO control U+%04X", character)
+		}
+	}
+	for _, name := range []string{".env", "..hidden", "meeting ' * [1].txt", "你好.txt", strings.Repeat("a", 255), strings.Repeat("界", 85)} {
+		if !taildropCompletedName(name) {
+			t.Errorf("rejected supported name %q", name)
+		}
+	}
+}
+
+func TestTaildropIgnoresUnsupportedNamesWithoutChangingInput(t *testing.T) {
+	shared, incoming, inbox := taildropFixture(t)
+	invalid := []string{"tab\tname", "line\nbreak", "return\rname", "escape\x1bname", "delete\x7fname", "c1\u0085name", "back\\slash", ".outgoing"}
+	for _, name := range append(invalid, "normal.txt") {
+		if err := os.WriteFile(filepath.Join(incoming, name), []byte("keep"), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	result, err := importTaildrop(shared, inbox)
+	if err != nil || result.Received != 1 || result.Ignored != len(invalid) || result.Files[0] != "normal.txt" {
+		t.Fatalf("mixed import: %+v %v", result, err)
+	}
+	for _, name := range invalid {
+		if body, err := os.ReadFile(filepath.Join(incoming, name)); err != nil || string(body) != "keep" {
+			t.Fatalf("unsupported original changed: %q %v", name, err)
+		}
+		if _, err := os.Lstat(filepath.Join(inbox, name)); !os.IsNotExist(err) {
+			t.Fatalf("unsupported name entered inbox: %q %v", name, err)
+		}
+	}
+	entries, err := os.ReadDir(inbox)
+	if err != nil || len(entries) != 2 {
+		t.Fatalf("unexpected renamed files: %v %v", entries, err)
+	}
+	result, err = importTaildrop(shared, inbox)
+	if err != nil || result.Received != 0 || result.Ignored != len(invalid) {
+		t.Fatalf("repeated import: %+v %v", result, err)
 	}
 }
 
@@ -196,7 +248,7 @@ func TestTaildropExclusivePublicationAndRootReplacement(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer receipts.Close()
-	for _, name := range []string{"../secret", "/secret", ".taildrop", "x.partial"} {
+	for _, name := range []string{"../secret", "/secret", ".taildrop", ".outgoing", "x.partial", "tab\tname", "c1\u0085name", "delete\x7fname"} {
 		if _, err = importTaildropFile(root, private, receipts, name); err == nil {
 			t.Fatal("accepted unsafe name", name)
 		}

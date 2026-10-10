@@ -1,0 +1,3 @@
+<resources>
+    <string name="replica_settings_save_hint">修改保留为草稿；保存后，待应用配置可统一重启生效。</string>
+</resources>

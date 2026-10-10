@@ -17,6 +17,7 @@ type taildropResult struct {
 	OK       bool     `json:"ok"`
 	Received int      `json:"received"`
 	Files    []string `json:"files"`
+	Ignored  int      `json:"ignored,omitempty"`
 }
 
 func runTaildrop(args []string) error {
@@ -101,7 +102,11 @@ func importTaildrop(source, destination string) (taildropResult, error) {
 		entries, readErr := directory.ReadDir(128)
 		for _, entry := range entries {
 			name := entry.Name()
-			if !entry.Type().IsRegular() || !taildropCompletedName(name) {
+			if !entry.Type().IsRegular() || strings.HasSuffix(name, ".partial") || strings.HasSuffix(name, ".deleted") {
+				continue
+			}
+			if !taildropCompletedName(name) {
+				result.Ignored++
 				continue
 			}
 			published, err := importTaildropFile(incoming, inbox, receipts, name)
@@ -124,9 +129,8 @@ func importTaildrop(source, destination string) (taildropResult, error) {
 }
 
 func taildropCompletedName(name string) bool {
-	return name != "." && name != ".." && name != ".taildrop" && name != ".outgoing" &&
-		!strings.HasSuffix(name, ".partial") && !strings.HasSuffix(name, ".deleted") &&
-		!strings.ContainsAny(name, "/\\\r\n\x00")
+	return plainName(name) && name != ".taildrop" && name != ".outgoing" &&
+		!strings.HasSuffix(name, ".partial") && !strings.HasSuffix(name, ".deleted")
 }
 
 func importTaildropFile(incoming, inbox, receipts *os.Root, name string) (string, error) {

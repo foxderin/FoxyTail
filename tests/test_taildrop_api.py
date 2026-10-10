@@ -176,7 +176,7 @@ cp() { return 1; }
     def test_receive_skips_unfinished_files_and_keeps_receipts_after_clear(self):
         result = self.receive({'done.txt': 'complete', 'later.partial': 'partial',
                                'removed.deleted': 'deleted', 'line\nbreak.txt': 'unsupported'})
-        self.assertEqual(result, {'ok': True, 'received': 1, 'exported': 1})
+        self.assertEqual(result, {'ok': True, 'received': 1, 'exported': 1, 'ignored': 1})
         self.assertEqual(json.loads(self.shell('cmd_file_clear').stdout)['removed'], 1)
         self.assertTrue((self.inbox / '.taildrop').is_dir())
         self.assertEqual(self.receive({})['received'], 0)
@@ -197,6 +197,51 @@ cp() { return 1; }
         self.assertEqual(json.loads(self.shell('cmd_file_clear').stdout)['removed'], 0)
         self.assertEqual((receipts / 'receipt').read_text(), 'private')
         self.assertEqual(outside.read_text(), 'secret')
+
+    def test_receive_rejects_control_names_without_renaming_or_deleting(self):
+        controls = [chr(n) for n in range(1, 32)] + [chr(n) for n in range(127, 160)]
+        unsupported = {'bad' + control + '.txt': 'keep' for control in controls}
+        unsupported['back\\slash.txt'] = 'keep'
+        result = self.receive(dict(unsupported, **{'normal.txt': 'valid'}))
+        self.assertEqual(result, {'ok': True, 'received': 1, 'exported': 1, 'ignored': len(unsupported)})
+        self.assertEqual({p.name: p.read_text() for p in self.inbox.iterdir() if p.is_file()}, {'normal.txt': 'valid'})
+        self.assertEqual({p.name: p.read_text() for p in self.downloads.iterdir() if p.is_file()}, {'normal.txt': 'valid'})
+        incoming = self.downloads / 'Taildrop'
+        for name, body in unsupported.items():
+            self.assertEqual((incoming / name).read_text(), body)
+        self.assertEqual(self.receive({}), {'ok': True, 'received': 0, 'exported': 0, 'ignored': len(unsupported)})
+
+    def test_initial_listing_and_clear_isolate_existing_incompatible_entries(self):
+        unsupported = ['tab\tname', 'line\nbreak', 'return\rname', 'escape\x1bname', 'delete\x7fname', 'c1\u0085name', 'back\\slash']
+        supported = ['normal.txt', '.env', "literal * [1] ' .txt"]
+        for name in unsupported + supported:
+            (self.inbox / name).write_text('keep-' + name)
+        listing = json.loads(self.shell('cmd_files_inbox').stdout)
+        self.assertTrue(listing['ok'])
+        self.assertEqual({item['name'] for item in listing['files']}, set(supported))
+        self.assertEqual(listing['ignored'], len(unsupported))
+        read = self.shell('cmd_file_read normal.txt').stdout
+        self.assertEqual(read, 'keep-normal.txt')
+        self.assertEqual(json.loads(self.shell('cmd_file_clear').stdout), {'ok': True, 'removed': len(supported), 'ignored': len(unsupported)})
+        self.assertEqual({p.name for p in self.inbox.iterdir()}, set(unsupported))
+        for name in unsupported:
+            self.assertEqual((self.inbox / name).read_bytes(), ('keep-' + name).encode())
+        listing = json.loads(self.shell('cmd_files_inbox').stdout)
+        self.assertEqual(listing['files'], [])
+        self.assertEqual(listing['ignored'], len(unsupported))
+
+    def test_inbox_item_operations_reject_unsupported_names(self):
+        for name in ('tab\tname', 'line\nbreak', 'delete\x7fname', 'c1\u0085name', 'back\\slash'):
+            (self.inbox / name).write_text('preserve')
+            for command in ('cmd_file_read', 'cmd_file_delete', 'cmd_file_export'):
+                result = self.shell(command + ' ' + shlex.quote(name), ok=False)
+                self.assertNotEqual(result.returncode, 0)
+                if command == 'cmd_file_read':
+                    self.assertEqual(result.stdout, '')
+                else:
+                    self.assertFalse(json.loads(result.stdout)['ok'])
+                self.assertEqual((self.inbox / name).read_text(), 'preserve')
+        self.assertEqual([p for p in self.downloads.iterdir() if p.is_file()], [])
 
 
     def test_direct_mode_marker_requires_same_owned_daemon_identity(self):

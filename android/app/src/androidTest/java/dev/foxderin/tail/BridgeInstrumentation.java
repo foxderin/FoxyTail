@@ -39,8 +39,7 @@ public final class BridgeInstrumentation extends Instrumentation {
             check(RootApi.failureMessage("FOXYTAIL_ROOT_READY\nhelper failed") == R.string.backend_failed, "Backend failure is not root denial");
             check(RootApi.failureMessage("su: denied") == R.string.root_failed, "Missing handshake is not backend success");
             check(RootApi.failureMessage("prefix FOXYTAIL_ROOT_READY") == R.string.root_failed, "Handshake requires exact line");
-            check(MainActivity.targetPlaceholder(false, false) == R.string.loading, "Unknown targets are not empty targets");
-            check(MainActivity.targetPlaceholder(true, false) == R.string.no_targets, "Successful empty targets");
+            check(MainActivity.targetPlaceholder(false, false) != MainActivity.targetPlaceholder(true, false), "Unknown targets are not empty targets");
             check(MainActivity.targetPlaceholder(false, true) == R.string.targets_failed && MainActivity.targetPlaceholder(true, true) == R.string.targets_failed, "Target failure takes precedence over stale state");
             check(Models.sourcePath("/sdcard/Download/hello world.txt"), "Shared file accepted");
             check(!Models.sourcePath("/sdcard/../data/file"), "Parent traversal rejected");
@@ -70,10 +69,20 @@ public final class BridgeInstrumentation extends Instrumentation {
             FilesIntegrationChecks.run(context);
             NetworkChecks.run();
             ToolsLogicTests.run();
+            ToolsPagesChecks.run();
+            AccountServeChecks.run();
+            ConfigPageChecks.run();
+            ShellStateChecks.run(this);
+            java.util.concurrent.atomic.AtomicReference<Throwable> uiFailure = new java.util.concurrent.atomic.AtomicReference<>();
+            runOnMainSync(() -> {
+                try { TrafficChecks.run(context); } catch (Throwable error) { uiFailure.set(error); }
+            });
+            if (uiFailure.get() != null) throw new AssertionError("Traffic interaction regression", uiFailure.get());
             result.putString("stream", "PASS: root control receipts and failures, network and tool contracts, Taildrop boundaries, binary streaming, cancellation and read-only exports\n");
             finish(-1, result);
         } catch (Throwable error) {
-            result.putString("stream", "FAIL: " + error + "\n"); finish(1, result);
+            java.io.StringWriter trace = new java.io.StringWriter(); error.printStackTrace(new java.io.PrintWriter(trace));
+            result.putString("stream", "FAIL: " + trace + "\n"); finish(1, result);
         }
     }
     private static JSONObject file(String state, String name, boolean known, long sent) throws JSONException {

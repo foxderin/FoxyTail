@@ -538,8 +538,9 @@ ui_print "- Starting FoxyTail service and resident helpers in background"
 
 # --- Quickstart --------------------------------------------------------------
 
-ui_print "- Companion: dev.foxderin.tail (FoxyTail); installed by PackageManager after reboot."
-ui_print "- Grant root in Magisk/KernelSU before opening it; existing app data is preserved."
+ui_print "- Companion APK is a separate sibling release artifact (FoxyTail-<version>.apk)."
+ui_print "- Install or update it yourself in Android; the module never installs it, including after reboot."
+ui_print "- Grant root to FoxyTail itself in Magisk/KernelSU; existing app data is preserved."
 ui_print "-----------------------------------------------------------"
 ui_print " Quick start"
 ui_print "-----------------------------------------------------------"

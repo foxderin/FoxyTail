@@ -71,7 +71,11 @@ public final class TransferService extends Service {
                 requestId = RootApi.requestId(); currentCall = new RootApi.Call();
                 prefs.edit().putString("request", requestId).apply();
                 JSONObject result = RootApi.json(this, requestId, null, null, 150, currentCall, "file-receive");
-                publish(getString(R.string.imported, result.getInt("received")), null);
+                long received = Models.number(result, "received");
+                long ignored = result.has("ignored") ? Models.number(result, "ignored") : 0;
+                String message = getString(R.string.imported, received);
+                if (ignored > 0) message += "\n" + getString(R.string.repair_files_ignored_import, ignored);
+                publish(message, null);
                 return;
             }
             if (ADOPT.equals(action)) {
@@ -197,7 +201,7 @@ public final class TransferService extends Service {
         cleanup.commit();
     }
     private Notification notification(String text) {
-        PendingIntent open = PendingIntent.getActivity(this, 0, new Intent(this, MainActivity.class).putExtra("history", true), PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
+        PendingIntent open = PendingIntent.getActivity(this, 0, new Intent(this, MainActivity.class).putExtra("history", true).addFlags(Intent.FLAG_ACTIVITY_REORDER_TO_FRONT | Intent.FLAG_ACTIVITY_SINGLE_TOP), PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
         PendingIntent cancel = PendingIntent.getService(this, 1, new Intent(this, TransferService.class).setAction(CANCEL), PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
         return new Notification.Builder(this, CHANNEL).setSmallIcon(R.drawable.ic_tail).setContentTitle(getString(R.string.app_name))
                 .setContentText(text).setStyle(new Notification.BigTextStyle().bigText(text)).setContentIntent(open).setOngoing(true).setOnlyAlertOnce(true)

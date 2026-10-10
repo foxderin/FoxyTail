@@ -1,265 +1,398 @@
 package dev.foxderin.tail;
 
+import android.graphics.Typeface;
+import android.graphics.drawable.GradientDrawable;
 import android.text.Editable;
 import android.text.InputType;
 import android.text.TextWatcher;
+import android.view.Gravity;
+import android.view.View;
 import android.widget.Button;
+import android.widget.CompoundButton;
 import android.widget.EditText;
+import android.widget.ImageView;
 import android.widget.LinearLayout;
 import android.widget.TextView;
+import com.google.android.material.checkbox.MaterialCheckBox;
+import com.google.android.material.color.MaterialColors;
+import com.google.android.material.radiobutton.MaterialRadioButton;
 import org.json.JSONArray;
 import org.json.JSONObject;
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Set;
 
 final class RoutingPage extends ControlPage {
-    private final TextView acceptance, capability, result, appsState, savedRoutes, ipv6State, draftState;
-    private final Button enableAcceptance, disableAcceptance, save;
-    private final LinearLayout advertised, appRows;
-    private final EditText subnets, uids, search;
-    private final MaterialChoice scope;
-    private JSONArray apps;
-    private JSONArray savedSubnets;
-    private boolean binding, routesKnown, ownerKnown, ownerAvailable, acceptanceKnown, ipv6Enabled, discardRequested;
-    private boolean selectedOnly;
+    private final TextView acceptance, acceptanceHint, capability, result, appsState, selectedCount, emptySelection, ipv6State, draftState, subnetError, ipv6Pending;
+    private final Button save, addSubnet, discard, selectedFilter, moreApps, retryApps, ipv6Settings, retryRoutes, pendingSettings;
+    private final CompoundButton acceptanceSwitch;
+    private final View refreshAcceptance;
+    private final LinearLayout advertised, subnetRows, appRows, appBox;
+    private final EditText subnetInput, search;
+    private final MaterialRadioButton[] scopeButtons = new MaterialRadioButton[3];
+    private final LinearLayout[] scopeRows = new LinearLayout[3];
+    private JSONArray apps, savedSubnets, advertisedPeers, skippedIpv6;
+    private boolean binding, routesKnown, ownerKnown, ownerAvailable, acceptanceKnown, acceptanceOn, ipv6Enabled, discardRequested;
+    private boolean selectedOnly, acceptanceBusy, saveBusy, savedPending, appsRequested;
     private int limit = 100;
-    private String mode = "?", ownerReason = "";
-    private String savedSnapshot;
+    private String mode = "?", selectedScope = "all", savedSnapshot;
+    private final Set<String> destinations = new LinkedHashSet<>(), selectedUids = new LinkedHashSet<>();
     private final String[] scopes = {"all", "selected", "bypass"};
 
     RoutingPage(ControlActivity activity) {
         super(activity);
-        LinearLayout acceptBox = section(s(R.string.cs_accept));
-        acceptance = label(acceptBox, s(R.string.cs_unknown));
-        enableAcceptance = button(acceptBox, s(R.string.cs_accept_on), () -> accept(true));
-        disableAcceptance = button(acceptBox, s(R.string.cs_accept_off), () -> accept(false));
-        enableAcceptance.setEnabled(false); disableAcceptance.setEnabled(false);
-        button(acceptBox, s(R.string.cs_refresh), this::load);
-        advertised = section(s(R.string.cs_advertised));
-        LinearLayout local = section(s(R.string.cs_local_routes));
-        capability = label(local, s(R.string.cs_unknown));
-        savedRoutes = mono(local, s(R.string.cs_unknown));
-        ipv6State = label(local, "");
-        draftState = label(local, "");
-        button(local, s(R.string.cs_reload_draft), () -> confirm(s(R.string.cs_reload_draft), s(R.string.cs_reload_confirm), () -> { discardRequested = true; load(); }));
-        label(local, s(R.string.cs_scope_hint));
-        scope = choice(local, new String[]{s(R.string.cs_scope_all), s(R.string.cs_scope_selected), s(R.string.cs_scope_bypass)}, 0, i -> {
-            if (!binding) { activity.drafts.putString("routing.scope", scopes[i]); showDraftState(); }
+        LinearLayout acceptBox = section();
+        LinearLayout acceptRow = row(acceptBox); acceptRow.setGravity(Gravity.CENTER_VERTICAL);
+        icon(acceptRow, R.drawable.ic_alt_route);
+        TextView acceptTitle = label(acceptRow, s(R.string.web_tools_subnet_accept));
+        acceptTitle.setTypeface(null, Typeface.BOLD); acceptTitle.setLayoutParams(new LinearLayout.LayoutParams(0, -2, 1));
+        acceptanceSwitch = ControlUi.switchView(activity, false, next -> {
+            if (binding || !isCurrent()) return;
+            binding = true; acceptanceSwitchState(); binding = false;
+            accept(next);
         });
-        subnets = input(local, s(R.string.cs_subnets), activity.drafts.getString("routing.subnets", ""), InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_MULTI_LINE);
-        subnets.setMinLines(3);
-        watch(subnets, () -> { activity.drafts.putString("routing.subnets", subnets.getText().toString()); showDraftState(); });
-        button(local, s(R.string.cs_normalize), () -> {
-            try { subnets.setText(String.join("\n", SettingsRules.cidrs(subnets.getText().toString()))); }
-            catch (IllegalArgumentException e) { error(e); }
-        });
-        uids = input(local, s(R.string.cs_uids), activity.drafts.getString("routing.uids", ""), InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_MULTI_LINE);
-        watch(uids, () -> { activity.drafts.putString("routing.uids", uids.getText().toString()); renderApps(); showDraftState(); });
-        LinearLayout appBox = section(s(R.string.cs_apps));
-        search = input(appBox, s(R.string.cs_search), activity.drafts.getString("routing.search", ""), InputType.TYPE_CLASS_TEXT);
+        acceptanceSwitch.setContentDescription(s(R.string.web_tools_subnet_accept));
+        acceptanceSwitch.setEnabled(false);
+        acceptRow.addView(acceptanceSwitch);
+        refreshAcceptance = ControlUi.iconButton(activity, R.drawable.ic_refresh, s(R.string.web_tools_subnet_refresh), () -> { if (isCurrent()) refreshAdvertised(null); });
+        acceptRow.addView(refreshAcceptance);
+        acceptanceHint = hint(acceptBox, "");
+        acceptance = hint(acceptBox, s(R.string.web_tools_subnet_unknown));
+        advertised = section(s(R.string.web_tools_subnet_title), R.drawable.ic_router, null);
+        LinearLayout local = section(s(R.string.web_tools_route_targets), R.drawable.ic_router, s(R.string.web_tools_route_subnets_desc));
+        LinearLayout addRow = row(local); addRow.setGravity(Gravity.CENTER_VERTICAL);
+        LinearLayout inputHost = new LinearLayout(activity); inputHost.setOrientation(LinearLayout.VERTICAL);
+        addRow.addView(inputHost, new LinearLayout.LayoutParams(0, -2, 1));
+        subnetInput = input(inputHost, s(R.string.web_route_subnets), activity.drafts.getString("routing.newSubnet", ""), InputType.TYPE_CLASS_TEXT);
+        subnetInput.setHint(s(R.string.web_route_subnets_add_hint));
+        addSubnet = ControlUi.tonalButton(activity, s(R.string.web_add), R.drawable.ic_add, () -> { if (isCurrent()) addSubnet(); });
+        LinearLayout.LayoutParams addParams = new LinearLayout.LayoutParams(-2, -2); addParams.setMarginStart(dp(8)); addRow.addView(addSubnet, addParams);
+        subnetError = hint(local, ""); subnetError.setVisibility(View.GONE); subnetError.setAccessibilityLiveRegion(View.ACCESSIBILITY_LIVE_REGION_POLITE);
+        watch(subnetInput, () -> { activity.drafts.putString("routing.newSubnet", subnetInput.getText().toString()); subnetError.setVisibility(View.GONE); updateControls(); });
+        subnetRows = new LinearLayout(activity); subnetRows.setOrientation(LinearLayout.VERTICAL); local.addView(subnetRows);
+        ipv6State = hint(local, ""); ipv6State.setVisibility(View.GONE);
+        ipv6Settings = textButton(local, s(R.string.web_set_title), () -> activity.navigate("settings")); ipv6Settings.setVisibility(View.GONE);
+        LinearLayout policy = section(s(R.string.web_tools_route_policy), R.drawable.ic_alt_route, null);
+        capability = hint(policy, s(R.string.web_tools_route_probe));
+        int[] titles = {R.string.web_route_scope_all, R.string.web_route_scope_selected, R.string.web_route_scope_bypass};
+        int[] hints = {R.string.web_route_scope_all_hint, R.string.web_route_scope_selected_hint, R.string.web_route_scope_bypass_hint};
+        for (int i = 0; i < scopes.length; i++) {
+            final int position = i;
+            LinearLayout policyRow = row(policy); scopeRows[i] = policyRow;
+            policyRow.setPadding(dp(15), dp(15), dp(15), dp(15)); policyRow.setGravity(Gravity.TOP);
+            LinearLayout.LayoutParams params = (LinearLayout.LayoutParams) policyRow.getLayoutParams(); params.bottomMargin = dp(10);
+            MaterialRadioButton radio = new MaterialRadioButton(activity); scopeButtons[i] = radio;
+            radio.setContentDescription(s(titles[i])); radio.setMinimumWidth(0); radio.setMinimumHeight(0); radio.setPadding(0, 0, 0, 0);
+            policyRow.addView(radio, new LinearLayout.LayoutParams(dp(24), dp(24)));
+            LinearLayout copy = new LinearLayout(activity); copy.setOrientation(LinearLayout.VERTICAL);
+            LinearLayout.LayoutParams copyParams = new LinearLayout.LayoutParams(0, -2, 1); copyParams.setMarginStart(dp(12)); policyRow.addView(copy, copyParams);
+            TextView title = label(copy, s(titles[i])); title.setTextSize(14); title.setTypeface(null, Typeface.BOLD); title.setPadding(0, 0, 0, dp(5));
+            hint(copy, s(hints[i]));
+            policyRow.setOnClickListener(v -> selectScope(position)); radio.setOnClickListener(v -> selectScope(position));
+        }
+        appBox = section(s(R.string.web_route_apps), R.drawable.ic_group, s(R.string.web_tools_route_apps_desc));
+        search = input(appBox, s(R.string.web_tools_search_apps), activity.drafts.getString("routing.search", ""), InputType.TYPE_CLASS_TEXT);
         watch(search, () -> { activity.drafts.putString("routing.search", search.getText().toString()); limit = 100; renderApps(); });
         selectedOnly = activity.drafts.getBoolean("routing.selectedOnly", false);
-        toggle(appBox, s(R.string.cs_selected_only), selectedOnly, value -> { selectedOnly = value; activity.drafts.putBoolean("routing.selectedOnly", value); renderApps(); });
-        appsState = label(appBox, s(R.string.cs_unknown));
-        button(appBox, s(R.string.cs_refresh), this::loadApps);
-        appRows = new LinearLayout(activity); appRows.setOrientation(LinearLayout.VERTICAL); appBox.addView(appRows);
-        result = label(content, s(R.string.cs_unknown));
-        save = button(content, s(R.string.cs_save), this::save);
-        save.setEnabled(false);
-        button(content, s(R.string.cs_settings), () -> activity.navigate("settings"));
-        repeat(this::load, 10000);
+        LinearLayout toolbar = row(appBox); toolbar.setGravity(Gravity.CENTER_VERTICAL);
+        selectedCount = hint(toolbar, ""); selectedCount.setLayoutParams(new LinearLayout.LayoutParams(0, -2, 1));
+        selectedFilter = ControlUi.tonalButton(activity, s(R.string.web_tools_selected), () -> {
+            if (!isCurrent()) return;
+            selectedOnly = !selectedOnly; activity.drafts.putBoolean("routing.selectedOnly", selectedOnly); renderApps();
+        }); toolbar.addView(selectedFilter, new LinearLayout.LayoutParams(-2, -2));
+        emptySelection = hint(appBox, s(R.string.web_tools_route_empty_selection));
+        appsState = hint(appBox, s(R.string.web_loading));
+        retryApps = textButton(appBox, s(R.string.web_retry), this::loadApps); retryApps.setVisibility(View.GONE);
+        androidx.core.widget.NestedScrollView appScroll = new androidx.core.widget.NestedScrollView(activity) {
+            @Override protected void onMeasure(int width, int height) { super.onMeasure(width, View.MeasureSpec.makeMeasureSpec(dp(440), View.MeasureSpec.AT_MOST)); }
+        };
+        appScroll.setNestedScrollingEnabled(true);
+        appRows = new LinearLayout(activity); appRows.setOrientation(LinearLayout.VERTICAL); appScroll.addView(appRows);
+        appBox.addView(appScroll, new LinearLayout.LayoutParams(-1, -2));
+        moreApps = textButton(appBox, "", () -> { limit += 100; renderApps(); }); moreApps.setVisibility(View.GONE);
+        result = hint(content, ""); result.setVisibility(View.GONE); result.setAccessibilityLiveRegion(View.ACCESSIBILITY_LIVE_REGION_POLITE);
+        retryRoutes = textButton(content, s(R.string.web_retry), () -> { if (routesKnown) save(); else load(); }); retryRoutes.setVisibility(View.GONE);
+        ipv6Pending = hint(content, ""); ipv6Pending.setVisibility(View.GONE);
+        pendingSettings = textButton(content, s(R.string.web_set_title), () -> activity.navigate("settings")); pendingSettings.setVisibility(View.GONE);
+        LinearLayout actions = row(stickyActions); actions.setGravity(Gravity.CENTER_VERTICAL);
+        draftState = hint(actions, s(R.string.web_loading)); draftState.setTextSize(12); draftState.setLayoutParams(new LinearLayout.LayoutParams(0, -2, 1));
+        save = ControlUi.primaryButton(activity, s(R.string.web_tools_apply_rules), R.drawable.ic_check_circle, () -> { if (isCurrent()) save(); });
+        actions.addView(save, new LinearLayout.LayoutParams(-2, -2));
+        discard = textButton(stickyActions, s(R.string.cs_reload_draft), () -> confirm(s(R.string.cs_reload_draft), s(R.string.cs_reload_confirm), () -> { discardRequested = true; load(); }));
+        discard.setVisibility(View.GONE);
+        bindDraft(activity.drafts.getString("routing.scope", "all"), activity.drafts.getString("routing.uids", ""), activity.drafts.getString("routing.subnets", ""));
+        showCapability(); repeat(this::load, 10000);
     }
-    @Override String title() { return s(R.string.cs_routing); }
-    @Override void onPause() { discardRequested = false; }
+    @Override String title() { return s(R.string.web_route_title); }
+    @Override void onPause() { discardRequested = false; saveBusy = false; acceptanceBusy = false; if (apps == null) appsRequested = false; }
+    private void icon(LinearLayout row, int resource) {
+        ImageView icon = new ImageView(activity); icon.setImageResource(resource);
+        icon.setColorFilter(MaterialColors.getColor(row, androidx.appcompat.R.attr.colorPrimary));
+        LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(dp(20), dp(20)); params.setMarginEnd(dp(10)); row.addView(icon, params);
+    }
     private void watch(EditText text, Runnable action) {
         text.addTextChangedListener(new TextWatcher() {
-            public void beforeTextChanged(CharSequence s, int start, int count, int after) {}
+            public void beforeTextChanged(CharSequence s, int start, int count, int after) { }
             public void onTextChanged(CharSequence s, int start, int before, int count) { if (!binding) action.run(); }
-            public void afterTextChanged(Editable e) {}
+            public void afterTextChanged(Editable e) { }
         });
     }
     @Override void load() {
+        if (saveBusy) return;
         read(value -> {
             if (value.optJSONArray("uids") == null || value.optJSONArray("subnets") == null || !java.util.Arrays.asList(scopes).contains(value.optString("scope"))) {
                 routesFailed(new IllegalStateException(s(R.string.cs_invalid_response))); return;
             }
-            routesKnown = true; save.setEnabled(true);
-            savedSubnets = value.optJSONArray("subnets");
-            savedRoutes.setText(s(R.string.cs_routes_snapshot, SettingsState.state(activity, value.opt("scope")), join(value.optJSONArray("uids")), join(savedSubnets)));
-            showIpv6();
-            String incomingScope = value.optString("scope"), incomingUids = join(value.optJSONArray("uids")), incomingSubnets = join(savedSubnets);
+            routesKnown = true; savedSubnets = value.optJSONArray("subnets");
+            String incomingScope = value.optString("scope"), incomingUids = join(value.optJSONArray("uids")), incomingSubnets = String.join("\n", SettingsRules.cidrs(join(savedSubnets)));
             savedSnapshot = snapshot(incomingScope, incomingUids, incomingSubnets);
             SettingsRules.Draft merged = SettingsRules.mergeDraft(activity.drafts.getString("routing.baseline"), currentSnapshot(), savedSnapshot, false);
             if (discardRequested || merged.value.equals(savedSnapshot)) {
-                discardRequested = false;
-                activity.drafts.putString("routing.baseline", savedSnapshot);
-                bindDraft(incomingScope, incomingUids, incomingSubnets);
+                discardRequested = false; activity.drafts.putString("routing.baseline", savedSnapshot); bindDraft(incomingScope, incomingUids, incomingSubnets);
             } else {
                 activity.drafts.putString("routing.baseline", merged.baseline);
                 bindDraft(activity.drafts.getString("routing.scope", incomingScope), activity.drafts.getString("routing.uids", incomingUids), activity.drafts.getString("routing.subnets", incomingSubnets));
             }
-            showDraftState();
+            showIpv6(); updateControls();
         }, this::routesFailed, "routes-get");
         read(value -> {
-            if (!(value.opt("available") instanceof Boolean)) { ownerKnown = false; capability.setText(s(R.string.cs_invalid_response)); return; }
-            ownerKnown = true; ownerAvailable = value.optBoolean("available"); ownerReason = value.optString("reason"); showCapability();
-        }, e -> { ownerKnown = false; capability.setText(s(R.string.cs_unknown) + "\n" + e.getMessage()); error(e); }, "owner-capability");
-        read(value -> {
-            mode = value.opt("mode") instanceof String ? value.optString("mode") : "?";
-            showCapability();
-        }, e -> { mode = "?"; showCapability(); error(e); }, "status");
-        refreshAdvertised(null);
-        if (apps == null) loadApps();
+            if (!(value.opt("available") instanceof Boolean)) { ownerKnown = false; showCapability(); capability.setText(s(R.string.cs_invalid_response)); return; }
+            ownerKnown = true; ownerAvailable = value.optBoolean("available"); showCapability();
+        }, e -> { ownerKnown = false; showCapability(); capability.setText(s(R.string.web_tools_route_probe) + "\n" + e.getMessage()); error(e); }, "owner-capability");
+        read(value -> { mode = value.opt("mode") instanceof String ? value.optString("mode") : "?"; showCapability(); }, e -> { mode = "?"; showCapability(); error(e); }, "status");
+        if (!acceptanceBusy) refreshAdvertised(null);
     }
-    private static String snapshot(String scope, String uids, String subnets) {
-        return new JSONArray().put(scope).put(uids).put(subnets).toString();
-    }
+    private static String snapshot(String scope, String uids, String subnets) { return new JSONArray().put(scope).put(uids).put(subnets).toString(); }
     private String currentSnapshot() {
-        if (!activity.drafts.containsKey("routing.scope") && !activity.drafts.containsKey("routing.uids") && !activity.drafts.containsKey("routing.subnets")) return null;
-        return snapshot(activity.drafts.getString("routing.scope", "all"), activity.drafts.getString("routing.uids", ""), activity.drafts.getString("routing.subnets", ""));
+        if (!activity.drafts.containsKey("routing.baseline")) return null;
+        return snapshot(selectedScope, String.join("\n", selectedUids), String.join("\n", destinations));
     }
-    private void bindDraft(String selectedScope, String selectedUids, String destinations) {
-        binding = true;
-        activity.drafts.putString("routing.scope", selectedScope);
-        activity.drafts.putString("routing.uids", selectedUids);
-        activity.drafts.putString("routing.subnets", destinations);
-        scope.setSelection(Math.max(0, java.util.Arrays.asList(scopes).indexOf(selectedScope)));
-        if (!uids.getText().toString().equals(selectedUids)) uids.setText(selectedUids);
-        if (!subnets.getText().toString().equals(destinations)) subnets.setText(destinations);
-        binding = false; renderApps();
+    private void bindDraft(String scope, String uids, String subnets) {
+        selectedScope = scope; selectedUids.clear(); selectedUids.addAll(SettingsRules.uids(uids)); destinations.clear(); destinations.addAll(SettingsRules.cidrs(subnets));
+        rememberDraft(); renderSubnets(); showCapability();
     }
-    private boolean draftConflict() {
-        return savedSnapshot != null && SettingsRules.mergeDraft(activity.drafts.getString("routing.baseline"), currentSnapshot(), savedSnapshot, false).conflict;
+    private void rememberDraft() {
+        activity.drafts.putString("routing.scope", selectedScope); activity.drafts.putString("routing.uids", String.join("\n", selectedUids)); activity.drafts.putString("routing.subnets", String.join("\n", destinations));
     }
-    private void showDraftState() {
-        if (savedSnapshot == null) return;
-        draftState.setText(draftConflict() ? s(R.string.cs_draft_conflict) : !savedSnapshot.equals(currentSnapshot()) ? s(R.string.cs_draft_changed) : "");
+    private boolean draftConflict() { return savedSnapshot != null && SettingsRules.mergeDraft(activity.drafts.getString("routing.baseline"), currentSnapshot(), savedSnapshot, false).conflict; }
+    private boolean dirty() { return savedSnapshot != null && !savedSnapshot.equals(currentSnapshot()); }
+    private boolean editable() { return routesKnown && !saveBusy; }
+    private boolean perApp() { return "bridge".equals(mode) && ownerKnown && ownerAvailable; }
+    private void updateControls() {
+        if (save == null) return;
+        Set<String> pending = pendingIpv6();
+        draftState.setText(!routesKnown ? s(R.string.web_tools_route_load_error) : draftConflict() ? s(R.string.cs_draft_conflict) : s(dirty() ? R.string.web_tools_route_pending : savedPending || !pending.isEmpty() ? R.string.web_tools_saved_pending : R.string.web_tools_route_saved));
+        ipv6Pending.setText(s(R.string.web_tools_subnet_ipv6_saved) + "\n" + String.join("\n", pending));
+        ipv6Pending.setVisibility(!dirty() && !pending.isEmpty() ? View.VISIBLE : View.GONE); pendingSettings.setVisibility(ipv6Pending.getVisibility());
+        discard.setVisibility(dirty() ? View.VISIBLE : View.GONE);
+        save.setEnabled(editable() && dirty() && (selectedScope.equals("all") || perApp()));
+        save.setText(s(saveBusy ? R.string.web_loading : R.string.web_tools_apply_rules));
+        subnetInput.setEnabled(editable()); addSubnet.setEnabled(editable() && !subnetInput.getText().toString().trim().isEmpty());
+        for (int i = 0; i < scopes.length; i++) {
+            boolean enabled = editable() && (i == 0 || perApp()), checked = scopes[i].equals(selectedScope);
+            scopeButtons[i].setEnabled(enabled); scopeButtons[i].setChecked(checked); scopeRows[i].setEnabled(enabled); scopeRows[i].setAlpha(enabled ? 1f : .5f);
+            GradientDrawable border = new GradientDrawable(); border.setCornerRadius(dp(12));
+            border.setColor(MaterialColors.getColor(scopeRows[i], checked ? com.google.android.material.R.attr.colorPrimaryContainer : com.google.android.material.R.attr.colorSurface));
+            border.setStroke(dp(1), MaterialColors.getColor(scopeRows[i], checked ? androidx.appcompat.R.attr.colorPrimary : com.google.android.material.R.attr.colorOutlineVariant)); scopeRows[i].setBackground(border);
+        }
     }
-    private void routesFailed(Exception e) { discardRequested = false; routesKnown = false; save.setEnabled(false); savedRoutes.setText(s(R.string.cs_unknown) + "\n" + e.getMessage()); error(e); }
-    private void showCapability() { capability.setText(s(R.string.cs_capability, mode, SettingsState.bool(activity, ownerKnown ? ownerAvailable : null), ownerReason)); }
+    private void selectScope(int position) {
+        if (!isCurrent() || !editable() || position > 0 && !perApp()) { updateControls(); return; }
+        selectedScope = scopes[position]; rememberDraft(); showCapability();
+    }
+    private void routesFailed(Exception e) { discardRequested = false; routesKnown = false; result.setText(e.getMessage()); result.setVisibility(View.VISIBLE); retryRoutes.setVisibility(View.VISIBLE); showCapability(); renderSubnets(); error(e); }
+    private void showCapability() {
+        if (capability == null) return;
+        List<String> messages = new ArrayList<>();
+        if ("tun".equals(mode)) messages.add(s(R.string.web_route_native_scope));
+        if (!ownerKnown) messages.add(s(R.string.web_tools_route_probe)); else if (!ownerAvailable) messages.add(s(R.string.web_route_no_owner));
+        capability.setText(String.join("\n", messages)); capability.setVisibility(messages.isEmpty() ? View.GONE : View.VISIBLE);
+        acceptanceHint.setText(s("bridge".equals(mode) ? R.string.web_tools_subnet_bridge_hint : "proxy".equals(mode) ? R.string.web_tools_subnet_proxy_hint : R.string.web_tools_subnet_native_hint));
+        if (appBox != null) {
+            boolean visible = perApp() && !selectedScope.equals("all"); ControlUi.setCardVisible(appBox, visible);
+            if (visible && apps == null && !appsRequested && isCurrent()) loadApps();
+        }
+        updateControls(); renderApps();
+    }
     private void refreshAdvertised(Boolean expected) {
+        refreshAcceptance.setEnabled(false); acceptanceSwitch.setEnabled(false);
         read(value -> {
             if (!(value.opt("acceptRoutes") instanceof Boolean) || !(value.opt("ipv6Enabled") instanceof Boolean) || !(value.opt("mode") instanceof String) || value.optJSONArray("peers") == null) { acceptanceFailed(new IllegalStateException(s(R.string.cs_invalid_response))); return; }
-            acceptanceKnown = true; enableAcceptance.setEnabled(!value.optBoolean("acceptRoutes")); disableAcceptance.setEnabled(value.optBoolean("acceptRoutes"));
-            acceptance.setText(s(R.string.cs_accept_state, SettingsState.bool(activity, value.opt("acceptRoutes"))));
-            if (expected != null && value.optBoolean("acceptRoutes") != expected) notice(s(R.string.cs_accept_mismatch));
-            mode = value.optString("mode", "?"); ipv6Enabled = Boolean.TRUE.equals(value.opt("ipv6Enabled")); showCapability();
-            showIpv6();
-            advertised.removeAllViews();
-            JSONArray peers = value.optJSONArray("peers");
-            int count = 0;
-            for (int i = 0; i < peers.length(); i++) {
-                JSONObject peer = peers.optJSONObject(i);
-                if (peer == null) continue;
-                JSONArray routes = peer.optJSONArray("routes");
-                if (routes == null) continue;
-                Set<String> shown = new java.util.LinkedHashSet<>();
-                for (int j = 0; j < routes.length(); j++) {
-                    JSONObject route = routes.optJSONObject(j);
-                    if (route == null) continue;
-                    String cidr;
-                    try { cidr = SettingsRules.cidr(route.optString("cidr")); } catch (IllegalArgumentException ignored) { continue; }
-                    if (cidr.equals("0.0.0.0/0") || cidr.equals("::/0") || !shown.add(cidr)) continue;
-                    count++;
-                    label(advertised, s(R.string.cs_peer_route, peer.optString("hostname", peer.optString("id")), cidr, SettingsState.bool(activity, peer.opt("online")), SettingsState.bool(activity, route.opt("primary"))));
-                    Button add = button(advertised, s(R.string.cs_import, cidr), () -> importCidr(cidr));
-                    add.setEnabled(routesKnown && (ipv6Enabled || !cidr.contains(":")));
-                }
-            }
-            if (count == 0) label(advertised, s(R.string.cs_empty));
-            if (!ipv6Enabled) label(advertised, s(R.string.cs_ipv6_import));
+            acceptanceBusy = false; acceptanceKnown = true; acceptanceOn = value.optBoolean("acceptRoutes");
+            binding = true; acceptanceSwitchState(); binding = false;
+            acceptanceSwitch.setEnabled(true); refreshAcceptance.setEnabled(true);
+            acceptance.setText(expected != null && acceptanceOn != expected ? s(R.string.web_tools_subnet_mismatch) : ""); acceptance.setVisibility(acceptance.length() == 0 ? View.GONE : View.VISIBLE);
+            mode = value.optString("mode", "?"); ipv6Enabled = value.optBoolean("ipv6Enabled"); advertisedPeers = value.optJSONArray("peers");
+            showCapability(); showIpv6(); renderAdvertised();
         }, this::acceptanceFailed, "subnet-routes-get");
     }
-    private void acceptanceFailed(Exception e) { acceptanceKnown = false; showIpv6(); enableAcceptance.setEnabled(false); disableAcceptance.setEnabled(false); acceptance.setText(s(R.string.cs_unknown) + "\n" + e.getMessage()); advertised.removeAllViews(); label(advertised, s(R.string.cs_unknown)); error(e); }
-    private void showIpv6() {
-        if (!acceptanceKnown) { ipv6State.setText(s(R.string.cs_unknown)); return; }
-        List<String> pending = new ArrayList<>();
-        if (!ipv6Enabled && savedSubnets != null) for (int i = 0; i < savedSubnets.length(); i++) {
-            String cidr = savedSubnets.optString(i);
-            if (cidr.contains(":")) pending.add(cidr);
+    private void acceptanceSwitchState() { acceptanceSwitch.setChecked(acceptanceOn); }
+    private void renderAdvertised() {
+        advertised.removeAllViews();
+        if (advertisedPeers == null) return;
+        int count = 0; boolean ipv6 = false;
+        for (int i = 0; i < advertisedPeers.length(); i++) {
+            JSONObject peer = advertisedPeers.optJSONObject(i); if (peer == null || !(peer.opt("id") instanceof String)) continue;
+            JSONArray routes = peer.optJSONArray("routes"); if (routes == null) continue;
+            LinkedHashMap<String, Boolean> grouped = new LinkedHashMap<>();
+            for (int j = 0; j < routes.length(); j++) {
+                JSONObject route = routes.optJSONObject(j); if (route == null) continue;
+                String cidr; try { cidr = SettingsRules.cidr(route.optString("cidr")); } catch (IllegalArgumentException ignored) { continue; }
+                if (cidr.equals("0.0.0.0/0") || cidr.equals("::/0")) continue;
+                grouped.put(cidr, route.optBoolean("primary") || Boolean.TRUE.equals(grouped.get(cidr)));
+            }
+            if (grouped.isEmpty()) continue;
+            if (count++ > 0) ControlUi.divider(advertised);
+            LinearLayout heading = row(advertised); heading.setGravity(Gravity.CENTER_VERTICAL); icon(heading, R.drawable.ic_router);
+            String hostname = peer.optString("hostname");
+            TextView title = label(heading, hostname.isEmpty() ? peer.optString("id") : hostname); title.setTextSize(14); title.setTypeface(null, Typeface.BOLD); title.setLayoutParams(new LinearLayout.LayoutParams(0, -2, 1));
+            View dot = new View(activity); GradientDrawable circle = new GradientDrawable(); circle.setShape(GradientDrawable.OVAL);
+            circle.setColor(peer.optBoolean("online") ? androidx.core.content.ContextCompat.getColor(activity, R.color.foxy_ok) : MaterialColors.getColor(heading, com.google.android.material.R.attr.colorOutline)); dot.setBackground(circle);
+            dot.setContentDescription(s(peer.optBoolean("online") ? R.string.web_tools_subnet_online : R.string.web_offline)); heading.addView(dot, new LinearLayout.LayoutParams(dp(8), dp(8)));
+            for (java.util.Map.Entry<String, Boolean> route : grouped.entrySet()) {
+                String cidr = route.getKey(); ipv6 |= cidr.contains(":");
+                LinearLayout line = row(advertised); line.setGravity(Gravity.CENTER_VERTICAL);
+                LinearLayout copy = new LinearLayout(activity); copy.setOrientation(LinearLayout.VERTICAL); line.addView(copy, new LinearLayout.LayoutParams(0, -2, 1)); mono(copy, cidr);
+                if (route.getValue()) { TextView primary = hint(copy, s(R.string.web_tools_subnet_primary)); primary.setTextSize(10); }
+                boolean added = destinations.contains(cidr);
+                Button add = ControlUi.textButton(activity, s(added ? R.string.web_tools_subnet_added : R.string.web_add), () -> { if (isCurrent()) importCidr(cidr); });
+                if (add instanceof com.google.android.material.button.MaterialButton) ((com.google.android.material.button.MaterialButton) add).setIconResource(added ? R.drawable.ic_check_circle : R.drawable.ic_add);
+                add.setContentDescription(s(R.string.web_tools_subnet_add_network) + " " + cidr);
+                add.setEnabled(editable() && acceptanceKnown && !added && (ipv6Enabled || !cidr.contains(":"))); line.addView(add, new LinearLayout.LayoutParams(-2, -2));
+            }
         }
-        ipv6State.setText(pending.isEmpty() ? "" : s(R.string.cs_ipv6_pending, String.join(", ", pending)));
+        if (count == 0) hint(advertised, s(R.string.web_tools_subnet_empty));
+        if (ipv6 && !ipv6Enabled) { hint(advertised, s(R.string.web_tools_subnet_ipv6_disabled)); textButton(advertised, s(R.string.web_set_title), () -> activity.navigate("settings")); }
+    }
+    private void acceptanceFailed(Exception e) {
+        acceptanceBusy = false; acceptanceKnown = false; acceptanceSwitch.setEnabled(false); refreshAcceptance.setEnabled(true);
+        acceptance.setText(s(R.string.web_tools_subnet_unknown) + "\n" + e.getMessage()); acceptance.setVisibility(View.VISIBLE);
+        advertisedPeers = null; advertised.removeAllViews(); hint(advertised, e.getMessage()); showIpv6(); error(e);
+    }
+    private void showIpv6() {
+        boolean hasIpv6 = false; for (String cidr : destinations) hasIpv6 |= cidr.contains(":");
+        boolean unavailable = hasIpv6 && (!acceptanceKnown || !ipv6Enabled);
+        ipv6State.setText(s(acceptanceKnown ? R.string.web_tools_subnet_ipv6_disabled : R.string.web_tools_subnet_ipv6_unknown));
+        ipv6State.setVisibility(unavailable ? View.VISIBLE : View.GONE); ipv6Settings.setVisibility(unavailable ? View.VISIBLE : View.GONE);
+        updateControls();
+    }
+    private Set<String> pendingIpv6() {
+        Set<String> pending = new LinkedHashSet<>();
+        if (ipv6Enabled || savedSubnets == null) return pending;
+        for (int i = 0; i < savedSubnets.length(); i++) {
+            String cidr = savedSubnets.optString(i);
+            if (acceptanceKnown && cidr.contains(":")) pending.add(cidr);
+            if (skippedIpv6 != null) for (int j = 0; j < skippedIpv6.length(); j++) if (cidr.equals(skippedIpv6.optString(j))) pending.add(cidr);
+        }
+        return pending;
+    }
+    private void renderSubnets() {
+        subnetRows.removeAllViews();
+        for (String cidr : destinations) {
+            LinearLayout line = row(subnetRows); line.setGravity(Gravity.CENTER_VERTICAL);
+            TextView text = mono(line, cidr); text.setLayoutParams(new LinearLayout.LayoutParams(0, -2, 1));
+            View remove = ControlUi.iconButton(activity, R.drawable.ic_delete, s(R.string.web_delete) + " " + cidr, () -> {
+                if (!isCurrent() || !editable()) return; destinations.remove(cidr); changedDestinations();
+            }); remove.setEnabled(editable()); line.addView(remove);
+        }
+        if (destinations.isEmpty()) hint(subnetRows, s(R.string.web_tools_route_empty_subnets));
+    }
+    private void changedDestinations() { rememberDraft(); renderSubnets(); renderAdvertised(); showIpv6(); updateControls(); }
+    private void addSubnet() {
+        if (!editable()) return;
+        String value; try { value = SettingsRules.cidr(subnetInput.getText().toString().trim()); }
+        catch (IllegalArgumentException e) { subnetError.setText(s(R.string.web_route_subnets_invalid)); subnetError.setVisibility(View.VISIBLE); return; }
+        if (!destinations.add(value)) { subnetError.setText(s(R.string.web_tools_route_duplicate)); subnetError.setVisibility(View.VISIBLE); return; }
+        subnetInput.setText(""); subnetError.setVisibility(View.GONE); changedDestinations();
     }
     private void importCidr(String cidr) {
-        if (!routesKnown || !acceptanceKnown || cidr.contains(":") && !ipv6Enabled) { notice(s(R.string.cs_ipv6_import)); return; }
-        try { Set<String> current = SettingsRules.cidrs(subnets.getText().toString()); current.add(cidr); subnets.setText(String.join("\n", current)); }
-        catch (IllegalArgumentException e) { error(e); }
+        if (!editable() || !acceptanceKnown || cidr.contains(":") && !ipv6Enabled) return;
+        destinations.add(cidr); changedDestinations();
     }
     private void accept(boolean next) {
-        if (!acceptanceKnown) return;
-        confirm(s(R.string.cs_accept), s(R.string.cs_network_warning), () -> mutate(s(R.string.cs_accept), terminal -> {
-            if (!terminal.optBoolean("ok")) notice(s(R.string.cs_failed, terminal.optString("error", terminal.toString())));
-            refreshAdvertised(terminal.optBoolean("ok") ? next : null);
-        }, "subnet-routes-set", next ? "on" : "off"));
+        if (!acceptanceKnown || acceptanceBusy || next == acceptanceOn) return;
+        confirm(s(R.string.web_tools_subnet_accept), s(next ? R.string.web_tools_subnet_enable_confirm : R.string.web_tools_subnet_disable_confirm), () -> {
+            if (!acceptanceKnown || acceptanceBusy) return;
+            acceptanceBusy = true; acceptanceSwitch.setEnabled(false); refreshAcceptance.setEnabled(false);
+            acceptance.setText(s(R.string.web_net_working)); acceptance.setVisibility(View.VISIBLE);
+            mutate(s(R.string.web_tools_subnet_accept), terminal -> {
+                if (!terminal.optBoolean("ok")) notice(terminal.optString("error", s(R.string.web_tools_subnet_unconfirmed)));
+                acceptance.setText(s(R.string.web_net_controls_verifying)); refreshAdvertised(terminal.optBoolean("ok") ? next : null);
+            }, "subnet-routes-set", next ? "on" : "off");
+        });
     }
     private void loadApps() {
+        appsRequested = true;
+        appsState.setText(s(R.string.web_loading)); appsState.setVisibility(View.VISIBLE); retryApps.setVisibility(View.GONE);
         read(value -> {
-            JSONArray array = value.optJSONArray("apps");
-            if (array == null) { appsState.setText(s(R.string.cs_invalid_response)); return; }
-            apps = array; appsState.setText(""); renderApps();
-        }, e -> { appsState.setText(s(R.string.cs_unknown) + "\n" + e.getMessage()); error(e); }, "apps");
+            JSONArray array = value.optJSONArray("apps"); if (array == null) { appsState.setText(s(R.string.cs_invalid_response)); retryApps.setVisibility(View.VISIBLE); return; }
+            apps = array; appsState.setText(""); appsState.setVisibility(View.GONE); renderApps();
+        }, e -> { appsState.setText(e.getMessage()); appsState.setVisibility(View.VISIBLE); retryApps.setVisibility(View.VISIBLE); error(e); }, "apps");
     }
     private void renderApps() {
-        if (apps == null || appRows == null) return;
+        if (appRows == null) return;
+        selectedCount.setText(s(R.string.web_tools_selected) + " " + selectedUids.size() + " " + s(R.string.web_tools_items));
+        selectedFilter.setSelected(selectedOnly); selectedFilter.setActivated(selectedOnly); selectedFilter.setAlpha(selectedOnly ? 1f : .65f);
+        androidx.core.view.ViewCompat.setStateDescription(selectedFilter, s(selectedOnly ? R.string.web_tools_selected : R.string.web_route_scope_all));
+        emptySelection.setVisibility(selectedScope.equals("selected") && selectedUids.isEmpty() ? View.VISIBLE : View.GONE);
+        if (apps == null) return;
         appRows.removeAllViews();
-        Set<String> selected;
-        try { selected = SettingsRules.uids(uids.getText().toString()); } catch (IllegalArgumentException e) { appsState.setText(e.getMessage()); return; }
-        String query = search.getText().toString().toLowerCase(Locale.ROOT);
-        List<JSONObject> matches = new ArrayList<>();
+        String query = search.getText().toString().toLowerCase(Locale.ROOT); List<JSONObject> matches = new ArrayList<>();
         for (int i = 0; i < apps.length(); i++) {
-            JSONObject app = apps.optJSONObject(i);
-            if (app == null) continue;
-            String uid = app.optString("uid");
-            if (!uid.matches("[0-9]+")) continue;
+            JSONObject app = apps.optJSONObject(i); if (app == null) continue;
+            String uid = app.optString("uid"); if (!uid.matches("[0-9]+")) continue;
             String description = app.optString("label") + " " + app.optString("package") + " " + uid;
-            if ((!selectedOnly || selected.contains(uid)) && description.toLowerCase(Locale.ROOT).contains(query)) matches.add(app);
+            if ((!selectedOnly || selectedUids.contains(uid)) && description.toLowerCase(Locale.ROOT).contains(query)) matches.add(app);
         }
-        matches.sort(Comparator.comparing(a -> a.optString("label"), String.CASE_INSENSITIVE_ORDER));
+        matches.sort(Comparator.comparing(a -> a.optString("label"), java.text.Collator.getInstance()));
         for (int i = 0; i < Math.min(limit, matches.size()); i++) {
             JSONObject app = matches.get(i); String uid = app.optString("uid");
-            android.widget.CompoundButton box = toggle(appRows, app.optString("label") + "\n" + app.optString("package") + " · UID " + uid, selected.contains(uid), on -> {
-                try { Set<String> values = SettingsRules.uids(uids.getText().toString()); if (on) values.add(uid); else values.remove(uid); uids.setText(String.join(",", values)); }
-                catch (IllegalArgumentException e) { error(e); }
+            LinearLayout line = row(appRows); line.setGravity(Gravity.CENTER_VERTICAL); line.setMinimumHeight(dp(56));
+            MaterialCheckBox checkbox = new MaterialCheckBox(activity); checkbox.setChecked(selectedUids.contains(uid)); checkbox.setContentDescription(app.optString("label"));
+            checkbox.setEnabled(editable() && perApp() && !selectedScope.equals("all")); line.addView(checkbox, new LinearLayout.LayoutParams(dp(48), dp(48)));
+            LinearLayout copy = new LinearLayout(activity); copy.setOrientation(LinearLayout.VERTICAL); line.addView(copy, new LinearLayout.LayoutParams(0, -2, 1));
+            label(copy, app.optString("label")); TextView detail = hint(copy, app.optString("package") + " · UID " + uid); detail.setTextSize(12);
+            line.setOnClickListener(v -> { if (checkbox.isEnabled()) checkbox.performClick(); });
+            checkbox.setOnCheckedChangeListener((button, checked) -> {
+                if (!isCurrent() || !editable()) return;
+                if (checked) selectedUids.add(uid); else selectedUids.remove(uid); rememberDraft(); renderApps(); updateControls();
             });
-            box.setEnabled(routesKnown);
+            ControlUi.divider(appRows);
         }
-        if (matches.isEmpty()) label(appRows, s(R.string.cs_empty));
-        if (matches.size() > limit) button(appRows, s(R.string.cs_more), () -> { limit += 100; renderApps(); });
+        if (matches.isEmpty()) hint(appRows, s(R.string.web_empty));
+        moreApps.setText(s(R.string.web_tools_route_show_all) + " (" + Math.max(0, matches.size() - limit) + ")"); moreApps.setVisibility(matches.size() > limit ? View.VISIBLE : View.GONE);
     }
     private void save() {
-        if (!routesKnown) return;
-        String selectedScope = scopes[scope.getSelectedItemPosition()];
-        if (!selectedScope.equals("all") && (!ownerKnown || !ownerAvailable || !mode.equals("bridge"))) { notice(s(R.string.cs_owner_required)); return; }
-        try {
-            Set<String> destinations = SettingsRules.cidrs(subnets.getText().toString());
-            Set<String> selected = SettingsRules.uids(uids.getText().toString());
-            String csv = String.join(",", destinations), uidCsv = String.join(",", selected);
-            String submittedDraft = currentSnapshot();
-            String normalizedUids = String.join("\n", selected), normalizedSubnets = String.join("\n", destinations);
-            confirm(s(R.string.cs_save), (draftConflict() ? s(R.string.cs_draft_conflict) + "\n\n" : "") + s(R.string.cs_network_warning), () -> mutate(s(R.string.cs_save), terminal -> {
-                if (!terminal.optBoolean("ok")) result.setText(s(R.string.cs_failed, terminal.optString("error", terminal.toString())));
+        if (!editable()) return;
+        if (!selectedScope.equals("all") && !perApp()) { notice(s(R.string.cs_owner_required)); return; }
+        String scope = selectedScope, csv = String.join(",", destinations), uidCsv = String.join(",", selectedUids), submittedDraft = currentSnapshot();
+        String normalizedUids = String.join("\n", selectedUids), normalizedSubnets = String.join("\n", destinations);
+        confirm(s(R.string.web_tools_apply_rules), (draftConflict() ? s(R.string.cs_draft_conflict) + "\n\n" : "") + s(R.string.cs_network_warning), () -> {
+            saveBusy = true; updateControls(); renderApps(); renderSubnets(); renderAdvertised();
+            mutate(s(R.string.web_tools_apply_rules), terminal -> {
+                saveBusy = false;
+                if (!terminal.optBoolean("ok")) { result.setText(terminal.optString("applyError", terminal.optString("error", s(R.string.web_op_failed)))); result.setVisibility(View.VISIBLE); retryRoutes.setVisibility(View.VISIBLE); }
                 else {
-                    String actualSubnets = terminal.optJSONArray("subnets") == null ? normalizedSubnets : join(terminal.optJSONArray("subnets"));
-                    savedSnapshot = snapshot(selectedScope, normalizedUids, actualSubnets);
-                    activity.drafts.putString("routing.baseline", savedSnapshot);
-                    if (java.util.Objects.equals(submittedDraft, currentSnapshot())) bindDraft(selectedScope, normalizedUids, actualSubnets);
-                    showDraftState();
-                    String message = s(terminal.optBoolean("applied") && !terminal.optBoolean("restartRequired") && !terminal.optBoolean("requiresIpv6") ? R.string.cs_applied : R.string.cs_pending);
-                    if (!terminal.isNull("applyError")) message += "\n" + terminal.optString("applyError");
-                    JSONArray skipped = terminal.optJSONArray("ipv6Skipped");
-                    if (skipped != null && skipped.length() > 0) message += "\n" + s(R.string.cs_ipv6_pending, join(skipped));
-                    result.setText(message);
+                    retryRoutes.setVisibility(View.GONE);
+                    String actualSubnets = terminal.optJSONArray("subnets") == null ? normalizedSubnets : String.join("\n", SettingsRules.cidrs(join(terminal.optJSONArray("subnets"))));
+                    savedSnapshot = snapshot(scope, normalizedUids, actualSubnets); activity.drafts.putString("routing.baseline", savedSnapshot);
+                    if (java.util.Objects.equals(submittedDraft, currentSnapshot())) bindDraft(scope, normalizedUids, actualSubnets);
+                    String applyError = terminal.optString("applyError", "");
+                    savedPending = !terminal.optBoolean("applied") || terminal.optBoolean("restartRequired") || !applyError.isEmpty();
+                    List<String> messages = new ArrayList<>(); if (!applyError.isEmpty()) messages.add(applyError);
+                    skippedIpv6 = terminal.optJSONArray("ipv6Skipped");
+                    savedSubnets = new JSONArray(new ArrayList<>(SettingsRules.cidrs(actualSubnets)));
+                    result.setText(String.join("\n", messages)); result.setVisibility(messages.isEmpty() ? View.GONE : View.VISIBLE);
+                    retryRoutes.setVisibility(applyError.isEmpty() ? View.GONE : View.VISIBLE);
+                    notice(s(terminal.optBoolean("requiresIpv6") ? R.string.web_tools_subnet_ipv6_saved : savedPending ? R.string.web_tools_saved_pending : R.string.web_route_apply_done));
                 }
                 load();
-            }, "routes-set", selectedScope, uidCsv.isEmpty() ? "-" : uidCsv, csv.isEmpty() ? "-" : csv));
-        } catch (IllegalArgumentException e) { error(e); }
+            }, "routes-set", scope, uidCsv.isEmpty() ? "-" : uidCsv, csv.isEmpty() ? "-" : csv);
+        });
     }
-    private static String join(JSONArray values) {
-        List<String> out = new ArrayList<>();
-        for (int i = 0; i < values.length(); i++) out.add(values.optString(i));
-        return String.join("\n", out);
-    }
+    private static String join(JSONArray values) { List<String> out = new ArrayList<>(); for (int i = 0; i < values.length(); i++) out.add(values.optString(i)); return String.join("\n", out); }
 }

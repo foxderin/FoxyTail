@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="repair_files_ignored_inbox">%1$d incompatible inbox entries are hidden and remain untouched, including when clearing the inbox.</string>
+    <string name="repair_files_ignored_import">%1$d files have unsupported names and were not imported. The originals remain in Download/Taildrop.</string>
+    <string name="repair_files_ignored_clear">%1$d incompatible entries were preserved, not deleted.</string>
+</resources>

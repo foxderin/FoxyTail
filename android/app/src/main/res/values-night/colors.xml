@@ -17,6 +17,7 @@
     <color name="foxy_surface_low">#1D222B</color>
     <color name="foxy_surface_container">#232A34</color>
     <color name="foxy_surface_high">#282F3B</color>
+    <color name="foxy_surface_highest">#333D4B</color>
     <color name="foxy_on_surface">#E7EAF0</color>
     <color name="foxy_on_surface_variant">#A0AABA</color>
     <color name="foxy_outline">#657084</color>

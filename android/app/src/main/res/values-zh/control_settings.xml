@@ -100,7 +100,7 @@
     <string name="cs_trial_confirm">确认当前试运行</string>
     <string name="cs_trial_revert">回退／重试失败的回退</string>
     <string name="cs_trial_none">模块没有记录试运行。</string>
-    <string name="cs_trial_state">试运行 %1$s\n状态：%2$s\n剩余：%3$d 秒（模块倒计时）\n原配置：%4$s\n候选配置：%5$s\n原因：%6$s</string>
+    <string name="cs_trial_state">试运行 %1$s\n状态：%2$s\n剩余：%3$d 秒（本地估算，模块负责到期回退）\n原配置：%4$s\n候选配置：%5$s\n原因：%6$s</string>
     <string name="cs_trial_confirm_warning">保留此候选配置吗？请先核验实际连通性。服务启动成功不代表网络健康。</string>
     <string name="cs_trial_revert_warning">恢复试运行前捕获的配置吗？App 中未保存的编辑草稿仍会保留。</string>
     <string name="cs_context_limit">场景原文超过 48 KiB UTF-8 命令传输上限。草稿已保留，没有发送。</string>

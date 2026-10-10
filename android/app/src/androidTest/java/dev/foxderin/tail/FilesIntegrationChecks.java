@@ -8,6 +8,33 @@ import java.util.*;
 
 final class FilesIntegrationChecks {
     static void run(Context context) throws Exception {
+        for (int character = 0; character <= 0x9f; character++) {
+            if (character > 0x1f && character < 0x7f) continue;
+            String name = "file" + (char) character + ".txt";
+            reject(() -> Models.requireName(name));
+            Models.requireName(Models.safeName(name));
+        }
+        String longestName = String.join("", Collections.nCopies(255, "a"));
+        for (String name : Arrays.asList(null, "", ".", "..", ".taildrop", ".outgoing", "a/b", "a\\b", longestName + "a", "bad\ud800")) reject(() -> Models.requireName(name));
+        for (String name : Arrays.asList(".env", "..hidden", "meeting ' * [1].txt", "你好.txt", longestName)) Models.requireName(name);
+        Models.requireName(String.join("", Collections.nCopies(85, "界")));
+        reject(() -> Models.requireName(String.join("", Collections.nCopies(86, "界"))));
+        JSONObject validInboxFile = new JSONObject().put("name", "normal.txt").put("size", 0).put("mtime", 1);
+        JSONObject invalidInboxFile = new JSONObject(validInboxFile.toString()).put("name", "tab\tname");
+        JSONObject inboxResponse = new JSONObject().put("files", new JSONArray().put(invalidInboxFile).put(validInboxFile).put(new JSONObject(validInboxFile.toString()).put("name", "c1\u0085name"))).put("ignored", 3);
+        Models.Inbox parsedInbox = new Models.Inbox(inboxResponse);
+        check(parsedInbox.files.length() == 1 && parsedInbox.files.getJSONObject(0).getString("name").equals("normal.txt") && parsedInbox.ignored == 5, "Incompatible entries cannot brick valid inbox files; warning includes backend and consumer counts");
+        Models.Inbox legacyInbox = new Models.Inbox(new JSONObject().put("files", new JSONArray().put(validInboxFile).put(invalidInboxFile)));
+        check(legacyInbox.files.length() == 1 && legacyInbox.ignored == 1, "Legacy listing remains accessible without weakening filename validation");
+        check(invalidInboxFile.getString("name").equals("tab\tname"), "Listing isolation never silently renames incompatible entries");
+        reject(() -> new Models.Inbox(new JSONObject(inboxResponse.toString()).put("ignored", -1)));
+        reject(() -> new Models.Inbox(new JSONObject(inboxResponse.toString()).put("ignored", 1.5)));
+        reject(() -> new Models.Inbox(new JSONObject(inboxResponse.toString()).put("ignored", "3")));
+        reject(() -> new Models.Inbox(new JSONObject(inboxResponse.toString()).put("files", "invalid")));
+        for (String name : Arrays.asList("tab\tname", "c1\u0085name", "a\\b")) {
+            reject(() -> Models.Source.shared("/sdcard/Download/" + name, 0));
+            reject(() -> ExportProvider.cache(context, name, output -> { throw new AssertionError("Incompatible name reached exporter"); }));
+        }
         check(Models.relativePath("") && Models.relativePath("Download/photos"), "Shared directory roots");
         for (String path : Arrays.asList(null, "/sdcard", "/sdcard/", "/sdcard/../private", "/sdcard//file", "/sdcard/a\\b", "/sdcard/a\n", Models.STAGED + "id/file", "/data/local/tmp/file")) {
             check(!Models.sharedPath(path), "Reject non-shared source " + path);

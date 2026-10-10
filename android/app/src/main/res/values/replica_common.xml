@@ -1,0 +1,3 @@
+<resources>
+    <string name="replica_settings_save_hint">Changes remain drafts until saved. Apply pending settings together with a service restart.</string>
+</resources>

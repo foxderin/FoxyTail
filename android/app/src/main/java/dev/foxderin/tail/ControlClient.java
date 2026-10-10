@@ -33,6 +33,23 @@ final class ControlClient {
     private boolean compatible, upgrading, checking, polling, submitting, cancellable, unknown;
     private WeakReference<Consumer<JSONObject>> completion = new WeakReference<>(null);
     private JSONObject lastResult;
+    static final class TaskEntry {
+        final String id, command, label;
+        String state = "running", cancellation = "", detail = "";
+        TaskEntry(String id, String command, String label) { this.id = id; this.command = command; this.label = label; }
+    }
+    private final ArrayList<TaskEntry> tasks = new ArrayList<>();
+    private String readyMessage = "";
+    ArrayList<TaskEntry> tasks() { return new ArrayList<>(tasks); }
+    boolean hasNotice() { return !message.isEmpty() && (busy() || !message.equals(readyMessage)); }
+    private TaskEntry currentTask() {
+        for (TaskEntry task : tasks) if (task.id.equals(id)) return task;
+        return null;
+    }
+    private void rememberTask() {
+        tasks.add(0, new TaskEntry(id, command, label));
+        if (tasks.size() > 5) tasks.remove(tasks.size() - 1);
+    }
 
     private ControlClient(Context context) {
         this.context = context;
@@ -41,6 +58,7 @@ final class ControlClient {
         command = preferences.getString("command", "");
         label = preferences.getString("label", "");
         if (id != null) message = context.getString(R.string.control_reconnecting, label);
+        if (id != null) rememberTask();
     }
     boolean busy() { return id != null || submitting; }
     boolean canWrite() { return compatible && !upgrading; }
@@ -51,8 +69,9 @@ final class ControlClient {
     JSONObject lastResult() { return lastResult; }
     String lastCommand() { return command; }
     long accountRevision() { return preferences.getLong("accountRevision", 0); }
+    long lastResultTime(String name) { return preferences.getLong("resultTime." + name, 0); }
     JSONObject lastResult(String name) {
-        if (preferences.getLong("resultTime." + name, 0) < System.currentTimeMillis() - 24 * 60 * 60 * 1000L) return null;
+        if (lastResultTime(name) < System.currentTimeMillis() - 24 * 60 * 60 * 1000L) return null;
         String result = preferences.getString("result." + name, null);
         if (result == null) return null;
         try { return new JSONObject(result); } catch (org.json.JSONException e) { return null; }
@@ -66,6 +85,8 @@ final class ControlClient {
         if (listeners.isEmpty()) main.removeCallbacks(poll);
     }
     private void changed() {
+        TaskEntry task = currentTask();
+        if (task != null) { task.detail = message; task.state = unknown ? "unknown" : "running"; }
         for (Runnable listener : new ArrayList<>(listeners)) listener.run();
     }
     void refreshAvailability() {
@@ -83,6 +104,7 @@ final class ControlClient {
                     compatible = true; upgrading = info.optBoolean("upgrading"); checking = false;
                     commands.clear(); commands.addAll(supported);
                     if (!busy()) message = context.getString(upgrading ? R.string.control_upgrading : info.optBoolean("disabled") ? R.string.control_disabled : R.string.control_ready, info.optString("moduleVersion"));
+                    readyMessage = !upgrading && !info.optBoolean("disabled") ? context.getString(R.string.control_ready, info.optString("moduleVersion")) : "";
                     changed(); reconnect();
                 });
             } catch (Exception e) {
@@ -101,6 +123,7 @@ final class ControlClient {
         }
         id = next; command = args[0]; label = operationLabel; submitting = true;
         cancellable = false; unknown = false; lastResult = null; completion = new WeakReference<>(terminal);
+        rememberTask();
         message = context.getString(R.string.control_running, label); changed();
         String[] wire = new String[args.length + 2];
         wire[0] = "operation-start"; wire[1] = next;
@@ -168,6 +191,11 @@ final class ControlClient {
             }
             if ("switch".equals(command) || "logout".equals(command) || "login-authkey".equals(command)) finished.putLong("accountRevision", accountRevision() + 1);
             if (!finished.commit()) throw new IOException(context.getString(R.string.control_record_failed));
+            TaskEntry task = currentTask();
+            if (task != null) {
+                task.state = "cancelled".equals(operation.optString("state")) ? "cancelled" : result.optBoolean("ok") ? "done" : "error";
+                task.detail = message;
+            }
             id = null; cancellable = false;
             Consumer<JSONObject> callback = completion.get(); completion.clear();
             changed();
@@ -179,19 +207,21 @@ final class ControlClient {
     void cancelCurrent() {
         if (id == null || !cancellable || unknown) return;
         String expected = id;
+        TaskEntry task = currentTask(); if (task != null) task.cancellation = "requested";
         message = context.getString(R.string.cancel_requested); changed();
         io.execute(() -> {
             try {
                 RootApi.json(context, null, null, null, 12, new RootApi.Call(), "cancel", expected);
                 main.post(this::reconnect);
             } catch (Exception e) {
-                main.post(() -> { if (expected.equals(id)) { message = RootApi.message(e); changed(); reconnect(); } });
+                main.post(() -> { if (expected.equals(id)) { TaskEntry current = currentTask(); if (current != null) current.cancellation = "failed"; message = RootApi.message(e); changed(); reconnect(); } });
             }
         });
     }
     void acknowledgeUnknown() {
         if (!isUnknown() || polling || submitting) return;
         preferences.edit().remove("id").remove("command").remove("label").commit();
+        TaskEntry task = currentTask(); if (task != null) { task.state = "unknown"; task.detail = context.getString(R.string.control_unknown_acknowledged); }
         id = null; unknown = false; cancellable = false; completion.clear();
         message = context.getString(R.string.control_unknown_acknowledged); changed();
     }

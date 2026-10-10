@@ -20,9 +20,9 @@ final class NetworkChecks {
         check(OverviewPage.expiresSoon("1970-01-02T00:00:00Z", 0), "Expiry within seven days");
         JSONObject peer = new JSONObject().put("id", "node1").put("hostname", "peer").put("online", true).put("ips", new JSONArray().put("100.64.0.1").put("fd7a:115c:a1e0::1").put("-").put(17));
         check(PeersPage.addresses(peer).size() == 2, "Both address families with invalid elements omitted");
-        check(PeersPage.pathLabel(peer) == R.string.network_relay, "Online does not imply direct");
-        check(PeersPage.pathLabel(peer.put("curAddr", "192.0.2.1:41641")) == R.string.network_direct, "Observed direct path");
-        check(PeersPage.pathLabel(peer.put("online", false)) == R.string.network_offline, "Offline overrides old direct path");
+        check(PeersPage.pathLabel(peer) == R.string.web_net_topo_relay, "Online does not imply direct");
+        check(PeersPage.pathLabel(peer.put("curAddr", "192.0.2.1:41641")) == R.string.web_net_topo_direct, "Observed direct path");
+        check(PeersPage.pathLabel(peer.put("online", false)) == R.string.web_net_filter_offline, "Offline overrides old direct path");
         check(PeersPage.decodePeers(new JSONObject().put("peers", new JSONArray().put(peer))).size() == 1, "Inventory decoder");
         try { PeersPage.decodePeers(new JSONObject().put("peers", new JSONArray().put(new JSONObject().put("id", "broken")))); throw new AssertionError("Missing online state accepted"); }
         catch (org.json.JSONException expected) { }
@@ -39,21 +39,21 @@ final class NetworkChecks {
         check(ExitNodesPage.selectedId(routing) == null, "Missing selection is unknown");
         check("".equals(ExitNodesPage.selectedId(routing.put("selected", JSONObject.NULL))), "Explicit null means no exit");
         routing.put("selected", new JSONObject().put("id", "node1")).put("effective", "not-effective");
-        check("node1".equals(ExitNodesPage.selectedId(routing)) && ExitNodesPage.effectiveLabel(routing) == R.string.network_exit_failed, "Failed routing retains selection");
+        check("node1".equals(ExitNodesPage.selectedId(routing)) && ExitNodesPage.effectiveLabel(routing) == R.string.web_net_exit_failed, "Failed routing retains selection");
         routing.put("selected", new JSONObject().put("auto", "any"));
         check("auto:any".equals(ExitNodesPage.selectedId(routing)), "Automatic selection preserved");
         check(TunnelPage.socksEndpoint(new JSONObject().put("socksPort", "1099")) == null, "Port strings cannot masquerade as actual ports");
         check(TunnelPage.socksEndpoint(new JSONObject().put("socksPort", 65536)) == null, "Port upper bound");
         JSONObject dns = new JSONObject().put("mode", "transparent").put("enabled", true).put("listenerReady", true).put("state", "running").put("repairNeeded", false).put("policyState", "owned").put("reason", "running").put("interception4", true).put("interception6", false).put("port", 1053);
-        check(TunnelPage.dnsLabel(dns) == R.string.network_dns_v4, "IPv4-only transparent DNS must remain limited");
+        check(TunnelPage.dnsLabel(dns) == R.string.web_tools_dns_transparent_ipv4, "IPv4-only transparent DNS must remain limited");
         check("127.0.0.1:1053".equals(TunnelPage.dnsEndpoint(dns)), "Actual listener port");
-        check(TunnelPage.dnsLabel(dns.put("repairNeeded", true)) != R.string.network_dns_v4, "Repair needed cannot appear healthy");
+        check(TunnelPage.dnsLabel(dns.put("repairNeeded", true)) != R.string.web_tools_dns_transparent_ipv4, "Repair needed cannot appear healthy");
         dns.put("repairNeeded", false).put("policyState", "foreign");
         check(!TunnelPage.dnsReady(dns), "Foreign policy cannot appear owned");
         dns.put("policyState", "owned").remove("enabled");
         check(!TunnelPage.dnsReady(dns), "Missing enabled is unknown not healthy");
         check(TunnelPage.dnsEndpoint(dns.put("port", 1053.5)) == null, "Fractional port rejected");
-        check(TunnelPage.dnsLabel(new JSONObject()) == R.string.network_unknown, "Empty DNS response is unknown");
+        check(TunnelPage.dnsLabel(new JSONObject()) == R.string.web_net_unknown, "Empty DNS response is unknown");
     }
     private static void check(boolean condition, String message) { if (!condition) throw new AssertionError(message); }
 }

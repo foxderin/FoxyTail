@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="repair_files_ignored_inbox">%1$d 个不兼容的收件箱条目已隐藏，清空收件箱时也会保留，不会修改。</string>
+    <string name="repair_files_ignored_import">%1$d 个文件的名称不受支持，未导入。原文件仍保留在 Download/Taildrop 中。</string>
+    <string name="repair_files_ignored_clear">已保留 %1$d 个不兼容的条目，没有删除。</string>
+</resources>

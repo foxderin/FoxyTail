@@ -102,20 +102,23 @@ su -c 'foxytail.service mode tun'          # 切换运行模式并重启
 
 从桌面打开 **FoxyTail**，在 Magisk/KernelSU 单独授予该 App root 权限；不需要管理器提供 WebUI。
 
-- 原生导航包含总览、设备、账号、出口、隧道/DNS、路由、设置、场景、试运行、Serve/Funnel、共存、流量、日志、诊断和备份；Taildrop 保留收件箱、发送和历史界面。
-- Java/View + Material Components 1.14.0，Material 3 主题、抽屉导航、卡片、输入框、下拉框和确认弹窗；中英语言和浅色/深色/跟随系统。无 WebView、root HTTP 服务或 App 内 VPN；关闭 App 不停止模块网络，也不撤销模块已接受的任务。
+- 原生界面按原 WebUI 的字段、中英文文案、分组顺序及二进制流量/时间格式还原。设置页内嵌配置试用、默认折叠的高级场景/钩子和备份恢复；隧道页内嵌逐步解锁的共存向导。
+- Java/View + Material Components 1.14.0，共享服务/任务顶栏、手机五项完整标签底栏、960dp 起的侧栏，支持浅色/深色/跟随系统和系统字号。文件页复用同一外壳，按收件箱 → 发送文件 → 发送记录纵向排列，目录浏览在发送区内展开。无 WebView、root HTTP 服务或 App 内 VPN；关闭 App 不停止模块网络，也不撤销模块已接受的任务。
 - 服务、配置和账号写操作使用模块持久回执。保存不等于应用；退出码非零仍保留实际状态字段。失联显示未知，不自动重放；提交期拒绝取消，确认未知只清除 App 观察记录，不终止或回滚后台操作。
 - 账号切换前如存在活动发送，先在文件历史取消并等待终态；切换后重新读取设备、出口和共存快照。
 - 配置备份不包含登录身份。SAF 导入由 App 自身读取授权 URI，私有归档令牌限制为 1 MiB；诊断产物最多 16 MiB，128 个产物保留 24 小时、按需清理，活动恢复源受锁保护。恢复预览必须同时匹配归档和保存配置摘要。
+- 协议兼容时，未知服务状态及升级限制下仍保留独立停止入口；取消确认不改变快照显示。写操作结束后必须取得新状态，已有读取不会吞掉这次核验；浏览器与 Headscale 登录同样受兼容写入门禁约束。
+- 设置只在字段修改或冲突时显示保存/重载；路由保存和草稿状态固定在主滚动区外，应用列表有界滚动，selected/bypass 只在 bridge + owner 支持时可编辑，隐藏选择器不丢草稿。试运行在前台按单调时钟估算倒计时，实际到期与回退仍由模块负责。
+- 流量图支持时段选点与折叠数据表；设备提供内联地址复制、有限节点图及完整可访问列表。总览将出口选中/生效状态与 Tailnet 连接健康分开；日志保留原版紧凑控制区与独立正文卡，诊断新失败或未确认结果不会复用旧“通过”。
 
 固定 Android CLI 直接收件至 `/sdcard/Download/Taildrop`。**导入已接收文件**只复制已完成普通文件到私有收件箱，不等待缓冲模式的 `tailscale file get`，共享原件保留。私有收据去重，排除 partial/deleted 和软链接。若开机共享存储未就绪导致记录缺失，导入前可用当前 daemon 的 LocalAPI 严格确认 direct mode，并在 PID/启动时间/boot ID 前后不变时恢复记录；不凭目录存在推断。daemon 未确认 direct mode 时，仍须解锁并重启 FoxyTail。发送使用稳定节点 ID 与其当前 IP（含 IPv6）。
 
-自动与手动导出保留 Download 现有文件，依次尝试编号至 `-99`，耗尽时失败但不删除私有副本。清空包含隐藏普通文件，保留收据和目录。App 使用二进制流打开、分享和另存，不再保留 WebUI 的 base64 内联下载接口。
+自动与手动导出保留 Download 现有文件，依次尝试编号至 `-99`，耗尽时失败但不删除私有副本。清空包含受支持的隐藏普通文件，保留收据、目录和不兼容条目。文件名必须为有效 UTF-8、最多 255 字节，不含路径分隔符、ISO 控制字符及内部保留名；导入和列表报告跳过数量，不改名、不删除原件，单个异常条目不再阻断其他文件。App 使用二进制流打开、分享和另存，不再保留 WebUI 的 base64 内联下载接口。
 
 ### Taildrop 日常使用
 
 - **共享目录浏览**：文件页可逐层浏览 `/sdcard`，勾选最多 32 个文件（每个 ≤2 GiB），选择实际支持 Taildrop 的节点后发送；单目录最多列出 1000 项并提示截断，不接受外部 Intent 指定 root 路径。
-- **Android**：提供收件箱、发送、历史三个原生页面。系统文件选择器支持多选；文件管理器“分享 → FoxyTail”支持单文件/多文件。分享只打开待发送列表，选择设备并确认后才开始读取与发送。
+- **Android**：收件箱、发送、历史纵向分区共用一个原生文件页；各区独立刷新，失败不清除其他区数据或待发选择。系统文件选择器支持多选；文件管理器“分享 → FoxyTail”和传输通知定位到对应分区。分享只打开待发送列表，选择设备并确认后才开始读取与发送。
 - **收件**：tailscaled 继续直接接收到 `Download/Taildrop`。导入已完成普通文件后可在私有收件箱搜索、打开、分享、另存、导出到 Download、删除或清空；不等待新文件、不删除共享原件。App 单文件限制为 2 GiB。
 - **进度与历史**：模块同一时间接受一个批次，逐文件发送。进度取自 tailscaled LocalAPI `OutgoingFiles.Sent`，按唯一文件 ID 和节点 ID 关联；事件不可用时明确显示未知，不估算百分比。本地 URI 暂存进度与网络发送进度分开。仅真实上传 HTTP 成功响应标记完成；失败项保留错误，可以仅重试未成功文件。
 - **后台与取消**：已接受的发送由模块工作进程持有，退出页面、关闭 App 不停止发送；重新打开历史可接管。应用仅工作时运行前台通知，拒绝通知权限仍可在应用内查看或取消。取消是请求，等待工作进程确认；已被对端接受的字节无法撤回。服务停止/升级会先等待工作进程释放所有权。
@@ -129,7 +132,7 @@ App 区分 root 启动失败、授权不足、模块不可读、协议不兼容�
 
 设置 `JAVA_HOME` 与 `ANDROID_HOME` 后运行 `bash .github/tools/build-android.sh debug dist/FoxyTail-debug.apk`。正式构建把 `debug` 改为 `release`，必须提供 `FOXYTAIL_KEYSTORE_PATH`、`FOXYTAIL_KEYSTORE_PASSWORD`、`FOXYTAIL_KEY_ALIAS`、`FOXYTAIL_KEY_PASSWORD`；缺失即失败，不回退到临时签名。签名文件不入仓库，应离线备份；丢失后不能无损升级已安装应用。CI 仅可信打包任务读取签名 secrets，PR 只构建 debug。
 
-原生 App 仪器回归：先执行 `./gradlew :app:assembleDebugAndroidTest` 生成测试 APK，安装两者后运行 `adb -s <设备> shell am instrument -w dev.foxderin.tail.test/dev.foxderin.tail.BridgeInstrumentation`。覆盖 root 错误/回执、CIDR/场景、协议/端口、共存片段、传输状态、二进制与只读导出边界。实际界面和 root 后端仍需设备 smoke；构建或主机测试不能替代 App UID 授权、OEM 后台限制和真实网络验收。
+原生 App 仪器回归：先执行 `./gradlew :app:assembleDebugAndroidTest` 生成测试 APK，在隔离测试设备安装两者后运行 `adb -s <设备> shell am instrument -w dev.foxderin.tail.test/dev.foxderin.tail.BridgeInstrumentation`。覆盖 root 错误/回执、网络与工具契约、文件名与混合收件箱、图表触摸/无障碍、路由选项、倒计时、草稿归属、诊断新旧结果、二进制与只读导出边界。实际界面和 root 后端仍需设备 smoke；构建或主机测试不能替代 App UID 授权、OEM 后台限制和真实网络验收。
 
 <!-- 截图占位：docs/screenshots/*.png（待补充，见 Roadmap） -->
 

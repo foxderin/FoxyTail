@@ -4,7 +4,6 @@ import android.content.Context;
 import android.database.Cursor;
 import android.net.Uri;
 import android.provider.OpenableColumns;
-import android.text.format.Formatter;
 import org.json.*;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
@@ -30,7 +29,7 @@ final class Models {
         return value;
     }
     static void requireName(String name) throws IOException {
-        if (name.isEmpty() || name.equals(".") || name.equals("..") || name.equals(".taildrop") || name.equals(".outgoing") || name.contains("/") || name.contains("\\") || name.codePoints().anyMatch(Character::isISOControl)) throw new IOException("Invalid file name");
+        if (name == null || name.isEmpty() || name.getBytes(StandardCharsets.UTF_8).length > 255 || name.equals(".") || name.equals("..") || name.equals(".taildrop") || name.equals(".outgoing") || name.contains("/") || name.contains("\\") || name.codePoints().anyMatch(c -> Character.isISOControl(c) || c >= 0xd800 && c <= 0xdfff)) throw new IOException("Invalid file name");
     }
     static boolean sourcePath(String path) {
         if (path == null || !(path.startsWith("/sdcard/") || path.startsWith(STAGED)) || path.length() > 4096 || path.contains("\\") || path.codePoints().anyMatch(Character::isISOControl)) return false;
@@ -40,7 +39,7 @@ final class Models {
     static boolean sharedPath(String path) { return sourcePath(path) && path.startsWith("/sdcard/"); }
     static boolean relativePath(String path) { return path != null && (path.isEmpty() || sharedPath("/sdcard/" + path)); }
     static String safeName(String name) {
-        String value = name == null ? "file" : name.replaceAll("[\\p{Cntrl}/\\\\]", "_").trim();
+        String value = name == null ? "file" : name.replaceAll("[\\x00-\\x1f\\x7f-\\x9f/\\\\]", "_").trim();
         while (value.getBytes(StandardCharsets.UTF_8).length > 120) value = value.substring(0, value.offsetByCodePoints(value.length(), -1));
         if (value.isEmpty() || value.equals(".") || value.equals("..") || value.equals(".outgoing") || value.equals(".taildrop") || value.equals(".lease") || value.equals(".data")) value = "file";
         return value;
@@ -67,6 +66,28 @@ final class Models {
             }
             if (size > RootApi.MAX_FILE || size < -1) throw new IOException(context.getString(R.string.file_limit));
             return new Source(uri, safeName(name), size);
+        }
+    }
+    static final class Inbox {
+        final JSONArray files = new JSONArray();
+        final int ignored;
+        Inbox(JSONObject response) throws JSONException {
+            JSONArray entries = response.getJSONArray("files");
+            if (entries.length() > 10000) throw new JSONException("Invalid inbox count");
+            Object count = response.opt("ignored");
+            int skipped = 0;
+            if (count != null) {
+                if (!(count instanceof Number) || ((Number) count).doubleValue() < 0 || ((Number) count).doubleValue() > Integer.MAX_VALUE - entries.length() || ((Number) count).doubleValue() != ((Number) count).intValue()) throw new JSONException("Invalid ignored count");
+                skipped = ((Number) count).intValue();
+            }
+            for (int i = 0; i < entries.length(); i++) {
+                try {
+                    JSONObject item = entries.getJSONObject(i);
+                    requireName(required(item, "name")); number(item, "size"); number(item, "mtime");
+                    files.put(item);
+                } catch (IOException | JSONException incompatible) { skipped++; }
+            }
+            ignored = skipped;
         }
     }
     static final class Peer {
@@ -117,7 +138,7 @@ final class Models {
             case "cancelled" -> R.string.cancelled; default -> R.string.interrupted;
         });
     }
-    static String bytes(Context context, long size) { return Formatter.formatShortFileSize(context, size); }
+    static String bytes(Context context, long size) { return WebFormat.bytes(size); }
     static String progress(Context context, FileState file) {
         if (!file.known) return context.getString(active(file.status) ? R.string.waiting : R.string.progress_unavailable);
         return context.getString(R.string.known_progress, bytes(context, file.sent), bytes(context, file.size), bytes(context, file.speed));
