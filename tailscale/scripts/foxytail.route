@@ -11,15 +11,20 @@ ROUTE_RULE_PREF=12510
 ROUTE_PROTOCOL=186
 ROUTE_STATE_FILE="${TS_RUN_DIR}/route.state"
 ROUTE_SNAPSHOT_DIR="${TS_RUN_DIR}/route.snapshot"
+ROUTE_READ_SNAPSHOT=
 
 safe_table() {
   [ "$1" = 1052 ]
 }
 
 route_exit_destinations() {
-  _re_snapshot=$("${TS_SCRIPTS_DIR}/foxytail.exitnode" snapshot) || {
-    log Error "exit preference is unknown; refusing to claim current routing"; return 1;
-  }
+  if [ -n "${ROUTE_READ_SNAPSHOT:-}" ]; then
+    _re_snapshot=${ROUTE_READ_SNAPSHOT}
+  else
+    _re_snapshot=$("${TS_SCRIPTS_DIR}/foxytail.exitnode" snapshot) || {
+      log Error "exit preference is unknown; refusing to claim current routing"; return 1;
+    }
+  fi
   ROUTE_EXIT_FINGERPRINT=$(printf '%s' "${_re_snapshot}" | jqr -c '{profile,self,pref,actual:(.actual.ID // "")}') || return 1
   ROUTE_DESTINATIONS=""
   for _re_net in ${ROUTE_SUBNETS}; do
@@ -298,6 +303,20 @@ ensure_run_dirs
 # damaged. Never let a bad newly edited config strand the previous rules.
 case "$1" in
   check) load_runtime_conf || exit 1; route_check ;;
+  check-snapshot)
+    load_runtime_conf || exit 1
+    [ "$2" = "${TS_MODE}|${ROUTE_SCOPE}|${UID_LIST}|${ROUTE_SUBNETS}|${IPV6}|${ROUTE_TABLE}|${FWMARK}/${FWMARK_MASK}|${MAGIC_DNS}" ] || exit 1
+    # This read-only entry consumes the caller's bracketed snapshot, never a cache.
+    ROUTE_READ_SNAPSHOT=$(jqr -e -s -c 'select(length==1) | .[0] | select(type=="object" and
+      (.profile|type)=="string" and .profile!="" and (.self|type)=="string" and .self!="" and
+      (.backend|type)=="string" and (.pref|type)=="object" and
+      (.pref.id|type)=="string" and (.pref.ip|type)=="string" and (.pref.auto|type)=="string" and
+      (.pref.allowLAN|type)=="boolean" and (.actual==null or
+        ((.actual|type)=="object" and (.actual.ID|type)=="string" and
+         (.actual.Online|type)=="boolean" and ((.actual.TailscaleIPs // [])|type)=="array" and
+         all((.actual.TailscaleIPs // [])[]; type=="string"))))') || exit 1
+    route_check
+    ;;
   apply|reload)
     route_lock || exit 1
     if [ "$1" = reload ]; then conf_apply_runtime routes.conf || exit 1; fi

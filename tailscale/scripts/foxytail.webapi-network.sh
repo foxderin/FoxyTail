@@ -6,8 +6,16 @@
 
 cmd_status() {
   _cs_st=""
-  daemon_up && _cs_st=$(ts_status_json ts_cli 10 status --json)
-  _cs_exit=$("${TS_SCRIPTS_DIR}/foxytail.exitnode" status 2>/dev/null) || _cs_exit='{"known":false,"selected":null,"effective":"unknown","ipv4":false,"ipv6":false,"warning":"preference-unavailable"}'
+  _cs_exit='{"known":false,"selected":null,"effective":"unknown","ipv4":false,"ipv6":false,"warning":"preference-unavailable"}'
+  if daemon_up; then
+    _cs_read=$(_op_exec 20 "${TS_SCRIPTS_DIR}/foxytail.exitnode" network-status \
+      "${TS_MODE}|${ROUTE_SCOPE}|${UID_LIST}|${ROUTE_SUBNETS}|${IPV6}|${ROUTE_TABLE}|${FWMARK}/${FWMARK_MASK}|${MAGIC_DNS}" 2>/dev/null) || _cs_read='{}'
+    _op_cancelled && jerr 'status cancelled'
+    _cs_st=$(printf '%s' "${_cs_read}" | jqr -e -c '.status | select(type=="object")' 2>/dev/null)
+    _cs_exit=$(printf '%s' "${_cs_read}" | jqr -e -c '.exitRouting | select(type=="object" and (.known|type)=="boolean")' 2>/dev/null) ||
+      _cs_exit='{"known":false,"selected":null,"effective":"unknown","ipv4":false,"ipv6":false,"warning":"preference-unavailable"}'
+  fi
+  _op_cancelled && jerr 'status cancelled'
   if [ -z "${_cs_st}" ]; then
     # A Stop may have completed during the CLI read. Recheck before reporting
     # either a stopped daemon or a live process with an unavailable LocalAPI.
@@ -218,8 +226,9 @@ cmd_dns() {
   # State machine lives in foxytail.dns; this is a thin passthrough.
   _cd_out=""
   if [ -x "${TS_SCRIPTS_DIR}/foxytail.dns" ]; then
-    _cd_out=$("${TS_SCRIPTS_DIR}/foxytail.dns" status --json 2>/dev/null)
+    _cd_out=$(_op_exec 20 "${TS_SCRIPTS_DIR}/foxytail.dns" status --json 2>/dev/null) || _cd_out=""
   fi
+  _op_cancelled && jerr 'DNS status cancelled'
   if [ -n "${_cd_out}" ] && printf '%s' "${_cd_out}" | jqr -e . >/dev/null 2>&1; then
     printf '%s' "${_cd_out}" | jqr -c '{ok:true,state:.state,suffix:.suffix,port:.port,
       mode:(.mode // "legacy"),configuredMode:.configuredMode,pendingMode:.pendingMode,
@@ -246,8 +255,9 @@ cmd_dns() {
 # callers should re-read dns status afterwards for the reflected state.
 cmd_dns_probe() {
   [ -x "${TS_SCRIPTS_DIR}/foxytail.dns" ] || jerr 'DNS controller not found'
-  _cdp_out=$("${TS_SCRIPTS_DIR}/foxytail.dns" probe-transparent 2>&1)
+  _cdp_out=$(_op_exec 20 "${TS_SCRIPTS_DIR}/foxytail.dns" probe-transparent 2>&1)
   _cdp_rc=$?
+  _op_cancelled && jerr 'DNS probe cancelled'
   if [ "${_cdp_rc}" = 0 ]; then
     jqr -n -c '{ok:true,transparentAvailable:true}'
   else

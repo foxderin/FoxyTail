@@ -16,11 +16,16 @@ root = Path(os.environ['TEST_DIR'])
 p = root / 'daemon.json'
 s = json.loads(p.read_text())
 a = [v for v in sys.argv[1:] if not v.startswith('--socket=')]
+with (root / 'reads').open('a') as f: f.write(json.dumps(a) + '\n')
 if s.get('unavailable'): sys.exit(1)
 if a[:1] == ['switch']:
  print(json.dumps([] if s.get('unknownProfile') else [{'id': s['profile'], 'selected': True}]))
 elif a == ['debug', 'prefs']: print(json.dumps(s['prefs']))
-elif a == ['status', '--json']: print(json.dumps(s['status']))
+elif a == ['status', '--json']:
+ print(json.dumps(s['status']))
+ if s.get('changeDuringStatus'):
+  s.update(s.pop('changeDuringStatus'))
+  p.write_text(json.dumps(s))
 elif a[:1] == ['set']:
  with (root / 'writes').open('a') as f: f.write(json.dumps(a) + '\n')
  if s.get('failWrite'): sys.exit(1)
@@ -91,6 +96,66 @@ ts_status_json() { "$@"; }
 
     def restore(self, ok=True):
         return self.run_exit('trial-restore', str(self.root / 'state/config-trial'), ok=ok)
+
+
+    def test_read_reuses_snapshot_and_reports_profile_changes_as_unknown(self):
+        self.run_exit('set', 'node-a')
+        reads = self.root / 'reads'
+        reads.write_text('')
+        result = self.run_exit('status')
+        self.assertEqual(result['effective'], 'bridge-policy')
+        self.assertEqual(len(reads.read_text().splitlines()), 8)
+        self.reload()
+        self.daemon['changeDuringStatus'] = {'profile': 'profile-b'}
+        self.save()
+        writes = (self.root / 'writes').read_text()
+        result = self.run_exit('status')
+        self.assertFalse(result['known'])
+        self.assertEqual(result['effective'], 'unknown')
+        self.assertEqual((self.root / 'writes').read_text(), writes)
+
+    def test_read_rejects_identity_preferences_or_config_changed_during_policy_check(self):
+        self.run_exit('set', 'node-a')
+        self.reload()
+        original = json.loads(json.dumps(self.daemon))
+        helper = self.root / 'scripts/foxytail.route'
+        for change in ('profile', 'self', 'preferences', 'config'):
+            with self.subTest(change=change):
+                self.daemon = json.loads(json.dumps(original))
+                self.save()
+                self.config()
+                helper.write_text('''#!/bin/sh
+python3 - "$TEST_DIR" ''' + change + ''' <<'PY'
+import json, sys
+from pathlib import Path
+root, change = Path(sys.argv[1]), sys.argv[2]
+p = root / 'daemon.json'
+s = json.loads(p.read_text())
+if change == 'profile': s['profile'] = 'other'
+elif change == 'self': s['status']['Self']['ID'] = 'other'
+elif change == 'preferences': s['prefs']['ExitNodeAllowLANAccess'] = True
+else:
+ c = root / 'config'
+ c.write_text(c.read_text().replace('ROUTE_SCOPE=all', 'ROUTE_SCOPE=selected'))
+p.write_text(json.dumps(s))
+PY
+''')
+                writes = (self.root / 'writes').read_text()
+                result = self.run_exit('status')
+                self.assertFalse(result['known'])
+                self.assertEqual(result['effective'], 'unknown')
+                self.assertEqual((self.root / 'writes').read_text(), writes)
+
+    def test_network_read_envelope_retains_startup_but_rejects_config_mismatch(self):
+        fingerprint = 'bridge|all|||on||/|'
+        self.daemon['status'] = {'BackendState': 'NeedsLogin', 'Self': None, 'Peer': {}}
+        self.save()
+        result = self.run_exit('network-status', fingerprint)
+        self.assertEqual(result['status']['BackendState'], 'NeedsLogin')
+        self.assertFalse(result['exitRouting']['known'])
+        result = self.run_exit('network-status', 'different-config')
+        self.assertIsNone(result['status'])
+        self.assertFalse(result['exitRouting']['known'])
 
     def test_exact_identity_and_route_failure_are_not_success(self):
         self.run_exit('set', 'same-name', ok=False)

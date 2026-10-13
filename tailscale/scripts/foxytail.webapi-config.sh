@@ -214,7 +214,11 @@ cmd_settings_set() {
 cmd_trial_start() {
   "${TS_SCRIPTS_DIR}/foxytail.trial" begin "${1:-120}" "${2:-saved}"
 }
-cmd_trial_status() { "${TS_SCRIPTS_DIR}/foxytail.trial" status; }
+cmd_trial_status() {
+  _cts_out=$(_op_exec 20 "${TS_SCRIPTS_DIR}/foxytail.trial" status) || jerr 'trial status failed or cancelled'
+  _op_cancelled && jerr 'trial status cancelled'
+  printf '%s\n' "${_cts_out}"
+}
 cmd_trial_confirm() { "${TS_SCRIPTS_DIR}/foxytail.trial" confirm "$1"; }
 cmd_trial_revert() { "${TS_SCRIPTS_DIR}/foxytail.trial" revert "$1"; }
 
@@ -222,6 +226,7 @@ cmd_trial_revert() { "${TS_SCRIPTS_DIR}/foxytail.trial" revert "$1"; }
 
 cmd_context_get() {
   _cg_status=$(_op_exec 15 "${TS_SCRIPTS_DIR}/foxytail.context" status 2>/dev/null) || _cg_status=null
+  _op_cancelled && jerr 'context status cancelled'
   printf '%s' "$_cg_status" | jqr -e 'type=="object" and (.running|type)=="boolean"' >/dev/null 2>&1 || _cg_status=null
   if [ -f "${TS_CONF_DIR}/context.conf" ]; then
     jqr -R -s -c --argjson status "$_cg_status" '{ok:true,rules:.,status:$status}' "${TS_CONF_DIR}/context.conf"

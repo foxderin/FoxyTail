@@ -163,6 +163,32 @@ esac
   (self.dir/'bin/dumpsys').chmod(0o755)
  def exit_snapshot(self,node='exit-a',actual='exit-a',online=True):
   (self.dir/'exit-snapshot.json').write_text(json.dumps({'profile':'test','self':'self','pref':{'id':node,'ip':'','auto':'','allowLAN':False},'backend':'Running','actual':{'ID':actual,'Online':online} if actual else None}))
+ def test_network_status_reuses_snapshot_on_valid_bridge_without_mutations(self):
+  from test_exit_routing import CLI
+  route=self.dir/'scripts/foxytail.route'
+  route.write_text(route.read_text().replace('#!/system/bin/sh','#!/bin/sh',1))
+  helper=self.dir/'scripts/foxytail.exitnode'
+  helper.write_text((ROOT/'tailscale/scripts/foxytail.exitnode').read_text().replace('#!/system/bin/sh','#!/bin/sh',1))
+  cli=self.dir/'bin/tailscale';cli.write_text(CLI);cli.chmod(0o755)
+  with (self.dir/'settings.sh').open('a') as f:f.write('\ntmo() { shift; "$@"; }\n')
+  (self.dir/'daemon.json').write_text(json.dumps({'profile':'test','prefs':{'ExitNodeID':'exit-a','ExitNodeIP':'','ExitNodeAllowLANAccess':False},
+   'status':{'BackendState':'Running','Self':{'ID':'self'},'ExitNodeStatus':{'ID':'exit-a','Online':True},'Peer':{}}}))
+  self.run_script('foxytail.route','apply')
+  before=self.read();before.pop('calls')
+  (self.dir/'reads').write_text('')
+  fingerprint='bridge|selected|10101 10102|100.64.0.0/10 fd7a:115c:a1e0::/48|on|1052|0x40000000/0x40000000|on'
+  result=json.loads(self.run_script('foxytail.exitnode','network-status',fingerprint).stdout)
+  self.assertEqual(result['exitRouting']['effective'],'bridge-policy')
+  self.assertTrue(result['exitRouting']['ipv4']);self.assertTrue(result['exitRouting']['ipv6'])
+  self.assertEqual(result['status']['Self']['ID'],'self')
+  calls=[json.loads(line) for line in (self.dir/'reads').read_text().splitlines()]
+  self.assertEqual(len(calls),8)
+  self.assertFalse(any(call[0]=='set' for call in calls))
+  after=self.read();after.pop('calls');self.assertEqual(after,before)
+  for payload in ('{}','null','{"profile":"test","self":"self","pref":{}}'):
+   result=subprocess.run(['sh',str(self.dir/'scripts/foxytail.route'),'check-snapshot',fingerprint],input=payload,env=self.env,text=True,capture_output=True)
+   self.assertNotEqual(result.returncode,0)
+  after=self.read();after.pop('calls');self.assertEqual(after,before)
  def test_exit_public_defaults_follow_selected_identity_and_clear(self):
   self.config(ROUTE_SCOPE='all',IPV6='off',ROUTE_SUBNETS='100.64.0.0/10 0.0.0.0/0 ::/0')
   self.run_script('foxytail.route','apply')

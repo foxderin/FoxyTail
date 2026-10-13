@@ -2,31 +2,63 @@
 # Exit preferences and bridge policy share the config lock; no service lock.
 DIR=$(dirname "$(realpath "$0")")
 . "${DIR}/../settings.sh"
+EXIT_NETWORK_STATUS=0
 
 exit_profile() {
   tmo 5 tailscale --socket="${TS_SOCKET}" switch --list --json 2>/dev/null |
     jqr -e -r '[.[] | select(.selected == true) | .id | select(type=="string" and length>0)] | select(length==1) | .[0]'
 }
 
-exit_snapshot() {
-  _xs_profile=$(exit_profile) || return 1
+exit_snapshot_read() {
+  _xs_valid=true
+  _xs_profile=$(exit_profile) || _xs_valid=false
   _xs_prefs=$(tmo 5 tailscale --socket="${TS_SOCKET}" debug prefs 2>/dev/null |
     jqr -e -c 'select(type=="object" and (.ExitNodeID|type)=="string") |
       {id:.ExitNodeID,ip:(.ExitNodeIP // ""),auto:(if has("AutoExitNode") then .AutoExitNode else "" end),allowLAN:.ExitNodeAllowLANAccess} |
-      select((.ip|type)=="string" and (.auto|type)=="string" and (.allowLAN|type)=="boolean")') || return 1
-  _xs_status=$(ts_status_json tmo 5 tailscale --socket="${TS_SOCKET}" status --json 2>/dev/null) || return 1
-  [ "$(exit_profile)" = "${_xs_profile}" ] || return 1
-  printf '%s' "${_xs_status}" | jqr -e -c --arg profile "${_xs_profile}" --argjson pref "${_xs_prefs}" '
+      select((.ip|type)=="string" and (.auto|type)=="string" and (.allowLAN|type)=="boolean")') || _xs_valid=false
+  _xs_status=$(ts_status_json tmo 5 tailscale --socket="${TS_SOCKET}" status --json 2>/dev/null) || _xs_status=
+  _xs_status=$(printf '%s' "${_xs_status}" | jqr -e -s -c 'select(length==1) | .[0] | select(type=="object")') || _xs_valid=false
+  if [ "$(exit_profile)" != "${_xs_profile}" ]; then _xs_status=; _xs_valid=false; fi
+  [ "${_xs_valid}" = true ] || return 1
+  EXIT_SNAPSHOT=$(printf '%s' "${_xs_status}" | jqr -e -c --arg profile "${_xs_profile}" --argjson pref "${_xs_prefs}" '
     select(type=="object" and (.Self.ID|type)=="string" and (.Self.ID|length)>0) | {profile:$profile,self:.Self.ID,pref:$pref,
-      backend:(.BackendState // "unknown"),actual:(.ExitNodeStatus // null)}'
+      backend:(.BackendState // "unknown"),actual:(.ExitNodeStatus // null)}')
+}
+
+exit_snapshot() {
+  exit_snapshot_read || return 1
+  printf '%s\n' "${EXIT_SNAPSHOT}"
+}
+
+exit_config_fingerprint() {
+  printf '%s\n' "${TS_MODE}|${ROUTE_SCOPE}|${UID_LIST}|${ROUTE_SUBNETS}|${IPV6}|${ROUTE_TABLE}|${FWMARK}/${FWMARK_MASK}|${MAGIC_DNS}"
+}
+
+exit_output() {
+  if [ "${EXIT_NETWORK_STATUS:-0}" = 1 ]; then
+    _xo_exit=$(cat) || return 1
+    printf '{"status":%s,"exitRouting":%s}\n' "${_xs_status:-null}" "${_xo_exit}"
+  else
+    cat
+  fi
+}
+
+exit_unknown() {
+  echo '{"known":false,"selected":null,"effective":"unknown","ipv4":false,"ipv6":false,"warning":"preference-unavailable"}' | exit_output
 }
 
 exit_status() {
-  _es_snapshot=$(exit_snapshot) || { echo '{"known":false,"selected":null,"effective":"unknown","ipv4":false,"ipv6":false,"warning":"preference-unavailable"}'; return 0; }
+  exit_snapshot_read || { exit_unknown; return 0; }
+  _es_snapshot=${EXIT_SNAPSHOT}
+  _es_config=$(exit_config_fingerprint)
   _es_policy=false
   if [ "${TS_MODE}" = bridge ]; then
-    "${TS_SCRIPTS_DIR}/foxytail.route" check >/dev/null 2>&1 && _es_policy=true
-    [ "$(exit_snapshot)" = "${_es_snapshot}" ] || _es_policy=false
+    printf '%s\n' "${_es_snapshot}" | "${TS_SCRIPTS_DIR}/foxytail.route" check-snapshot "${_es_config}" >/dev/null 2>&1 && _es_policy=true
+  fi
+  # Reuse only within this read; an external profile/preference change invalidates it.
+  if [ "$(exit_snapshot)" != "${_es_snapshot}" ] || ! load_runtime_conf ||
+     [ "$(exit_config_fingerprint)" != "${_es_config}" ]; then
+    _xs_status=; exit_unknown; return 0
   fi
   printf '%s' "${_es_snapshot}" | jqr -c --arg mode "${TS_MODE}" --arg scope "${ROUTE_SCOPE}" --arg uids "${UID_LIST}" --arg ipv6 "${IPV6}" --argjson policy "${_es_policy}" '
     (.pref.id!="" or .pref.ip!="" or .pref.auto!="") as $selected |
@@ -39,7 +71,7 @@ exit_status() {
       effective:(if ($selected|not) and ($mode!="bridge" or $policy) then "none" elif $selected|not then "not-effective" elif $online|not then "not-effective" elif $mode=="proxy" then "explicit-proxy" elif $mode=="tun" then "daemon-owned" elif $policy and $covered then "bridge-policy" else "not-effective" end),
       ipv4:($selected and $mode=="bridge" and $policy and $online and $covered),
       ipv6:($selected and $mode=="bridge" and $policy and $online and $covered and $ipv6=="on"),
-      warning:(if $mode=="bridge" and ($policy|not) then "route-apply-failed" elif $selected|not then "" elif $online|not then "exit-unavailable" elif $mode=="proxy" then "explicit-proxy-only" elif $mode=="tun" then "daemon-owned-unverified" elif $covered|not then "empty-uid-scope" elif $ipv6!="on" then "ipv6-not-covered" else "" end)}'
+      warning:(if $mode=="bridge" and ($policy|not) then "route-apply-failed" elif $selected|not then "" elif $online|not then "exit-unavailable" elif $mode=="proxy" then "explicit-proxy-only" elif $mode=="tun" then "daemon-owned-unverified" elif $covered|not then "empty-uid-scope" elif $ipv6!="on" then "ipv6-not-covered" else "" end)}' | exit_output
 }
 
 exit_journal_write() {
@@ -129,6 +161,11 @@ ensure_run_dirs
 case "$1" in
   snapshot) exit_snapshot; exit $? ;;
   status) load_runtime_conf || exit 1; exit_status; exit $? ;;
+  network-status)
+    load_runtime_conf || exit 1
+    EXIT_NETWORK_STATUS=1
+    if [ "$2" != "$(exit_config_fingerprint)" ]; then exit_unknown; else exit_status; fi
+    exit $? ;;
   set|clear|trial-restore) ;;
   *) echo 'usage: foxytail.exitnode {set <node> [--context]|clear [--context]|status|trial-restore <journal-dir>}' >&2; exit 1 ;;
 esac

@@ -30,6 +30,39 @@ class NetworkApiTests(ApiTestCase):
         result = self.shell('load_conf; _op_exec() { shift; "$@"; }; cmd_exitnode_clear', ok=False)
         self.assertFalse(json.loads(result.stdout)['ok'])
 
+    def test_status_discards_failed_helper_output_and_skips_stopped_daemon(self):
+        helper = self.scripts / 'foxytail.exitnode'
+        helper.write_text('#!/bin/sh\necho \'{"status":{"BackendState":"Running"},"exitRouting":{"known":true}}\'\nexit 1\n')
+        helper.chmod(0o755)
+        result = json.loads(self.shell('''load_conf
+daemon_up() { return 0; }
+daemon_exists() { return 0; }
+daemon_uptime() { echo 2; }
+cmd_status''').stdout)
+        self.assertEqual((result['daemon'], result['backend']), ('running', 'unreachable'))
+        self.assertFalse(result['exitRouting']['known'])
+        result = json.loads(self.shell('''load_conf
+daemon_up() { return 1; }
+daemon_exists() { return 1; }
+_op_exec() { touch "$TS_RUN_DIR/unexpected-helper"; return 9; }
+cmd_status''').stdout)
+        self.assertEqual((result['daemon'], result['backend']), ('stopped', '-'))
+        self.assertFalse((self.run / 'unexpected-helper').exists())
+
+    def test_read_helpers_never_publish_success_after_cancellation(self):
+        for command in ('cmd_status', 'cmd_dns', 'cmd_dns_probe', 'cmd_trial_status', 'cmd_context_get'):
+            with self.subTest(command=command):
+                for name in ('foxytail.exitnode', 'foxytail.dns', 'foxytail.trial'):
+                    helper = self.scripts / name
+                    helper.write_text('#!/bin/sh\necho \'{"ok":true}\'\n')
+                    helper.chmod(0o755)
+                result = self.shell('''load_conf
+daemon_up() { return 0; }
+_op_cancelled() { return 0; }
+''' + command, ok=False)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertFalse(json.loads(result.stdout)['ok'])
+
     def dns_account_fixture(self, fail=False):
         script = self.scripts / 'foxytail.dns'
         script.write_text('#!/bin/sh\n' +
@@ -427,9 +460,11 @@ ts_cli() { cat "$TS_RUN_DIR/status.json"; }
         for stopped in (False, True):
             with self.subTest(stopped=stopped):
                 (self.run / 'alive').touch()
+                helper = self.scripts / 'foxytail.exitnode'
+                helper.write_text('#!/bin/sh\n' + ('rm "' + str(self.run / 'alive') + '"\n' if stopped else '') + 'exit 1\n')
+                helper.chmod(0o755)
                 result = json.loads(self.shell('''load_conf
 daemon_exists() { [ -f "$TS_RUN_DIR/alive" ]; }
-ts_status_json() { ''' + ('rm "$TS_RUN_DIR/alive";' if stopped else ':;') + ''' }
 cmd_status''').stdout)
                 expected = ('stopped', '-') if stopped else ('running', 'unreachable')
                 self.assertEqual((result['daemon'], result['backend']), expected)
@@ -441,10 +476,14 @@ cmd_status''').stdout)
         for backend in ('NoState', 'NeedsLogin', 'NeedsMachineAuth'):
             with self.subTest(backend=backend):
                 (self.run / 'status.json').write_text(json.dumps({'BackendState': backend, 'Peer': {}, 'Self': None}))
+                helper = self.scripts / 'foxytail.exitnode'
+                helper.write_text('#!/bin/sh\nprintf %s ' + shlex.quote(json.dumps({
+                    'status': {'BackendState': backend, 'Peer': {}, 'Self': None},
+                    'exitRouting': {'known': False, 'selected': None, 'effective': 'unknown'}})) + '\n')
+                helper.chmod(0o755)
                 result = json.loads(self.shell('''load_conf
 daemon_exists() { return 0; }
 daemon_uptime() { echo 1; }
-ts_status_json() { cat "$TS_RUN_DIR/status.json"; }
 ts_cli() { touch "$TS_RUN_DIR/unexpected-auth-probe"; return 99; }
 cmd_status''').stdout)
                 self.assertTrue(result['ok'])

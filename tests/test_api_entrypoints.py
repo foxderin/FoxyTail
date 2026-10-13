@@ -188,6 +188,47 @@ printf '{"state":"stopped","suffix":"","port":%s,"mode":"%s"}' "$DNS_PORT" "$DNS
                 process.kill()
         process.communicate(timeout=3)
 
+    def test_status_cancels_owned_exit_route_descendants_without_success_payload(self):
+        self.slow_fixture()
+        source = (ROOT / 'tailscale/scripts/foxytail.exitnode').read_text()
+        self.script('scripts/foxytail.exitnode', source.replace('#!/system/bin/sh\n', '', 1))
+        self.script('scripts/foxytail.route', 'exec "$TEST_DIR/bin/slow"\n')
+        self.script('bin/tailscale', '''
+case "$2" in
+ switch) echo '[{"id":"profile-a","selected":true}]' ;;
+ debug) echo '{"ExitNodeID":"node-a","ExitNodeIP":"","ExitNodeAllowLANAccess":false}' ;;
+ status) echo '{"BackendState":"Running","Self":{"ID":"self-a"},"ExitNodeStatus":{"ID":"node-a","Online":true},"Peer":{}}' ;;
+ *) exit 1 ;;
+esac
+''')
+        with (self.scripts / 'foxytail.webapi-network.sh').open('a') as network:
+            network.write('\ndaemon_up() { return 0; }\ndaemon_exists() { return 0; }\n')
+        request = str(int(time.time())) + '_status_route_cancel'
+        runner = subprocess.Popen(['sh', str(self.api), '--request-id', request, 'status'],
+            env=self.env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, start_new_session=True)
+        bystander = subprocess.Popen(['sleep', '30'], start_new_session=True)
+        try:
+            pidfile = self.base / 'leaf-pid'
+            deadline = time.monotonic() + 8
+            while not pidfile.exists() and runner.poll() is None and time.monotonic() < deadline:
+                time.sleep(0.02)
+            self.assertTrue(pidfile.exists(), 'status never reached nested route read')
+            registry = self.run / 'operations' / request
+            self.assertTrue(list(registry.glob('child.*')))
+            started = time.monotonic()
+            self.assertTrue(self.entry('cancel', request)['cancelled'])
+            stdout, stderr = runner.communicate(timeout=3)
+            self.assertLess(time.monotonic() - started, 7)
+            self.assertNotEqual(runner.returncode, 0, stdout + stderr)
+            self.assertFalse(json.loads(stdout)['ok'])
+            state = subprocess.run(['ps', '-p', pidfile.read_text(), '-o', 'stat='], text=True, capture_output=True)
+            self.assertTrue(state.returncode != 0 or state.stdout.strip().startswith('Z'))
+            self.assertFalse(list(registry.glob('child.*')))
+            self.assertIsNone(bystander.poll())
+        finally:
+            self.terminate(runner)
+            self.terminate(bystander)
+
     def test_real_slow_helpers_cancel_descendants_and_leave_bystander_alive(self):
         self.slow_fixture()
         bystander = subprocess.Popen(['sleep', '30'], start_new_session=True)
