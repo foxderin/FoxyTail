@@ -60,9 +60,41 @@ final class RootApi {
         volatile String cancellationError;
         final AtomicBoolean cancelled = new AtomicBoolean();
         private final AtomicBoolean cancelling = new AtomicBoolean();
+        private boolean started, localCancellation;
+        private FutureTask<Void> queued;
+        synchronized void submit(ExecutorService executor, Runnable action) {
+            if (cancelled.get()) return;
+            queued = new FutureTask<>(action, null);
+            executor.execute(queued);
+        }
+        synchronized void begin(Context context, String request) throws InterruptedIOException {
+            if (cancelled.get()) throw new InterruptedIOException(context.getString(R.string.cancelled));
+            this.context = context.getApplicationContext(); this.request = request; started = true;
+            queued = null;
+        }
+        Process launch(Context context, String request, String command, boolean localCancellation, ProcessStarter starter) throws IOException {
+            this.localCancellation = localCancellation;
+            begin(context, request);
+            try {
+                Process launched = startRoot(context, command, starter);
+                process = launched;
+                if (cancelled.get()) launched.destroy();
+                return launched;
+            } catch (IOException | RuntimeException failure) { finished = true; throw failure; }
+        }
         void cancel() {
-            if (finished) return;
-            if (request == null || context == null) { stop(); return; }
+            synchronized (this) {
+                if (finished) return;
+                if (!started) {
+                    cancelled.set(true); finished = true;
+                    if (queued != null) { queued.cancel(false); queued = null; }
+                    return;
+                }
+            }
+            if (request == null || context == null) {
+                if (localCancellation) IO.execute(this::stop);
+                return;
+            }
             if (!cancelling.compareAndSet(false, true)) return;
             IO.execute(() -> {
                 try {
@@ -119,10 +151,8 @@ final class RootApi {
             if (arg == null || arg.indexOf('\0') >= 0) throw new IOException(context.getString(R.string.invalid_response));
             command.append(' ').append(quote(arg));
         }
-        call.context = context.getApplicationContext(); call.request = request;
-        if (call.cancelled.get()) throw new InterruptedIOException(context.getString(R.string.cancelled));
-        Process process = startRoot(context, command.toString(), ProcessBuilder::start);
-        call.process = process;
+        boolean localCancellation = args.length > 0 && localCancellationAllowed(args[0]);
+        Process process = call.launch(context, request, command.toString(), localCancellation, ProcessBuilder::start);
         call.source = input;
         ScheduledFuture<?> timer = CLOCK.schedule(() -> { call.timedOut = true; call.cancel(); }, seconds, TimeUnit.SECONDS);
         Future<String> stderr = IO.submit(() -> {
@@ -142,7 +172,7 @@ final class RootApi {
         });
         Exception readFailure = null;
         try {
-            if (call.cancelled.get()) process.destroyForcibly();
+            if (call.cancelled.get()) process.destroy();
             try (InputStream stdout = process.getInputStream()) { copy(stdout, output, outputLimit, null, call); }
             catch (Exception e) { readFailure = e; process.destroy(); }
             int exit = process.waitFor();
@@ -165,6 +195,13 @@ final class RootApi {
             process.destroy();
             writer.cancel(true);
             stderr.cancel(true);
+        }
+    }
+    static boolean localCancellationAllowed(String command) {
+        switch (command) {
+            case "backend-info": case "operation-status": case "artifact-read": case "file-read":
+            case "files-browse": case "files-inbox": case "taildrop-targets": case "file-send-history": case "file-send-status": return true;
+            default: return false;
         }
     }
     static long copy(InputStream input, OutputStream output, long limit, Progress progress, Call call) throws IOException {

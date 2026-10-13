@@ -19,9 +19,11 @@ import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
 import java.util.Locale;
+import java.util.LinkedHashMap;
+import java.util.Map;
 
 final class PeersPage extends ControlPage {
-    private final LinearLayout inventory, filters;
+    private final LinearLayout inventory, filters, peerRows, inventoryMessage;
     private final TextView state, onlineCount, resultCount;
     private final EditText search;
     private List<JSONObject> peers;
@@ -31,6 +33,17 @@ final class PeersPage extends ControlPage {
     private String identity;
     private AlertDialog detail;
     private final List<android.widget.Button> pingButtons = new ArrayList<>();
+    private final Map<String, PeerRow> retainedRows = new LinkedHashMap<>();
+    private String inventoryState;
+    private boolean failed;
+
+    private static final class PeerRow {
+        JSONObject peer;
+        String appearance;
+        LinearLayout view;
+        TextView traffic;
+        String searchText;
+    }
 
     PeersPage(ControlActivity activity) {
         super(activity);
@@ -47,7 +60,7 @@ final class PeersPage extends ControlPage {
         search.setLayoutParams(new LinearLayout.LayoutParams(compact ? -1 : 0, -2, compact ? 0 : 1));
         filter = activity.drafts.getInt("network.peerFilter", 0); tab = activity.drafts.getInt("network.peerTab", 0);
         LinearLayout tabs = ControlUi.tabs(top, new String[]{s(R.string.web_peers_list), s(R.string.web_peers_topology)}, tab,
-                selected -> { tab = selected; activity.drafts.putInt("network.peerTab", tab); render(); });
+                selected -> { if (!isCurrent()) return; tab = selected; activity.drafts.putInt("network.peerTab", tab); render(); });
         LinearLayout.LayoutParams tabParams = new LinearLayout.LayoutParams(compact ? -1 : dp(210), -2); if (compact) tabParams.topMargin = dp(12); else tabParams.setMarginStart(dp(16)); tabs.setLayoutParams(tabParams);
         int[] icons = {R.drawable.ic_group, R.drawable.ic_router};
         for (int i = 0; i < tabs.getChildCount(); i++) { TextView item = (TextView) tabs.getChildAt(i); android.graphics.drawable.Drawable icon = androidx.appcompat.content.res.AppCompatResources.getDrawable(activity, icons[i]); if (icon != null) { icon.setTint(com.google.android.material.color.MaterialColors.getColor(item, com.google.android.material.R.attr.colorOnSurfaceVariant)); icon.setBounds(0, 0, dp(18), dp(18)); item.setCompoundDrawablesRelative(icon, null, null, null); item.setCompoundDrawablePadding(dp(6)); } }
@@ -55,13 +68,17 @@ final class PeersPage extends ControlPage {
         filters = new LinearLayout(activity); filters.setOrientation(LinearLayout.VERTICAL); filterRow.addView(filters, new LinearLayout.LayoutParams(0, -2, 1)); renderFilters();
         resultCount = ControlUi.muted(activity, "", R.dimen.ft_caption); LinearLayout.LayoutParams countParams = new LinearLayout.LayoutParams(-2, -2); countParams.setMarginStart(dp(12)); filterRow.addView(resultCount, countParams);
         inventory = row(toolbar); inventory.setOrientation(LinearLayout.VERTICAL);
+        inventoryMessage = row(inventory); inventoryMessage.setOrientation(LinearLayout.VERTICAL);
+        peerRows = row(inventory); peerRows.setOrientation(LinearLayout.VERTICAL);
         search.addTextChangedListener(new TextWatcher() {
             public void beforeTextChanged(CharSequence value, int start, int count, int after) { }
             public void onTextChanged(CharSequence value, int start, int before, int count) {
+                if (!isCurrent()) return;
                 activity.drafts.putString("network.peerSearch", value.toString()); render();
             }
             public void afterTextChanged(Editable value) { }
         });
+        render();
         repeat(this::refresh, 15000);
     }
     @Override String title() { return s(R.string.web_peers_title); }
@@ -69,11 +86,15 @@ final class PeersPage extends ControlPage {
         refresh();
     }
     private void refresh() {
-        if (reading || detail != null && detail.isShowing()) return;
-        reading = true;
+        if (!isCurrent() || reading || detail != null && detail.isShowing()) return;
+        reading = true; failed = false;
+        if (peers == null) render();
         read(status -> {
             String observedIdentity = ExitNodesPage.identityOf(status);
-            if (identity != null && !identity.equals(observedIdentity)) { peers = null; fresh = false; render(); }
+            if (identity != null && !identity.equals(observedIdentity)) {
+                peers = null; fresh = false; retainedRows.clear(); peerRows.removeAllViews();
+                state.setText("—"); onlineCount.setText(s(R.string.web_loading)); render();
+            }
             identity = observedIdentity;
             JSONObject own = status.optJSONObject("self");
             self = own == null ? s(R.string.network_unknown) : own.optString("hostname", s(R.string.network_unknown));
@@ -82,7 +103,7 @@ final class PeersPage extends ControlPage {
                 reading = false;
                 try {
                     List<JSONObject> loaded = decodePeers(result);
-                    peers = loaded; fresh = true;
+                    peers = loaded; fresh = true; failed = false;
                     int online = 0; for (JSONObject peer : peers) if (peer.optBoolean("online")) online++;
                     state.setText(Integer.toString(peers.size())); onlineCount.setText("● " + online + " " + s(R.string.web_net_filter_online) + "   ● " + (peers.size() - online) + " " + s(R.string.web_net_filter_offline));
                     if (detail != null) detail.dismiss();
@@ -92,42 +113,85 @@ final class PeersPage extends ControlPage {
         }, failure -> { reading = false; fail(failure); }, "status");
     }
     private void fail(Exception failure) {
-        fresh = false; state.setText("—"); onlineCount.setText(s(R.string.web_net_status_stale));
-        if (peers == null) { inventory.removeAllViews(); hint(inventory, s(R.string.web_net_unknown_hint)); textButton(inventory, s(R.string.web_retry), this::refresh); }
+        fresh = false; failed = true; state.setText("—"); onlineCount.setText(s(R.string.web_net_status_stale));
+        if (peers == null) render();
         for (android.widget.Button button : pingButtons) button.setEnabled(false);
         error(failure);
     }
     private void renderFilters() {
         filters.removeAllViews();
         ControlUi.chips(filters, new String[]{s(R.string.web_net_filter_all), s(R.string.web_net_filter_online), s(R.string.web_net_filter_offline)}, filter,
-                selected -> { filter = selected; activity.drafts.putInt("network.peerFilter", selected); render(); });
+                selected -> { if (!isCurrent()) return; filter = selected; activity.drafts.putInt("network.peerFilter", selected); render(); });
         filters.getChildAt(0).setLayoutParams(new LinearLayout.LayoutParams(-1, -2));
     }
     private void render() {
-        inventory.removeAllViews();
-        if (peers == null) { ControlUi.skeleton(inventory, 1f, 80); return; }
-        String query = search.getText().toString().trim().toLowerCase(Locale.ROOT);
-        List<JSONObject> visible = new ArrayList<>();
-        for (JSONObject peer : peers) {
-            if (filter == 1 && !peer.optBoolean("online") || filter == 2 && peer.optBoolean("online")) continue;
-            String text = peer.optString("hostname") + " " + peer.optString("os") + " " + String.join(" ", addresses(peer));
-            if (text.toLowerCase(Locale.ROOT).contains(query)) visible.add(peer);
-        }
-        visible.sort(Comparator.<JSONObject>comparingInt(peer -> peer.optBoolean("online") ? 0 : 1)
-                .thenComparing(peer -> peer.optString("hostname"), String.CASE_INSENSITIVE_ORDER));
-        resultCount.setText(visible.size() + " " + s(R.string.web_net_result_count));
-        if (peers.isEmpty()) { hint(inventory, s(R.string.web_peers_empty)); return; }
-        if (visible.isEmpty()) {
-            label(inventory, s(R.string.web_net_no_results)); hint(inventory, s(R.string.web_net_no_results_hint));
-            textButton(inventory, s(R.string.web_net_reset_filter), () -> { filter = 0; activity.drafts.putInt("network.peerFilter", 0); renderFilters(); search.setText(""); render(); });
+        if (peers == null) {
+            peerRows.setVisibility(View.GONE); inventoryMessage.setVisibility(View.VISIBLE);
+            String next = failed ? "failed" : "loading";
+            if (!next.equals(inventoryState)) {
+                inventoryState = next; inventoryMessage.removeAllViews();
+                hint(inventoryMessage, s(failed ? R.string.web_net_unknown_hint : R.string.web_loading));
+                if (failed) textButton(inventoryMessage, s(R.string.web_retry), this::refresh);
+                else ControlUi.skeleton(inventoryMessage, 1f, 80);
+            }
             return;
         }
-        if (tab == 1) {
-            hint(inventory, s(R.string.web_net_topology_hint));
-            inventory.addView(new PeerTopologyView(activity, self, exitId, visible, this::showDetail));
-        } else for (JSONObject peer : visible) {
-            ControlUi.divider(inventory);
-            LinearLayout card = row(inventory); card.setOrientation(LinearLayout.VERTICAL); card.setPadding(0, dp(17), 0, dp(11));
+        String query = search.getText().toString().trim().toLowerCase(Locale.ROOT);
+        List<JSONObject> sorted = new ArrayList<>(peers);
+        sorted.sort(Comparator.<JSONObject>comparingInt(peer -> peer.optBoolean("online") ? 0 : 1)
+                .thenComparing(peer -> peer.optString("hostname"), String.CASE_INSENSITIVE_ORDER));
+        List<JSONObject> visible = new ArrayList<>();
+        Map<String, PeerRow> nextRows = new LinkedHashMap<>();
+        Map<String, Integer> occurrences = new LinkedHashMap<>();
+        int position = 0;
+        for (JSONObject peer : sorted) {
+            String id = peer.optString("id"); int occurrence = occurrences.getOrDefault(id, 0); occurrences.put(id, occurrence + 1);
+            String key = id + "\u0000" + occurrence;
+            PeerRow entry = retainedRows.get(key);
+            String appearance = entry != null && entry.peer == peer ? entry.appearance : new JSONArray().put(peer.optString("hostname")).put(peer.optString("os")).put(peer.optString("relay"))
+                    .put(peer.optBoolean("online")).put(peer.optBoolean("exitNodeOption")).put(new JSONArray(addresses(peer))).toString();
+            if (entry == null || !appearance.equals(entry.appearance)) {
+                if (entry != null) peerRows.removeView(entry.view);
+                entry = new PeerRow(); entry.peer = peer; entry.appearance = appearance; createPeerRow(entry);
+            }
+            if (entry.peer != peer) {
+                entry.peer = peer;
+                String traffic = "↓ " + byteLabel(peer, "rxBytes") + "   ↑ " + byteLabel(peer, "txBytes");
+                if (!traffic.contentEquals(entry.traffic.getText())) entry.traffic.setText(traffic);
+            }
+            if (peerRows.indexOfChild(entry.view) != position) {
+                peerRows.removeView(entry.view); peerRows.addView(entry.view, position);
+            }
+            position++; nextRows.put(key, entry);
+            boolean shown = !(filter == 1 && !peer.optBoolean("online") || filter == 2 && peer.optBoolean("online")) && entry.searchText.contains(query);
+            entry.view.setVisibility(shown ? View.VISIBLE : View.GONE);
+            if (shown) visible.add(peer);
+        }
+        for (Map.Entry<String, PeerRow> old : retainedRows.entrySet()) if (!nextRows.containsKey(old.getKey())) peerRows.removeView(old.getValue().view);
+        retainedRows.clear(); retainedRows.putAll(nextRows);
+        resultCount.setText(visible.size() + " " + s(R.string.web_net_result_count));
+        peerRows.setVisibility(tab == 0 && !visible.isEmpty() ? View.VISIBLE : View.GONE);
+        String next = peers.isEmpty() ? "empty" : visible.isEmpty() ? "no-results" : tab == 1
+                ? new JSONArray().put(self).put(exitId).put(new JSONArray(visible)).toString() : "list";
+        inventoryMessage.setVisibility("list".equals(next) ? View.GONE : View.VISIBLE);
+        if (next.equals(inventoryState)) return;
+        inventoryState = next; inventoryMessage.removeAllViews();
+        if (peers.isEmpty()) hint(inventoryMessage, s(R.string.web_peers_empty));
+        else if (visible.isEmpty()) {
+            label(inventoryMessage, s(R.string.web_net_no_results)); hint(inventoryMessage, s(R.string.web_net_no_results_hint));
+            textButton(inventoryMessage, s(R.string.web_net_reset_filter), () -> { filter = 0; activity.drafts.putInt("network.peerFilter", 0); renderFilters(); search.setText(""); render(); });
+        } else if (tab == 1) {
+            hint(inventoryMessage, s(R.string.web_net_topology_hint));
+            inventoryMessage.addView(new PeerTopologyView(activity, self, exitId, visible, peer -> { if (isCurrent()) showDetail(peer); }));
+        }
+    }
+    private void createPeerRow(PeerRow entry) {
+            JSONObject peer = entry.peer;
+            entry.searchText = (peer.optString("hostname") + " " + peer.optString("os") + " " + String.join(" ", addresses(peer))).toLowerCase(Locale.ROOT);
+            LinearLayout frame = new LinearLayout(activity); frame.setOrientation(LinearLayout.VERTICAL);
+            frame.setLayoutParams(new LinearLayout.LayoutParams(-1, -2)); entry.view = frame;
+            ControlUi.divider(frame);
+            LinearLayout card = row(frame); card.setOrientation(LinearLayout.VERTICAL); card.setPadding(0, dp(17), 0, dp(11));
             LinearLayout head = row(card); head.setGravity(Gravity.CENTER_VERTICAL); head.setMinimumHeight(dp(48));
             ImageView icon = ControlUi.iconTile(activity, osIcon(peer.optString("os")), 44);
             icon.setColorFilter(com.google.android.material.color.MaterialColors.getColor(icon, com.google.android.material.R.attr.colorOnSurfaceVariant));
@@ -144,23 +208,22 @@ final class PeersPage extends ControlPage {
             head.addView(identityRow, new LinearLayout.LayoutParams(0, -2, 1));
             TextView online = ControlUi.muted(activity, "● " + s(peer.optBoolean("online") ? R.string.web_net_filter_online : R.string.web_net_filter_offline), R.dimen.ft_caption); online.setTextSize(11);
             if (peer.optBoolean("online")) online.setTextColor(androidx.core.content.ContextCompat.getColor(activity, R.color.foxy_ok));
-            head.addView(online); head.setOnClickListener(view -> { if (isCurrent()) showDetail(peer); }); head.setFocusable(true);
+            head.addView(online); head.setOnClickListener(view -> { if (isCurrent()) showDetail(entry.peer); }); head.setFocusable(true);
             head.setContentDescription(s(R.string.web_net_peer_details) + ": " + peer.optString("hostname"));
             LinearLayout bottom = row(card); bottom.setGravity(Gravity.CENTER_VERTICAL); bottom.setPadding(dp(activity.getResources().getConfiguration().screenWidthDp <= 700 ? 0 : 56), dp(3), 0, 0);
             LinearLayout addresses = new LinearLayout(activity); addresses.setOrientation(LinearLayout.VERTICAL); bottom.addView(addresses, new LinearLayout.LayoutParams(0, -2, 1));
             List<String> ips = addresses(peer);
             if (ips.isEmpty()) hint(addresses, s(R.string.web_net_address_pending));
             for (String ip : ips) {
-                com.google.android.material.button.MaterialButton copy = ControlUi.textButton(activity, ip, () -> copy(s(R.string.web_net_copy_address), ip));
+                com.google.android.material.button.MaterialButton copy = ControlUi.textButton(activity, ip, () -> { if (isCurrent()) copy(s(R.string.web_net_copy_address), ip); });
                 int muted = com.google.android.material.color.MaterialColors.getColor(copy, com.google.android.material.R.attr.colorOnSurfaceVariant);
                 copy.setIconResource(R.drawable.ic_content_copy); copy.setIconSize(dp(15)); copy.setIconGravity(com.google.android.material.button.MaterialButton.ICON_GRAVITY_TEXT_END); copy.setIconPadding(dp(8)); copy.setIconTint(android.content.res.ColorStateList.valueOf(muted)); copy.setTextColor(muted);
                 copy.setTypeface(android.graphics.Typeface.MONOSPACE); copy.setTextSize(activity.getResources().getConfiguration().screenWidthDp <= 700 ? 11 : 12); copy.setGravity(Gravity.START | Gravity.CENTER_VERTICAL); copy.setPadding(0, 0, 0, 0);
                 copy.setContentDescription(s(R.string.web_net_copy_address) + ": " + ip); addresses.addView(copy, new LinearLayout.LayoutParams(-1, -2));
             }
-            TextView traffic = ControlUi.muted(activity, "↓ " + byteLabel(peer, "rxBytes") + "   ↑ " + byteLabel(peer, "txBytes"), R.dimen.ft_caption); traffic.setTextSize(10);
+            TextView traffic = ControlUi.muted(activity, "↓ " + byteLabel(peer, "rxBytes") + "   ↑ " + byteLabel(peer, "txBytes"), R.dimen.ft_caption); traffic.setTextSize(10); entry.traffic = traffic;
             bottom.addView(traffic, new LinearLayout.LayoutParams(-2, -2));
-            bottom.addView(ControlUi.iconButton(activity, R.drawable.ic_chevron_right, s(R.string.web_net_peer_details) + ": " + peer.optString("hostname"), () -> { if (isCurrent()) showDetail(peer); }), new LinearLayout.LayoutParams(dp(44), dp(44)));
-        }
+            bottom.addView(ControlUi.iconButton(activity, R.drawable.ic_chevron_right, s(R.string.web_net_peer_details) + ": " + peer.optString("hostname"), () -> { if (isCurrent()) showDetail(entry.peer); }), new LinearLayout.LayoutParams(dp(44), dp(44)));
     }
     private String byteLabel(JSONObject peer, String field) {
         Object value = peer.opt(field);
@@ -189,10 +252,10 @@ final class PeersPage extends ControlPage {
         hint(identity, "● " + s(peer.optBoolean("online") ? R.string.web_net_filter_online : R.string.web_net_filter_offline));
         if (addresses(peer).isEmpty()) hint(body, s(R.string.web_net_address_pending));
         for (String ip : addresses(peer)) {
-            ControlUi.insetRow(body, ip, R.drawable.ic_content_copy, () -> copy(s(R.string.web_net_copy_address), ip));
+            ControlUi.insetRow(body, ip, R.drawable.ic_content_copy, () -> { if (isCurrent()) copy(s(R.string.web_net_copy_address), ip); });
             TextView resultView = label(body, ""); resultView.setVisibility(View.GONE);
             android.widget.Button ping = button(body, s(R.string.web_net_peer_probe) + (ip.contains(":") ? " IPv6" : " IPv4"), () -> {
-                if (!fresh) return;
+                if (!isCurrent() || !fresh) return;
                 probe(s(R.string.web_net_peer_probe), result -> {
                     resultView.setVisibility(View.VISIBLE);
                     if (validProbe(result, peer.optString("id"), ip)) {

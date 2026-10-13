@@ -12,8 +12,6 @@ import android.view.View;
 import android.widget.*;
 import org.json.JSONObject;
 import java.util.ArrayList;
-import java.util.HashSet;
-import java.util.Set;
 import java.util.Map;
 import java.util.LinkedHashMap;
 import java.util.concurrent.ExecutorService;
@@ -30,14 +28,16 @@ abstract class ControlPage {
     private final ArrayList<RootApi.Call> calls = new ArrayList<>();
     private final ArrayList<Poll> polls = new ArrayList<>();
     private final ArrayList<Consumer<JSONObject>> callbacks = new ArrayList<>();
-    private final Set<String> reading = new HashSet<>();
+    private final Map<String, PendingRead> reading = new LinkedHashMap<>();
     private final Map<String, PendingRead> queuedReads = new LinkedHashMap<>();
     private final Map<ControlPage, Boolean> embedded = new LinkedHashMap<>();
     private static final class PendingRead {
+        final int generation;
         final String[] command;
+        final RootApi.Call call = new RootApi.Call();
         final ArrayList<Consumer<JSONObject>> success = new ArrayList<>();
         final ArrayList<Consumer<Exception>> failure = new ArrayList<>();
-        PendingRead(String[] command) { this.command = command; }
+        PendingRead(int generation, String[] command) { this.generation = generation; this.command = command.clone(); }
     }
     private boolean closed, visible;
     private boolean refreshAfterRead;
@@ -65,7 +65,7 @@ abstract class ControlPage {
     }
     final void start() { resume(); }
     final void resume() {
-        if (closed) return;
+        if (closed || visible) return;
         visible = true;
         for (Poll poll : polls) { main.removeCallbacks(poll); main.postDelayed(poll, poll.millis); }
         load();
@@ -74,8 +74,10 @@ abstract class ControlPage {
     final void pause() {
         visible = false; generation++;
         for (Poll poll : polls) main.removeCallbacks(poll);
+        activity.removeStatusRead(this);
         for (RootApi.Call call : new ArrayList<>(calls)) call.cancel();
-        calls.clear(); reading.clear(); queuedReads.clear();
+        calls.removeIf(call -> call.finished);
+        reading.clear(); queuedReads.clear(); refreshAfterRead = false;
         onPause();
         for (ControlPage child : embedded.keySet()) child.pause();
     }
@@ -181,39 +183,55 @@ abstract class ControlPage {
     void read(Consumer<JSONObject> success, Consumer<Exception> failure, String... command) {
         if (!isCurrent()) return;
         String key = String.join("\u0001", command);
-        if (!reading.add(key)) {
-            PendingRead pending = queuedReads.get(key);
-            if (pending == null) { pending = new PendingRead(command.clone()); queuedReads.put(key, pending); }
+        PendingRead pending = reading.get(key);
+        if (pending != null) {
+            if (!(command.length == 1 && "status".equals(command[0]))) {
+                pending = queuedReads.get(key);
+                if (pending == null) { pending = new PendingRead(generation, command); queuedReads.put(key, pending); }
+            }
+            for (int i = 0; i < pending.success.size(); i++) if (pending.success.get(i) == success && pending.failure.get(i) == failure) return;
+            if (pending.success.size() >= 64) { failure.accept(new IllegalStateException(s(R.string.busy))); return; }
             pending.success.add(success); pending.failure.add(failure); return;
         }
-        int token = generation;
-        RootApi.Call call = new RootApi.Call(); calls.add(call);
-        READS.execute(() -> {
+        PendingRead request = new PendingRead(generation, command);
+        request.success.add(success); request.failure.add(failure);
+        startRead(key, request);
+    }
+    private void startRead(String key, PendingRead request) {
+        reading.put(key, request);
+        String[] command = request.command;
+        if (command.length == 1 && "status".equals(command[0])) {
+            activity.readStatus(this, result -> completeRead(key, request, result, null), error -> completeRead(key, request, null, error));
+            return;
+        }
+        calls.add(request.call);
+        request.call.submit(READS, () -> {
+            JSONObject result = null; Exception error = null;
             try {
-                if (call.cancelled.get()) return;
-                JSONObject result = RootApi.json(activity.getApplicationContext(), RootApi.requestId(), null, null, timeout(command[0]), call, command);
-                main.post(() -> {
-                    calls.remove(call);
-                    if (isCurrent() && token == generation) {
-                        reading.remove(key);
-                        try { success.accept(result); } catch (RuntimeException e) { failure.accept(e); }
-                        continueReads(key);
-                    }
-                });
-            } catch (Exception e) {
-                main.post(() -> {
-                    calls.remove(call);
-                    if (isCurrent() && token == generation) { reading.remove(key); failure.accept(e); continueReads(key); }
-                });
-            }
+                result = RootApi.json(activity.getApplicationContext(), RootApi.requestId(), null, null, timeout(command[0]), request.call, command);
+            } catch (Exception e) { error = e; }
+            finally { request.call.finished = true; }
+            JSONObject loaded = result; Exception failureResult = error;
+            main.post(() -> {
+                calls.remove(request.call);
+                completeRead(key, request, loaded, failureResult);
+            });
         });
     }
-    private void continueReads(String key) {
-        PendingRead pending = queuedReads.remove(key);
-        if (pending != null && isCurrent()) {
-            read(result -> { for (Consumer<JSONObject> callback : pending.success) callback.accept(result); },
-                    error -> { for (Consumer<Exception> callback : pending.failure) callback.accept(error); }, pending.command);
+    private void completeRead(String key, PendingRead request, JSONObject result, Exception error) {
+        if (!isCurrent() || request.generation != generation || reading.get(key) != request) return;
+        boolean status = request.command.length == 1 && "status".equals(request.command[0]);
+        if (status) reading.remove(key);
+        for (int i = 0; i < request.success.size() && isCurrent() && request.generation == generation; i++) {
+            if (error != null) request.failure.get(i).accept(error);
+            else {
+                try { request.success.get(i).accept(result); }
+                catch (RuntimeException failure) { request.failure.get(i).accept(failure); }
+            }
         }
+        if (!status && reading.get(key) == request) reading.remove(key);
+        PendingRead pending = queuedReads.remove(key);
+        if (pending != null && isCurrent() && request.generation == generation) startRead(key, pending);
         refreshWhenIdle();
     }
     static int timeout(String command) {

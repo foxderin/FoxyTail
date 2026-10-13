@@ -16,7 +16,7 @@ final class ExitNodesPage extends ControlPage {
     private JSONObject snapshot, routing;
     private List<JSONObject> peers;
     private String draft, identity, pending;
-    private boolean freshStatus, freshPeers, reading;
+    private boolean freshStatus, freshPeers, reading, loadFailed;
     private java.util.function.Consumer<JSONObject> queuedAfter;
     private int sequence;
     private final Map<String, Double> latencies = new HashMap<>();
@@ -40,6 +40,7 @@ final class ExitNodesPage extends ControlPage {
         draft = activity.drafts.getString("network.exitDraft");
         identity = activity.drafts.getString("network.exitIdentity");
         apply.setEnabled(false); test.setEnabled(false);
+        renderRoute(); renderOptions();
         repeat(() -> { if (!reading) refresh(null); }, 15000);
     }
     @Override String title() { return s(R.string.web_exit_title); }
@@ -47,8 +48,10 @@ final class ExitNodesPage extends ControlPage {
         refresh(null);
     }
     private void refresh(java.util.function.Consumer<JSONObject> after) {
+        if (!isCurrent()) return;
         if (reading) { if (after != null) queuedAfter = after; return; }
-        final int request = ++sequence; reading = true;
+        final int request = ++sequence; reading = true; loadFailed = false;
+        if (snapshot == null || peers == null) renderOptions();
         read(result -> {
             if (request != sequence) return;
             snapshot = result; routing = result.optJSONObject("exitRouting"); freshStatus = true;
@@ -63,20 +66,23 @@ final class ExitNodesPage extends ControlPage {
             read(list -> {
                 if (request != sequence) return;
                 reading = false;
-                try { peers = PeersPage.decodePeers(list); freshPeers = true; }
-                catch (org.json.JSONException invalid) { freshPeers = false; feedback.setVisibility(android.view.View.VISIBLE); feedback.setText(s(R.string.web_net_status_stale)); error(invalid); }
+                try {
+                    peers = PeersPage.decodePeers(list); freshPeers = true;
+                    if (s(R.string.web_net_status_stale).contentEquals(feedback.getText())) feedback.setVisibility(android.view.View.GONE);
+                }
+                catch (org.json.JSONException invalid) { freshPeers = false; loadFailed = true; feedback.setVisibility(android.view.View.VISIBLE); feedback.setText(s(R.string.web_net_status_stale)); error(invalid); }
                 renderOptions();
                 if (after != null) after.accept(result);
                 followUp();
             }, failure -> {
                 if (request != sequence) return;
-                reading = false; freshPeers = false; feedback.setVisibility(android.view.View.VISIBLE); feedback.setText(s(R.string.web_net_status_stale)); error(failure); renderOptions();
+                reading = false; freshPeers = false; loadFailed = true; feedback.setVisibility(android.view.View.VISIBLE); feedback.setText(s(R.string.web_net_status_stale)); error(failure); renderOptions();
                 if (after != null) after.accept(result);
                 followUp();
             }, "exitnodes");
         }, failure -> {
             if (request != sequence) return;
-            reading = false; freshStatus = false; feedback.setVisibility(android.view.View.VISIBLE); feedback.setText(s(R.string.web_net_status_stale)); error(failure); renderRoute(); renderOptions();
+            reading = false; freshStatus = false; loadFailed = true; feedback.setVisibility(android.view.View.VISIBLE); feedback.setText(s(R.string.web_net_status_stale)); error(failure); renderRoute(); renderOptions();
             if (after != null) after.accept(null);
             followUp();
         }, "status");
@@ -116,16 +122,19 @@ final class ExitNodesPage extends ControlPage {
         if (showCurrent) {
             currentBox.removeAllViews(); hint(currentBox, s(R.string.web_net_exit_selection));
             label(currentBox, known ? node == null ? selectedLabel(this, routing) : node.optString("hostname", selectedLabel(this, routing)) : s(R.string.web_net_exit_unknown));
-            hint(currentBox, known ? node == null ? s(R.string.web_net_exit_local_hint) : node.optString("ip", s(R.string.web_net_exit_local_hint)) : s(R.string.web_net_exit_unknown_hint));
-            if (!known) textButton(currentBox, s(R.string.web_retry), () -> refresh(null));
-            else badge(currentBox, s(R.string.web_exit_current), ControlUi.BADGE_NEUTRAL);
+            hint(currentBox, known ? node == null ? s(R.string.web_net_exit_local_hint) : node.optString("ip", s(R.string.web_net_exit_local_hint)) : s(!loadFailed && (reading || snapshot == null) ? R.string.web_loading : R.string.web_net_exit_unknown_hint));
+            if (!known && !reading && (loadFailed || snapshot != null)) textButton(currentBox, s(R.string.web_retry), () -> refresh(null));
+            else if (known) badge(currentBox, s(R.string.web_exit_current), ControlUi.BADGE_NEUTRAL);
             if (known && node != null && Boolean.FALSE.equals(node.opt("online"))) ControlUi.banner(currentBox, R.drawable.ic_warning, s(R.string.web_net_exit_unavailable), ControlUi.TONE_WARN);
         }
         boolean changed = chosen != null && current != null && !chosen.equals(current);
         String chosenName = s(R.string.web_net_exit_local);
         boolean eligible = "".equals(chosen), online = false;
         option("", s(R.string.web_net_exit_local), s(R.string.web_net_exit_local_hint), null, R.drawable.ic_language, chosen, current, known, null);
-        if (peers == null) ControlUi.skeleton(options, 1f, 80);
+        if (peers == null) {
+            hint(options, s(loadFailed ? R.string.web_net_unknown_hint : R.string.web_loading));
+            if (!loadFailed) ControlUi.skeleton(options, 1f, 80);
+        }
         else {
             java.util.ArrayList<JSONObject> sorted = new java.util.ArrayList<>(peers);
             sorted.sort(java.util.Comparator.<JSONObject>comparingInt(peer -> peer.optBoolean("online") ? 0 : 1)

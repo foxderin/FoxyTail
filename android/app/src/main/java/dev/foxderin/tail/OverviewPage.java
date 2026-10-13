@@ -101,6 +101,7 @@ final class OverviewPage extends ControlPage {
     @Override String title() { return s(R.string.web_nav_dashboard); }
     @Override void load() {
         if (awaitingBrowser) { awaitingBrowser = false; activity.invalidateAccountState(); }
+        render(activity.statusEverLoaded() ? activity.statusSnapshot() : null);
         activity.refreshStatus();
         read(result -> {
             compatibility.removeAllViews();

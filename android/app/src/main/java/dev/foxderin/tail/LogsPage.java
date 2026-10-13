@@ -11,6 +11,12 @@ import com.google.android.material.color.MaterialColors;
 import org.json.*;
 import java.text.DateFormat;
 import java.util.Date;
+import java.util.Arrays;
+import java.util.Locale;
+import android.content.Context;
+import android.text.Layout;
+import androidx.recyclerview.widget.LinearLayoutManager;
+import androidx.recyclerview.widget.RecyclerView;
 
 final class LogsPage extends ControlPage {
     private String source, copied = "", updated = "", failure = "";
@@ -18,9 +24,10 @@ final class LogsPage extends ControlPage {
     private boolean live, follow, wrap, matchCase, readingLogs, queued, bindingStatus;
     private JSONArray lines;
     private final EditText query;
-    private final LinearLayout output, status;
+    private final LinearLayout status;
+    private final LogList output;
+    private final LogAdapter rows;
     private final TextView metadata, updatedText, errorText, empty, refreshDisabled;
-    private final ScrollView scroll;
     private final HorizontalScrollView horizontal;
     private final Button refresh, copyButton;
     private final CompoundButton liveToggle;
@@ -64,18 +71,12 @@ final class LogsPage extends ControlPage {
         updatedText = ControlUi.text(activity, "", 11); updatedText.setTextColor(color(com.google.android.material.R.attr.colorOnSurfaceVariant)); meta.addView(updatedText);
         errorText = ControlUi.text(activity, "", 13); errorText.setTextColor(color(androidx.appcompat.R.attr.colorError)); errorText.setPadding(0, dp(16), 0, dp(16)); errorText.setVisibility(View.GONE); viewer.addView(errorText);
         empty = ControlUi.text(activity, "", 13); empty.setGravity(Gravity.CENTER); empty.setPadding(dp(14), dp(24), dp(14), dp(24)); viewer.addView(empty, new LinearLayout.LayoutParams(-1, -2));
-        scroll = new ScrollView(activity) {
-            @Override protected void onMeasure(int widthMeasureSpec, int heightMeasureSpec) {
-                int cap = Math.max(dp(240), (int) (getResources().getDisplayMetrics().heightPixels * .62f));
-                super.onMeasure(widthMeasureSpec, MeasureSpec.makeMeasureSpec(cap, MeasureSpec.AT_MOST));
-            }
-        };
-        scroll.setMinimumHeight(dp(240)); scroll.setFillViewport(true); scroll.setFocusable(true); scroll.setNestedScrollingEnabled(true);
-        GradientDrawable background = new GradientDrawable(); background.setColor(color(com.google.android.material.R.attr.colorSurfaceContainer)); background.setCornerRadius(dp(12)); background.setStroke(dp(1), color(com.google.android.material.R.attr.colorOutlineVariant)); scroll.setBackground(background); scroll.setClipToOutline(true);
-        horizontal = new HorizontalScrollView(activity); horizontal.setFillViewport(true); scroll.addView(horizontal, new ScrollView.LayoutParams(-1, -2));
-        output = new LinearLayout(activity); output.setOrientation(LinearLayout.VERTICAL); output.setPadding(0, dp(12), 0, dp(12)); horizontal.addView(output, new HorizontalScrollView.LayoutParams(-1, -2));
-        LinearLayout.LayoutParams scrollParams = new LinearLayout.LayoutParams(-1, -2); scrollParams.topMargin = dp(16); viewer.addView(scroll, scrollParams);
-        horizontal.addOnLayoutChangeListener((view, left, top, right, bottom, oldLeft, oldTop, oldRight, oldBottom) -> { if (wrap && right - left != oldRight - oldLeft) render(false); });
+        horizontal = new HorizontalScrollView(activity); horizontal.setFillViewport(true); horizontal.setMinimumHeight(dp(240));
+        GradientDrawable background = new GradientDrawable(); background.setColor(color(com.google.android.material.R.attr.colorSurfaceContainer)); background.setCornerRadius(dp(12)); background.setStroke(dp(1), color(com.google.android.material.R.attr.colorOutlineVariant)); horizontal.setBackground(background); horizontal.setClipToOutline(true);
+        rows = new LogAdapter(activity); output = new LogList(activity); output.setAdapter(rows);
+        horizontal.addView(output, new HorizontalScrollView.LayoutParams(-1, -2));
+        LinearLayout.LayoutParams scrollParams = new LinearLayout.LayoutParams(-1, -2); scrollParams.topMargin = dp(16); viewer.addView(horizontal, scrollParams);
+        horizontal.addOnLayoutChangeListener((view, left, top, right, bottom, oldLeft, oldTop, oldRight, oldBottom) -> { if (right - left != oldRight - oldLeft) render(false); });
         render(); activity.addStatusListener(snapshot -> { if (isCurrent()) renderStatus(); }); repeat(() -> { renderStatus(); if (live && !readingLogs) load(); }, 5000);
     }
     String title() { return s(R.string.web_logs_title); }
@@ -103,8 +104,9 @@ final class LogsPage extends ControlPage {
                 JSONArray current = result.optJSONArray("lines");
                 if (current == null) { failure = s(R.string.tools_invalid_response); render(false); }
                 else {
-                    boolean changed = lines == null || !lines.toString().equals(current.toString());
-                    lines = current; failure = ""; updated = DateFormat.getTimeInstance().format(new Date()); render(changed);
+                    boolean changed = !sameLines(lines, current);
+                    if (changed) lines = current;
+                    failure = ""; updated = DateFormat.getTimeInstance().format(new Date()); render(changed);
                 }
             }
             finishRead();
@@ -117,28 +119,120 @@ final class LogsPage extends ControlPage {
     private void render() { render(true); }
     private void render(boolean changed) {
         if (output == null || query == null) return;
-        StringBuilder copy = new StringBuilder(); int count = 0; String needle = query.getText().toString(); output.removeAllViews();
+        String needle = query.getText().toString(); rows.update(lines, needle, matchCase, wrap);
+        int count = rows.getItemCount();
         int width = horizontal.getWidth() > 0 ? horizontal.getWidth() : activity.getResources().getDisplayMetrics().widthPixels - dp(72);
-        output.getLayoutParams().width = wrap ? width : -2;
-        if (lines != null) for (int i = 0; i < lines.length(); i++) {
-            String line = lines.optString(i); if (!ToolsData.matches(line, needle, matchCase)) continue;
-            if (count++ > 0) copy.append('\n'); copy.append(line);
-            LinearLayout row = new LinearLayout(activity); row.setPadding(0, 0, dp(14), 0);
-            TextView number = logText(String.valueOf(i + 1)); number.setGravity(Gravity.END); number.setTextColor(color(com.google.android.material.R.attr.colorOnSurfaceVariant)); number.setAlpha(.5f); number.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_NO); row.addView(number, new LinearLayout.LayoutParams(dp(42), -2));
-            TextView code = logText(line.isEmpty() ? " " : ToolsData.visibleLog(line)); code.setTextIsSelectable(true); code.setHorizontallyScrolling(!wrap);
-            LinearLayout.LayoutParams codeParams = new LinearLayout.LayoutParams(wrap ? 0 : -2, -2, wrap ? 1 : 0); codeParams.setMarginStart(dp(12)); row.addView(code, codeParams); output.addView(row, new LinearLayout.LayoutParams(wrap ? -1 : -2, -2));
-        }
-        copied = copy.toString(); copyButton.setEnabled(count > 0); horizontal.setHorizontalScrollBarEnabled(!wrap); if (wrap) horizontal.scrollTo(0, 0);
-        scroll.setVisibility(count > 0 ? View.VISIBLE : View.GONE); scroll.setContentDescription(s(source.equals("daemon") ? R.string.web_logs_daemon : R.string.web_logs_service));
+        int contentWidth = wrap ? width : Math.max(width, rows.contentWidth());
+        if (output.getLayoutParams().width != contentWidth) { output.getLayoutParams().width = contentWidth; output.requestLayout(); }
+        copied = rows.copied; copyButton.setEnabled(count > 0); horizontal.setHorizontalScrollBarEnabled(!wrap); if (wrap) horizontal.scrollTo(0, 0);
+        horizontal.setVisibility(count > 0 ? View.VISIBLE : View.GONE); output.setContentDescription(s(source.equals("daemon") ? R.string.web_logs_daemon : R.string.web_logs_service));
         empty.setVisibility(count == 0 && failure.isEmpty() ? View.VISIBLE : View.GONE); empty.setText(s(lines == null ? R.string.web_loading : needle.isEmpty() ? R.string.web_logs_empty : R.string.web_tools_logs_no_match));
         metadata.setText(s(R.string.web_tools_logs_count) + " · " + count + " / " + (lines == null ? "—" : lines.length()));
         updatedText.setText(s(R.string.web_tools_logs_updated) + " " + updated); updatedText.setVisibility(updated.isEmpty() ? View.GONE : View.VISIBLE);
         errorText.setText(failure); errorText.setVisibility(failure.isEmpty() ? View.GONE : View.VISIBLE); renderStatus();
         if (follow && changed && count > 0) followEnd();
     }
-    private TextView logText(String value) { TextView text = ControlUi.text(activity, value, 11); text.setTypeface(Typeface.MONOSPACE); text.setLineHeight(Math.round(text.getTextSize() * 1.9f)); text.setIncludeFontPadding(false); return text; }
+    private static boolean sameLines(JSONArray first, JSONArray second) {
+        if (first == second) return true;
+        if (first == null || second == null || first.length() != second.length()) return false;
+        for (int i = 0; i < first.length(); i++) if (!first.optString(i).equals(second.optString(i))) return false;
+        return true;
+    }
     private int color(int attr) { return MaterialColors.getColor(content, attr); }
-    private void followEnd() { if (scroll != null) scroll.post(() -> { if (isCurrent()) scroll.fullScroll(View.FOCUS_DOWN); }); }
+    private void followEnd() { if (output != null) output.post(() -> { if (isCurrent()) output.followEnd(); }); }
+
+    static final class LogList extends RecyclerView {
+        private boolean followPending;
+        LogList(Context context) {
+            super(context);
+            setLayoutManager(new LinearLayoutManager(context)); setItemAnimator(null);
+            setMinimumHeight(ControlUi.dp(context, 240)); setPadding(0, ControlUi.dp(context, 12), 0, ControlUi.dp(context, 12));
+            setFocusable(true);
+        }
+        @Override protected void onMeasure(int widthSpec, int heightSpec) {
+            int cap = Math.max(ControlUi.dp(getContext(), 240), (int) (getResources().getDisplayMetrics().heightPixels * .62f));
+            // HorizontalScrollView measures its child with UNSPECIFIED width even with explicit layout params.
+            if (getLayoutParams() != null && getLayoutParams().width > 0) widthSpec = MeasureSpec.makeMeasureSpec(getLayoutParams().width, MeasureSpec.EXACTLY);
+            super.onMeasure(widthSpec, MeasureSpec.makeMeasureSpec(cap, MeasureSpec.AT_MOST));
+        }
+        void followEnd() {
+            if (getAdapter() == null || getAdapter().getItemCount() == 0) return;
+            followPending = true;
+            ((LinearLayoutManager) getLayoutManager()).scrollToPositionWithOffset(getAdapter().getItemCount() - 1, 0);
+        }
+        @Override protected void onLayout(boolean changed, int left, int top, int right, int bottom) {
+            super.onLayout(changed, left, top, right, bottom);
+            if (!followPending) return;
+            followPending = false;
+            View last = getLayoutManager().findViewByPosition(getAdapter().getItemCount() - 1);
+            if (last != null) scrollBy(0, last.getBottom() - getHeight() + getPaddingBottom());
+        }
+    }
+
+    static final class LogAdapter extends RecyclerView.Adapter<LogRow> {
+        private final Context context;
+        private final TextView measureText;
+        private JSONArray snapshot;
+        private String[] text = {}, display = {}, folded = {};
+        private int[] selected = {}, widths = {};
+        private String query;
+        private boolean matchCase, wrap = true;
+        String copied = "";
+        LogAdapter(Context context) { this.context = context; measureText = logText(context, ""); setHasStableIds(true); }
+        void update(JSONArray lines, String needle, boolean sensitive, boolean wrapped) {
+            boolean dataChanged = !sameLines(snapshot, lines);
+            if (!dataChanged && needle.equals(query) && sensitive == matchCase && wrapped == wrap) return;
+            if (dataChanged) {
+                snapshot = lines;
+                int size = lines == null ? 0 : lines.length();
+                text = new String[size]; display = new String[size]; folded = new String[size]; widths = new int[size];
+                Arrays.fill(widths, -1);
+                for (int i = 0; i < size; i++) {
+                    text[i] = lines.optString(i); display[i] = text[i].isEmpty() ? " " : ToolsData.visibleLog(text[i]); folded[i] = text[i].toLowerCase(Locale.ROOT);
+                }
+            }
+            String search = sensitive ? needle : needle.toLowerCase(Locale.ROOT);
+            int[] matches = new int[text.length]; int count = 0; StringBuilder copy = new StringBuilder();
+            for (int i = 0; i < text.length; i++) if ((sensitive ? text[i] : folded[i]).contains(search)) {
+                matches[count++] = i; if (count > 1) copy.append('\n'); copy.append(text[i]);
+            }
+            int[] next = Arrays.copyOf(matches, count);
+            boolean changed = dataChanged || wrapped != wrap || !Arrays.equals(selected, next);
+            selected = next; copied = copy.toString(); query = needle; matchCase = sensitive; wrap = wrapped;
+            if (changed) notifyDataSetChanged();
+        }
+        int contentWidth() {
+            int widest = 0;
+            for (int index : selected) {
+                if (widths[index] < 0) widths[index] = (int) Math.ceil(Layout.getDesiredWidth(display[index], measureText.getPaint()));
+                widest = Math.max(widest, widths[index]);
+            }
+            return widest + ControlUi.dp(context, 42) + ControlUi.dp(context, 12) + ControlUi.dp(context, 14);
+        }
+        @Override public int getItemCount() { return selected.length; }
+        @Override public long getItemId(int position) { return selected[position]; }
+        @Override public LogRow onCreateViewHolder(ViewGroup parent, int viewType) { return new LogRow(context); }
+        @Override public void onBindViewHolder(LogRow holder, int position) {
+            int index = selected[position]; String number = String.valueOf(index + 1);
+            if (!number.contentEquals(holder.number.getText())) holder.number.setText(number);
+            if (!display[index].contentEquals(holder.code.getText())) holder.code.setText(display[index]);
+            holder.code.setHorizontallyScrolling(!wrap);
+            LinearLayout.LayoutParams params = (LinearLayout.LayoutParams) holder.code.getLayoutParams();
+            int width = wrap ? 0 : ViewGroup.LayoutParams.WRAP_CONTENT;
+            if (params.width != width) { params.width = width; params.weight = wrap ? 1 : 0; holder.code.setLayoutParams(params); }
+        }
+    }
+    static final class LogRow extends RecyclerView.ViewHolder {
+        final TextView number, code;
+        LogRow(Context context) {
+            super(new LinearLayout(context)); LinearLayout row = (LinearLayout) itemView;
+            row.setLayoutParams(new RecyclerView.LayoutParams(-1, -2)); row.setPadding(0, 0, ControlUi.dp(context, 14), 0);
+            number = logText(context, ""); number.setGravity(Gravity.END); number.setTextColor(MaterialColors.getColor(number, com.google.android.material.R.attr.colorOnSurfaceVariant)); number.setAlpha(.5f); number.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_NO); row.addView(number, new LinearLayout.LayoutParams(ControlUi.dp(context, 42), -2));
+            code = logText(context, ""); code.setTextIsSelectable(true);
+            LinearLayout.LayoutParams codeParams = new LinearLayout.LayoutParams(0, -2, 1); codeParams.setMarginStart(ControlUi.dp(context, 12)); row.addView(code, codeParams);
+        }
+    }
+    private static TextView logText(Context context, String value) { TextView text = ControlUi.text(context, value, 11); text.setTypeface(Typeface.MONOSPACE); text.setLineHeight(Math.round(text.getTextSize() * 1.9f)); text.setIncludeFontPadding(false); return text; }
 }
 
 final class ToolsFlowLayout extends ViewGroup {

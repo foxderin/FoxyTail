@@ -19,6 +19,8 @@ import java.io.*;
 import java.lang.ref.WeakReference;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
+import java.util.Map;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.function.Consumer;
@@ -266,14 +268,14 @@ public class ControlActivity extends AppCompatActivity {
         super.onResume();
         android.content.SharedPreferences appearance = getSharedPreferences("interface", MODE_PRIVATE);
         if (!createdLanguage.equals(appearance.getString("language", "auto")) || !createdTheme.equals(appearance.getString("theme", "auto"))) { recreate(); return; }
-        resumed = true; client.addListener(operationChanged); refreshAvailability();
-        refreshStatus(); stripPoller.removeCallbacks(stripPoll); stripPoller.postDelayed(stripPoll, 15000);
+        resumed = true; client.addListener(operationChanged); showOperation(); refreshAvailability();
         if (page != null) page.resume();
+        refreshStatus(); stripPoller.removeCallbacks(stripPoll); stripPoller.postDelayed(stripPoll, 15000);
         BackupImport.get(this).observe(importChanged); deliverImport();
     }
     @Override protected void onPause() {
         resumed = false; stripPoller.removeCallbacks(stripPoll);
-        if (page != null) page.pause(); client.removeListener(operationChanged); BackupImport.get(this).remove(importChanged); super.onPause();
+        if (page != null) page.pause(); cancelShellReads(); client.removeListener(operationChanged); BackupImport.get(this).remove(importChanged); super.onPause();
     }
     private final Runnable stripPoll = new Runnable() {
         @Override public void run() {
@@ -282,7 +284,7 @@ public class ControlActivity extends AppCompatActivity {
             stripPoller.postDelayed(this, powerSave ? 30000 : 15000);
         }
     };
-    @Override protected void onDestroy() { if (taskPopup != null) taskPopup.dismiss(); if (page != null) page.close(); importCallback = null; super.onDestroy(); }
+    @Override protected void onDestroy() { cancelShellReads(); if (taskPopup != null) taskPopup.dismiss(); if (page != null) page.close(); importCallback = null; super.onDestroy(); }
     @Override protected void onSaveInstanceState(Bundle state) {
         state.putString("page", destination); state.putBundle("drafts", drafts); state.putString("saveId", saveId); state.putString("saveName", saveName);
         state.putLong("accountRevision", observedAccountRevision);
@@ -357,8 +359,16 @@ public class ControlActivity extends AppCompatActivity {
      * snapshot; mutations verify against the next shared read. */
     private JSONObject sharedStatus;
     private String statusError;
-    private boolean statusFresh, statusLoading, statusQueued, statusEverLoaded;
+    private boolean statusFresh, statusLoading, statusEverLoaded;
     private int statusSequence, statusRevision;
+    private RootApi.Call statusCall, settingsCall;
+    private final ArrayList<RootApi.Call> shellCalls = new ArrayList<>();
+    private final Map<ControlPage, StatusRead> statusReads = new LinkedHashMap<>();
+    private static final class StatusRead {
+        final Consumer<JSONObject> success;
+        final Consumer<Exception> failure;
+        StatusRead(Consumer<JSONObject> success, Consumer<Exception> failure) { this.success = success; this.failure = failure; }
+    }
     private final ArrayList<java.util.function.Consumer<JSONObject>> statusListeners = new ArrayList<>();
     JSONObject statusSnapshot() { return sharedStatus; }
     String statusError() { return statusError; }
@@ -368,39 +378,68 @@ public class ControlActivity extends AppCompatActivity {
         statusListeners.add(listener);
         if (statusEverLoaded || statusError != null) listener.accept(sharedStatus);
     }
+    void readStatus(ControlPage owner, Consumer<JSONObject> success, Consumer<Exception> failure) {
+        statusReads.put(owner, new StatusRead(success, failure));
+        refreshStatus();
+    }
+    void removeStatusRead(ControlPage owner) { statusReads.remove(owner); }
     void refreshStatus() {
-        if (isDestroyed()) return;
-        if (statusLoading) { statusQueued = true; return; }
+        if (!resumed || isDestroyed() || statusLoading || client.busy()) return;
         statusLoading = true; final int token = ++statusSequence, revision = statusRevision;
+        RootApi.Call call = new RootApi.Call(); statusCall = call; shellCalls.add(call);
         Context context = getApplicationContext();
         WeakReference<ControlActivity> owner = new WeakReference<>(this);
-        FILES.execute(() -> {
-            try {
-                JSONObject result = RootApi.json(context, null, null, null, 30, new RootApi.Call(), "status");
-                new Handler(Looper.getMainLooper()).post(() -> {
-                    ControlActivity current = owner.get();
-                    if (current == null || current.isDestroyed() || token != current.statusSequence) return;
-                    current.completeStatus(result, null, revision);
-                });
-            } catch (Exception e) {
-                new Handler(Looper.getMainLooper()).post(() -> {
-                    ControlActivity current = owner.get();
-                    if (current == null || current.isDestroyed() || token != current.statusSequence) return;
-                    current.completeStatus(null, RootApi.message(e), revision);
-                });
-            }
+        call.submit(FILES, () -> {
+            JSONObject result = null; Exception error = null;
+            try { result = RootApi.json(context, RootApi.requestId(), null, null, 30, call, "status"); }
+            catch (Exception e) { error = e; }
+            finally { call.finished = true; }
+            JSONObject loaded = result; Exception failure = error;
+            new Handler(Looper.getMainLooper()).post(() -> {
+                ControlActivity current = owner.get();
+                if (current == null) return;
+                current.shellCalls.remove(call);
+                if (current.isDestroyed() || !current.resumed || token != current.statusSequence) return;
+                current.statusCall = null;
+                current.completeStatus(loaded, failure, revision);
+            });
         });
     }
-    private void completeStatus(JSONObject result, String error, int revision) {
+    private void completeStatus(JSONObject result, Exception error, int revision) {
         statusLoading = false;
-        boolean queued = statusQueued; statusQueued = false;
-        if (revision == statusRevision && !client.busy()) {
-            statusEverLoaded = true; statusError = error;
-            statusFresh = error == null;
-            if (result != null) sharedStatus = result;
-            publishStatus();
-        } else statusFresh = false;
-        if (queued) refreshStatus();
+        if (revision != statusRevision || client.busy()) {
+            statusFresh = false;
+            refreshStatus();
+            return;
+        }
+        statusEverLoaded = true; statusError = error == null ? null : RootApi.message(error);
+        statusFresh = error == null;
+        if (result != null) sharedStatus = result;
+        ArrayList<Map.Entry<ControlPage, StatusRead>> consumers = new ArrayList<>(statusReads.entrySet());
+        statusReads.clear();
+        publishStatus();
+        for (Map.Entry<ControlPage, StatusRead> consumer : consumers) {
+            if (!consumer.getKey().isCurrent()) continue;
+            if (revision != statusRevision || client.busy()) { statusReads.putIfAbsent(consumer.getKey(), consumer.getValue()); continue; }
+            if (error == null) consumer.getValue().success.accept(result); else consumer.getValue().failure.accept(error);
+        }
+        if (!statusReads.isEmpty()) refreshStatus();
+    }
+    private void cancelShellReads() {
+        statusSequence++; statusLoading = false; statusFresh = false;
+        statusCall = null; settingsCall = null; statusReads.clear();
+        for (RootApi.Call call : new ArrayList<>(shellCalls)) call.cancel();
+        shellCalls.removeIf(call -> call.finished);
+    }
+    private void invalidateStatus() {
+        statusRevision++; statusFresh = false;
+        if (statusCall != null) {
+            statusCall.cancel();
+            if (statusCall.finished) {
+                shellCalls.remove(statusCall); statusCall = null;
+                statusSequence++; statusLoading = false;
+            }
+        }
     }
     private void publishStatus() {
         renderStrip();
@@ -484,6 +523,8 @@ public class ControlActivity extends AppCompatActivity {
     }
     private void showOperation() {
         if (isDestroyed()) return;
+        boolean active = client.busy();
+        if (active != operationWasBusy) invalidateStatus();
         if (observedAccountRevision != client.accountRevision()) {
             observedAccountRevision = client.accountRevision(); invalidateAccountState();
             if (resumed && page != null && ("peers".equals(destination) || "exitnodes".equals(destination) || "coexist".equals(destination))) showPage(destination);
@@ -494,9 +535,7 @@ public class ControlActivity extends AppCompatActivity {
         if (feedback.getText().toString().contentEquals(status.getText())) { feedback.setText(""); feedback.setVisibility(View.GONE); } cancel.setVisibility(client.canCancel() ? View.VISIBLE : View.GONE);
         acknowledge.setVisibility(client.isUnknown() ? View.VISIBLE : View.GONE);
         operationActions.setVisibility(client.busy() ? View.VISIBLE : View.GONE);
-        boolean active = client.busy();
         String completed = client.lastCommand();
-        if (active != operationWasBusy) { statusFresh = false; statusRevision++; }
         if (operationWasBusy && !active && resumed && page != null) page.operationFinished(completed);
         if (operationWasBusy && !active) refreshStatus();
         operationWasBusy = active;
@@ -504,17 +543,26 @@ public class ControlActivity extends AppCompatActivity {
     }
     void refreshAvailability() {
         client.refreshAvailability();
+        if (!resumed || isDestroyed() || settingsCall != null) return;
+        RootApi.Call call = new RootApi.Call(); settingsCall = call; shellCalls.add(call);
         WeakReference<ControlActivity> owner = new WeakReference<>(this);
         Context context = getApplicationContext();
-        FILES.execute(() -> {
-            try {
-                JSONObject settings = RootApi.json(context, null, null, null, 25, new RootApi.Call(), "settings-get").getJSONObject("settings");
-                new Handler(Looper.getMainLooper()).post(() -> {
-                    ControlActivity current = owner.get(); if (current == null || current.isDestroyed()) return;
-                    if ("on".equals(settings.optString("WEBUI_AUTO_REFRESH")) || "off".equals(settings.optString("WEBUI_AUTO_REFRESH"))) current.autoRefresh = "on".equals(settings.optString("WEBUI_AUTO_REFRESH"));
-                    if ("on".equals(settings.optString("POWER_SAVE")) || "off".equals(settings.optString("POWER_SAVE"))) current.powerSave = "on".equals(settings.optString("POWER_SAVE"));
-                });
-            } catch (Exception ignored) { /* The active page and backend handshake retain their own errors. */ }
+        call.submit(FILES, () -> {
+            JSONObject result = null;
+            try { result = RootApi.json(context, RootApi.requestId(), null, null, 25, call, "settings-get").getJSONObject("settings"); }
+            catch (Exception ignored) { /* The active page and backend handshake retain their own errors. */ }
+            finally { call.finished = true; }
+            JSONObject settings = result;
+            new Handler(Looper.getMainLooper()).post(() -> {
+                ControlActivity current = owner.get();
+                if (current == null) return;
+                current.shellCalls.remove(call);
+                if (current.isDestroyed() || !current.resumed || current.settingsCall != call) return;
+                current.settingsCall = null;
+                if (settings == null) return;
+                if ("on".equals(settings.optString("WEBUI_AUTO_REFRESH")) || "off".equals(settings.optString("WEBUI_AUTO_REFRESH"))) current.autoRefresh = "on".equals(settings.optString("WEBUI_AUTO_REFRESH"));
+                if ("on".equals(settings.optString("POWER_SAVE")) || "off".equals(settings.optString("POWER_SAVE"))) current.powerSave = "on".equals(settings.optString("POWER_SAVE"));
+            });
         });
     }
     void setAutoRefresh(boolean enabled) { autoRefresh = enabled; }
@@ -522,10 +570,13 @@ public class ControlActivity extends AppCompatActivity {
     boolean powerSave() { return powerSave; }
     void invalidateAccountState() {
         accountRevision++;
+        invalidateStatus(); sharedStatus = null; statusEverLoaded = false; statusError = null;
+        publishStatus();
         for (String key : new java.util.HashSet<>(drafts.keySet())) {
             if (key.startsWith("peers.") || key.startsWith("exitnodes.") || key.startsWith("coexist.")) drafts.remove(key);
             if (key.startsWith("network.peer") || key.startsWith("network.exit")) drafts.remove(key);
         }
+        refreshStatus();
     }
     int accountRevision() { return accountRevision; }
     void pickBackup(Consumer<String> completed) {

@@ -5,6 +5,9 @@ import android.view.ContextThemeWrapper;
 import android.widget.ListAdapter;
 import com.google.android.material.textfield.MaterialAutoCompleteTextView;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.ArrayList;
+import java.util.function.Consumer;
+import org.json.JSONObject;
 
 final class ShellStateChecks {
     static void run(Instrumentation instrumentation) {
@@ -33,9 +36,54 @@ final class ShellStateChecks {
                 toggle.performClick(); require(toggle.isChecked(), "Service switch click changes checked state");
                 android.view.accessibility.AccessibilityNodeInfo info = android.view.accessibility.AccessibilityNodeInfo.obtain(); toggle.onInitializeAccessibilityNodeInfo(info);
                 require(info.isCheckable() && info.isChecked() && "android.widget.Switch".contentEquals(info.getClassName()), "Service switch exposes checked state to accessibility"); info.recycle();
+                statusConsumers(instrumentation.getTargetContext());
             } catch (Throwable error) { failure.set(error); }
         });
         if (failure.get() != null) throw new AssertionError("Shell choice regression", failure.get());
+    }
+    private static final class ReadActivity extends ControlActivity {
+        final ArrayList<Consumer<JSONObject>> pending = new ArrayList<>();
+        ReadActivity(android.content.Context context) { attachBaseContext(context); getTheme().applyStyle(R.style.AppTheme, true); }
+        @Override void readStatus(ControlPage owner, Consumer<JSONObject> success, Consumer<Exception> failure) { pending.add(success); }
+    }
+    private static final class ReadPage extends ControlPage {
+        int loads;
+        ReadPage(ControlActivity activity) { super(activity); }
+        @Override String title() { return "Reads"; }
+        @Override void load() { loads++; }
+    }
+    private static void statusConsumers(android.content.Context context) throws Exception {
+        ReadActivity activity = new ReadActivity(context);
+        ReadPage page = new ReadPage(activity); page.resume(); page.resume();
+        require(page.loads == 1, "An already visible page does not load twice during resume");
+        int[] first = {0}, second = {0}, failures = {0};
+        page.read(value -> first[0]++, error -> failures[0]++, "status");
+        page.read(value -> second[0]++, error -> failures[0]++, "status");
+        require(activity.pending.size() == 1, "Concurrent page status consumers share one read");
+        JSONObject value = new JSONObject().put("ok", true);
+        Consumer<JSONObject> old = activity.pending.remove(0);
+        old.accept(value);
+        require(first[0] == 1 && second[0] == 1 && failures[0] == 0, "One snapshot reaches both genuine consumers");
+        page.read(result -> first[0]++, error -> failures[0]++, "status");
+        old = activity.pending.remove(0); page.pause(); page.resume();
+        page.read(result -> second[0]++, error -> failures[0]++, "status");
+        old.accept(value);
+        require(first[0] == 1 && second[0] == 1, "Paused generation cannot publish after resume");
+        activity.pending.remove(0).accept(value);
+        require(second[0] == 2, "Current generation still receives its snapshot");
+        page.read(result -> first[0]++, error -> failures[0]++, "status");
+        old = activity.pending.remove(0); page.close(); old.accept(value);
+        require(first[0] == 1 && failures[0] == 0, "Closed pages receive neither success nor failure callbacks");
+        ReadPage busy = new ReadPage(activity); busy.resume();
+        java.util.HashSet<Integer> delivered = new java.util.HashSet<>(); int[] rejected = {0};
+        for (int i = 0; i < 65; i++) {
+            final int consumer = i;
+            busy.read(result -> delivered.add(consumer), error -> rejected[0]++, "status");
+        }
+        require(activity.pending.size() == 1 && rejected[0] == 1, "Excess consumers fail explicitly without queuing unlimited callbacks");
+        activity.pending.remove(0).accept(value);
+        require(delivered.size() == 64 && rejected[0] == 1, "Every admitted distinct consumer receives its status");
+        busy.close();
     }
     private static void require(boolean value, String detail) { if (!value) throw new AssertionError(detail); }
 }

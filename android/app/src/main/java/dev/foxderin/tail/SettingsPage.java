@@ -18,9 +18,11 @@ import java.util.List;
 
 final class SettingsPage extends ControlPage {
     private final List<Field> fields = new ArrayList<>();
-    private final TextView savedState, table, mark, mask, dnsHint, dnsReason, probePaused, dnsState, runtimeState;
-    private final LinearLayout pending, advancedBody, hooks, diagnostics;
-    private final ContextPage context;
+    private final TextView savedState, dnsHint, dnsReason, probePaused;
+    private final LinearLayout pending, advancedBody;
+    private TextView table, mark, mask, dnsState, runtimeState;
+    private LinearLayout hooks, diagnostics;
+    private ContextPage context;
     private final Button restart;
     private Field dnsField;
     private boolean advancedOpen, capabilityProbed, diagnosticsOpen;
@@ -74,20 +76,6 @@ final class SettingsPage extends ControlPage {
         number(background, "LOG_MAX_KB", R.string.web_tools_log_limit, 0, 64, 10240);
         embed(new TrialPage(activity, this::load), content);
         advancedBody = ControlUi.disclosure(content, s(R.string.web_tools_advanced), R.drawable.ic_settings, this::toggleAdvanced);
-        table = readOnly(advancedBody, R.string.web_tools_route_table);
-        mark = readOnly(advancedBody, R.string.web_tools_mark);
-        mask = readOnly(advancedBody, R.string.web_tools_mark_mask);
-        hint(advancedBody, s(R.string.cs_readonly));
-        context = new ContextPage(activity, true); embed(context, advancedBody); setEmbeddedVisible(context, false);
-        hooks = ControlUi.card(advancedBody, s(R.string.web_set_hooks), R.drawable.ic_article, s(R.string.web_set_hooks_hint));
-        textButton(advancedBody, s(R.string.web_diag_title), this::toggleDiagnostics);
-        diagnostics = new LinearLayout(activity); diagnostics.setOrientation(LinearLayout.VERTICAL); advancedBody.addView(diagnostics); diagnostics.setVisibility(View.GONE);
-        hint(diagnostics, s(R.string.cs_dns_state)); dnsState = mono(diagnostics, s(R.string.cs_unknown));
-        textButton(diagnostics, s(R.string.cs_dns_probe), () -> probe(s(R.string.cs_dns_probe), result -> {
-            if (!result.optBoolean("ok")) notice(s(R.string.cs_failed, result.optString("error", result.toString())));
-            readDns();
-        }, "dns-probe"));
-        hint(diagnostics, s(R.string.cs_status)); runtimeState = mono(diagnostics, s(R.string.cs_unknown));
         advancedBody.setVisibility(View.GONE);
         embed(new BackupPage(activity), content);
         setEnabled(false);
@@ -131,7 +119,30 @@ final class SettingsPage extends ControlPage {
     }
     private void toggleAdvanced(boolean open) {
         advancedOpen = open;
-        setEmbeddedVisible(context, advancedOpen); if (advancedOpen) loadHooks();
+        if (open && context == null) buildAdvanced();
+        if (context != null) setEmbeddedVisible(context, open);
+        if (open) loadHooks();
+    }
+    private void buildAdvanced() {
+        table = readOnly(advancedBody, R.string.web_tools_route_table);
+        mark = readOnly(advancedBody, R.string.web_tools_mark);
+        mask = readOnly(advancedBody, R.string.web_tools_mark_mask);
+        hint(advancedBody, s(R.string.cs_readonly));
+        context = new ContextPage(activity, true); embed(context, advancedBody);
+        hooks = ControlUi.card(advancedBody, s(R.string.web_set_hooks), R.drawable.ic_article, s(R.string.web_set_hooks_hint));
+        hint(hooks, s(R.string.web_loading));
+        textButton(advancedBody, s(R.string.web_diag_title), this::toggleDiagnostics);
+        diagnostics = new LinearLayout(activity); diagnostics.setOrientation(LinearLayout.VERTICAL); advancedBody.addView(diagnostics); diagnostics.setVisibility(View.GONE);
+        hint(diagnostics, s(R.string.cs_dns_state)); dnsState = mono(diagnostics, s(R.string.cs_unknown));
+        textButton(diagnostics, s(R.string.cs_dns_probe), () -> probe(s(R.string.cs_dns_probe), result -> {
+            if (!result.optBoolean("ok")) notice(s(R.string.cs_failed, result.optString("error", result.toString())));
+            readDns();
+        }, "dns-probe"));
+        hint(diagnostics, s(R.string.cs_status)); runtimeState = mono(diagnostics, s(R.string.cs_unknown));
+        if (saved != null) bindAdvanced();
+    }
+    private void bindAdvanced() {
+        table.setText(saved.optString("ROUTE_TABLE", "?")); mark.setText(saved.optString("FWMARK", "?")); mask.setText(saved.optString("FWMARK_MASK", "?"));
     }
     private void loadHooks() {
         read(result -> {
@@ -240,7 +251,7 @@ final class SettingsPage extends ControlPage {
                 showField(field);
             }
             activity.setAutoRefresh(values.optString("WEBUI_AUTO_REFRESH").equals("on"));
-            table.setText(values.optString("ROUTE_TABLE", "?")); mark.setText(values.optString("FWMARK", "?")); mask.setText(values.optString("FWMARK_MASK", "?"));
+            if (table != null) bindAdvanced();
             updateDnsHint();
         }, this::settingsFailure, "settings-get");
         readDns();

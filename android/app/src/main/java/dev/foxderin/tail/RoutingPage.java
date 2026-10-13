@@ -42,6 +42,19 @@ final class RoutingPage extends ControlPage {
     private String mode = "?", selectedScope = "all", savedSnapshot;
     private final Set<String> destinations = new LinkedHashSet<>(), selectedUids = new LinkedHashSet<>();
     private final String[] scopes = {"all", "selected", "bypass"};
+    private final LinkedHashMap<String, AppRow> retainedApps = new LinkedHashMap<>();
+    private TextView noApps;
+    private boolean bindingApps;
+    private String advertisedState, subnetsState;
+    private JSONArray sortedAppsSource;
+    private final List<JSONObject> sortedApps = new ArrayList<>();
+    private String appsRenderState;
+
+    private static final class AppRow {
+        LinearLayout view;
+        MaterialCheckBox checkbox;
+        String label;
+    }
 
     RoutingPage(ControlActivity activity) {
         super(activity);
@@ -63,6 +76,7 @@ final class RoutingPage extends ControlPage {
         acceptanceHint = hint(acceptBox, "");
         acceptance = hint(acceptBox, s(R.string.web_tools_subnet_unknown));
         advertised = section(s(R.string.web_tools_subnet_title), R.drawable.ic_router, null);
+        hint(advertised, s(R.string.web_loading));
         LinearLayout local = section(s(R.string.web_tools_route_targets), R.drawable.ic_router, s(R.string.web_tools_route_subnets_desc));
         LinearLayout addRow = row(local); addRow.setGravity(Gravity.CENTER_VERTICAL);
         LinearLayout inputHost = new LinearLayout(activity); inputHost.setOrientation(LinearLayout.VERTICAL);
@@ -96,7 +110,7 @@ final class RoutingPage extends ControlPage {
         }
         appBox = section(s(R.string.web_route_apps), R.drawable.ic_group, s(R.string.web_tools_route_apps_desc));
         search = input(appBox, s(R.string.web_tools_search_apps), activity.drafts.getString("routing.search", ""), InputType.TYPE_CLASS_TEXT);
-        watch(search, () -> { activity.drafts.putString("routing.search", search.getText().toString()); limit = 100; renderApps(); });
+        watch(search, () -> { if (!isCurrent()) return; activity.drafts.putString("routing.search", search.getText().toString()); limit = 100; renderApps(); });
         selectedOnly = activity.drafts.getBoolean("routing.selectedOnly", false);
         LinearLayout toolbar = row(appBox); toolbar.setGravity(Gravity.CENTER_VERTICAL);
         selectedCount = hint(toolbar, ""); selectedCount.setLayoutParams(new LinearLayout.LayoutParams(0, -2, 1));
@@ -142,7 +156,7 @@ final class RoutingPage extends ControlPage {
         });
     }
     @Override void load() {
-        if (saveBusy) return;
+        if (!isCurrent() || saveBusy) return;
         read(value -> {
             if (value.optJSONArray("uids") == null || value.optJSONArray("subnets") == null || !java.util.Arrays.asList(scopes).contains(value.optString("scope"))) {
                 routesFailed(new IllegalStateException(s(R.string.cs_invalid_response))); return;
@@ -220,6 +234,7 @@ final class RoutingPage extends ControlPage {
     }
     private void refreshAdvertised(Boolean expected) {
         refreshAcceptance.setEnabled(false); acceptanceSwitch.setEnabled(false);
+        if (advertisedPeers == null) { advertisedState = null; advertised.removeAllViews(); hint(advertised, s(R.string.web_loading)); }
         read(value -> {
             if (!(value.opt("acceptRoutes") instanceof Boolean) || !(value.opt("ipv6Enabled") instanceof Boolean) || !(value.opt("mode") instanceof String) || value.optJSONArray("peers") == null) { acceptanceFailed(new IllegalStateException(s(R.string.cs_invalid_response))); return; }
             acceptanceBusy = false; acceptanceKnown = true; acceptanceOn = value.optBoolean("acceptRoutes");
@@ -232,8 +247,10 @@ final class RoutingPage extends ControlPage {
     }
     private void acceptanceSwitchState() { acceptanceSwitch.setChecked(acceptanceOn); }
     private void renderAdvertised() {
-        advertised.removeAllViews();
         if (advertisedPeers == null) return;
+        String next = new JSONArray().put(advertisedPeers).put(new JSONArray(new ArrayList<>(destinations))).put(editable()).put(acceptanceKnown).put(ipv6Enabled).toString();
+        if (next.equals(advertisedState)) return;
+        advertisedState = next; advertised.removeAllViews();
         int count = 0; boolean ipv6 = false;
         for (int i = 0; i < advertisedPeers.length(); i++) {
             JSONObject peer = advertisedPeers.optJSONObject(i); if (peer == null || !(peer.opt("id") instanceof String)) continue;
@@ -271,7 +288,11 @@ final class RoutingPage extends ControlPage {
     private void acceptanceFailed(Exception e) {
         acceptanceBusy = false; acceptanceKnown = false; acceptanceSwitch.setEnabled(false); refreshAcceptance.setEnabled(true);
         acceptance.setText(s(R.string.web_tools_subnet_unknown) + "\n" + e.getMessage()); acceptance.setVisibility(View.VISIBLE);
-        advertisedPeers = null; advertised.removeAllViews(); hint(advertised, e.getMessage()); showIpv6(); error(e);
+        if (advertisedPeers == null) {
+            advertisedState = null; advertised.removeAllViews(); hint(advertised, s(R.string.web_tools_subnet_unknown));
+            textButton(advertised, s(R.string.web_retry), () -> refreshAdvertised(null));
+        } else renderAdvertised();
+        showIpv6(); error(e);
     }
     private void showIpv6() {
         boolean hasIpv6 = false; for (String cidr : destinations) hasIpv6 |= cidr.contains(":");
@@ -291,6 +312,9 @@ final class RoutingPage extends ControlPage {
         return pending;
     }
     private void renderSubnets() {
+        String next = new JSONArray().put(new JSONArray(new ArrayList<>(destinations))).put(editable()).toString();
+        if (next.equals(subnetsState)) return;
+        subnetsState = next;
         subnetRows.removeAllViews();
         for (String cidr : destinations) {
             LinearLayout line = row(subnetRows); line.setGravity(Gravity.CENTER_VERTICAL);
@@ -326,6 +350,7 @@ final class RoutingPage extends ControlPage {
         });
     }
     private void loadApps() {
+        if (!isCurrent()) return;
         appsRequested = true;
         appsState.setText(s(R.string.web_loading)); appsState.setVisibility(View.VISIBLE); retryApps.setVisibility(View.GONE);
         read(value -> {
@@ -335,36 +360,70 @@ final class RoutingPage extends ControlPage {
     }
     private void renderApps() {
         if (appRows == null) return;
+        String next = new JSONArray().put(search.getText().toString()).put(selectedScope).put(new JSONArray(new ArrayList<>(selectedUids)))
+                .put(selectedOnly).put(limit).put(editable()).put(perApp()).toString();
+        if (apps == sortedAppsSource && next.equals(appsRenderState)) return;
+        appsRenderState = next;
         selectedCount.setText(s(R.string.web_tools_selected) + " " + selectedUids.size() + " " + s(R.string.web_tools_items));
         selectedFilter.setSelected(selectedOnly); selectedFilter.setActivated(selectedOnly); selectedFilter.setAlpha(selectedOnly ? 1f : .65f);
         androidx.core.view.ViewCompat.setStateDescription(selectedFilter, s(selectedOnly ? R.string.web_tools_selected : R.string.web_route_scope_all));
         emptySelection.setVisibility(selectedScope.equals("selected") && selectedUids.isEmpty() ? View.VISIBLE : View.GONE);
         if (apps == null) return;
-        appRows.removeAllViews();
-        String query = search.getText().toString().toLowerCase(Locale.ROOT); List<JSONObject> matches = new ArrayList<>();
-        for (int i = 0; i < apps.length(); i++) {
-            JSONObject app = apps.optJSONObject(i); if (app == null) continue;
-            String uid = app.optString("uid"); if (!uid.matches("[0-9]+")) continue;
+        String query = search.getText().toString().toLowerCase(Locale.ROOT);
+        if (apps != sortedAppsSource) {
+            sortedAppsSource = apps; sortedApps.clear();
+            for (int i = 0; i < apps.length(); i++) {
+                JSONObject app = apps.optJSONObject(i); if (app == null || !app.optString("uid").matches("[0-9]+")) continue;
+                sortedApps.add(app);
+            }
+            sortedApps.sort(Comparator.comparing(a -> a.optString("label"), java.text.Collator.getInstance()));
+        }
+        LinkedHashMap<String, AppRow> nextRows = new LinkedHashMap<>();
+        LinkedHashMap<String, Integer> occurrences = new LinkedHashMap<>();
+        int matches = 0, position = 0;
+        bindingApps = true;
+        for (JSONObject app : sortedApps) {
+            String uid = app.optString("uid"), base = uid + "\u0000" + app.optString("package");
+            int occurrence = occurrences.getOrDefault(base, 0); occurrences.put(base, occurrence + 1);
+            String key = base + "\u0000" + occurrence;
             String description = app.optString("label") + " " + app.optString("package") + " " + uid;
-            if ((!selectedOnly || selectedUids.contains(uid)) && description.toLowerCase(Locale.ROOT).contains(query)) matches.add(app);
+            boolean shown = (!selectedOnly || selectedUids.contains(uid)) && description.toLowerCase(Locale.ROOT).contains(query);
+            if (shown) shown = ++matches <= limit;
+            AppRow entry = retainedApps.get(key);
+            if (entry != null && !entry.label.equals(app.optString("label"))) { appRows.removeView(entry.view); entry = null; }
+            if (entry == null && shown) entry = createAppRow(app, uid);
+            if (entry == null) continue;
+            nextRows.put(key, entry);
+            if (appRows.indexOfChild(entry.view) != position) { appRows.removeView(entry.view); appRows.addView(entry.view, position); }
+            position++;
+            entry.view.setVisibility(shown ? View.VISIBLE : View.GONE);
+            entry.checkbox.setChecked(selectedUids.contains(uid));
+            entry.checkbox.setEnabled(editable() && perApp() && !selectedScope.equals("all"));
         }
-        matches.sort(Comparator.comparing(a -> a.optString("label"), java.text.Collator.getInstance()));
-        for (int i = 0; i < Math.min(limit, matches.size()); i++) {
-            JSONObject app = matches.get(i); String uid = app.optString("uid");
-            LinearLayout line = row(appRows); line.setGravity(Gravity.CENTER_VERTICAL); line.setMinimumHeight(dp(56));
-            MaterialCheckBox checkbox = new MaterialCheckBox(activity); checkbox.setChecked(selectedUids.contains(uid)); checkbox.setContentDescription(app.optString("label"));
-            checkbox.setEnabled(editable() && perApp() && !selectedScope.equals("all")); line.addView(checkbox, new LinearLayout.LayoutParams(dp(48), dp(48)));
-            LinearLayout copy = new LinearLayout(activity); copy.setOrientation(LinearLayout.VERTICAL); line.addView(copy, new LinearLayout.LayoutParams(0, -2, 1));
-            label(copy, app.optString("label")); TextView detail = hint(copy, app.optString("package") + " · UID " + uid); detail.setTextSize(12);
-            line.setOnClickListener(v -> { if (checkbox.isEnabled()) checkbox.performClick(); });
-            checkbox.setOnCheckedChangeListener((button, checked) -> {
-                if (!isCurrent() || !editable()) return;
-                if (checked) selectedUids.add(uid); else selectedUids.remove(uid); rememberDraft(); renderApps(); updateControls();
-            });
-            ControlUi.divider(appRows);
-        }
-        if (matches.isEmpty()) hint(appRows, s(R.string.web_empty));
-        moreApps.setText(s(R.string.web_tools_route_show_all) + " (" + Math.max(0, matches.size() - limit) + ")"); moreApps.setVisibility(matches.size() > limit ? View.VISIBLE : View.GONE);
+        bindingApps = false;
+        for (java.util.Map.Entry<String, AppRow> old : retainedApps.entrySet()) if (!nextRows.containsKey(old.getKey())) appRows.removeView(old.getValue().view);
+        retainedApps.clear(); retainedApps.putAll(nextRows);
+        if (noApps == null) noApps = hint(appRows, s(R.string.web_empty));
+        noApps.setVisibility(matches == 0 ? View.VISIBLE : View.GONE);
+        moreApps.setText(s(R.string.web_tools_route_show_all) + " (" + Math.max(0, matches - limit) + ")"); moreApps.setVisibility(matches > limit ? View.VISIBLE : View.GONE);
+    }
+    private AppRow createAppRow(JSONObject app, String uid) {
+        AppRow entry = new AppRow(); entry.label = app.optString("label");
+        LinearLayout frame = new LinearLayout(activity); frame.setOrientation(LinearLayout.VERTICAL);
+        frame.setLayoutParams(new LinearLayout.LayoutParams(-1, -2)); entry.view = frame;
+        LinearLayout line = row(frame); line.setGravity(Gravity.CENTER_VERTICAL); line.setMinimumHeight(dp(56));
+        MaterialCheckBox checkbox = new MaterialCheckBox(activity); entry.checkbox = checkbox;
+        checkbox.setChecked(selectedUids.contains(uid)); checkbox.setContentDescription(entry.label);
+        line.addView(checkbox, new LinearLayout.LayoutParams(dp(48), dp(48)));
+        LinearLayout copy = new LinearLayout(activity); copy.setOrientation(LinearLayout.VERTICAL); line.addView(copy, new LinearLayout.LayoutParams(0, -2, 1));
+        label(copy, entry.label); TextView detail = hint(copy, app.optString("package") + " · UID " + uid); detail.setTextSize(12);
+        line.setOnClickListener(v -> { if (isCurrent() && checkbox.isEnabled()) checkbox.performClick(); });
+        checkbox.setOnCheckedChangeListener((button, checked) -> {
+            if (bindingApps || !isCurrent() || !editable() || !perApp() || selectedScope.equals("all")) return;
+            if (checked) selectedUids.add(uid); else selectedUids.remove(uid); rememberDraft(); renderApps(); updateControls();
+        });
+        ControlUi.divider(frame);
+        return entry;
     }
     private void save() {
         if (!editable()) return;

@@ -75,9 +75,14 @@ public final class BridgeInstrumentation extends Instrumentation {
             ShellStateChecks.run(this);
             java.util.concurrent.atomic.AtomicReference<Throwable> uiFailure = new java.util.concurrent.atomic.AtomicReference<>();
             runOnMainSync(() -> {
-                try { TrafficChecks.run(context); } catch (Throwable error) { uiFailure.set(error); }
+                try { TrafficChecks.run(context); LogsChecks.run(context); } catch (Throwable error) { uiFailure.set(error); }
             });
-            if (uiFailure.get() != null) throw new AssertionError("Traffic interaction regression", uiFailure.get());
+            if (uiFailure.get() != null) throw new AssertionError("View interaction regression", uiFailure.get());
+            ControlActivity activity = (ControlActivity) startActivitySync(new android.content.Intent(context, ControlActivity.class).addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK | android.content.Intent.FLAG_ACTIVITY_CLEAR_TASK));
+            try {
+                runOnMainSync(() -> { try { NetworkListChecks.run(activity); SettingsViewChecks.run(activity); } catch (Throwable error) { uiFailure.set(error); } });
+                if (uiFailure.get() != null) throw new AssertionError("Network list interaction regression", uiFailure.get());
+            } finally { runOnMainSync(activity::finish); }
             result.putString("stream", "PASS: root control receipts and failures, network and tool contracts, Taildrop boundaries, binary streaming, cancellation and read-only exports\n");
             finish(-1, result);
         } catch (Throwable error) {
