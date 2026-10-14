@@ -141,11 +141,7 @@ public final class TransferService extends Service {
                 Thread.sleep(1000);
             }
         } catch (Exception e) {
-            String message = RootApi.message(e);
-            if (cancelRequested && jobId == null && !submissionAttempted) message = getString(R.string.cancelled_local);
-            else if (submissionAttempted && jobId == null) message = getString(R.string.submission_unknown, message);
-            else if (!staged.isEmpty()) message = getString(R.string.staging_failed, message);
-            publish(message, null);
+            publish(failureMessage(this, e, cancelRequested, submissionAttempted, jobId, !staged.isEmpty()), null);
         } finally {
             if (requestId != null) {
                 try { RootApi.json(this, "cancel", requestId); } catch (Exception ignored) { }
@@ -162,12 +158,21 @@ public final class TransferService extends Service {
                 }
                 edit.commit();
             } else {
-                // A lost start response can still own these files. Retain them for backend retry/expiry.
+                // Even a failed start response can follow a saved job. Retain sources for backend retry/expiry.
                 prefs.edit().remove("staged").remove("request").remove("preparing").commit();
             }
             requestId = null; currentCall = null; jobId = null;
             main.post(this::finish);
         }
+    }
+    static String failureMessage(Context context, Exception error, boolean cancelRequested, boolean submissionAttempted, String jobId, boolean hasStaged) {
+        String message = RootApi.message(error);
+        if (cancelRequested && jobId == null && !submissionAttempted) return context.getString(R.string.cancelled_local);
+        if (submissionAttempted && jobId == null) {
+            return error instanceof RootApi.Failure ? context.getString(R.string.backend_failed) + "\n" + message
+                    : context.getString(R.string.submission_unknown, message);
+        }
+        return hasStaged ? context.getString(R.string.staging_failed, message) : message;
     }
     static JSONArray sharedSources(Intent intent) throws IOException {
         // Only the unexported service accepts these extras; MainActivity never forwards external paths.

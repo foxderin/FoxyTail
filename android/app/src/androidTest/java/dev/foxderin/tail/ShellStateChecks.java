@@ -85,5 +85,64 @@ final class ShellStateChecks {
         require(delivered.size() == 64 && rejected[0] == 1, "Every admitted distinct consumer receives its status");
         busy.close();
     }
+    static void observations(ControlActivity activity) throws Exception {
+        java.util.Map<String, Object> saved = new java.util.LinkedHashMap<>();
+        for (String name : new String[]{"resumed", "destination", "sharedStatus", "statusFresh", "statusLoading", "statusEverLoaded", "statusError", "statusRevision", "sharedExitRouting", "exitRoutingFresh", "exitRoutingLoading", "tunnelSnapshot"}) saved.put(name, field(ControlActivity.class, name).get(activity));
+        ControlClient client = activity.client;
+        java.util.Map<String, Object> operation = new java.util.LinkedHashMap<>();
+        for (String name : new String[]{"id", "command", "unknown", "submitting"}) operation.put(name, field(ControlClient.class, name).get(client));
+        java.lang.reflect.Method status = ControlActivity.class.getDeclaredMethod("completeStatus", JSONObject.class, Exception.class, int.class); status.setAccessible(true);
+        java.lang.reflect.Method route = ControlActivity.class.getDeclaredMethod("completeExitRouting", JSONObject.class, int.class, String.class); route.setAccessible(true);
+        JSONObject light = new JSONObject().put("ok", true).put("daemon", "running").put("backend", "Running").put("mode", "bridge")
+                .put("self", new JSONObject().put("id", "self-a")).put("peerList", new org.json.JSONArray());
+        JSONObject deep = new JSONObject().put("ok", true).put("selfId", "self-a").put("exitRouting", new JSONObject().put("known", true).put("selected", JSONObject.NULL).put("effective", "none"));
+        try {
+            field(ControlActivity.class, "resumed").set(activity, false);
+            field(ControlActivity.class, "destination").set(activity, "peers");
+            field(ControlActivity.class, "statusRevision").set(activity, 20);
+            field(ControlClient.class, "id").set(client, "receipt-owned");
+            field(ControlClient.class, "submitting").set(client, false);
+            for (String command : new String[]{"speedtest-exitnodes", "control"}) {
+                field(ControlClient.class, "command").set(client, command);
+                for (boolean unknown : new boolean[]{false, true}) {
+                    field(ControlClient.class, "unknown").set(client, unknown);
+                    status.invoke(activity, light, null, 20);
+                    require(activity.statusFresh() && activity.statusSnapshot() == light, "Owned known/unknown operations cannot freeze actual-state reads");
+                    require(client.busy() && client.ownsMutation() == "control".equals(command), "Observation never frees receipt ownership or misclassifies probes");
+                }
+            }
+            route.invoke(activity, deep, 20, "self-a|bridge||running|Running");
+            require(activity.exitRoutingSnapshot() != null, "Matching validated deep state attaches independently");
+            route.invoke(activity, deep, 19, "self-a|bridge||running|Running");
+            require(activity.exitRoutingSnapshot() == null && activity.statusFresh(), "Old mutation revision cannot attach or erase light status");
+            route.invoke(activity, deep.put("selfId", "self-b"), 20, "self-a|bridge||running|Running");
+            require(activity.exitRoutingSnapshot() == null && OverviewPage.connectionLabel(activity.statusSnapshot()) == R.string.network_connected, "Mismatched deep identity cannot turn the connection unknown");
+            route.invoke(activity, null, 20, "self-a|bridge||running|Running");
+            require(activity.exitRoutingSnapshot() == null && activity.statusFresh(), "Heavy-read failure remains isolated");
+            JSONObject old = new JSONObject(light.toString()).put("backend", "NeedsLogin");
+            status.invoke(activity, old, null, 19);
+            require(activity.statusSnapshot() == light && !activity.statusFresh(), "Pre-mutation light response remains fenced");
+            status.invoke(activity, light, null, 20);
+            require(activity.statusFresh(), "A current read recovers without releasing the receipt");
+            java.lang.reflect.Method show = ControlActivity.class.getDeclaredMethod("showPage", String.class); show.setAccessible(true);
+            for (String page : new String[]{"more", "traffic", "logs"}) {
+                show.invoke(activity, page);
+                require(activity.statusFresh() && activity.statusSnapshot() == light, "Tab navigation preserves the verified service observation");
+            }
+            show.invoke(activity, saved.get("destination"));
+            android.view.View restart = (android.view.View) field(ControlActivity.class, "stripRestart").get(activity);
+            android.view.View stop = (android.view.View) field(ControlActivity.class, "stripStop").get(activity);
+            require(restart.getParent() == stop.getParent() && ((android.widget.LinearLayout) stop.getParent()).getOrientation() == android.widget.LinearLayout.HORIZONTAL, "Recovery Stop and Restart share one horizontal action row");
+            int touch = ControlUi.dp(activity, 44);
+            require(restart.getLayoutParams().width >= touch && restart.getLayoutParams().height >= touch && stop.getLayoutParams().width >= touch && stop.getLayoutParams().height >= touch, "Both service actions retain 44dp touch targets");
+        } finally {
+            for (java.util.Map.Entry<String, Object> entry : operation.entrySet()) field(ControlClient.class, entry.getKey()).set(client, entry.getValue());
+            for (java.util.Map.Entry<String, Object> entry : saved.entrySet()) field(ControlActivity.class, entry.getKey()).set(activity, entry.getValue());
+            java.lang.reflect.Method publish = ControlActivity.class.getDeclaredMethod("publishStatus"); publish.setAccessible(true); publish.invoke(activity);
+        }
+    }
+    private static java.lang.reflect.Field field(Class<?> type, String name) throws Exception {
+        java.lang.reflect.Field field = type.getDeclaredField(name); field.setAccessible(true); return field;
+    }
     private static void require(boolean value, String detail) { if (!value) throw new AssertionError(detail); }
 }

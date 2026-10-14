@@ -79,6 +79,39 @@ final class FilesIntegrationChecks {
             new File(ExportProvider.directory(context), exported.getLastPathSegment()).delete();
             context.getSharedPreferences("exports", Context.MODE_PRIVATE).edit().remove(exported.getLastPathSegment()).commit();
         }
+        File destination = File.createTempFile("save-boundary-", ".bin", context.getCacheDir());
+        byte[] original = new byte[]{9, 8, 7}, replacement = new byte[]{1, 2, 3, 4};
+        try {
+            try (OutputStream output = new FileOutputStream(destination)) { output.write(original); }
+            Uri target = Uri.fromFile(destination);
+            reject(() -> ExportProvider.save(context, "failed.bin", target, output -> { output.write(replacement); throw new IOException("source failed"); }, () -> { throw new AssertionError("Failed source reached commit"); }, null));
+            check(Arrays.equals(java.nio.file.Files.readAllBytes(destination.toPath()), original), "Failed source never opens existing destination");
+            reject(() -> ExportProvider.save(context, "cancelled.bin", target, output -> output.write(replacement), () -> { throw new InterruptedIOException("Cancelled at commit fence"); }, null));
+            check(Arrays.equals(java.nio.file.Files.readAllBytes(destination.toPath()), original), "Cancellation after verified staging leaves existing destination untouched");
+            final boolean[] staged = {false}, committed = {false}; final long[] copied = {0};
+            ExportProvider.save(context, "success.bin", target, output -> { output.write(replacement); staged[0] = true; }, () -> {
+                check(staged[0] && Arrays.equals(java.nio.file.Files.readAllBytes(destination.toPath()), original), "Commit begins only after verified source and before destination opening"); committed[0] = true;
+            }, bytes -> copied[0] = bytes);
+            check(committed[0] && copied[0] == replacement.length && Arrays.equals(java.nio.file.Files.readAllBytes(destination.toPath()), replacement), "Successful commit preserves full bytes and reports actual progress");
+            reject(() -> ExportProvider.save(context, "destination-failure.bin", Uri.fromFile(context.getCacheDir()), output -> output.write(replacement), () -> { }, null));
+            check(exportFiles(context).equals(before), "Save success, cancellation and destination failure clean verified staging");
+        } finally { destination.delete(); }
+        ArrayList<Uri> exports = new ArrayList<>();
+        try {
+            exports.add(ExportProvider.cache(context, "one.txt", output -> output.write(new byte[]{1, 2})));
+            exports.add(ExportProvider.cache(context, "two.png", output -> output.write(new byte[]{3, 4, 5})));
+            Intent share = MainActivity.shareIntent(Arrays.asList("one.txt", "two.png"), exports);
+            check(Intent.ACTION_SEND_MULTIPLE.equals(share.getAction()) && "*/*".equals(share.getType()), "Mixed types use multi-file sharing without falsely advertising one MIME type");
+            check((share.getFlags() & Intent.FLAG_GRANT_READ_URI_PERMISSION) != 0 && (share.getFlags() & Intent.FLAG_GRANT_WRITE_URI_PERMISSION) == 0, "Shared exports grant only read access");
+            ArrayList<Uri> streams = share.getParcelableArrayListExtra(Intent.EXTRA_STREAM);
+            check(exports.equals(streams) && share.getClipData().getItemCount() == 2, "Every shared stream carries its matching URI grant");
+            for (int i = 0; i < exports.size(); i++) {
+                check(exports.get(i).equals(share.getClipData().getItemAt(i).getUri()), "Shared ClipData keeps file order");
+                try (InputStream input = context.getContentResolver().openInputStream(streams.get(i))) { check(Arrays.equals(input.readAllBytes(), i == 0 ? new byte[]{1, 2} : new byte[]{3, 4, 5}), "Shared stream resolves to the exact selected bytes"); }
+            }
+            Intent single = MainActivity.shareIntent(Collections.singletonList("one.txt"), new ArrayList<>(Collections.singletonList(exports.get(0))));
+            check(Intent.ACTION_SEND.equals(single.getAction()) && "text/plain".equals(single.getType()), "One selection retains ordinary file sharing");
+        } finally { for (Uri uri : exports) ExportProvider.discard(context, uri); }
     }
     private static Set<String> exportFiles(Context context) throws Exception {
         ExportProvider.prune(context); String[] files = ExportProvider.directory(context).list();

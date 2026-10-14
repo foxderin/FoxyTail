@@ -7,7 +7,7 @@ import (
 
 func run(args []string) error {
 	if len(args) == 0 {
-		return fmt.Errorf("usage: foxyfiles extract|artifact-stage|artifact-create|artifact-read|artifact-delete|artifact-extract|receive|receive-mode|ordered-stats|taildrop-targets|browse|stage|stage-delete|inbox-read|send-start|send-status|send-cancel|send-history|send-stop [arguments]")
+		return fmt.Errorf("usage: foxyfiles extract|artifact-stage|artifact-create|artifact-read|artifact-delete|artifact-extract|receive|receive-mode|stats-summary|taildrop-targets|browse|stage|stage-delete|inbox-list|inbox-read|send-start|send-status|send-cancel|send-history|send-delete|send-clear|send-stop [arguments]")
 	}
 	switch args[0] {
 	case "artifact-stage", "artifact-create", "artifact-read", "artifact-delete", "artifact-extract", "artifact-pin":
@@ -18,8 +18,8 @@ func run(args []string) error {
 		return runTaildrop(args[1:])
 	case "receive-mode":
 		return runReceiveMode(args[1:])
-	case "ordered-stats":
-		return runOrderedStats(args[1:])
+	case "stats-summary":
+		return runStatsSummary(args[1:])
 	case "taildrop-targets":
 		return runTargets(args[1:])
 	case "browse":
@@ -28,11 +28,13 @@ func run(args []string) error {
 		return runStage(args[1:])
 	case "stage-delete":
 		return runStageDelete(args[1:])
+	case "inbox-list":
+		return runInboxList(args[1:])
 	case "inbox-read":
 		return runInboxRead(args[1:])
 	case "send-start":
 		return runSendStart(args[1:])
-	case "send-status", "send-cancel", "send-history", "send-stop":
+	case "send-status", "send-cancel", "send-history", "send-delete", "send-clear", "send-stop":
 		return runSendQuery(args[0], args[1:])
 	case "send-worker":
 		return runSendWorker(args[1:])

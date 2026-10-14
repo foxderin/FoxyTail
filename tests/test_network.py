@@ -163,7 +163,7 @@ esac
   (self.dir/'bin/dumpsys').chmod(0o755)
  def exit_snapshot(self,node='exit-a',actual='exit-a',online=True):
   (self.dir/'exit-snapshot.json').write_text(json.dumps({'profile':'test','self':'self','pref':{'id':node,'ip':'','auto':'','allowLAN':False},'backend':'Running','actual':{'ID':actual,'Online':online} if actual else None}))
- def test_network_status_reuses_snapshot_on_valid_bridge_without_mutations(self):
+ def test_exit_routing_keeps_eight_cli_validation_branch_without_mutations(self):
   from test_exit_routing import CLI
   route=self.dir/'scripts/foxytail.route'
   route.write_text(route.read_text().replace('#!/system/bin/sh','#!/bin/sh',1))
@@ -177,10 +177,10 @@ esac
   before=self.read();before.pop('calls')
   (self.dir/'reads').write_text('')
   fingerprint='bridge|selected|10101 10102|100.64.0.0/10 fd7a:115c:a1e0::/48|on|1052|0x40000000/0x40000000|on'
-  result=json.loads(self.run_script('foxytail.exitnode','network-status',fingerprint).stdout)
+  result=json.loads(self.run_script('foxytail.exitnode','exit-routing',fingerprint).stdout)
   self.assertEqual(result['exitRouting']['effective'],'bridge-policy')
   self.assertTrue(result['exitRouting']['ipv4']);self.assertTrue(result['exitRouting']['ipv6'])
-  self.assertEqual(result['status']['Self']['ID'],'self')
+  self.assertEqual(result['selfId'],'self');self.assertTrue(result['ok'])
   calls=[json.loads(line) for line in (self.dir/'reads').read_text().splitlines()]
   self.assertEqual(len(calls),8)
   self.assertFalse(any(call[0]=='set' for call in calls))

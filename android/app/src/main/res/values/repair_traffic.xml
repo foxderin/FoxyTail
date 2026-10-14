@@ -1,13 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="repair_traffic_download">Download</string>
-    <string name="repair_traffic_upload">Upload</string>
-    <string name="repair_traffic_sample">%1$s · Download %2$s · Upload %3$s</string>
-    <string name="repair_traffic_chart">Recorded traffic chart · %1$d intervals</string>
     <string name="repair_traffic_previous">Previous interval</string>
     <string name="repair_traffic_next">Next interval</string>
     <string name="repair_traffic_select">Select interval</string>
-    <string name="repair_traffic_show_table">Show chart data (%1$d intervals)</string>
-    <string name="repair_traffic_hide_table">Hide chart data (%1$d intervals)</string>
-    <string name="repair_traffic_period">%1$s · %2$s</string>
 </resources>

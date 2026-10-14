@@ -208,18 +208,7 @@ _file_name_valid() {
 }
 
 cmd_files_inbox() {
-  mkdir -p "${FILES_DIR}" 2>/dev/null
-  for _fi_path in "${FILES_DIR}"/* "${FILES_DIR}"/.[!.]* "${FILES_DIR}"/..?*; do
-    _fi_name=${_fi_path##*/}
-    [ "${_fi_name}" != .taildrop ] && [ "${_fi_name}" != .outgoing ] && [ -f "${_fi_path}" ] && [ ! -L "${_fi_path}" ] || continue
-    if ! _file_name_valid "${_fi_name}"; then printf '%s\n' '{"ignored":1}'; continue; fi
-    _fi_size=$(stat -c %s "${_fi_path}" 2>/dev/null)
-    _fi_mtime=$(stat -c %Y "${_fi_path}" 2>/dev/null)
-    case "${_fi_size}" in '' | *[!0-9]*) _fi_size=0 ;; esac
-    case "${_fi_mtime}" in '' | *[!0-9]*) _fi_mtime=0 ;; esac
-    jqr -n -c --arg n "${_fi_name}" --argjson s "${_fi_size}" --argjson m "${_fi_mtime}" \
-      '{name:$n,size:$s,mtime:$m}'
-  done | jqr -s -c '{ok:true,files:(map(select(has("name"))) | sort_by(-.mtime)),ignored:(map(.ignored // 0) | add // 0)} | if .ignored == 0 then del(.ignored) else . end'
+  _file_json_command 15 inbox-list --root "${TS_DIR}"
 }
 
 
@@ -315,4 +304,40 @@ cmd_file_export() {
   [ -f "${_fe_path}" ] || jerr "file-export: no such file: $1"
   _file_export_to_download "${_fe_path}" "$1" || jerr 'file-export: cannot create an unused file in Download'
   jqr -n -c --arg p "${_fx_dst}" '{ok:true,path:$p}'
+}
+
+_file_batch() (
+  _fb_action=$1 _fb_json=$2
+  [ "${#_fb_json}" -le 16384 ] || jerr 'file batch exceeds 16 KiB'
+  _fb_names=$(printf '%s' "${_fb_json}" | jqr -e -r '
+    select(type=="array" and length>=1 and length<=32) |
+    select(length==(unique|length)) |
+    select(all(.[]; type=="string" and length>0 and utf8bytelength<=255 and .!="." and .!=".." and .!=".taildrop" and .!=".outgoing" and ((contains("/") or contains("\\"))|not) and all(explode[]; .>=32 and (. < 127 or . > 159)))) | .[]') || jerr 'invalid inbox file selection'
+  _fb_output=$(mktemp "${TS_RUN_DIR}/.file-batch.XXXXXX") || jerr 'cannot prepare inbox results'
+  chmod 600 "${_fb_output}" || { rm -f "${_fb_output}"; jerr 'cannot protect inbox results'; }
+  trap 'rm -f "${_fb_output}"' 0
+  while IFS= read -r _fb_name; do
+    case "${_fb_action}" in
+      delete) if _fb_result=$(cmd_file_delete "${_fb_name}"); then _fb_rc=0; else _fb_rc=$?; fi ;;
+      export) if _fb_result=$(cmd_file_export "${_fb_name}"); then _fb_rc=0; else _fb_rc=$?; fi ;;
+      *) jerr 'invalid inbox batch action' ;;
+    esac
+    jqr -n -c --arg name "${_fb_name}" --argjson result "${_fb_result}" --argjson code "${_fb_rc}" '
+      {name:$name,ok:($code==0 and $result.ok==true)} |
+      if .ok then . + (if ($result.path|type)=="string" then {path:$result.path} else {} end)
+      else . + {error:($result.error // "Inbox operation failed")} end' >>"${_fb_output}" || jerr 'cannot record inbox result'
+  done <<EOF_BATCH
+${_fb_names}
+EOF_BATCH
+  jqr -s -c '{ok:true,results:.,succeeded:([.[]|select(.ok)]|length),failed:([.[]|select(.ok|not)]|length)}' "${_fb_output}"
+)
+
+cmd_file_delete_many() {
+  [ "$#" = 1 ] || jerr 'file-delete-many: expected a file name array'
+  _file_batch delete "$1"
+}
+
+cmd_file_export_many() {
+  [ "$#" = 1 ] || jerr 'file-export-many: expected a file name array'
+  _file_batch export "$1"
 }

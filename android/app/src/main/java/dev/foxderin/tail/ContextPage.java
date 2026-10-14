@@ -20,9 +20,10 @@ final class ContextPage extends ControlPage {
     private final LinearLayout status, visual, editor;
     private final TextView result, draftState, rawHint;
     private final EditText raw;
-    private final Button modeButton, save, discard;
+    private final View modeButton; private final Button save; private final View discard;
     private boolean loaded, binding, textMode, saving;
     private boolean discardRequested;
+    private int rulesRevision;
     private String savedRaw;
     private int editing = -2;
     private String trigger = "ssid", action = "up";
@@ -34,18 +35,18 @@ final class ContextPage extends ControlPage {
     ContextPage(ControlActivity activity, boolean embedded) {
         super(activity);
         if (embedded) { content.setPadding(0, 0, 0, 0); content.setTag("web-disclosure-body"); }
-        LinearLayout top = section(s(R.string.web_set_context), R.drawable.ic_sync, s(R.string.web_context_description));
+        LinearLayout top = section(s(R.string.web_set_context), R.drawable.ic_sync, null);
         LinearLayout actions = row(top);
-        textButton(actions, s(R.string.web_context_refresh), this::load);
+        iconButton(actions, R.drawable.ic_refresh, s(R.string.web_context_refresh), this::load);
         textMode = activity.drafts.getBoolean("context.textMode", false);
-        modeButton = textButton(actions, "", () -> {
+        modeButton = iconButton(actions, R.drawable.ic_edit, "", () -> {
             if (editing != -2) return;
             textMode = !textMode; activity.drafts.putBoolean("context.textMode", textMode); showMode();
         });
         status = new LinearLayout(activity); status.setOrientation(LinearLayout.VERTICAL); top.addView(status);
         renderStatus(null);
         draftState = hint(top, ""); draftState.setVisibility(View.GONE);
-        discard = textButton(top, s(R.string.cs_reload_draft), () -> confirm(s(R.string.cs_reload_draft), s(R.string.cs_reload_confirm), () -> { discardRequested = true; load(); }));
+        discard = iconButton(top, R.drawable.ic_restart_alt, s(R.string.cs_reload_draft), () -> confirm(s(R.string.cs_reload_draft), s(R.string.cs_reload_confirm), () -> { discardRequested = true; load(); }));
         discard.setVisibility(View.GONE);
         rawHint = hint(top, s(R.string.web_set_context_hint));
         raw = ControlUi.compactInput(top, "", activity.drafts.getString("context.raw", ""), InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_MULTI_LINE | InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS);
@@ -65,25 +66,28 @@ final class ContextPage extends ControlPage {
         showMode(); repeat(this::load, 10000);
     }
     @Override String title() { return s(R.string.web_set_context); }
-    @Override void onPause() { discardRequested = false; saving = false; }
+    @Override void onPause() { discardRequested = false; saving = false; rulesRevision++; }
     @Override void load() {
         if (saving) return;
-        read(value -> {
-            if (!(value.opt("rules") instanceof String)) { failed(new IllegalStateException(s(R.string.cs_invalid_response))); return; }
-            savedRaw = value.optString("rules");
-            boolean firstLoad = !loaded;
-            if (discardRequested) {
-                discardRequested = false; editing = -2; activity.drafts.remove("context.editing"); activity.drafts.remove("context.editorError"); editor.removeAllViews(); editorError = null;
-                activity.drafts.putString("context.baseline", savedRaw); setRaw(savedRaw);
-            } else {
-                SettingsRules.Draft merged = SettingsRules.mergeDraft(activity.drafts.getString("context.baseline"), activity.drafts.getString("context.raw"), savedRaw, editing != -2 || activity.drafts.containsKey("context.editing"));
-                activity.drafts.putString("context.baseline", merged.baseline);
-                if (!raw.getText().toString().equals(merged.value)) setRaw(merged.value); else activity.drafts.putString("context.raw", merged.value);
-            }
-            loaded = true; raw.setEnabled(true); render();
-            if (firstLoad && activity.drafts.containsKey("context.editing")) edit(activity.drafts.getInt("context.editing"), null, true);
-            showDraftState(); updateControls(); renderStatus(value.optJSONObject("status"));
-        }, this::failed, "context-get");
+        int revision = ++rulesRevision;
+        read(value -> { if (revision == rulesRevision) rulesLoaded(value); }, e -> { if (revision == rulesRevision) failed(e); }, "context-get");
+        read(value -> renderStatus(value.optJSONObject("status")), this::statusFailed, "context-status");
+    }
+    private void rulesLoaded(JSONObject value) {
+        if (!(value.opt("rules") instanceof String)) { failed(new IllegalStateException(s(R.string.cs_invalid_response))); return; }
+        savedRaw = value.optString("rules");
+        boolean firstLoad = !loaded;
+        if (discardRequested) {
+            discardRequested = false; editing = -2; activity.drafts.remove("context.editing"); activity.drafts.remove("context.editorError"); editor.removeAllViews(); editorError = null;
+            activity.drafts.putString("context.baseline", savedRaw); setRaw(savedRaw);
+        } else {
+            SettingsRules.Draft merged = SettingsRules.mergeDraft(activity.drafts.getString("context.baseline"), activity.drafts.getString("context.raw"), savedRaw, editing != -2 || activity.drafts.containsKey("context.editing"));
+            activity.drafts.putString("context.baseline", merged.baseline);
+            if (!raw.getText().toString().equals(merged.value)) setRaw(merged.value); else activity.drafts.putString("context.raw", merged.value);
+        }
+        loaded = true; raw.setEnabled(true); render();
+        if (firstLoad && activity.drafts.containsKey("context.editing")) edit(activity.drafts.getInt("context.editing"), null, true);
+        showDraftState(); updateControls();
     }
     private void renderStatus(JSONObject current) {
         status.removeAllViews();
@@ -101,10 +105,11 @@ final class ContextPage extends ControlPage {
         label(status, detail);
     }
     private void failed(Exception e) {
-        discardRequested = false; renderStatus(null); result.setText(e.getMessage()); result.setVisibility(View.VISIBLE); updateControls(); error(e);
+        discardRequested = false; result.setText(e.getMessage()); result.setVisibility(View.VISIBLE); updateControls(); error(e);
     }
+    private void statusFailed(Exception e) { renderStatus(null); hint(status, e.getMessage()); error(e); }
     private void showMode() {
-        modeButton.setText(s(textMode ? R.string.web_context_visual : R.string.web_context_text));
+        String modeDescription = s(textMode ? R.string.web_context_visual : R.string.web_context_text); modeButton.setContentDescription(modeDescription); modeButton.setTooltipText(modeDescription);
         raw.setVisibility(textMode ? View.VISIBLE : View.GONE); rawHint.setVisibility(textMode ? View.VISIBLE : View.GONE);
         visual.setVisibility(textMode ? View.GONE : View.VISIBLE);
         if (!textMode) render(); updateControls();
@@ -135,15 +140,16 @@ final class ContextPage extends ControlPage {
             if (rule == null) { label(box, s(R.string.web_context_unsupported)); mono(box, lines[index]); }
             else label(box, (rule.trigger.equals("ssid") ? s(R.string.web_context_wifi) + ": " + rule.value : s(R.string.web_context_cellular)) + " → " + actionLabel(rule.action) + (rule.arg.isEmpty() ? "" : ": " + rule.arg));
             LinearLayout actions = row(box);
-            Button earlier = textButton(actions, "↑", () -> { if (!canEdit()) return; setRaw(SettingsRules.move(raw.getText().toString(), index, positions.get(position - 1))); render(); });
-            earlier.setContentDescription(s(R.string.web_context_move_up)); earlier.setEnabled(canEdit() && pos > 0);
-            Button later = textButton(actions, "↓", () -> { if (!canEdit()) return; setRaw(SettingsRules.move(raw.getText().toString(), index, positions.get(position + 1))); render(); });
-            later.setContentDescription(s(R.string.web_context_move_down)); later.setEnabled(canEdit() && pos < positions.size() - 1);
-            Button edit = textButton(actions, s(R.string.web_context_edit), () -> {
+            View earlier = iconButton(actions, R.drawable.ic_expand_less, s(R.string.web_context_move_up), () -> { if (!canEdit()) return; setRaw(SettingsRules.move(raw.getText().toString(), index, positions.get(position - 1))); render(); });
+            earlier.setEnabled(canEdit() && pos > 0);
+            View later = iconButton(actions, R.drawable.ic_expand_more, s(R.string.web_context_move_down), () -> { if (!canEdit()) return; setRaw(SettingsRules.move(raw.getText().toString(), index, positions.get(position + 1))); render(); });
+            later.setEnabled(canEdit() && pos < positions.size() - 1);
+            View edit = iconButton(actions, R.drawable.ic_edit, s(R.string.web_context_edit), () -> {
                 if (!canEdit()) return;
                 if (rule == null) { textMode = true; activity.drafts.putBoolean("context.textMode", true); showMode(); } else edit(index, rule, false);
             }); edit.setEnabled(canEdit());
-            textButton(actions, s(R.string.web_delete), () -> { if (!canEdit()) return; setRaw(SettingsRules.remove(raw.getText().toString(), index)); render(); }).setEnabled(canEdit());
+            View delete = iconButton(actions, R.drawable.ic_delete, s(R.string.web_delete), () -> { if (!canEdit()) return; setRaw(SettingsRules.remove(raw.getText().toString(), index)); render(); }); delete.setEnabled(canEdit());
+            ControlUi.iconGroup(actions, earlier, later, edit); ControlUi.iconGroup(actions, delete);
             ControlUi.divider(visual);
         }
         if (positions.isEmpty()) hint(visual, s(R.string.web_context_empty));
@@ -184,7 +190,7 @@ final class ContextPage extends ControlPage {
             }
             setRaw(SettingsRules.replace(raw.getText().toString(), editing, value.line())); closeEditor();
         });
-        textButton(actions, s(R.string.web_cancel), this::closeEditor); render(); showDraftState(); updateControls();
+        iconButton(actions, R.drawable.ic_close, s(R.string.web_cancel), this::closeEditor); render(); showDraftState(); updateControls();
     }
     private void clearEditorError() { activity.drafts.remove("context.editorError"); if (editorError != null) { editorError.setText(""); editorError.setVisibility(View.GONE); } }
     private void remember(EditText view, String key) {
@@ -201,7 +207,7 @@ final class ContextPage extends ControlPage {
         String submitted = raw.getText().toString(); byte[] bytes = submitted.getBytes(StandardCharsets.UTF_8);
         if (bytes.length > 48 * 1024) { raw.setError(s(R.string.cs_context_limit)); raw.requestFocus(); return; }
         confirm(s(R.string.web_save), (draftConflict() ? s(R.string.cs_draft_conflict) + "\n\n" : "") + s(R.string.cs_network_warning), () -> {
-            saving = true; updateControls(); render();
+            saving = true; rulesRevision++; updateControls(); render();
             mutate(s(R.string.web_save), terminal -> {
                 saving = false;
                 if (terminal.optBoolean("ok")) { activity.drafts.putString("context.baseline", submitted); savedRaw = submitted; showDraftState(); }

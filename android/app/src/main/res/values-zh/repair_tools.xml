@@ -1,13 +1,4 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="repair_tools_diag_unconfirmed">最新检查尚无已确认结果。此前的检查不代表当前状态。</string>
-    <string name="repair_tools_log_daemon">守护进程</string>
-    <string name="repair_tools_log_service">模块服务</string>
-    <string name="repair_tools_copy_filtered">复制筛选结果</string>
-    <string name="repair_tools_log_live">实时更新</string>
-    <string name="repair_tools_log_follow">跟随最新</string>
-    <string name="repair_tools_log_wrap">自动换行</string>
-    <string name="repair_tools_log_case">区分大小写</string>
-    <string name="repair_tools_coexist_no_peers">当前没有可供检查的节点。</string>
-    <string name="repair_tools_coexist_no_addresses">此节点没有可供检查的已发布地址。</string>
+    <string name="repair_tools_diag_unconfirmed">最新检查尚无确认结果。</string>
 </resources>

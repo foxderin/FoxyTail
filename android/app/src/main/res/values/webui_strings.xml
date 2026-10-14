@@ -3,7 +3,6 @@
     <string name="web_trial_title" formatted="false">Try configuration with automatic rollback</string>
     <string name="web_trial_invalid_response" formatted="false">Trial state could not be verified. Refresh before continuing.</string>
     <string name="web_backup_invalid_response" formatted="false">Invalid backup list or preview. Refresh before continuing.</string>
-    <string name="web_trial_description" formatted="false">Try saved DNS, routing and mode settings. Confirm to keep them; otherwise the backend restores the previously applied settings even after this page closes. Later saves are preserved.</string>
     <string name="web_trial_candidate" formatted="false">Candidate mode</string>
     <string name="web_trial_saved" formatted="false">Use saved mode</string>
     <string name="web_trial_previous" formatted="false">Rollback configuration</string>
@@ -13,14 +12,12 @@
     <string name="web_trial_revert" formatted="false">Revert now</string>
     <string name="web_trial_remaining" formatted="false">Time remaining</string>
     <string name="web_trial_preparing" formatted="false">Applying and checking candidate settings</string>
-    <string name="web_trial_running" formatted="false">Trial active — verify your connection</string>
+    <string name="web_trial_running" formatted="false">Trial active</string>
     <string name="web_trial_reverting" formatted="false">Rolling back</string>
     <string name="web_trial_confirmed" formatted="false">Configuration confirmed</string>
     <string name="web_trial_reverted" formatted="false">Previous applied configuration restored</string>
     <string name="web_trial_failed" formatted="false">Rollback failed; retry or restart the module</string>
     <string name="web_trial_superseded" formatted="false">Trial superseded by a stop or newer application</string>
-    <string name="web_trial_health_hint" formatted="false">Startup checks local Tailscale, DNS and tunnel state. Verify the remote connections you need. Saving remains available; confirm or revert before applying other settings.</string>
-    <string name="web_backup_picker_hint" formatted="false">Lists FoxyTail configuration backups in Download. Preview changes before restoring. Account identity is never displayed or restored.</string>
     <string name="web_backup_select" formatted="false">Choose a configuration backup</string>
     <string name="web_backup_refresh" formatted="false">Refresh backups</string>
     <string name="web_backup_preview" formatted="false">Preview restore changes</string>
@@ -28,39 +25,27 @@
     <string name="web_backup_unchanged" formatted="false">No configuration changes</string>
     <string name="web_backup_before" formatted="false">Currently saved</string>
     <string name="web_backup_after" formatted="false">Saved after restore</string>
-    <string name="web_backup_hooks" formatted="false">These hooks will only be retained for review, never executed</string>
+    <string name="web_backup_hooks" formatted="false">Retained for review only; never executed.</string>
     <string name="web_tools_network" formatted="false">Network tools</string>
     <string name="web_tools_device" formatted="false">Device &amp; account</string>
     <string name="web_tools_maintenance" formatted="false">Maintenance &amp; preferences</string>
-    <string name="web_tools_tunnel_desc" formatted="false">Inspect the tunnel, DNS and proxy connectivity</string>
-    <string name="web_tools_routing_desc" formatted="false">Choose applications and destination networks</string>
-    <string name="web_tools_serve_desc" formatted="false">Expose local services privately or publicly</string>
-    <string name="web_tools_account_desc" formatted="false">Sign in, switch accounts or connect to Headscale</string>
-    <string name="web_tools_files_desc" formatted="false">Send and receive files with Taildrop</string>
-    <string name="web_tools_logs_desc" formatted="false">View, filter and copy runtime logs</string>
-    <string name="web_tools_settings_desc" formatted="false">Appearance, network settings and backups</string>
-    <string name="web_tools_diag_desc" formatted="false">Collect troubleshooting data and locate the bundle</string>
     <string name="web_tools_appearance" formatted="false">Appearance &amp; language</string>
     <string name="web_tools_network_settings" formatted="false">Network configuration</string>
     <string name="web_tools_background" formatted="false">Power &amp; background</string>
     <string name="web_tools_power_save" formatted="false">Power saving</string>
-    <string name="web_tools_power_save_desc" formatted="false">Slow watchdog, traffic and context checks; pause automatic network probes while keeping the main connection. Independently disabled features stay off.</string>
+    <string name="web_tools_power_save_desc" formatted="false">Slow watchdog, traffic and context checks; pause background probes.</string>
     <string name="web_tools_watchdog_probe" formatted="false">Background connectivity probes</string>
-    <string name="web_tools_watchdog_probe_desc" formatted="false">Let the watchdog test network reachability. Turning this off keeps process checks but stops background probe packets.</string>
-    <string name="web_tools_probe_paused" formatted="false">Power saving is active: background probes are paused. This switch retains its saved preference.</string>
+    <string name="web_tools_watchdog_probe_desc" formatted="false">Test network reachability from the watchdog.</string>
+    <string name="web_tools_probe_paused" formatted="false">Power saving: background probes are paused.</string>
     <string name="web_tools_stats_enabled" formatted="false">Traffic statistics</string>
-    <string name="web_tools_stats_enabled_desc" formatted="false">Collect and retain traffic history. Turning this off stops sampling and the statistics process.</string>
+    <string name="web_tools_stats_enabled_desc" formatted="false">Collect and retain traffic history.</string>
     <string name="web_tools_context_enabled" formatted="false">Network context automation</string>
-    <string name="web_tools_context_enabled_desc" formatted="false">Run context rules when networks change. Turning this off keeps the rules but stops automatic checks and actions.</string>
+    <string name="web_tools_context_enabled_desc" formatted="false">Run context rules when the network changes.</string>
     <string name="web_tools_auto_refresh" formatted="false">Interface auto-refresh</string>
-    <string name="web_tools_auto_refresh_desc" formatted="false">Periodically update status, devices, tunnel and logs. Manual refresh and active trial countdowns and status checks remain available when disabled.</string>
-    <string name="web_tools_refresh_disabled" formatted="false">Auto-refresh is disabled in Settings. Manual refresh remains available.</string>
+    <string name="web_tools_auto_refresh_desc" formatted="false">Periodically refresh status, devices, tunnel and logs.</string>
     <string name="web_tools_advanced" formatted="false">Advanced options</string>
     <string name="web_tools_saved_pending" formatted="false">Saved, awaiting application</string>
-    <string name="web_tools_saved_pending_desc" formatted="false">Restart the service to apply network and background settings. Your connection will briefly pause.</string>
     <string name="web_tools_all_applied" formatted="false">Configuration applied</string>
-    <string name="web_tools_save_mode" formatted="false">Changes save automatically. Apply pending settings together with a service restart.</string>
-    <string name="web_tools_saving" formatted="false">Saving…</string>
     <string name="web_tools_restart" formatted="false">Restart &amp; apply</string>
     <string name="web_tools_magicdns" formatted="false">Local MagicDNS</string>
     <string name="web_tools_magicdns_desc" formatted="false">Resolve Tailnet short names and full domain names for local apps.</string>
@@ -69,14 +54,13 @@
     <string name="web_tools_watchdog_desc" formatted="false">Recover after service exits or network changes.</string>
     <string name="web_tools_socks_port" formatted="false">SOCKS5 port</string>
     <string name="web_tools_dns_port" formatted="false">DNS listener port</string>
-    <string name="web_tools_dns_port_hint" formatted="false">Choose another port if an app already uses it.</string>
     <string name="web_tools_dns_mode" formatted="false">DNS mode</string>
     <string name="web_tools_dns_mode_legacy" formatted="false">Compatibility</string>
     <string name="web_tools_dns_mode_local" formatted="false">Local resolver</string>
-    <string name="web_tools_dns_mode_transparent_option" formatted="false">Transparent split DNS (kernel support required)</string>
+    <string name="web_tools_dns_mode_transparent_option" formatted="false">Transparent split DNS</string>
     <string name="web_tools_dns_mode_legacy_hint" formatted="false">Use the system resolver and DNS port redirection.</string>
-    <string name="web_tools_dns_mode_local_hint" formatted="false">Provide Tailnet DNS; configure public and corporate DNS in the consuming resolver.</string>
-    <string name="web_tools_dns_mode_transparent_hint" formatted="false">Preserve plain DNS routing, excluding DoH / DoT. Configure Tailscale corporate DNS separately.</string>
+    <string name="web_tools_dns_mode_local_hint" formatted="false">Provide the Tailnet DNS upstream.</string>
+    <string name="web_tools_dns_mode_transparent_hint" formatted="false">Preserve plain DNS routing; DoH / DoT are not handled.</string>
     <string name="web_tools_dns_mode_transparent_unavailable" formatted="false">The running kernel lacks transparent split DNS support; use Local resolver.</string>
     <string name="web_tools_route_table" formatted="false">Policy routing table</string>
     <string name="web_tools_watchdog_interval" formatted="false">Watchdog interval (seconds)</string>
@@ -86,28 +70,14 @@
     <string name="web_tools_mark_mask" formatted="false">Traffic mark mask</string>
     <string name="web_tools_mode_link" formatted="false">Open tunnel tools</string>
     <string name="web_tools_range" formatted="false">Allowed range</string>
-    <string name="web_tools_invalid_number" formatted="false">Enter an integer within the allowed range.</string>
-    <string name="web_tools_backup_desc" formatted="false">Save configuration and hooks for migration or recovery.</string>
-    <string name="web_tools_backup_running" formatted="false">Creating backup…</string>
-    <string name="web_tools_backup_ready" formatted="false">Backup created</string>
-    <string name="web_tools_backup_failed" formatted="false">Backup failed</string>
     <string name="web_tools_backup_latest" formatted="false">Last successful backup</string>
-    <string name="web_tools_backup_path_missing" formatted="false">The response did not include a valid file path. Backup creation is unconfirmed. Retry.</string>
-    <string name="web_tools_backup_file_hint" formatted="false">The file is saved on your phone. Find it at this path in your file manager.</string>
-    <string name="web_tools_context_load_error" formatted="false">Could not read context rules. Retry before editing.</string>
     <string name="web_tools_copy_path" formatted="false">Copy path</string>
     <string name="web_tools_restore_result" formatted="false">Last successful restore</string>
     <string name="web_tools_restore_previous" formatted="false">Previous configuration backup</string>
     <string name="web_tools_advanced_login" formatted="false">Other sign-in methods</string>
-    <string name="web_tools_account_list_desc" formatted="false">Switching accounts reconnects the network.</string>
-    <string name="web_tools_logout_desc" formatted="false">Signing out disconnects this device from the Tailnet.</string>
     <string name="web_tools_server_invalid" formatted="false">Enter a valid http:// or https:// server URL.</string>
     <string name="web_tools_refresh" formatted="false">Refresh</string>
-    <string name="web_tools_retry" formatted="false">Reload</string>
     <string name="web_tools_tunnel_overview" formatted="false">Connection path</string>
-    <string name="web_tools_bridge_desc" formatted="false">A local SOCKS5 proxy and bridge tunnel carry the selected traffic.</string>
-    <string name="web_tools_tun_desc" formatted="false">Tailscale manages the native tunnel directly. All-app scope is currently supported.</string>
-    <string name="web_tools_proxy_desc" formatted="false">Apps must use the local SOCKS5 proxy explicitly. No tunnel interface is created.</string>
     <string name="web_tools_dns_unchecked" formatted="false">DNS has not been checked yet</string>
     <string name="web_tools_dns_settings" formatted="false">Configure MagicDNS</string>
     <string name="web_tools_dns_check_again" formatted="false">Check again</string>
@@ -120,22 +90,19 @@
     <string name="web_tools_dns_transparent_inactive" formatted="false">Transparent split DNS inactive</string>
     <string name="web_tools_dns_listener_unready" formatted="false">Local resolver not ready</string>
     <string name="web_tools_dns_endpoint" formatted="false">Local DNS upstream</string>
-    <string name="web_tools_dns_endpoint_hint" formatted="false">Resolves Tailnet domains and device short names only.</string>
     <string name="web_tools_dns_endpoint_copy" formatted="false">Copy address</string>
-    <string name="web_tools_dns_transparent_limit" formatted="false">Queries with an unconfirmed network path stay with the original resolver. DoH / DoT are not intercepted.</string>
     <string name="web_tools_dns_transparent_unavailable" formatted="false">Kernel interception is unavailable. You can forward queries to the local DNS upstream.</string>
     <string name="web_tools_dns_native_policy_unavailable" formatted="false">Could not coordinate native DNS policy</string>
     <string name="web_tools_dns_native_policy_changed" formatted="false">Native DNS policy changed</string>
     <string name="web_tools_dns_restore_pending" formatted="false">Native DNS policy restoration pending</string>
     <string name="web_tools_dns_invalid_config" formatted="false">Invalid DNS configuration</string>
     <string name="web_tools_dns_helper_missing" formatted="false">FoxyTail DNS helper not found</string>
-    <string name="web_tools_dns_listener_failed" formatted="false">Listener failed. Check whether the port is in use.</string>
+    <string name="web_tools_dns_listener_failed" formatted="false">Listener failed: port unavailable.</string>
     <string name="web_tools_dns_interception_failed" formatted="false">Could not enable transparent split DNS</string>
     <string name="web_tools_dns_context_changed" formatted="false">Network context changed; reconciliation pending</string>
     <string name="web_tools_dns_interception_lost" formatted="false">Transparent split DNS interrupted</string>
     <string name="web_tools_dns_guard_failed" formatted="false">Transparent DNS guard is not ready</string>
     <string name="web_tools_dns_mark_conflict" formatted="false">Transparent DNS mark conflicts with other rules</string>
-    <string name="web_tools_dns_packet_policy_conflict" formatted="false">Existing firewall policy is preserved; local DNS only</string>
     <string name="web_tools_dns_interception_conflict" formatted="false">Another tool handles DNS; configure local split DNS</string>
     <string name="web_tools_dns_ipv6_unavailable" formatted="false">Transparent IPv6 DNS forwarding unavailable.</string>
     <string name="web_tools_dns_ipv6_path" formatted="false">IPv6 DNS path</string>
@@ -147,50 +114,36 @@
     <string name="web_tools_dns_ipv6_module_failed" formatted="false">Module load failed</string>
     <string name="web_tools_dns_ipv6_loader_missing" formatted="false">Module loader unavailable</string>
     <string name="web_tools_dns_ipv6_module_unchecked" formatted="false">Module not checked</string>
-    <string name="web_tools_dns_ipv6_fallback_hint" formatted="false">Compatibility mode does not intercept IPv6 DNS.</string>
     <string name="web_coexist_title" formatted="false">Proxy coexistence wizard</string>
-    <string name="web_coexist_intro" formatted="false">Generate a mihomo / Clash.Meta merge fragment from the applied configuration. Read-only: no proxy configuration or device networking changes.</string>
     <string name="web_coexist_detect" formatted="false">Detect environment</string>
     <string name="web_coexist_refresh" formatted="false">Detect again</string>
-    <string name="web_coexist_unchecked" formatted="false">Not detected yet. Reads and probes are on demand; no automatic DNS or connectivity checks.</string>
+    <string name="web_coexist_unchecked" formatted="false">Not detected yet.</string>
     <string name="web_coexist_environment" formatted="false">1. Environment and prerequisites</string>
-    <string name="web_coexist_inventory_hint" formatted="false">Installed modules and apps are informational, not proof of a running proxy, core type or fake-IP mode.</string>
-    <string name="web_coexist_inventory_empty" formatted="false">No known proxy modules or apps found. Other proxies may still exist.</string>
+    <string name="web_coexist_inventory_empty" formatted="false">No known proxy modules or apps found.</string>
     <string name="web_coexist_applied_mode" formatted="false">Currently applied mode</string>
-    <string name="web_coexist_prerequisite" formatted="false">A ready local or transparent MagicDNS listener for the current Tailnet with FoxyTail-owned policy is required. Configure and apply it in Settings, then detect again. Legacy DNS is not supported by this wizard.</string>
     <string name="web_coexist_filter_step" formatted="false">2. Confirm the existing DNS mode</string>
-    <string name="web_coexist_core_hint" formatted="false">For mihomo / Clash.Meta cores supporting these fields only. Inspect the destination configuration and choose explicitly; the wizard never infers or switches its mode.</string>
-    <string name="web_coexist_filter_label" formatted="false">Mode currently used by the destination</string>
+    <string name="web_coexist_filter_label" formatted="false">Mode used by the destination</string>
     <string name="web_coexist_filter_choose" formatted="false">Choose the existing mode</string>
-    <string name="web_coexist_filter_whitelist" formatted="false">fake-ip · whitelist (automatic generation unavailable)</string>
-    <string name="web_coexist_whitelist_hint" formatted="false">Whitelist exclusions have different semantics. A safe fragment requires reviewing the existing list. Manually review and adjust the destination policy first, then select its actual mode. No automatic conversion to blacklist.</string>
-    <string name="web_coexist_invalid_snapshot" formatted="false">The current suffix, listener state, ports or node addresses are invalid. A safe fragment cannot be generated. Detect again.</string>
+    <string name="web_coexist_filter_whitelist" formatted="false">fake-ip · whitelist</string>
+    <string name="web_coexist_whitelist_hint" formatted="false">Whitelist semantics differ; review the destination policy first.</string>
+    <string name="web_coexist_invalid_snapshot" formatted="false">The configuration is invalid; no fragment can be generated.</string>
     <string name="web_coexist_snippet_step" formatted="false">3. Copy and merge manually</string>
-    <string name="web_coexist_merge_hint" formatted="false">Not a complete configuration! Merge into the existing dns and nameserver-policy maps and proxies / rules / fake-ip-filter lists, preserving other entries. Prepend routing rules and rule-mode filter rules before catchalls. Do not replace the whole configuration or use this local listener as a global DNS upstream.</string>
-    <string name="web_coexist_scope_hint" formatted="false">Only the current full Tailnet suffix and exact self/peer /32 and /128 addresses. No short names, company DNS, subnet or exit routes are imported. Regenerate for new IP-literal targets.</string>
-    <string name="web_coexist_name_hint" formatted="false">FoxyTail-Tailnet must be unique in the destination. If renamed, update all rule references too. Copying does not mean the destination configuration is applied.</string>
-    <string name="web_coexist_tun_hint" formatted="false">tun uses a direct outbound bound to tailscale0. The destination core needs interface-name support and interface permission. Another VPN app may not be able to use this binding.</string>
-    <string name="web_coexist_socks_hint" formatted="false">bridge / proxy uses the actual applied local SOCKS5 port. The destination proxy must be able to reach that listener.</string>
-    <string name="web_coexist_ipv6_hint" formatted="false">Global IPv6 settings are unchanged. For AAAA, separately confirm that FoxyTail IPv6 and the destination mihomo AAAA support are enabled.</string>
-    <string name="web_coexist_yaml" formatted="false">YAML merge fragment (read-only)</string>
+    <string name="web_coexist_yaml" formatted="false">YAML merge fragment</string>
     <string name="web_coexist_check_step" formatted="false">4. Verify one target independently</string>
-    <string name="web_coexist_check_hint" formatted="false">Runs only on request. DNS uses root loopback access. TCP connects to the selected numeric address and port without sending application data. Generating a fragment is not required, and results do not prove it was applied.</string>
-    <string name="web_coexist_no_peers" formatted="false">No current peer is available to verify. You can still generate a fragment containing self addresses.</string>
+    <string name="web_coexist_no_peers" formatted="false">No current peer to verify.</string>
     <string name="web_coexist_peer" formatted="false">Current peer FQDN</string>
     <string name="web_coexist_peer_choose" formatted="false">Choose a peer</string>
     <string name="web_coexist_address" formatted="false">Current peer address</string>
     <string name="web_coexist_address_choose" formatted="false">Choose an address</string>
     <string name="web_coexist_port" formatted="false">Target TCP port (required)</string>
     <string name="web_coexist_resolver_port" formatted="false">Proxy DNS port (optional)</string>
-    <string name="web_coexist_ports_hint" formatted="false">Supply an actual service port (1–65535); ports are not discovered. Optional DNS is fixed to 127.0.0.1 and must differ from the FoxyTail DNS port. Leave blank to explicitly skip.</string>
-    <string name="web_coexist_invalid_port" formatted="false">Ports must be 1–65535. The optional proxy DNS port must differ from the FoxyTail DNS port.</string>
+    <string name="web_coexist_invalid_port" formatted="false">Ports must be 1–65535 and must differ from the FoxyTail DNS port.</string>
     <string name="web_coexist_check" formatted="false">Verify selected target</string>
-    <string name="web_coexist_checking" formatted="false">Checking DNS and target TCP independently…</string>
-    <string name="web_coexist_context_changed" formatted="false">The current state changed or the result identity did not match. Detect again.</string>
+    <string name="web_coexist_context_changed" formatted="false">State changed; detect again.</string>
     <string name="web_coexist_target" formatted="false">TCP target</string>
     <string name="web_coexist_target_path" formatted="false">Target connection path</string>
     <string name="web_coexist_path_socks" formatted="false">root → local SOCKS5 → current peer</string>
-    <string name="web_coexist_path_system" formatted="false">root / system routing → current peer (proxy interface binding not verified)</string>
+    <string name="web_coexist_path_system" formatted="false">root / system routing → current peer</string>
     <string name="web_coexist_dns_udp" formatted="false">FoxyTail DNS · UDP</string>
     <string name="web_coexist_dns_tcp" formatted="false">FoxyTail DNS · TCP</string>
     <string name="web_coexist_resolver_udp" formatted="false">Optional proxy DNS · UDP</string>
@@ -201,37 +154,27 @@
     <string name="web_coexist_skipped" formatted="false">Skipped (no port supplied)</string>
     <string name="web_coexist_not_checked" formatted="false">No check result returned</string>
     <string name="web_coexist_observed" formatted="false">Observed addresses</string>
-    <string name="web_coexist_result_boundary" formatted="false">Only the listed root probes at this moment are established. DNS, proxy DNS and TCP are independent, not substitutes for one another. They do not prove a third-party app path, proxy rules or configuration are active, nor verify UDP traffic, ACLs or application health.</string>
     <string name="web_tools_route_policy" formatted="false">Traffic scope</string>
     <string name="web_tools_route_targets" formatted="false">Custom networks</string>
-    <string name="web_tools_route_apps_desc" formatted="false">Apps sharing a UID share the selection.</string>
     <string name="web_tools_selected" formatted="false">Selected</string>
     <string name="web_tools_items" formatted="false">items</string>
     <string name="web_tools_route_pending" formatted="false">Unsaved changes</string>
     <string name="web_tools_route_saved" formatted="false">Rules saved</string>
-    <string name="web_tools_route_empty_subnets" formatted="false">No destination networks are configured. This rule will not match any destinations.</string>
-    <string name="web_tools_route_empty_selection" formatted="false">No apps selected. The selected-app scope will not match any traffic.</string>
-    <string name="web_tools_route_subnets_desc" formatted="false">Send these destination networks through the tunnel for the selected app scope.</string>
+    <string name="web_tools_route_empty_subnets" formatted="false">No destination networks configured.</string>
+    <string name="web_tools_route_empty_selection" formatted="false">No apps selected.</string>
     <string name="web_tools_route_duplicate" formatted="false">This network is already listed.</string>
     <string name="web_tools_route_show_all" formatted="false">Show more apps</string>
     <string name="web_tools_route_probe" formatted="false">Checking app-scope support…</string>
-    <string name="web_tools_route_load_error" formatted="false">Could not read current routing rules. Reload before editing.</string>
+    <string name="web_tools_route_load_error" formatted="false">Could not read the current routing rules.</string>
     <string name="web_tools_subnet_accept" formatted="false">Accept subnet routes</string>
     <string name="web_tools_subnet_refresh" formatted="false">Refresh subnet routes</string>
     <string name="web_tools_subnet_title" formatted="false">Peer routes</string>
     <string name="web_tools_subnet_empty" formatted="false">No peer subnet routes available</string>
-    <string name="web_tools_subnet_load_error" formatted="false">Could not read peer routes</string>
-    <string name="web_tools_subnet_unknown" formatted="false">Route acceptance is unknown. Refresh to retry.</string>
-    <string name="web_tools_subnet_unconfirmed" formatted="false">The operation did not confirm completion. Route acceptance was read again.</string>
+    <string name="web_tools_subnet_unknown" formatted="false">Route acceptance is unconfirmed.</string>
     <string name="web_tools_subnet_mismatch" formatted="false">Route acceptance differs from the request. You can retry.</string>
-    <string name="web_tools_subnet_updated" formatted="false">Route acceptance updated</string>
     <string name="web_tools_subnet_enable_confirm" formatted="false">Accept subnet routes advertised by other peers?</string>
     <string name="web_tools_subnet_disable_confirm" formatted="false">Stop accepting subnet routes advertised by other peers?</string>
-    <string name="web_tools_subnet_native_hint" formatted="false">Tailscale manages accepted routes. Custom networks do not limit route acceptance.</string>
-    <string name="web_tools_subnet_bridge_hint" formatted="false">Add peer networks below to route them for the selected apps.</string>
-    <string name="web_tools_subnet_proxy_hint" formatted="false">Peer routes apply to proxy connections. Custom networks do not capture system traffic.</string>
     <string name="web_tools_subnet_add_network" formatted="false">Add network</string>
-    <string name="web_tools_subnet_added" formatted="false">Added</string>
     <string name="web_tools_subnet_primary" formatted="false">Primary</string>
     <string name="web_tools_subnet_online" formatted="false">Online</string>
     <string name="web_tools_subnet_ipv6_disabled" formatted="false">IPv6 is disabled</string>
@@ -244,13 +187,12 @@
     <string name="web_tools_serve_listener_protocol" formatted="false">Listener protocol</string>
     <string name="web_tools_serve_listener_port" formatted="false">Listener port</string>
     <string name="web_tools_serve_local_target" formatted="false">Local service address</string>
-    <string name="web_tools_serve_protocol_invalid" formatted="false">Choose a listener protocol supported by this kind of mapping.</string>
     <string name="web_tools_funnel_port_invalid" formatted="false">Funnel listener ports must be 443, 8443 or 10000.</string>
     <string name="web_tools_port_invalid" formatted="false">Port must be an integer from 1 to 65535.</string>
-    <string name="web_tools_serve_public_hint" formatted="false">Funnel exposes this service to the internet. Use HTTPS to proxy a local HTTP service.</string>
+    <string name="web_tools_serve_public_hint" formatted="false">Funnel exposes this service to the internet.</string>
     <string name="web_tools_serve_add_done" formatted="false">Service mapping added.</string>
     <string name="web_tools_mapping_count" formatted="false">mappings</string>
-    <string name="web_tools_no_peers" formatted="false">No receiving devices available. Connect to your Tailnet and reload.</string>
+    <string name="web_tools_no_peers" formatted="false">No receiving devices available.</string>
     <string name="web_tools_file_count" formatted="false">files</string>
     <string name="web_tools_file_search" formatted="false">Find an inbox file</string>
     <string name="web_tools_total_size" formatted="false">Inbox size</string>
@@ -264,18 +206,14 @@
     <string name="web_tools_logs_match_case" formatted="false">Case sensitive</string>
     <string name="web_tools_logs_wrap" formatted="false">Wrap lines</string>
     <string name="web_tools_logs_updated" formatted="false">Last updated</string>
-    <string name="web_tools_logs_scope" formatted="false">Searches loaded log lines only.</string>
     <string name="web_tools_diag_collect" formatted="false">Collect a diagnostic bundle</string>
-    <string name="web_tools_diag_contents" formatted="false">Includes service logs, network state, compatibility checks and runtime configuration for troubleshooting.</string>
     <string name="web_tools_diag_ready" formatted="false">Diagnostic bundle ready</string>
-    <string name="web_tools_diag_waiting" formatted="false">No diagnostic bundle yet. Start collection when you are ready.</string>
-    <string name="web_shell_navigation" formatted="false">Main navigation</string>
+    <string name="web_tools_diag_waiting" formatted="false">No diagnostic bundle yet.</string>
     <string name="web_shell_workspace" formatted="false">Network console</string>
     <string name="web_shell_network" formatted="false">Network</string>
     <string name="web_shell_services" formatted="false">Connections &amp; services</string>
     <string name="web_shell_manage" formatted="false">Management</string>
     <string name="web_shell_back_tools" formatted="false">Back to tools</string>
-    <string name="web_shell_skip" formatted="false">Skip to content</string>
     <string name="web_shell_connected" formatted="false">Connected</string>
     <string name="web_shell_starting" formatted="false">Connecting</string>
     <string name="web_shell_login" formatted="false">Login required</string>
@@ -287,11 +225,8 @@
     <string name="web_shell_task_error" formatted="false">Failed</string>
     <string name="web_shell_task_cancelled" formatted="false">Cancelled</string>
     <string name="web_shell_no_tasks" formatted="false">No background tasks</string>
-    <string name="web_shell_task_keep_running" formatted="false">You can switch pages while this task continues.</string>
     <string name="web_task_cancel_pending" formatted="false">Waiting for the backend to acknowledge cancellation.</string>
-    <string name="web_task_cancel_failed" formatted="false">Cancellation is unconfirmed; the task may still be running. You can retry cancellation.</string>
-    <string name="web_task_timeout_running" formatted="false">This operation is taking longer; still waiting for the actual backend result.</string>
-    <string name="web_context_description" formatted="false">Run rules when the network changes. Actions for the same network run in order. Saving does not confirm successful execution.</string>
+    <string name="web_task_cancel_failed" formatted="false">Cancellation is unconfirmed.</string>
     <string name="web_context_refresh" formatted="false">Refresh execution status</string>
     <string name="web_context_visual" formatted="false">Visual editor</string>
     <string name="web_context_text" formatted="false">Advanced text</string>
@@ -303,8 +238,8 @@
     <string name="web_context_success" formatted="false">All actions succeeded</string>
     <string name="web_context_failed" formatted="false">Failed or partially failed</string>
     <string name="web_context_empty" formatted="false">No network rules configured</string>
-    <string name="web_context_unsupported" formatted="false">Unrecognized line. The original text is preserved; correct it in the advanced editor.</string>
-    <string name="web_context_invalid" formatted="false">Invalid rule: SSID cannot contain colons, #, quotes or control characters. An exit node needs a name or IP.</string>
+    <string name="web_context_unsupported" formatted="false">Unrecognized line; the original text is preserved.</string>
+    <string name="web_context_invalid" formatted="false">SSID cannot contain colons, #, quotes or control characters; an exit node needs a name or IP.</string>
     <string name="web_context_network" formatted="false">Network condition</string>
     <string name="web_context_wifi" formatted="false">Wi-Fi</string>
     <string name="web_context_cellular" formatted="false">Cellular</string>
@@ -319,26 +254,13 @@
     <string name="web_context_move_up" formatted="false">Move rule up</string>
     <string name="web_context_move_down" formatted="false">Move rule down</string>
     <string name="web_context_apply_rule" formatted="false">Update draft</string>
-    <string name="web_net_controls_label" formatted="false">Service and operating mode</string>
     <string name="web_net_controls_service" formatted="false">Service</string>
-    <string name="web_net_controls_awaiting_confirm" formatted="false">Waiting for confirmation</string>
     <string name="web_net_controls_verifying" formatted="false">Checking device status…</string>
     <string name="web_net_controls_unknown" formatted="false">Device status is unconfirmed. Changes are temporarily disabled.</string>
-    <string name="web_net_controls_pending" formatted="false">Change sent. Waiting for the device to confirm its state.</string>
-    <string name="web_net_controls_mismatch" formatted="false">The device reported a different state. You can retry the operation.</string>
-    <string name="web_net_controls_config_pending" formatted="false">The service responded, but some configuration is still pending.</string>
-    <string name="web_net_controls_mode_applied" formatted="false">Operating mode switched</string>
-    <string name="web_net_controls_result_unknown" formatted="false">The operation did not respond. Service state is unconfirmed.</string>
-    <string name="web_net_controls_response_running" formatted="false">The operation did not respond. The service is currently running.</string>
-    <string name="web_net_controls_response_stopped" formatted="false">The operation did not respond. The service is confirmed stopped.</string>
-    <string name="web_net_connection" formatted="false">Network connection</string>
     <string name="web_net_connected" formatted="false">Connected to Tailnet</string>
     <string name="web_net_connecting" formatted="false">Connecting to your network</string>
-    <string name="web_net_connected_hint" formatted="false">This device is connected. Reach your devices using their Tailscale addresses.</string>
     <string name="web_net_connecting_hint" formatted="false">The service is running and waiting for connectivity or device approval.</string>
-    <string name="web_net_stopped_hint" formatted="false">Start the service to bring this device back onto your private network.</string>
-    <string name="web_net_login_hint" formatted="false">Authorize this device to join your private network.</string>
-    <string name="web_net_unknown_hint" formatted="false">Device status is unavailable. Refresh to try again.</string>
+    <string name="web_net_unknown_hint" formatted="false">Device status is unreadable.</string>
     <string name="web_net_status_stale" formatted="false">Connection needs verification</string>
     <string name="web_net_service_runtime" formatted="false">Service uptime</string>
     <string name="web_net_peer_total" formatted="false">devices</string>
@@ -346,26 +268,21 @@
     <string name="web_net_mode_tun" formatted="false">Native TUN</string>
     <string name="web_net_mode_bridge" formatted="false">Bridge tunnel</string>
     <string name="web_net_mode_proxy" formatted="false">SOCKS5 proxy</string>
-    <string name="web_net_mode_confirm" formatted="false">Changing the operating mode restarts the service and may briefly interrupt active connections. Continue?</string>
-    <string name="web_net_stop_confirm" formatted="false">Stopping the service disconnects this device from Tailscale. Continue?</string>
-    <string name="web_net_restart_confirm" formatted="false">Restarting briefly interrupts active Tailscale connections. Continue?</string>
     <string name="web_net_working" formatted="false">Working…</string>
     <string name="web_net_device_address" formatted="false">Tailscale addresses</string>
-    <string name="web_net_address_pending" formatted="false">Device addresses appear once connected</string>
+    <string name="web_net_address_pending" formatted="false">Address appears after connecting</string>
     <string name="web_net_copy_address" formatted="false">Copy address</string>
     <string name="web_net_quick_access" formatted="false">Quick access</string>
     <string name="web_net_quick_peers" formatted="false">Find devices and copy addresses</string>
     <string name="web_net_quick_routing" formatted="false">Manage apps and subnet scope</string>
     <string name="web_net_quick_dns" formatted="false">Check the tunnel and DNS</string>
     <string name="web_net_quick_logs" formatted="false">Inspect activity and errors</string>
-    <string name="web_net_no_exit_hint" formatted="false">No exit node selected; saved subnet routes still apply.</string>
-    <string name="web_net_exit_hint" formatted="false">Selection and effective routing are separate; this is not an end-to-end connectivity test.</string>
-    <string name="web_net_exit_scope" formatted="false">App scope (root and Tailscale-marked traffic always exempt)</string>
-    <string name="web_net_exit_proxy" formatted="false">Only apps explicitly using the SOCKS5 proxy use this exit; ordinary app traffic is not captured.</string>
-    <string name="web_net_exit_daemon" formatted="false">Native TUN routes are managed by tailscaled; kernel exit coverage is not verified here.</string>
-    <string name="web_net_exit_failed" formatted="false">Routing does not match the selected exit preference, or the exit is unavailable. Internet traffic is not confirmed protected. Retry Apply.</string>
-    <string name="web_net_exit_bridge_dual" formatted="false">IPv4/IPv6 bridge policy verified for the selected app scope; exit reachability is not tested.</string>
-    <string name="web_net_exit_bridge_v4" formatted="false">IPv4 bridge exit policy applied. IPv6 is not covered and may still use the local network.</string>
+    <string name="web_net_exit_scope" formatted="false">App scope (root and Tailscale traffic excluded)</string>
+    <string name="web_net_exit_proxy" formatted="false">Only apps explicitly using the SOCKS5 proxy.</string>
+    <string name="web_net_exit_daemon" formatted="false">Native TUN routes are managed by tailscaled.</string>
+    <string name="web_net_exit_failed" formatted="false">Routing does not match the selected exit, or the exit is unavailable.</string>
+    <string name="web_net_exit_bridge_dual" formatted="false">IPv4/IPv6 bridge policy applied for the selected app scope.</string>
+    <string name="web_net_exit_bridge_v4" formatted="false">IPv4 bridge exit policy applied; IPv6 is not covered.</string>
     <string name="web_net_manage_exit" formatted="false">Manage exit node</string>
     <string name="web_net_enabled" formatted="false">Enabled</string>
     <string name="web_net_disabled" formatted="false">Disabled</string>
@@ -375,40 +292,32 @@
     <string name="web_net_filter_online" formatted="false">Online</string>
     <string name="web_net_filter_offline" formatted="false">Offline</string>
     <string name="web_net_no_results" formatted="false">No matching devices</string>
-    <string name="web_net_no_results_hint" formatted="false">Try another keyword or clear the filters.</string>
     <string name="web_net_reset_filter" formatted="false">Clear filters</string>
     <string name="web_net_os" formatted="false">Operating system</string>
     <string name="web_net_relay_region" formatted="false">Relay region</string>
     <string name="web_net_peer_details" formatted="false">View device details</string>
     <string name="web_net_peer_probe" formatted="false">Test connection</string>
-    <string name="web_net_peer_probe_hint" formatted="false">Test the Tailscale path to the selected address. The reply identifies its path, but does not verify services on the device.</string>
     <string name="web_net_peer_probe_invalid" formatted="false">The test returned no valid result. Try again.</string>
     <string name="web_net_peer_direct" formatted="false">Direct</string>
     <string name="web_net_peer_relay" formatted="false">Peer relay</string>
-    <string name="web_net_connection_state" formatted="false">Connection status</string>
     <string name="web_net_refresh" formatted="false">Refresh</string>
     <string name="web_net_result_count" formatted="false">results</string>
     <string name="web_net_exit_selection" formatted="false">Selected exit preference</string>
     <string name="web_net_exit_unknown" formatted="false">Current gateway is unconfirmed</string>
-    <string name="web_net_exit_unknown_hint" formatted="false">Waiting for a valid connection status. Check that the service is running, then retry.</string>
+    <string name="web_net_exit_unknown_hint" formatted="false">Current state is unconfirmed.</string>
     <string name="web_net_exit_confirming" formatted="false">Change sent; waiting for gateway confirmation</string>
     <string name="web_net_exit_local" formatted="false">Device network</string>
     <string name="web_net_exit_local_hint" formatted="false">Use this device’s internet connection directly</string>
     <string name="web_net_exit_choose" formatted="false">Choose an exit node</string>
-    <string name="web_net_exit_pending" formatted="false">Not applied</string>
     <string name="web_net_exit_apply" formatted="false">Apply selected exit</string>
-    <string name="web_net_exit_untested" formatted="false">Not tested</string>
     <string name="web_net_exit_unreachable" formatted="false">No response</string>
-    <string name="web_net_exit_applied" formatted="false">Current selection is applied</string>
     <string name="web_net_exit_unavailable" formatted="false">The current exit node is offline. Choose another to restore connectivity.</string>
     <string name="web_net_traffic_period" formatted="false">Reporting period</string>
     <string name="web_net_traffic_total" formatted="false">Total transferred</string>
     <string name="web_net_traffic_chart" formatted="false">Traffic history</string>
-    <string name="web_net_traffic_chart_hint" formatted="false">Total bytes for each interval, rather than current transfer speed.</string>
     <string name="web_net_traffic_no_samples" formatted="false">Waiting for traffic samples</string>
     <string name="web_net_traffic_no_peer" formatted="false">No peer traffic recorded yet</string>
     <string name="web_net_traffic_no_app" formatted="false">No app upload traffic recorded yet</string>
-    <string name="web_net_traffic_top_hint" formatted="false">Ranked by total traffic in retained records, independently of the period selected above.</string>
     <string name="web_net_traffic_table" formatted="false">View chart data</string>
     <string name="web_net_traffic_time" formatted="false">Time</string>
     <string name="web_net_traffic_unrecorded" formatted="false">Not recorded</string>
@@ -418,7 +327,6 @@
     <string name="web_net_topology_hint" formatted="false">Solid: established direct connection. Dashed: relayed via the named DERP region. Dotted: offline member.</string>
     <string name="web_net_topology_list" formatted="false">Accessible device list</string>
     <string name="web_net_login_secure" formatted="false">Device authorization</string>
-    <string name="web_no_root_banner" formatted="false">Open this page in KernelSU manager or MMRL (no root exec bridge detected; features disabled)</string>
     <string name="web_nav_dashboard" formatted="false">Dashboard</string>
     <string name="web_nav_peers" formatted="false">Peers</string>
     <string name="web_nav_exitnodes" formatted="false">Exit</string>
@@ -429,18 +337,14 @@
     <string name="web_error" formatted="false">Something went wrong</string>
     <string name="web_save" formatted="false">Save</string>
     <string name="web_cancel" formatted="false">Cancel</string>
-    <string name="web_confirm" formatted="false">Confirm</string>
     <string name="web_delete" formatted="false">Delete</string>
     <string name="web_add" formatted="false">Add</string>
     <string name="web_copy" formatted="false">Copy</string>
-    <string name="web_copied" formatted="false">Copied</string>
     <string name="web_open_browser" formatted="false">Open in browser</string>
     <string name="web_offline" formatted="false">Offline</string>
     <string name="web_close" formatted="false">Close</string>
-    <string name="web_cancelled" formatted="false">Cancelled</string>
     <string name="web_retry" formatted="false">Retry</string>
     <string name="web_op_failed" formatted="false">Operation failed</string>
-    <string name="web_confirm_title" formatted="false">Please confirm</string>
     <string name="web_misc_missing" formatted="false">(missing)</string>
     <string name="web_misc_empty" formatted="false">(empty)</string>
     <string name="web_misc_unavailable" formatted="false">(unavailable)</string>
@@ -454,18 +358,11 @@
     <string name="web_dash_peers_online" formatted="false">Online peers</string>
     <string name="web_dash_key_expiring" formatted="false">Node key expires soon: </string>
     <string name="web_dash_compat_warning" formatted="false">Coexistence warnings</string>
-    <string name="web_dash_action_done" formatted="false">Done</string>
     <string name="web_dash_status_stale" formatted="false">Data may be out of date</string>
     <string name="web_hero_login_title" formatted="false">Log in to Tailscale</string>
-    <string name="web_hero_login_desc" formatted="false">This device is not connected to the tailnet yet; log in to unlock everything</string>
-    <string name="web_hero_stopped_title" formatted="false">Service stopped</string>
-    <string name="web_hero_stopped_desc" formatted="false">The tailscaled daemon is stopped; start it to continue</string>
-    <string name="web_hero_start_service" formatted="false">Start service</string>
     <string name="web_hero_get_link" formatted="false">Get login link</string>
     <string name="web_hero_minimize" formatted="false">Minimize</string>
     <string name="web_hero_expand" formatted="false">Log in / start</string>
-    <string name="web_hero_banner_login" formatted="false">Not logged in to the tailnet</string>
-    <string name="web_hero_banner_stopped" formatted="false">Service stopped</string>
     <string name="web_peers_title" formatted="false">Peers</string>
     <string name="web_peers_list" formatted="false">List</string>
     <string name="web_peers_topology" formatted="false">Topology</string>
@@ -475,15 +372,15 @@
     <string name="web_peers_tx" formatted="false">TX</string>
     <string name="web_exit_title" formatted="false">Exit Nodes</string>
     <string name="web_exit_test" formatted="false">Speed test</string>
-    <string name="web_exit_testing" formatted="false">Testing…</string>
     <string name="web_exit_current" formatted="false">Current</string>
     <string name="web_exit_empty" formatted="false">No exit nodes available</string>
     <string name="web_exit_set_done" formatted="false">Exit node switched</string>
     <string name="web_exit_cleared" formatted="false">Exit node cleared</string>
+    <string name="web_net_exit_clear" formatted="false">Clear exit node</string>
     <string name="web_acc_title" formatted="false">Account</string>
     <string name="web_acc_login" formatted="false">Log in</string>
     <string name="web_acc_login_url_hint" formatted="false">Copy the link below and finish authorization in a browser:</string>
-    <string name="web_acc_already" formatted="false">Already logged in</string>
+    <string name="web_acc_already" formatted="false">Already signed in.</string>
     <string name="web_acc_waiting" formatted="false">Fetching login URL…</string>
     <string name="web_acc_authkey" formatted="false">Auth key login</string>
     <string name="web_acc_authkey_hint" formatted="false">Paste a tskey-auth- key</string>
@@ -501,7 +398,7 @@
     <string name="web_acc_logged_in" formatted="false">Logged in</string>
     <string name="web_acc_not_logged_in" formatted="false">Not logged in</string>
     <string name="web_tun_title" formatted="false">Tunnel</string>
-    <string name="web_tun_iface" formatted="false">tailscale0 interface</string>
+    <string name="web_tun_iface" formatted="false">Interface</string>
     <string name="web_tun_up" formatted="false">Up</string>
     <string name="web_tun_down" formatted="false">Down</string>
     <string name="web_tun_gateway" formatted="false">Gateway</string>
@@ -519,10 +416,10 @@
     <string name="web_dns_native" formatted="false">Native DNS rules installed</string>
     <string name="web_dns_suffix" formatted="false">Domain suffix</string>
     <string name="web_dns_running" formatted="false">Running</string>
-    <string name="web_dns_disabled" formatted="false">Disabled (Tailnet MagicDNS may still be enabled)</string>
+    <string name="web_dns_disabled" formatted="false">Disabled</string>
     <string name="web_dns_apply_pending" formatted="false">Saved; waiting to apply</string>
     <string name="web_dns_disable_pending" formatted="false">Waiting to disable</string>
-    <string name="web_dns_tailnet_unavailable" formatted="false">Tailnet unavailable; check login status</string>
+    <string name="web_dns_tailnet_unavailable" formatted="false">Tailnet unavailable</string>
     <string name="web_dns_missing_binary" formatted="false">dnsmasq not found</string>
     <string name="web_dns_conflict" formatted="false">Another DNS proxy conflicts</string>
     <string name="web_dns_redirect_failed" formatted="false">DNS redirect rules failed</string>
@@ -531,17 +428,16 @@
     <string name="web_dns_reconcile_needed" formatted="false">Node or configuration changed; update pending</string>
     <string name="web_dns_private_dns" formatted="false">Strict Android Private DNS may bypass local resolution</string>
     <string name="web_dns_stopped" formatted="false">Stopped</string>
-    <string name="web_dns_degraded" formatted="false">Degraded; check the service logs</string>
+    <string name="web_dns_degraded" formatted="false">Degraded.</string>
     <string name="web_route_title" formatted="false">Routing</string>
-    <string name="web_route_scope" formatted="false">Route scope</string>
     <string name="web_route_scope_all" formatted="false">All</string>
     <string name="web_route_scope_selected" formatted="false">Selected apps</string>
     <string name="web_route_scope_bypass" formatted="false">Bypass selected</string>
-    <string name="web_route_scope_all_hint" formatted="false">All traffic goes through the tunnel (bounded by the subnet list)</string>
+    <string name="web_route_scope_all_hint" formatted="false">All traffic goes through the tunnel</string>
     <string name="web_route_scope_selected_hint" formatted="false">Only checked apps go through the tunnel</string>
     <string name="web_route_scope_bypass_hint" formatted="false">Checked apps bypass the tunnel; everything else uses it</string>
     <string name="web_route_no_owner" formatted="false">Kernel lacks xt_owner; per-app routing is unavailable. Select All.</string>
-    <string name="web_route_native_scope" formatted="false">Native TUN routing is managed by Tailscale and supports All only. Switch to bridge for per-app routing.</string>
+    <string name="web_route_native_scope" formatted="false">Native TUN routing is managed by Tailscale and supports All only.</string>
     <string name="web_route_apps" formatted="false">Apps</string>
     <string name="web_route_subnets" formatted="false">Routed subnets</string>
     <string name="web_route_subnets_add_hint" formatted="false">CIDR, e.g. 100.64.0.0/10</string>
@@ -550,7 +446,7 @@
     <string name="web_traffic_title" formatted="false">Traffic</string>
     <string name="web_traffic_hourly" formatted="false">Hourly (today)</string>
     <string name="web_traffic_daily" formatted="false">Daily (7 days)</string>
-    <string name="web_traffic_app_tx_hint" formatted="false">Application bytes sent to configured subnets (IPv4 + IPv6); received bytes are not measured.</string>
+    <string name="web_traffic_app_tx_hint" formatted="false">Application bytes sent to configured subnets.</string>
     <string name="web_traffic_topn" formatted="false">Top peers</string>
     <string name="web_traffic_by_app" formatted="false">By app</string>
     <string name="web_traffic_rx" formatted="false">RX</string>
@@ -564,7 +460,6 @@
     <string name="web_serve_add" formatted="false">Add mapping</string>
     <string name="web_serve_empty" formatted="false">No mappings</string>
     <string name="web_serve_del_confirm" formatted="false">Delete this mapping?</string>
-    <string name="web_serve_unavailable" formatted="false">Not supported by this tailscale build</string>
     <string name="web_files_title" formatted="false">Files</string>
     <string name="web_files_inbox" formatted="false">Inbox</string>
     <string name="web_files_empty" formatted="false">Inbox is empty</string>
@@ -572,7 +467,6 @@
     <string name="web_files_peer" formatted="false">Target peer</string>
     <string name="web_files_send_btn" formatted="false">Send</string>
     <string name="web_files_receive" formatted="false">Import received files</string>
-    <string name="web_files_received" formatted="false">Import complete</string>
     <string name="web_files_choose" formatted="false">Choose shared-storage files</string>
     <string name="web_files_close_browser" formatted="false">Close file browser</string>
     <string name="web_files_location" formatted="false">Current location</string>
@@ -583,30 +477,20 @@
     <string name="web_files_select" formatted="false">Select</string>
     <string name="web_files_selected" formatted="false">Selected</string>
     <string name="web_files_remove_selection" formatted="false">Remove selected file</string>
-    <string name="web_files_selection_empty" formatted="false">Browse shared storage and select up to 32 files.</string>
-    <string name="web_files_truncated" formatted="false">Only the first 1000 entries are shown, not the complete directory. Open a more specific folder.</string>
-    <string name="web_files_storage_hint" formatted="false">Unlock Android shared storage and check root permission. Symbolic links and non-regular files are not listed.</string>
-    <string name="web_files_root_required" formatted="false">Open in KernelSU or MMRL with root permission to access files and transfer history.</string>
+    <string name="web_files_truncated" formatted="false">Only the first 1000 entries are shown.</string>
     <string name="web_files_refresh_targets" formatted="false">Refresh receiving devices</string>
-    <string name="web_files_send_hint" formatted="false">Only Taildrop-capable receiving devices are listed. Choose files and a target, then Send. Transfers continue in the background; return here for progress.</string>
     <string name="web_files_history" formatted="false">Send history</string>
     <string name="web_files_history_empty" formatted="false">No transfers yet.</string>
     <string name="web_files_invalid_response" formatted="false">Invalid Taildrop response. Refresh and try again.</string>
     <string name="web_files_queued" formatted="false">Queued, not sent yet</string>
     <string name="web_files_sending" formatted="false">Sending</string>
-    <string name="web_files_completed" formatted="false">Accepted by receiving device</string>
     <string name="web_files_failed" formatted="false">Send failed</string>
     <string name="web_files_cancelled" formatted="false">Cancelled</string>
     <string name="web_files_interrupted" formatted="false">Transfer interrupted</string>
-    <string name="web_files_completed_count" formatted="false">Files accepted</string>
-    <string name="web_files_accepted_hint" formatted="false">Job submission is not delivery. A file is completed only after the receiving device accepts it.</string>
-    <string name="web_files_progress_unknown" formatted="false">Waiting for daemon progress; sent bytes are unknown.</string>
-    <string name="web_files_observation_hint" formatted="false">Progress is temporarily unavailable; the job may still be running. This is not a failed send result.</string>
     <string name="web_files_cancel_send" formatted="false">Cancel send</string>
     <string name="web_files_cancel_requested" formatted="false">Cancellation requested; waiting for the background job to acknowledge.</string>
     <string name="web_files_retry_unsuccessful" formatted="false">Retry failed or cancelled files only</string>
     <string name="web_files_retry_target_missing" formatted="false">The original target cannot receive right now. Refresh receiving devices before retrying.</string>
-    <string name="web_files_receive_hint" formatted="false">Import completed files from /sdcard/Download/Taildrop; originals are retained. If direct receive mode is unknown, unlock shared storage and restart FoxyTail.</string>
     <string name="web_files_download" formatted="false">Download</string>
     <string name="web_files_export" formatted="false">Export to Downloads</string>
     <string name="web_files_delete" formatted="false">Delete</string>
@@ -614,20 +498,16 @@
     <string name="web_files_deleted" formatted="false">Deleted</string>
     <string name="web_files_cleared" formatted="false">Cleared</string>
     <string name="web_files_exported_to" formatted="false">Exported to</string>
-    <string name="web_files_download_started" formatted="false">Download started</string>
     <string name="web_logs_title" formatted="false">Logs</string>
     <string name="web_logs_daemon" formatted="false">Daemon</string>
     <string name="web_logs_service" formatted="false">Service</string>
     <string name="web_logs_follow" formatted="false">Follow</string>
     <string name="web_logs_empty" formatted="false">Log is empty</string>
-    <string name="web_set_ipv6_hint" formatted="false">Add an IPv6 CIDR under routed subnets first, e.g. fd7a:115c:a1e0::/48, or this setting cannot be applied.</string>
-    <string name="web_set_restart_required" formatted="false">Configuration saved; restart the service to apply</string>
-    <string name="web_set_applied" formatted="false">Configuration applied</string>
+    <string name="web_set_ipv6_hint" formatted="false">Add an IPv6 CIDR under routed subnets first.</string>
     <string name="web_set_title" formatted="false">Settings</string>
     <string name="web_set_context" formatted="false">Network context rules</string>
     <string name="web_set_context_hint" formatted="false">One rule per line: &lt;trigger&gt;:&lt;value&gt;:&lt;action&gt;[:&lt;arg&gt;], e.g. ssid:HomeWifi:down, cellular:-:no-exit-node</string>
     <string name="web_set_hooks" formatted="false">tun hooks (read-only)</string>
-    <string name="web_set_hooks_hint" formatted="false">Edit in a terminal: /data/adb/foxytail/scripts/foxytail.tun.up / .down</string>
     <string name="web_set_hook_up" formatted="false">tun.up</string>
     <string name="web_set_hook_down" formatted="false">tun.down</string>
     <string name="web_set_backup" formatted="false">Backup config</string>
@@ -640,10 +520,9 @@
     <string name="web_set_language" formatted="false">Language</string>
     <string name="web_diag_title" formatted="false">Diagnostics</string>
     <string name="web_diag_run" formatted="false">Generate diagnostics bundle</string>
-    <string name="web_diag_running" formatted="false">Collecting (may take ~30s)…</string>
+    <string name="web_diag_running" formatted="false">Collecting…</string>
     <string name="web_diag_done" formatted="false">Bundle written: </string>
     <string name="web_diag_check" formatted="false">Check local status</string>
-    <string name="web_diag_check_hint" formatted="false">Check the service, tunnel, routes and DNS on demand. Test actual peer connectivity in device details.</string>
     <string name="web_diag_item_config" formatted="false">Runtime configuration</string>
     <string name="web_diag_item_service" formatted="false">Service connection</string>
     <string name="web_diag_item_tunnel" formatted="false">Tunnel interface</string>
@@ -652,32 +531,32 @@
     <string name="web_diag_level_warn" formatted="false">Attention</string>
     <string name="web_diag_level_fail" formatted="false">Problem</string>
     <string name="web_diag_level_skip" formatted="false">Not checked</string>
-    <string name="web_diag_invalid_config" formatted="false">Runtime configuration is unreadable. Inspect logs, then repair settings or restore a backup.</string>
-    <string name="web_diag_pending" formatted="false">Saved settings are pending. These checks use the currently applied configuration.</string>
-    <string name="web_diag_applied" formatted="false">Runtime configuration is readable with no pending marker.</string>
-    <string name="web_diag_stopped" formatted="false">The service is stopped. Start it from the dashboard when needed.</string>
+    <string name="web_diag_invalid_config" formatted="false">Runtime configuration is unreadable.</string>
+    <string name="web_diag_pending" formatted="false">Checked against the running configuration; settings are pending.</string>
+    <string name="web_diag_applied" formatted="false">Runtime configuration readable; nothing pending.</string>
+    <string name="web_diag_stopped" formatted="false">The service is stopped.</string>
     <string name="web_diag_connected" formatted="false">The Tailscale backend is running.</string>
-    <string name="web_diag_login" formatted="false">Login or administrator approval is required. Open the account page.</string>
-    <string name="web_diag_unreachable" formatted="false">Backend connection state is unknown. Inspect the service log.</string>
+    <string name="web_diag_login" formatted="false">Login or administrator approval required.</string>
+    <string name="web_diag_unreachable" formatted="false">Backend connection state unknown.</string>
     <string name="web_diag_needs_connection" formatted="false">The service is not connected, so tunnel and route health were not assessed.</string>
-    <string name="web_diag_proxy" formatted="false">Proxy mode creates no tunnel interface. Run the SOCKS5 check in tunnel tools.</string>
-    <string name="web_diag_interface_ready" formatted="false">The interface and required bridge process exist; this does not prove peer reachability.</string>
-    <string name="web_diag_interface_missing" formatted="false">The interface or bridge process is missing. Inspect tunnel status and logs.</string>
-    <string name="web_diag_managed_routes" formatted="false">This mode does not use the module bridge policy routes.</string>
+    <string name="web_diag_proxy" formatted="false">Proxy mode creates no tunnel interface.</string>
+    <string name="web_diag_interface_ready" formatted="false">The interface and bridge process exist.</string>
+    <string name="web_diag_interface_missing" formatted="false">Interface or bridge process missing.</string>
+    <string name="web_diag_managed_routes" formatted="false">This mode does not use bridge policy routes.</string>
     <string name="web_diag_routes_ready" formatted="false">Module routes and firewall rules match the applied configuration.</string>
-    <string name="web_diag_routes_incomplete" formatted="false">Complete route rules could not be verified; another module may have changed them. Inspect routing and service logs.</string>
+    <string name="web_diag_routes_incomplete" formatted="false">Route rules are incomplete and may have been changed by another module.</string>
     <string name="web_diag_dns_disabled" formatted="false">Local MagicDNS is disabled; the resolver was not checked.</string>
-    <string name="web_diag_dns_conflict" formatted="false">DNS policies or rules conflict. Open tunnel tools for the specific reason.</string>
-    <string name="web_diag_dns_limited" formatted="false">Some DNS capabilities are unavailable. Check the actual listener and IPv6 path.</string>
-    <string name="web_diag_dns_ready" formatted="false">The DNS controller reports a healthy state; no external domains were queried.</string>
-    <string name="web_diag_dns_unavailable" formatted="false">DNS is not ready or its status is unreadable. Check the port, kernel capabilities and logs.</string>
-    <string name="web_diag_unknown" formatted="false">Unrecognized check result. Inspect the logs.</string>
+    <string name="web_diag_dns_conflict" formatted="false">DNS policies or rules conflict.</string>
+    <string name="web_diag_dns_limited" formatted="false">Some DNS capabilities are unavailable.</string>
+    <string name="web_diag_dns_ready" formatted="false">The DNS controller reports a healthy state.</string>
+    <string name="web_diag_dns_unavailable" formatted="false">DNS is not ready or its status is unreadable.</string>
+    <string name="web_diag_unknown" formatted="false">Unrecognized check result.</string>
     <string name="web_diag_view_details" formatted="false">View details</string>
     <string name="web_diag_bundle_mode" formatted="false">Bundle contents</string>
     <string name="web_diag_share" formatted="false">Anonymized sharing bundle</string>
     <string name="web_diag_local" formatted="false">Detailed local bundle</string>
-    <string name="web_diag_share_hint" formatted="false">Consistent aliases replace accounts, device names, SSIDs and addresses across files. Review contents before sharing.</string>
-    <string name="web_diag_local_hint" formatted="false">Includes network addresses, accounts and device information. Keep this bundle private.</string>
+    <string name="web_diag_share_hint" formatted="false">Accounts, device names, SSIDs and addresses are replaced with consistent aliases.</string>
+    <string name="web_diag_local_hint" formatted="false">Contains network addresses, accounts and device information.</string>
     <string name="web_more_title" formatted="false">More</string>
     <string name="web_more_tunnel" formatted="false">Tunnel</string>
     <string name="web_more_routing" formatted="false">Routing</string>
@@ -687,4 +566,5 @@
     <string name="web_more_logs" formatted="false">Logs</string>
     <string name="web_more_settings" formatted="false">Settings</string>
     <string name="web_more_diag" formatted="false">Diagnostics</string>
+    <string name="web_tools_subnet_unconfirmed" formatted="false">The operation result is unconfirmed.</string>
 </resources>

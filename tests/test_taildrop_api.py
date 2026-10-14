@@ -230,6 +230,62 @@ cp() { return 1; }
         self.assertEqual(listing['files'], [])
         self.assertEqual(listing['ignored'], len(unsupported))
 
+    def test_large_inbox_uses_one_native_listing_and_no_per_file_helpers(self):
+        for index in range(500):
+            (self.inbox / f'file-{index:03}.txt').write_text('payload')
+        (self.inbox / '.env').write_text('hidden')
+        (self.inbox / '.taildrop').mkdir()
+        (self.inbox / '.outgoing').mkdir()
+        (self.inbox / 'directory').mkdir()
+        calls = self.run / 'inbox-native-calls'
+        jq_calls = self.run / 'inbox-jq-calls'
+        result = self.shell('''
+stat() { echo 'unexpected shell stat' >&2; return 1; }
+_file_name_valid() { echo 'unexpected per-file validation' >&2; return 1; }
+_op_exec() {
+  printf '%s\\n' "$3" >>"$TS_RUN_DIR/inbox-native-calls"
+  shift
+  "$@"
+}
+jqr() {
+  printf '%s\\n' jq >>"$TS_RUN_DIR/inbox-jq-calls"
+  command jq "$@"
+}
+cmd_files_inbox
+''')
+        listing = json.loads(result.stdout)
+        self.assertEqual(set(listing), {'ok', 'files'})
+        self.assertTrue(listing['ok'])
+        self.assertEqual(len(listing['files']), 501)
+        self.assertEqual(calls.read_text().splitlines(), ['inbox-list'])
+        self.assertEqual(jq_calls.read_text().splitlines(), ['jq'])
+        for entry in listing['files']:
+            expected = (self.inbox / entry['name']).stat()
+            self.assertEqual(entry, {'name': entry['name'], 'size': expected.st_size,
+                                     'mtime': int(expected.st_mtime)})
+
+    def test_inbox_listing_rejects_symlink_directory_without_following_it(self):
+        self.inbox.rmdir()
+        outside = self.base / 'outside-inbox'
+        outside.mkdir()
+        (outside / 'secret').write_text('keep private')
+        self.inbox.symlink_to(outside, target_is_directory=True)
+        result = self.shell('cmd_files_inbox', ok=False)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertFalse(json.loads(result.stdout)['ok'])
+        self.assertEqual((outside / 'secret').read_text(), 'keep private')
+
+    def test_inbox_native_failure_is_not_replaced_with_empty_success(self):
+        helper = self.base / 'bin/foxyfiles'
+        helper.write_text('#!/bin/sh\necho metadata-unavailable >&2\nexit 1\n')
+        helper.chmod(0o755)
+        result = self.shell('cmd_files_inbox', ok=False)
+        self.assertNotEqual(result.returncode, 0)
+        response = json.loads(result.stdout)
+        self.assertFalse(response['ok'])
+        self.assertIn('metadata-unavailable', response['error'])
+        self.assertNotIn('files', response)
+
     def test_inbox_item_operations_reject_unsupported_names(self):
         for name in ('tab\tname', 'line\nbreak', 'delete\x7fname', 'c1\u0085name', 'back\\slash'):
             (self.inbox / name).write_text('preserve')
@@ -311,6 +367,42 @@ taildrop_confirm_direct
             self.assertEqual((self.inbox / name / 'keep').read_text(), 'nested')
         self.assertTrue(self.base.is_dir())
         self.assertEqual(json.loads(self.shell('cmd_file_clear').stdout), {'ok': True, 'removed': 0})
+
+    def test_selected_delete_preserves_unselected_and_reports_partial_failure(self):
+        for name in ('a.txt', '.hidden', 'keep.txt'):
+            (self.inbox / name).write_text(name)
+        outside = self.base / 'outside'
+        outside.write_text('outside')
+        (self.inbox / 'link').symlink_to(outside)
+        names = ['a.txt', '.hidden', 'missing', 'link']
+        result = json.loads(self.shell('set -e\ncmd_file_delete_many ' + shlex.quote(json.dumps(names))).stdout)
+        self.assertEqual((result['succeeded'], result['failed']), (2, 2))
+        self.assertEqual([(item['name'], item['ok']) for item in result['results']], [(name, i < 2) for i, name in enumerate(names)])
+        self.assertEqual((self.inbox / 'keep.txt').read_text(), 'keep.txt')
+        self.assertEqual(outside.read_text(), 'outside')
+        self.assertTrue((self.inbox / 'link').is_symlink())
+        self.assertFalse((self.inbox / 'a.txt').exists())
+        self.assertFalse((self.inbox / '.hidden').exists())
+
+    def test_selected_export_preserves_existing_and_exact_names(self):
+        name = "literal * ' ; $(id).txt"
+        (self.inbox / name).write_text('new')
+        (self.downloads / name).write_text('original')
+        result = json.loads(self.shell('cmd_file_export_many ' + shlex.quote(json.dumps([name, 'missing']))).stdout)
+        self.assertEqual((result['succeeded'], result['failed']), (1, 1))
+        self.assertEqual(Path(result['results'][0]['path']).read_text(), 'new')
+        self.assertEqual((self.downloads / name).read_text(), 'original')
+        self.assertEqual((self.inbox / name).read_text(), 'new')
+        self.assertFalse(list(self.run.glob('.file-batch.*')))
+
+    def test_batch_validates_whole_selection_before_any_mutation(self):
+        (self.inbox / 'keep').write_text('original')
+        for names in ([], ['keep', '../outside'], ['keep', 'keep'], ['keep', '.outgoing'], ['keep', 'bad\nname'], ['keep'] + [str(i) for i in range(32)], {'keep': True}):
+            with self.subTest(names=names):
+                result = self.shell('cmd_file_delete_many ' + shlex.quote(json.dumps(names)), ok=False)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertFalse(json.loads(result.stdout)['ok'])
+                self.assertEqual((self.inbox / 'keep').read_text(), 'original')
 
 
 

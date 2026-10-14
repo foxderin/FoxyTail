@@ -21,48 +21,57 @@ final class TunnelPage extends ControlPage {
         socks = button(actions, s(R.string.web_tun_socks_check), R.drawable.ic_network_check, this::checkSocks);
         socks.setEnabled(false); socks.setVisibility(View.GONE);
         LinearLayout overview = section(s(R.string.web_tools_tunnel_overview), R.drawable.ic_router, null);
-        ControlUi.cardAction(overview, textButton(overview, s(R.string.web_tools_refresh), this::refresh));
+        ControlUi.cardAction(overview, iconButton(overview, R.drawable.ic_refresh, s(R.string.web_tools_refresh), this::refresh));
         tunState = label(overview, s(R.string.web_loading));
         tunBox = row(overview); tunBox.setOrientation(LinearLayout.VERTICAL);
         LinearLayout dns = section(s(R.string.web_dns_title), R.drawable.ic_dns, null);
         dnsBox = row(dns); dnsBox.setOrientation(LinearLayout.VERTICAL);
         ControlUi.emptyState(dnsBox, s(R.string.web_tools_dns_unchecked), R.drawable.ic_dns);
         dnsCheck = tonal(dns, s(R.string.web_dns_check), this::checkDns);
-        textButton(dns, s(R.string.web_tools_dns_settings) + " ›", () -> activity.navigate("settings"));
+        iconButton(dns, R.drawable.ic_settings, s(R.string.web_tools_dns_settings), () -> activity.navigate("settings"));
         embed(new CoexistPage(activity));
         socksBox = section(s(R.string.web_tun_socks_check), R.drawable.ic_network_check, null);
         socksResult = label(socksBox, ""); ControlUi.setCardVisible(socksBox, false);
         derpBox = section(s(R.string.web_tun_derp), R.drawable.ic_speed, null); ControlUi.setCardVisible(derpBox, false);
+        activity.addStatusListener(value -> { if (isCurrent() && !activity.statusFresh()) { socks.setEnabled(false); tunState.setVisibility(View.VISIBLE); tunState.setText(s(R.string.web_net_status_stale)); } });
+        if (activity.tunnelSnapshot != null) renderTun(activity.tunnelSnapshot, false);
         repeat(this::refresh, 15000);
     }
     @Override String title() { return s(R.string.web_tun_title); }
-    @Override void load() { refresh(); }
+    @Override void load() { if (tun != null) renderTun(tun, false); refresh(); }
     @Override void onPause() { reading = false; dnsReading = false; dnsAgain = false; socks.setEnabled(false); dnsCheck.setEnabled(true); }
     private void refresh() {
         if (reading) return; reading = true;
-        read(status -> read(result -> {
-            reading = false; tun = result; tunState.setVisibility(View.GONE); tunBox.removeAllViews();
+        int revision = activity.statusRevision();
+        read(result -> {
+            reading = false;
+            if (revision != activity.statusRevision()) { refresh(); return; }
+            activity.tunnelSnapshot = result; renderTun(result, true);
+        }, this::tunFailed, "tun");
+    }
+    private void renderTun(JSONObject result, boolean fresh) {
+            tun = result; tunState.setVisibility(fresh ? View.GONE : View.VISIBLE); tunState.setText(s(R.string.web_net_status_stale)); tunBox.removeAllViews();
             String mode = result.optString("mode", "");
-            if (!"bridge".equals(mode)) hint(tunBox, s("tun".equals(mode) ? R.string.web_tools_tun_desc : "proxy".equals(mode) ? R.string.web_tools_proxy_desc : R.string.web_net_unknown));
             LinearLayout metrics = row(tunBox);
             ControlUi.MetricTile iface = metric(metrics, R.drawable.ic_router, s(R.string.web_tun_iface));
             Object up = result.opt("ifaceUp"); iface.value.setText(up instanceof Boolean ? s(Boolean.TRUE.equals(up) ? R.string.web_tun_up : R.string.web_tun_down) : "—");
             iface.sub.setText("tailscale0"); iface.sub.setVisibility(View.VISIBLE);
+            iface.value.setSingleLine(true); iface.value.setEllipsize(android.text.TextUtils.TruncateAt.END);
             ControlUi.MetricTile gateway = metric(metrics, R.drawable.ic_alt_route, s(R.string.web_tun_gateway));
             gateway.value.setText(OverviewPage.textOrDash(result, "gateway"));
+            gateway.value.setSingleLine(true); gateway.value.setEllipsize(android.text.TextUtils.TruncateAt.END);
             if ("bridge".equals(mode)) {
                 Object pid = result.opt("hevPid");
                 ControlUi.infoRow(tunBox, s(R.string.web_tun_hev), pid instanceof Number && ((Number) pid).longValue() > 0 ? "PID " + pid : pid == JSONObject.NULL ? s(R.string.web_tun_not_running) : "—", pid instanceof Number && ((Number) pid).longValue() > 0);
             }
-            textButton(tunBox, s(R.string.web_more_routing) + " ›", () -> activity.navigate("routing"));
+            iconButton(tunBox, R.drawable.ic_alt_route, s(R.string.web_more_routing), () -> activity.navigate("routing"));
             boolean supportsSocks = "bridge".equals(mode) || "proxy".equals(mode);
-            socks.setVisibility(supportsSocks ? View.VISIBLE : View.GONE); socks.setEnabled(supportsSocks && socksEndpoint(result) != null);
+            socks.setVisibility(supportsSocks ? View.VISIBLE : View.GONE); socks.setEnabled(fresh && supportsSocks && socksEndpoint(result) != null);
             if (!supportsSocks) ControlUi.setCardVisible(socksBox, false);
-        }, this::tunFailed, "tun"), this::tunFailed, "status");
     }
     private void tunFailed(Exception failure) {
         reading = false; tunState.setVisibility(View.VISIBLE); tunState.setText(s(R.string.web_net_status_stale));
-        socks.setEnabled(false); tunBox.removeAllViews(); textButton(tunBox, s(R.string.web_retry), this::refresh); error(failure);
+        socks.setEnabled(false); if (tun == null) { tunBox.removeAllViews(); iconButton(tunBox, R.drawable.ic_refresh, s(R.string.web_retry), this::refresh); } error(failure);
     }
     private void checkDns() {
         if (dnsReading) { dnsAgain = true; return; }
@@ -78,7 +87,6 @@ final class TunnelPage extends ControlPage {
                     String path = ipv6DnsPathLabel(result);
                     if (path != null) {
                         ControlUi.infoRow(resultBox, s(R.string.web_tools_dns_ipv6_path), path, false);
-                        if ("fallback".equals(result.optString("ipv6DnsInterception"))) hint(resultBox, s(R.string.web_tools_dns_ipv6_fallback_hint));
                     }
                     Object nativeDns = result.opt("upstreamNative");
                     ControlUi.infoRow(resultBox, s(R.string.web_dns_native), nativeDns instanceof Boolean ? s(Boolean.TRUE.equals(nativeDns) ? R.string.web_tools_dns_native_yes : R.string.web_tools_dns_native_no) : "—", false);
@@ -86,11 +94,10 @@ final class TunnelPage extends ControlPage {
                 String endpoint = dnsEndpoint(result);
                 if (endpoint != null) {
                     ControlUi.infoRow(resultBox, s(R.string.web_tools_dns_endpoint), endpoint, false);
-                    hint(resultBox, s(R.string.web_tools_dns_endpoint_hint));
-                    textButton(resultBox, s(R.string.web_tools_dns_endpoint_copy), () -> copy(s(R.string.web_tools_dns_endpoint), endpoint));
+                    iconButton(resultBox, R.drawable.ic_content_copy, s(R.string.web_tools_dns_endpoint_copy), () -> copy(s(R.string.web_tools_dns_endpoint), endpoint));
                 }
-                if ("transparent".equals(result.optString("mode")) && Boolean.TRUE.equals(result.opt("listenerReady")))
-                    hint(resultBox, s("transparent-unavailable".equals(result.optString("reason")) ? R.string.web_tools_dns_transparent_unavailable : R.string.web_tools_dns_transparent_limit));
+                if ("transparent".equals(result.optString("mode")) && Boolean.TRUE.equals(result.opt("listenerReady")) && "transparent-unavailable".equals(result.optString("reason")))
+                    hint(resultBox, s(R.string.web_tools_dns_transparent_unavailable));
                 if (result.opt("suffix") instanceof String && !result.optString("suffix").isEmpty()) ControlUi.infoRow(resultBox, s(R.string.web_dns_suffix), result.optString("suffix"), false);
             }
             if (dnsAgain) { dnsAgain = false; checkDns(); }
@@ -219,7 +226,6 @@ final class TunnelPage extends ControlPage {
             case "interception-lost": case "queue-failed": return R.string.web_tools_dns_interception_lost;
             case "guard-failed": return R.string.web_tools_dns_guard_failed;
             case "capture-mark-conflict": return R.string.web_tools_dns_mark_conflict;
-            case "packet-policy-conflict": return R.string.web_tools_dns_packet_policy_conflict;
             case "dns-interception-conflict": return R.string.web_tools_dns_interception_conflict;
             case "stopped": return R.string.web_dns_stopped;
             case "degraded": return R.string.web_dns_degraded;

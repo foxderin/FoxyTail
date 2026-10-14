@@ -140,9 +140,19 @@ final class RootApi {
         execute(context, null, null, destination, MAX_FILE, null, 1800, new Call(), "artifact-read", id);
     }
     static void readInbox(Context context, String name, OutputStream destination) throws Exception {
+        readInbox(context, name, destination, null, new Call());
+    }
+    static void readInbox(Context context, String name, OutputStream destination, Progress progress, Call call) throws Exception {
         context = ControlUi.localized(context);
         Models.requireName(name);
-        execute(context, null, null, destination, MAX_FILE, null, 1800, new Call(), "file-read", name);
+        OutputStream output = progress == null ? destination : new FilterOutputStream(destination) {
+            long copied;
+            @Override public void write(byte[] bytes, int offset, int length) throws IOException {
+                out.write(bytes, offset, length); copied += length; progress.copied(copied);
+            }
+            @Override public void write(int value) throws IOException { out.write(value); progress.copied(++copied); }
+        };
+        execute(context, null, null, output, MAX_FILE, null, 1800, call, "file-read", name);
     }
     private static void execute(Context context, String request, InputStream input, OutputStream output, long outputLimit, Progress progress, int seconds, Call call, String... args) throws Exception {
         StringBuilder command = new StringBuilder("if [ \"$(/system/bin/id -u)\" != 0 ]; then echo FOXYTAIL_ROOT_DENIED >&2; exit 77; fi; if [ ! -f ").append(quote(SCRIPT)).append(" ] || [ ! -r ").append(quote(SCRIPT)).append(" ]; then echo FOXYTAIL_MODULE_MISSING >&2; exit 72; fi; echo FOXYTAIL_ROOT_READY >&2; exec /system/bin/sh ").append(quote(SCRIPT));

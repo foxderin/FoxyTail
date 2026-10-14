@@ -1,5 +1,2 @@
 <resources>
-    <string name="repair_network_manage_exit">Manage exit nodes</string>
-    <string name="repair_network_topology_list">All devices · %1$d</string>
-    <string name="repair_network_topology_shown">Diagram · %1$d / %2$d devices</string>
 </resources>

@@ -70,6 +70,16 @@ cmd_file_send_history() {
   _file_json_command 15 send-history --root "${TS_DIR}"
 }
 
+cmd_file_send_delete() {
+  [ "$#" = 1 ] || jerr 'file-send-delete: expected transfer ID'
+  _file_json_command 15 send-delete --root "${TS_DIR}" --id "$1"
+}
+
+cmd_file_send_clear() {
+  [ "$#" = 0 ] || jerr 'file-send-clear: expected no arguments'
+  _file_json_command 15 send-clear --root "${TS_DIR}"
+}
+
 # _op_exec backgrounds its child: preserve stdin explicitly across POSIX async lists.
 _file_stage_exec() {
   "${TS_BIN_DIR}/foxyfiles" stage --root "${TS_DIR}" --name "$1" --size "$2" <&3

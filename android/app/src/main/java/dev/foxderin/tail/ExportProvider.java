@@ -18,14 +18,34 @@ public final class ExportProvider extends ContentProvider {
         if (!directory.isDirectory() && !directory.mkdirs()) throw new IOException(context.getString(R.string.export_failed));
         return directory;
     }
-    static Uri export(Context context, String name) throws Exception {
-        return cache(context, name, output -> RootApi.readInbox(context, name, output));
+    static Uri export(Context context, String name, RootApi.Progress progress, RootApi.Call call) throws Exception {
+        return cache(context, name, output -> RootApi.readInbox(context, name, output, progress, call));
     }
     static Uri exportArtifact(Context context, String id, String displayName) throws Exception {
         if (id == null || !id.matches("art-[a-f0-9]{32}")) throw new IOException("Invalid artifact token");
         return cache(context, displayName, output -> RootApi.readArtifact(context, id, output));
     }
     interface Writer { void write(OutputStream output) throws Exception; }
+    interface Commit { void begin() throws Exception; }
+    static void save(Context context, String name, Uri target, Writer source, Commit commit, RootApi.Progress progress) throws Exception {
+        Uri staged = cache(context, name, source);
+        try {
+            try (InputStream input = context.getContentResolver().openInputStream(staged)) {
+                if (input == null) throw new IOException(context.getString(R.string.export_failed));
+                // Verified staging and the UI cancellation fence both precede any destination write.
+                commit.begin();
+                try (OutputStream output = context.getContentResolver().openOutputStream(target, "wt")) {
+                    if (output == null) throw new IOException(context.getString(R.string.export_failed));
+                    RootApi.copy(input, output, RootApi.MAX_FILE, progress, null);
+                }
+            }
+        } finally { discard(context, staged); }
+    }
+    static void discard(Context context, Uri staged) throws IOException {
+        if (!AUTHORITY.equals(staged.getAuthority()) || staged.getPathSegments().size() != 1 || !staged.getLastPathSegment().matches("[a-f0-9]{32}")) throw new IOException("Invalid export URI");
+        File file = new File(directory(context), staged.getLastPathSegment());
+        if (file.delete()) context.getSharedPreferences("exports", Context.MODE_PRIVATE).edit().remove(file.getName()).apply();
+    }
     static Uri cache(Context context, String name, Writer writer) throws Exception {
         Models.requireName(name);
         File directory = directory(context);

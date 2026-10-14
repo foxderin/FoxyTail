@@ -11,7 +11,7 @@ import java.time.Instant;
 final class OverviewPage extends ControlPage {
     private final LinearLayout statusBox, exitBox, detailRow, compatibility, expiryBox, skeleton, tilesRow;
     private final ControlUi.HealthCard health;
-    private final Button retryButton;
+    private final View retryButton;
     private final LinearLayout loginHero, loginBody, loginResult, authFields;
     private final android.widget.TextView loginState, loginUrlText;
     private final android.widget.EditText authKey;
@@ -25,7 +25,7 @@ final class OverviewPage extends ControlPage {
         expiryBox = row(content); expiryBox.setOrientation(LinearLayout.VERTICAL);
         compatibility = row(content); compatibility.setOrientation(LinearLayout.VERTICAL);
         health = ControlUi.healthCard(content);
-        retryButton = ControlUi.button(activity, s(R.string.web_retry), R.drawable.ic_refresh, () -> { if (isCurrent()) activity.refreshStatus(); });
+        retryButton = ControlUi.iconButton(activity, R.drawable.ic_refresh, s(R.string.web_retry), () -> { if (isCurrent()) activity.refreshStatus(); });
         LinearLayout.LayoutParams retryParams = new LinearLayout.LayoutParams(-2, -2); retryParams.setMarginEnd(dp(8));
         health.actions.addView(retryButton, retryParams);
         loginHero = section();
@@ -123,7 +123,7 @@ final class OverviewPage extends ControlPage {
         ControlUi.setCardVisible(statusBox, !loading);
         ControlUi.setCardVisible(exitBox, !loading);
         String error = activity.statusError();
-        int label = connectionLabel(error == null ? snapshot : null);
+        int label = connectionLabel(error == null && activity.statusFresh() ? snapshot : null);
         boolean connected = label == R.string.network_connected;
         int tone = connected ? ControlUi.TONE_OK
                 : label == R.string.network_unknown ? ControlUi.TONE_ERROR
@@ -137,7 +137,7 @@ final class OverviewPage extends ControlPage {
         health.title.setText(s(label == R.string.network_connected ? R.string.web_net_connected : label == R.string.network_stopped ? R.string.web_dash_stopped :
                 label == R.string.network_login_needed ? R.string.web_hero_login_title : label == R.string.network_unknown ? R.string.web_net_status_stale : R.string.web_net_connecting));
         String hint = error != null || label == R.string.network_unknown ? s(R.string.web_net_unknown_hint)
-                : connected ? "" : s(label == R.string.network_stopped ? R.string.web_net_stopped_hint : label == R.string.network_login_needed ? R.string.web_net_login_hint : R.string.web_net_connecting_hint);
+                : connected || label == R.string.network_stopped || label == R.string.network_login_needed ? "" : s(R.string.web_net_connecting_hint);
         health.hint.setText(hint); health.hint.setVisibility(hint.isEmpty() ? View.GONE : View.VISIBLE);
         health.actions.setVisibility(label == R.string.network_unknown ? View.VISIBLE : View.GONE);
         retryButton.setVisibility(label == R.string.network_unknown ? View.VISIBLE : View.GONE);
@@ -173,12 +173,12 @@ final class OverviewPage extends ControlPage {
         String expiry = error == null && snapshot != null ? snapshot.optString("keyExpiry", "") : "";
         if (!expiry.isEmpty() && expiresSoon(expiry, System.currentTimeMillis()))
             ControlUi.banner(expiryBox, R.drawable.ic_warning, s(R.string.web_dash_key_expiring) + expiry, ControlUi.TONE_WARN);
-        renderExit(snapshot, error == null);
+        renderExit(snapshot, activity.statusFresh());
     }
 
     private void renderExit(JSONObject snapshot, boolean fresh) {
         exitBox.removeAllViews();
-        JSONObject routing = fresh && snapshot != null ? snapshot.optJSONObject("exitRouting") : null;
+        JSONObject routing = fresh ? activity.exitRoutingSnapshot() : null;
         JSONObject node = fresh && snapshot != null ? snapshot.optJSONObject("exitNode") : null;
         LinearLayout heading = row(exitBox); heading.setGravity(android.view.Gravity.CENTER_VERTICAL);
         android.widget.ImageView avatar = new android.widget.ImageView(activity); avatar.setImageResource(node == null ? R.drawable.ic_language : R.drawable.ic_logout); avatar.setPadding(dp(10), dp(10), dp(10), dp(10));
@@ -190,15 +190,15 @@ final class OverviewPage extends ControlPage {
             dot.setTextColor(node != null && Boolean.TRUE.equals(node.opt("online")) ? androidx.core.content.ContextCompat.getColor(activity, R.color.foxy_ok) : com.google.android.material.color.MaterialColors.getColor(dot, com.google.android.material.R.attr.colorOutline));
             dot.setContentDescription(s(node != null && Boolean.TRUE.equals(node.opt("online")) ? R.string.web_net_filter_online : R.string.web_net_filter_offline)); heading.addView(dot);
         }
-        hint(exitBox, s(ExitNodesPage.effectiveLabel(routing)));
+        int effective = ExitNodesPage.effectiveLabel(routing);
+        if (effective != 0) hint(exitBox, s(effective));
         if (routing != null && routing.optJSONObject("selected") != null && "bridge".equals(snapshot.optString("mode")))
             hint(exitBox, s(R.string.web_net_exit_scope) + ": " + routing.optString("scope", "") + " " + ExitNodesPage.scopeUids(routing));
         if (node != null) {
-            hint(exitBox, s(R.string.web_net_exit_hint));
             ControlUi.infoRow(exitBox, s(R.string.web_dash_traffic), "↓ " + byteValue(node, "rx") + "   ↑ " + byteValue(node, "tx"), false);
             if (Boolean.FALSE.equals(node.opt("online"))) ControlUi.banner(exitBox, R.drawable.ic_warning, s(R.string.web_net_exit_unavailable), ControlUi.TONE_WARN);
         }
-        textButton(exitBox, s(R.string.web_net_manage_exit) + " ›", () -> activity.navigate("exitnodes"));
+        iconButton(exitBox, R.drawable.ic_chevron_right, s(R.string.web_net_manage_exit), () -> activity.navigate("peers"));
     }
     private String byteValue(JSONObject object, String field) { return object.opt(field) instanceof Number ? WebFormat.bytes(object.optLong(field)) : "—"; }
     static String textOrDash(JSONObject object, String key) {
@@ -244,20 +244,19 @@ final class OverviewPage extends ControlPage {
         if (!needed) { heroDismissed = false; loginUrl = null; authKey.setText(""); loginResult.setVisibility(View.GONE); authFields.setVisibility(View.GONE); return; }
         loginBody.removeAllViews();
         if (heroDismissed) {
-            hint(loginBody, s(R.string.web_hero_banner_login));
-            textButton(loginBody, s(R.string.web_hero_expand), () -> { heroDismissed = false; renderLoginHero(true); });
+            iconButton(loginBody, R.drawable.ic_expand_more, s(R.string.web_hero_expand), () -> { heroDismissed = false; renderLoginHero(true); });
             loginResult.setVisibility(View.GONE); authFields.setVisibility(View.GONE); return;
         }
-        textButton(loginBody, s(R.string.web_hero_minimize), () -> { heroDismissed = true; renderLoginHero(true); });
-        hint(loginBody, s(R.string.web_net_login_secure)); label(loginBody, s(R.string.web_hero_login_title)); hint(loginBody, s(R.string.web_hero_login_desc));
+        iconButton(loginBody, R.drawable.ic_expand_less, s(R.string.web_hero_minimize), () -> { heroDismissed = true; renderLoginHero(true); });
+        hint(loginBody, s(R.string.web_net_login_secure)); label(loginBody, s(R.string.web_hero_login_title));
         LinearLayout actions = row(loginBody);
         primary(actions, s(R.string.web_hero_get_link), R.drawable.ic_login, () -> guardedLogin(this::getLoginLink));
-        textButton(actions, s(R.string.web_acc_authkey), () -> authFields.setVisibility(authFields.getVisibility() == View.VISIBLE ? View.GONE : View.VISIBLE));
+        iconButton(actions, R.drawable.ic_vpn_key, s(R.string.web_acc_authkey), () -> authFields.setVisibility(authFields.getVisibility() == View.VISIBLE ? View.GONE : View.VISIBLE));
         if (loginUrl != null) loginResult.setVisibility(View.VISIBLE);
     }
     private void guardedLogin(Runnable action) {
         if (!activity.client.canWrite()) { notice(activity.client.message()); return; }
-        if (loginBusy || activity.client.busy() || activity.statusError() != null || connectionLabel(activity.statusSnapshot()) != R.string.network_login_needed) return;
+        if (loginBusy || activity.client.busy() || !activity.statusFresh() || activity.statusError() != null || connectionLabel(activity.statusSnapshot()) != R.string.network_login_needed) return;
         confirm(s(R.string.web_hero_login_title), s(R.string.network_account_interrupt), () -> {
             if (loginBusy || activity.client.busy()) return;
             loginBusy = true;

@@ -19,7 +19,7 @@ import (
 )
 
 func TestMain(m *testing.M) {
-	if len(os.Args) > 1 && (os.Args[1] == "send-worker" || os.Args[1] == "send-start" || os.Args[1] == "send-status" || os.Args[1] == "send-cancel" || os.Args[1] == "send-history" || os.Args[1] == "send-stop") {
+	if len(os.Args) > 1 && (os.Args[1] == "send-worker" || os.Args[1] == "send-start" || os.Args[1] == "send-status" || os.Args[1] == "send-cancel" || os.Args[1] == "send-history" || os.Args[1] == "send-delete" || os.Args[1] == "send-clear" || os.Args[1] == "send-stop") {
 		main()
 		os.Exit(0)
 	}
@@ -593,14 +593,10 @@ func TestWorkerDeathRecoveredFromReleasedLock(t *testing.T) {
 		t.Fatal(err)
 	}
 	worker.Wait()
-	guard, err := store.guard()
-	if err != nil {
-		t.Fatal(err)
-	}
-	err = store.recoverInterrupted()
-	guard.Close()
-	if err != nil {
-		t.Fatal(err)
+	corruptOtherTransfer(t, root)
+	result := queryTransfer(t, root, "send-status", record.ID)
+	if result.Status != "interrupted" {
+		t.Fatalf("crashed worker query returned active state: %+v", result)
 	}
 	loaded, err := store.load(record.ID)
 	if err != nil || loaded.Status != "interrupted" || loaded.Files[0].Status != "failed" || loaded.Files[1].Status != "failed" {

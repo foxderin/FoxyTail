@@ -196,63 +196,23 @@ do_status() {
   fi
 }
 
-# Keep only last counters and aggregate buckets, never all retained samples.
+# Native aggregation keeps bounded chronological ordering and reuses unchanged summaries.
 stats_summary() (
-  _sd_tmp=$(mktemp -d "${TS_RUN_DIR}/.stats-query.XXXXXX") || exit 1
-  trap 'rm -rf "${_sd_tmp}"' 0
-  trap 'exit 130' HUP INT TERM
-  {
-    for _sd_file in $(stats_recent_files); do cat "${_sd_file}" || exit 1; done
-    : >"${_sd_tmp}/input-complete"
-  } | "${TS_BIN_DIR}/foxyfiles" ordered-stats "${_sd_tmp}" >"${_sd_tmp}/ordered" || exit 1
-  [ -f "${_sd_tmp}/input-complete" ] || exit 1
-  jqr -R -n -c --arg d "${1:-$(date +%F)}" --arg mode "${2:-summary}" --argjson n "${3:-10}" '
-      def delta($old; $new; $changed):
-        if $old == null then 0 elif $changed or $new < $old then $new else $new - $old end;
-      def pair($old; $new; $changed):
-        {rx:delta($old.rx; ($new.rx // 0); $changed),tx:delta($old.tx; ($new.tx // 0); $changed)};
-      reduce (inputs | fromjson? | select(type=="object" and .error==null and (.ts|type)=="number")) as $s
-        ({lastIface:null,lastPeers:{},lastUids:{},days:{},hours:{},peers:{},uids:{}};
-          . as $acc | ($s.generation // {}) as $gen
-          | ($s.ts | strflocaltime("%F")) as $day
-          | ($s.ts | strflocaltime("%H")) as $hour
-          | .days[$day] //= {date:$day,samples:0,rx:0,tx:0}
-          | if $day==$d then .hours[$hour] //= {hour:($hour|tonumber),samples:0,iface:{rx:0,tx:0},peers:{}} else . end
-          | if $s.iface != null then
-              pair(.lastIface.value; $s.iface; .lastIface!=null and ($gen.iface // "")!=(.lastIface.gen // "")) as $v
-              | .days[$day].samples+=1 | .days[$day].rx+=$v.rx | .days[$day].tx+=$v.tx
-              | if $day==$d then .hours[$hour].samples+=1 | .hours[$hour].iface.rx+=$v.rx | .hours[$hour].iface.tx+=$v.tx else . end
-              | .lastIface={value:$s.iface,gen:$gen.iface}
-            else . end
-          | reduce $s.peers[]? as $p (. ;
-              ($p.id|tostring) as $id | $acc.lastPeers[$id] as $old
-              | pair($old.value; $p; $old!=null and ($gen.peers // "")!=($old.gen // "")) as $v
-              | .peers[$id] //= {id:$id,rx:0,tx:0}
-              | .peers[$id].rx+=$v.rx | .peers[$id].tx+=$v.tx
-              | if $day==$d then
-                  .hours[$hour].peers[$id] //= {id:$id,rx:0,tx:0}
-                  | .hours[$hour].peers[$id].rx+=$v.rx | .hours[$hour].peers[$id].tx+=$v.tx
-                else . end
-              | .lastPeers[$id]={value:$p,gen:$gen.peers})
-          | if $s.uidDirection=="tx" then
-              reduce $s.uids[]? as $u (. ;
-                ($u.uid|tostring) as $id | $acc.lastUids[$id] as $old
-                | pair($old.value; $u; $old!=null and ($gen.uids // "")!=($old.gen // "")) as $v
-                | .uids[$id] //= {uid:$id,rx:0,tx:0} | .uids[$id].tx+=$v.tx
-                | .lastUids[$id]={value:$u,gen:$gen.uids})
-            else . end)
-      | . as $result
-      | {date:$d,attribution:"interval-end",direction:"tx",
-          days:(.days | [.[]] | sort_by(.date)),
-          hours:[range(0;24) | . as $h | ($h|tostring | if length==1 then "0"+. else . end) as $key
-            | ($result.hours[$key] // {hour:$h,samples:0,iface:{rx:0,tx:0},peers:{}}) | .peers |= [.[]]],
-          topn:(.peers | [.[] | select(.rx+.tx>0)] | sort_by([-(.rx+.tx),.id])),
-          uids:(.uids | [.[] | select(.tx>0)] | sort_by([-.tx,.uid]))}
-      | if $mode=="hourly" then {date,attribution,hours}
-        elif $mode=="daily" then {attribution,days}
-        elif $mode=="topn" then {topn:.topn[:$n]}
-        elif $mode=="uids" then {uids:.uids[:$n],direction}
-        else . end' "${_sd_tmp}/ordered"
+  _sd_date="${1:-$(date +%F)}" _sd_mode="${2:-summary}" _sd_limit="${3:-10}"
+  _sd_timezone="${TZ:-}"
+  if [ -z "$_sd_timezone" ] && command -v getprop >/dev/null 2>&1; then
+    _sd_timezone=$(getprop persist.sys.timezone)
+  fi
+  _sd_files=$(stats_recent_files) || exit 1
+  set --
+  while IFS= read -r _sd_file; do
+    [ -z "$_sd_file" ] || set -- "$@" "$_sd_file"
+  done <<EOF
+$_sd_files
+EOF
+  exec "${TS_BIN_DIR}/foxyfiles" stats-summary --temp "${TS_RUN_DIR}" \
+    --date "$_sd_date" --mode "$_sd_mode" --limit "$_sd_limit" \
+    --retention "${STATS_RETENTION_DAYS:-}" --timezone "$_sd_timezone" -- "$@"
 )
 
 query() {

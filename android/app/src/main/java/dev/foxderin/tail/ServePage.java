@@ -16,10 +16,10 @@ final class ServePage extends ControlPage {
     ServePage(ControlActivity activity) {
         super(activity);
         LinearLayout privateCard = section(s(R.string.web_serve_serve), R.drawable.ic_vpn_key, s(R.string.web_tools_serve_private));
-        ControlUi.cardAction(privateCard, textButton(privateCard, s(R.string.web_tools_refresh), () -> loadKind(false)));
+        ControlUi.cardAction(privateCard, iconButton(privateCard, R.drawable.ic_refresh, s(R.string.web_tools_refresh), () -> loadKind(false)));
         privateRows = group(privateCard);
         LinearLayout publicCard = section(s(R.string.web_serve_funnel), R.drawable.ic_dns, s(R.string.web_tools_serve_public));
-        ControlUi.cardAction(publicCard, textButton(publicCard, s(R.string.web_tools_refresh), () -> loadKind(true)));
+        ControlUi.cardAction(publicCard, iconButton(publicCard, R.drawable.ic_refresh, s(R.string.web_tools_refresh), () -> loadKind(true)));
         publicRows = group(publicCard);
         LinearLayout form = section(s(R.string.web_serve_add), R.drawable.ic_add, null);
         kind = choice(form, new String[]{"Serve · " + s(R.string.web_tools_serve_private), "Funnel · " + s(R.string.web_tools_serve_public)}, activity.drafts.getInt("serve.kind", 0), index -> {
@@ -84,7 +84,7 @@ final class ServePage extends ControlPage {
                 }
                 if (count == 0) label(rows, s(R.string.web_serve_empty));
             } catch (Exception failure) { error(failure); }
-        }, failure -> { rows.removeAllViews(); label(rows, failure.getMessage()); textButton(rows, s(R.string.web_tools_refresh), () -> loadKind(funnel)); }, funnel ? "funnel-list" : "serve-list");
+        }, failure -> { rows.removeAllViews(); label(rows, failure.getMessage()); iconButton(rows, R.drawable.ic_refresh, s(R.string.web_tools_refresh), () -> loadKind(funnel)); }, funnel ? "funnel-list" : "serve-list");
     }
     private void add() {
         String portDraft = port.getText().toString(), targetDraft = target.getText().toString();

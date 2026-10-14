@@ -97,6 +97,38 @@ jqr() { jq "$@"; }
         result = self.invoke('check_dns_hijack_quiet', '', 'iptables() { return 1; }')
         self.assertEqual(result.returncode, 0)
 
+    def test_batch_inventory_keeps_categories_exclusions_and_package_names(self):
+        modules = self.base / 'modules'
+        for name in ('foxytail', 'MiHoMo_Module', 'AfWall_Module', 'searchbox-clash'):
+            (modules / name).mkdir(parents=True)
+        packages = self.base / 'packages'
+        names = [f'com.example.app{i}' for i in range(500)] + [
+            'com.Example.ClAsH', 'org.example.SINGBOX', 'dev.example.AFWALL',
+            'dev.example.NetGuard', 'org.sandbox.clash', 'com.searchbox.netguard']
+        packages.write_text(''.join('package:' + name + '\n' for name in names)
+                            + 'package:com.example.mihomo\r\nnot-a-package:clash\n')
+        source = (ROOT / 'tailscale/scripts/foxytail.compat').read_text()
+        inventory = source[source.index('_compat_kind='):source.index('check_dns_hijack_quiet() {')]
+        script = self.base / 'inventory.sh'
+        script.write_text('have_jq() { return 0; }\njqr() { jq "$@"; }\n'
+                          'pm() { cat "$PACKAGES"; }\ncheck_dns_hijack_quiet() { return 1; }\n'
+                          + inventory.replace('/data/adb/modules', str(modules)) + '\nprobe\n')
+        result = subprocess.run(['sh', str(script)], env={**os.environ, 'PACKAGES': str(packages)},
+                                capture_output=True, text=True, timeout=5)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        data = json.loads(result.stdout)
+        self.assertEqual(data['apps'], [
+            {'package': 'com.Example.ClAsH', 'kind': 'proxy'},
+            {'package': 'org.example.SINGBOX', 'kind': 'proxy'},
+            {'package': 'dev.example.AFWALL', 'kind': 'firewall'},
+            {'package': 'dev.example.NetGuard', 'kind': 'vpn'},
+            {'package': 'com.example.mihomo', 'kind': 'proxy'}])
+        self.assertEqual({row['name']: row['kind'] for row in data['modules']},
+                         {'MiHoMo_Module': 'proxy', 'AfWall_Module': 'firewall'})
+        self.assertEqual(len(data['warnings']), 2)
+        self.assertTrue(any('AfWall_Module' in warning and 'dev.example.AFWALL' in warning for warning in data['warnings']))
+        self.assertTrue(any('dev.example.NetGuard' in warning for warning in data['warnings']))
+
 
 if __name__ == '__main__':
     unittest.main()

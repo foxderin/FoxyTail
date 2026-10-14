@@ -80,9 +80,14 @@ public final class BridgeInstrumentation extends Instrumentation {
             if (uiFailure.get() != null) throw new AssertionError("View interaction regression", uiFailure.get());
             ControlActivity activity = (ControlActivity) startActivitySync(new android.content.Intent(context, ControlActivity.class).addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK | android.content.Intent.FLAG_ACTIVITY_CLEAR_TASK));
             try {
-                runOnMainSync(() -> { try { NetworkListChecks.run(activity); SettingsViewChecks.run(activity); } catch (Throwable error) { uiFailure.set(error); } });
+                runOnMainSync(() -> { try { NetworkListChecks.run(activity); ShellStateChecks.observations(activity); SettingsViewChecks.run(activity); } catch (Throwable error) { uiFailure.set(error); } });
                 if (uiFailure.get() != null) throw new AssertionError("Network list interaction regression", uiFailure.get());
             } finally { runOnMainSync(activity::finish); }
+            MainActivity filesActivity = (MainActivity) startActivitySync(new android.content.Intent(context, MainActivity.class).addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK | android.content.Intent.FLAG_ACTIVITY_CLEAR_TASK));
+            try {
+                runOnMainSync(() -> { try { FilesViewChecks.run(filesActivity); } catch (Throwable error) { uiFailure.set(error); } });
+                if (uiFailure.get() != null) throw new AssertionError("Files view interaction regression", uiFailure.get());
+            } finally { runOnMainSync(filesActivity::finish); }
             result.putString("stream", "PASS: root control receipts and failures, network and tool contracts, Taildrop boundaries, binary streaming, cancellation and read-only exports\n");
             finish(-1, result);
         } catch (Throwable error) {

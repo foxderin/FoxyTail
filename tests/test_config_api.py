@@ -214,6 +214,58 @@ cmd_apps''')
         self.assertEqual(apps[0], {'label': 'com.example.app000', 'package': 'com.example.app000', 'uid': 10000})
         self.assertEqual(apps[-1]['uid'], 10299)
 
+    def test_context_rules_read_is_static_and_holds_restore_lock(self):
+        rules = '# preserved comment\nssid:Office:up\n'
+        (self.conf / 'context.conf').write_text(rules)
+        result = self.shell('''
+_op_exec() { echo 'unexpected live status read' >&2; return 1; }
+jqr() {
+  [ "${_CONF_LOCK_HELD:-0}" = 1 ] || { echo 'rules read outside lock' >&2; return 1; }
+  command jq "$@"
+}
+cmd_context_get
+[ "${_CONF_LOCK_HELD:-0}" = 0 ]
+''')
+        self.assertEqual(json.loads(result.stdout), {'ok': True, 'rules': rules})
+        self.assertEqual(result.stderr, '')
+        nested = self.shell('''
+conf_lock_acquire || exit 1
+cmd_context_get
+[ "${_CONF_LOCK_HELD:-0}" = 1 ] || exit 2
+conf_lock_release
+''')
+        self.assertEqual(json.loads(nested.stdout), {'ok': True, 'rules': rules})
+        self.assertFalse((self.run / '.conf-write-lock').is_symlink())
+        (self.conf / 'context.conf').unlink()
+        self.assertEqual(json.loads(self.shell('cmd_context_get').stdout), {'ok': True, 'rules': ''})
+
+    def test_context_live_status_is_independent_and_reports_unknown(self):
+        current = {'running': True, 'context': 'ssid:Office', 'lastResult': None}
+        result = self.shell("""
+conf_lock_acquire() { echo 'unexpected static config lock' >&2; return 1; }
+_op_exec() { printf '%s\\n' """ + shlex.quote(json.dumps(current)) + """; }
+_op_cancelled() { return 1; }
+cmd_context_status
+""")
+        self.assertEqual(json.loads(result.stdout), {'ok': True, 'status': current})
+        self.assertEqual(result.stderr, '')
+        for output in ('not-json', '{}', '{"running":"yes"}'):
+            result = self.shell("_op_exec() { printf '%s\\n' " + shlex.quote(output) + "; }; cmd_context_status")
+            self.assertEqual(json.loads(result.stdout), {'ok': True, 'status': None})
+        result = self.shell('_op_exec() { return 1; }; cmd_context_status')
+        self.assertEqual(json.loads(result.stdout), {'ok': True, 'status': None})
+        cancelled = self.shell('_op_exec() { echo "{}"; }; _op_cancelled() { return 0; }; cmd_context_status', ok=False)
+        self.assertFalse(json.loads(cancelled.stdout)['ok'])
+
+    def test_context_rules_failure_releases_restore_lock(self):
+        result = self.shell('''
+jqr() { case "$1" in -R) return 1 ;; *) command jq "$@" ;; esac; }
+cmd_context_get
+''', ok=False)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('cannot read rules', json.loads(result.stdout)['error'])
+        self.assertFalse((self.run / '.conf-write-lock').is_symlink())
+
     def test_context_save_and_restore_share_validation(self):
         self.shell('conf_activate_runtime')
         valid = ['', 'ssid:Office WiFi:up\ncellular:-:down']

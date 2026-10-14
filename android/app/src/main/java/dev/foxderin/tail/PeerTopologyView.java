@@ -6,6 +6,7 @@ import android.graphics.Paint;
 import android.graphics.Path;
 import android.graphics.RectF;
 import android.text.TextUtils;
+import android.view.View;
 import android.widget.Button;
 import android.widget.FrameLayout;
 import android.widget.LinearLayout;
@@ -31,10 +32,10 @@ final class PeerTopologyView extends LinearLayout {
         addView(legend);
         addView(new Diagram(context, self, exitId, shown, selected), new LinearLayout.LayoutParams(-1, -2));
         LinearLayout fullList = new LinearLayout(context); fullList.setOrientation(VERTICAL); fullList.setVisibility(GONE);
-        Button toggle = ControlUi.textButton(context, context.getString(R.string.web_net_topology_list) + " · " + peers.size(), () -> {
+        View toggle = ControlUi.iconButton(context, R.drawable.ic_expand_more, context.getString(R.string.web_net_topology_list) + " · " + peers.size(), () -> {
             boolean open = fullList.getVisibility() != VISIBLE; fullList.setVisibility(open ? VISIBLE : GONE);
         });
-        addView(toggle, new LinearLayout.LayoutParams(-1, -2)); addView(fullList, new LinearLayout.LayoutParams(-1, -2));
+        addView(toggle, new LinearLayout.LayoutParams(-2, -2)); addView(fullList, new LinearLayout.LayoutParams(-1, -2));
         for (JSONObject peer : peers) fullList.addView(ControlUi.textButton(context,
                 (peer.optBoolean("online") ? "● " : "○ ") + peer.optString("hostname"), () -> selected.accept(peer)), new LinearLayout.LayoutParams(-1, -2));
     }

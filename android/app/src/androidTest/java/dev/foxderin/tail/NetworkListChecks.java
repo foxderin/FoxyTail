@@ -17,6 +17,8 @@ import java.util.List;
 final class NetworkListChecks {
     static void run(ControlActivity activity) throws Exception {
         Bundle drafts = new Bundle(activity.drafts);
+        JSONObject previousStatus = activity.statusSnapshot();
+        Field sharedStatus = ControlActivity.class.getDeclaredField("sharedStatus"); sharedStatus.setAccessible(true); sharedStatus.set(activity, null);
         PeersPage peers = null;
         RoutingPage routing = null;
         ExitNodesPage exits = null;
@@ -58,6 +60,28 @@ final class NetworkListChecks {
             set(peers, "peers", inventory); invoke(peers, "render");
             require(text(peers.content, "Peer 99") != null, "Inventory recovers after retry");
 
+            JSONObject light = new JSONObject().put("ok", true).put("daemon", "running").put("backend", "Running").put("mode", "bridge")
+                    .put("self", new JSONObject().put("id", "self-a"));
+            set(exits, "snapshot", light); set(exits, "peers", inventory); set(exits, "freshPeers", true);
+            set(exits, "routing", new JSONObject().put("known", true).put("selected", JSONObject.NULL).put("effective", "none"));
+            set(exits, "freshStatus", true); setVisible(exits, true); invoke(exits, "renderOptions");
+            View options = (View) get(exits, "options");
+            CompoundButton fortyOne = checkbox(options, "Peer 41"), ninetyNine = checkbox(options, "Peer 99");
+            require(fortyOne != null && ninetyNine != null, "All one hundred exits remain reachable");
+            fortyOne.performClick();
+            require(fortyOne.isChecked() && checkbox(options, "Peer 99") == ninetyNine && checkbox(options, "Peer 41") == fortyOne, "Selection changes only retained selection controls");
+            ninetyNine.performClick();
+            require(!fortyOne.isChecked() && ninetyNine.isChecked(), "Selection moves between existing rows");
+            set(exits, "peers", PeersPage.decodePeers(new JSONObject().put("peers", new JSONArray(inventory)))); invoke(exits, "renderOptions");
+            require(checkbox(options, "Peer 41") == fortyOne && checkbox(options, "Peer 99") == ninetyNine && ninetyNine.isChecked(), "Unchanged exit refresh preserves focus and draft");
+            light.put("peerList", new JSONArray(inventory)); sharedStatus.set(activity, light);
+            Field fresh = ControlActivity.class.getDeclaredField("statusFresh"); fresh.setAccessible(true); boolean wasFresh = fresh.getBoolean(activity); fresh.setBoolean(activity, false);
+            PeersPage cached = new PeersPage(activity);
+            try {
+                require(text(cached.content, "Peer 99") != null && text(cached.content, activity.getString(R.string.web_net_status_stale)) != null, "Cached reentry is populated and explicitly stale");
+                require(!(Boolean) get(cached, "fresh"), "Cached rows cannot authorize probes");
+            } finally { cached.close(); fresh.setBoolean(activity, wasFresh); sharedStatus.set(activity, null); }
+
             JSONArray apps = new JSONArray();
             for (int i = 0; i < 102; i++) apps.put(new JSONObject().put("uid", i < 2 ? "10001" : Integer.toString(10000 + i)).put("label", String.format(java.util.Locale.ROOT, "App %03d", i)).put("package", "example.app" + i));
             set(routing, "apps", apps); set(routing, "mode", "bridge"); set(routing, "ownerKnown", true); set(routing, "ownerAvailable", true); set(routing, "routesKnown", true); set(routing, "selectedScope", "selected");
@@ -86,6 +110,7 @@ final class NetworkListChecks {
             if (peers != null) peers.close();
             if (exits != null) exits.close();
             if (routing != null) routing.close();
+            sharedStatus.set(activity, previousStatus);
             activity.drafts.clear(); activity.drafts.putAll(drafts);
         }
     }

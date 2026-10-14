@@ -225,14 +225,29 @@ cmd_trial_revert() { "${TS_SCRIPTS_DIR}/foxytail.trial" revert "$1"; }
 # --- context rules -------------------------------------------------------------
 
 cmd_context_get() {
-  _cg_status=$(_op_exec 15 "${TS_SCRIPTS_DIR}/foxytail.context" status 2>/dev/null) || _cg_status=null
-  _op_cancelled && jerr 'context status cancelled'
-  printf '%s' "$_cg_status" | jqr -e 'type=="object" and (.running|type)=="boolean"' >/dev/null 2>&1 || _cg_status=null
-  if [ -f "${TS_CONF_DIR}/context.conf" ]; then
-    jqr -R -s -c --argjson status "$_cg_status" '{ok:true,rules:.,status:$status}' "${TS_CONF_DIR}/context.conf"
-  else
-    jqr -n -c --argjson status "$_cg_status" '{ok:true,rules:"",status:$status}'
+  _cg_locked=0
+  if [ "${_CONF_LOCK_HELD:-0}" != 1 ]; then
+    conf_lock_acquire || jerr 'context-get: configuration is busy'
+    _cg_locked=1
   fi
+  _cg_rules=$(
+    if [ -f "${TS_CONF_DIR}/context.conf" ]; then
+      jqr -R -s -c '{ok:true,rules:.}' "${TS_CONF_DIR}/context.conf"
+    else
+      jqr -n -c '{ok:true,rules:""}'
+    fi
+  )
+  _cg_rc=$?
+  [ "${_cg_locked}" = 0 ] || conf_lock_release
+  [ "${_cg_rc}" = 0 ] || jerr 'context-get: cannot read rules'
+  printf '%s\n' "${_cg_rules}"
+}
+
+cmd_context_status() {
+  _cs_status=$(_op_exec 15 "${TS_SCRIPTS_DIR}/foxytail.context" status 2>/dev/null) || _cs_status=null
+  _op_cancelled && jerr 'context status cancelled'
+  printf '%s' "$_cs_status" | jqr -e 'type=="object" and (.running|type)=="boolean"' >/dev/null 2>&1 || _cs_status=null
+  jqr -n -c --argjson status "$_cs_status" '{ok:true,status:$status}'
 }
 
 cmd_context_set() {

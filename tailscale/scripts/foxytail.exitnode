@@ -2,7 +2,7 @@
 # Exit preferences and bridge policy share the config lock; no service lock.
 DIR=$(dirname "$(realpath "$0")")
 . "${DIR}/../settings.sh"
-EXIT_NETWORK_STATUS=0
+EXIT_ROUTING_RESPONSE=0
 
 exit_profile() {
   tmo 5 tailscale --socket="${TS_SOCKET}" switch --list --json 2>/dev/null |
@@ -35,9 +35,9 @@ exit_config_fingerprint() {
 }
 
 exit_output() {
-  if [ "${EXIT_NETWORK_STATUS:-0}" = 1 ]; then
+  if [ "${EXIT_ROUTING_RESPONSE:-0}" = 1 ]; then
     _xo_exit=$(cat) || return 1
-    printf '{"status":%s,"exitRouting":%s}\n' "${_xs_status:-null}" "${_xo_exit}"
+    printf '%s' "${_xs_status:-null}" | jqr -c --argjson route "${_xo_exit}" '{ok:true,selfId:(.Self.ID // null),exitRouting:$route}'
   else
     cat
   fi
@@ -161,9 +161,9 @@ ensure_run_dirs
 case "$1" in
   snapshot) exit_snapshot; exit $? ;;
   status) load_runtime_conf || exit 1; exit_status; exit $? ;;
-  network-status)
+  exit-routing)
     load_runtime_conf || exit 1
-    EXIT_NETWORK_STATUS=1
+    EXIT_ROUTING_RESPONSE=1
     if [ "$2" != "$(exit_config_fingerprint)" ]; then exit_unknown; else exit_status; fi
     exit $? ;;
   set|clear|trial-restore) ;;

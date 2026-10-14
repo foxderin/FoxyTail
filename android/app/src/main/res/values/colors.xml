@@ -1,6 +1,5 @@
 <resources>
     <!-- FoxyTail identity palette, ported from the v1.4.1 WebUI theme -->
-    <color name="foxy_accent">#E76B3C</color>
     <color name="foxy_primary">#B84521</color>
     <color name="foxy_on_primary">#FFFFFF</color>
     <color name="foxy_primary_container">#FFF0E9</color>
@@ -28,6 +27,5 @@
     <color name="foxy_error_container">#FFF0F1</color>
     <color name="foxy_on_error_container">#942B35</color>
     <color name="foxy_ok">#237A56</color>
-    <color name="foxy_on_ok">#FFFFFF</color>
     <color name="foxy_ok_soft">#EAF7EF</color>
 </resources>

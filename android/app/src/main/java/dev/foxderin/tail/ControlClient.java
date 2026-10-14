@@ -31,6 +31,7 @@ final class ControlClient {
     private final Runnable poll = this::reconnect;
     private String id, command, label, message = "";
     private boolean compatible, upgrading, checking, polling, submitting, cancellable, unknown;
+    private long observationRevision;
     private WeakReference<Consumer<JSONObject>> completion = new WeakReference<>(null);
     private JSONObject lastResult;
     static final class TaskEntry {
@@ -61,7 +62,16 @@ final class ControlClient {
         if (id != null) rememberTask();
     }
     boolean busy() { return id != null || submitting; }
-    boolean canWrite() { return compatible && !upgrading; }
+    long observationRevision() { return observationRevision; }
+    boolean ownsMutation() { return busy() && !readOnlyOperation(command); }
+    static boolean readOnlyOperation(String command) {
+        switch (command) {
+            case "peer-ping": case "speedtest-exitnodes": case "derp-speedtest":
+            case "coexist-info": case "coexist-check": case "diag-check": case "socks-check": case "dns-probe": return true;
+            default: return false;
+        }
+    }
+    boolean canWrite() { return compatible && !upgrading && commands.contains("exit-routing") && commands.contains("context-status"); }
     boolean canStop() { return compatible && commands.contains("control"); }
     boolean canCancel() { return id != null && cancellable && !unknown; }
     boolean isUnknown() { return id != null && unknown; }
@@ -95,11 +105,11 @@ final class ControlClient {
         io.execute(() -> {
             try {
                 JSONObject info = RootApi.json(context, "backend-info");
-                if (info.getInt("protocol") != 1 || !(info.get("upgrading") instanceof Boolean) || !(info.get("disabled") instanceof Boolean)) throw new IOException(context.getString(R.string.control_incompatible));
+                if (info.getInt("protocol") != 2 || !(info.get("upgrading") instanceof Boolean) || !(info.get("disabled") instanceof Boolean)) throw new IOException(context.getString(R.string.control_incompatible));
                 JSONArray available = info.getJSONArray("commands");
                 Set<String> supported = new HashSet<>();
                 for (int i = 0; i < available.length(); i++) supported.add(available.getString(i));
-                if (!supported.contains("operation-start") || !supported.contains("operation-status")) throw new IOException(context.getString(R.string.control_incompatible));
+                if (!supported.contains("operation-start") || !supported.contains("operation-status") || !supported.contains("exit-routing") || !supported.contains("context-status")) throw new IOException(context.getString(R.string.control_incompatible));
                 main.post(() -> {
                     compatible = true; upgrading = info.optBoolean("upgrading"); checking = false;
                     commands.clear(); commands.addAll(supported);
@@ -122,6 +132,7 @@ final class ControlClient {
             message = context.getString(R.string.control_record_failed); changed(); return;
         }
         id = next; command = args[0]; label = operationLabel; submitting = true;
+        if (!readOnlyOperation(command)) observationRevision++;
         cancellable = false; unknown = false; lastResult = null; completion = new WeakReference<>(terminal);
         rememberTask();
         message = context.getString(R.string.control_running, label); changed();
@@ -133,7 +144,7 @@ final class ControlClient {
                 JSONObject response = RootApi.json(context, null, null, null, 30, new RootApi.Call(), wire);
                 main.post(() -> { submitting = false; accept(next, response); });
             } catch (Exception e) {
-                main.post(() -> { submitting = false; if (next.equals(id)) { message = context.getString(R.string.control_unknown, RootApi.message(e)); changed(); reconnect(); } });
+                main.post(() -> { submitting = false; if (next.equals(id)) { unknown = true; message = context.getString(R.string.control_unknown, RootApi.message(e)); changed(); reconnect(); } });
             }
         });
     }
@@ -196,6 +207,7 @@ final class ControlClient {
                 task.state = "cancelled".equals(operation.optString("state")) ? "cancelled" : result.optBoolean("ok") ? "done" : "error";
                 task.detail = message;
             }
+            if (!readOnlyOperation(command)) observationRevision++;
             id = null; cancellable = false;
             Consumer<JSONObject> callback = completion.get(); completion.clear();
             changed();
@@ -220,8 +232,11 @@ final class ControlClient {
     }
     void acknowledgeUnknown() {
         if (!isUnknown() || polling || submitting) return;
-        preferences.edit().remove("id").remove("command").remove("label").commit();
+        if (!preferences.edit().remove("id").remove("command").remove("label").commit()) {
+            message = context.getString(R.string.control_record_failed); changed(); return;
+        }
         TaskEntry task = currentTask(); if (task != null) { task.state = "unknown"; task.detail = context.getString(R.string.control_unknown_acknowledged); }
+        if (!readOnlyOperation(command)) observationRevision++;
         id = null; unknown = false; cancellable = false; completion.clear();
         message = context.getString(R.string.control_unknown_acknowledged); changed();
     }

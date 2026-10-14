@@ -10,9 +10,7 @@ import (
 	"io"
 	"math"
 	"os"
-	"os/signal"
 	"sort"
-	"syscall"
 )
 
 const statsChunkBytes = 1 << 20
@@ -95,7 +93,7 @@ func mergeStats(ctx context.Context, left, right, destination string) (err error
 }
 
 // Preserve chronological counter semantics across clock changes without a slurp.
-func orderedStats(ctx context.Context, input io.Reader, output io.Writer, temp string) error {
+func visitOrderedStats(ctx context.Context, input io.Reader, temp string, visit func([]byte) error) error {
 	directory, err := os.MkdirTemp(temp, ".stats-order-")
 	if err != nil {
 		return err
@@ -190,7 +188,6 @@ func orderedStats(ctx context.Context, input io.Reader, output io.Writer, temp s
 	}
 	defer file.Close()
 	reader := bufio.NewReader(file)
-	writer := bufio.NewWriter(output)
 	var row statsRow
 	for {
 		if err := ctx.Err(); err != nil {
@@ -198,25 +195,12 @@ func orderedStats(ctx context.Context, input io.Reader, output io.Writer, temp s
 		}
 		if err := readStatsRow(reader, &row); err != nil {
 			if err == io.EOF {
-				break
+				return nil
 			}
 			return err
 		}
-		if _, err := writer.Write(row.body); err != nil {
-			return err
-		}
-		if err := writer.WriteByte('\n'); err != nil {
+		if err := visit(row.body); err != nil {
 			return err
 		}
 	}
-	return writer.Flush()
-}
-
-func runOrderedStats(args []string) error {
-	if len(args) != 1 {
-		return errors.New("usage: foxyfiles ordered-stats <private-temp-directory>")
-	}
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer stop()
-	return orderedStats(ctx, os.Stdin, os.Stdout, args[0])
 }

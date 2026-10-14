@@ -22,8 +22,8 @@ final class AccountPage extends ControlPage {
 
     AccountPage(ControlActivity activity) {
         super(activity);
-        LinearLayout accountCard = section(s(R.string.web_acc_accounts), R.drawable.ic_person, s(R.string.web_tools_account_list_desc));
-        ControlUi.cardAction(accountCard, textButton(accountCard, s(R.string.web_tools_refresh), this::load));
+        LinearLayout accountCard = section(s(R.string.web_acc_accounts), R.drawable.ic_person, null);
+        ControlUi.cardAction(accountCard, iconButton(accountCard, R.drawable.ic_refresh, s(R.string.web_tools_refresh), this::load));
         accountState = label(accountCard, ""); accountState.setVisibility(View.GONE);
         accounts = new LinearLayout(activity); accounts.setOrientation(LinearLayout.VERTICAL); accountCard.addView(accounts);
         LinearLayout login = section(s(R.string.web_acc_login), R.drawable.ic_login, null);
@@ -31,7 +31,7 @@ final class AccountPage extends ControlPage {
         loginResult = new LinearLayout(activity); loginResult.setOrientation(LinearLayout.VERTICAL); login.addView(loginResult); loginResult.setVisibility(View.GONE);
         urlText = mono(loginResult, "");
         LinearLayout urlActions = row(loginResult);
-        tonal(urlActions, s(R.string.web_copy), () -> { if (loginUrl != null) copy(s(R.string.web_copy), loginUrl); });
+        iconButton(urlActions, R.drawable.ic_content_copy, s(R.string.web_copy), () -> { if (loginUrl != null) copy(s(R.string.web_copy), loginUrl); });
         reopen = primary(urlActions, s(R.string.web_open_browser), () -> {
             if (loginUrl != null) { awaitingBrowser = true; activity.openUrl(loginUrl); }
         });
@@ -63,7 +63,6 @@ final class AccountPage extends ControlPage {
             guarded(() -> browserLogin(url));
         });
         logout = ControlUi.dangerCard(content, s(R.string.web_acc_logout), R.drawable.ic_logout);
-        hint(logout, s(R.string.web_tools_logout_desc));
         button(logout, s(R.string.web_acc_logout), () -> confirm(s(R.string.web_acc_logout), s(R.string.web_acc_logout_confirm), () -> guarded(() -> accountMutation("logout"))));
         ControlUi.setCardVisible(logout, false);
     }

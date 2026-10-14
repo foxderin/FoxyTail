@@ -12,6 +12,7 @@ import android.database.Cursor;
 import android.net.Uri;
 import android.os.*;
 import android.provider.OpenableColumns;
+import android.view.Gravity;
 import android.view.View;
 import android.widget.*;
 import org.json.JSONObject;
@@ -28,11 +29,11 @@ import java.util.function.Consumer;
 public class ControlActivity extends AppCompatActivity {
     private static final int PICK_BACKUP = 50, SAVE_ARTIFACT = 51;
     private static final ExecutorService FILES = Executors.newFixedThreadPool(2);
-    static final String[] PAGES = {"overview", "peers", "account", "exitnodes", "tunnel", "routing", "settings", "context", "trial", "serve", "coexist", "traffic", "logs", "diagnostics", "backup"};
+    static final String[] PAGES = {"overview", "peers", "account", "tunnel", "routing", "settings", "context", "trial", "serve", "coexist", "traffic", "logs", "diagnostics", "backup"};
     static final String DESTINATION = "destination";
-    private static final String[] NAV = {"overview", "peers", "exitnodes", "traffic", "tunnel", "routing", "serve", "files", "account", "logs", "settings", "diagnostics", "more"};
-    private static final int[] NAV_LABELS = {R.string.web_nav_dashboard, R.string.web_nav_peers, R.string.web_nav_exitnodes, R.string.web_nav_traffic, R.string.web_tun_title, R.string.web_route_title, R.string.web_serve_title, R.string.web_files_title, R.string.web_acc_title, R.string.web_logs_title, R.string.web_set_title, R.string.web_diag_title, R.string.web_nav_more};
-    private static final int[] NAV_ICONS = {R.drawable.nav_dashboard, R.drawable.nav_group, R.drawable.nav_logout, R.drawable.nav_monitoring, R.drawable.ic_router, R.drawable.ic_alt_route, R.drawable.ic_dns, R.drawable.ic_folder, R.drawable.ic_person, R.drawable.ic_article, R.drawable.ic_settings, R.drawable.ic_bug_report, R.drawable.nav_more_horiz};
+    private static final String[] NAV = {"overview", "peers", "files", "traffic", "tunnel", "routing", "serve", "account", "logs", "settings", "diagnostics", "more"};
+    private static final int[] NAV_LABELS = {R.string.web_nav_dashboard, R.string.web_nav_peers, R.string.web_files_title, R.string.web_nav_traffic, R.string.web_tun_title, R.string.web_route_title, R.string.web_serve_title, R.string.web_acc_title, R.string.web_logs_title, R.string.web_set_title, R.string.web_diag_title, R.string.web_nav_more};
+    private static final int[] NAV_ICONS = {R.drawable.nav_dashboard, R.drawable.nav_group, R.drawable.ic_folder, R.drawable.nav_monitoring, R.drawable.ic_router, R.drawable.ic_alt_route, R.drawable.ic_dns, R.drawable.ic_person, R.drawable.ic_article, R.drawable.ic_settings, R.drawable.ic_bug_report, R.drawable.nav_more_horiz};
     Bundle drafts;
     ControlClient client;
     private ControlPage page;
@@ -47,7 +48,7 @@ public class ControlActivity extends AppCompatActivity {
     private boolean wide;
     private final ArrayList<View> navigationItems = new ArrayList<>();
     private LinearLayout operationActions, pageHost, footerHost, serviceNotice;
-    private Button cancel, acknowledge, serviceRetry;
+    private View cancel, acknowledge, serviceRetry;
     private androidx.core.widget.NestedScrollView scroll;
     private WebSwitch serviceSwitch;
     private MaterialChoice serviceModes;
@@ -55,12 +56,13 @@ public class ControlActivity extends AppCompatActivity {
     private boolean stripBound;
     private final Handler stripPoller = new Handler(Looper.getMainLooper());
     /* Bottom navigation destinations, WebUI PRIMARY_NAV order. */
-    static final String[] PRIMARY = {"overview", "peers", "exitnodes", "traffic", "more"};
+    static final String[] PRIMARY = {"overview", "peers", "files", "traffic", "more"};
     private boolean resumed, autoRefresh = true, powerSave, operationWasBusy;
     private Consumer<String> importCallback;
     private ControlPage importOwner;
     private int accountRevision;
     private long observedAccountRevision;
+    private long observedOperationRevision;
     private final Runnable operationChanged = this::showOperation;
     private final Runnable importChanged = this::deliverImport;
     void setAppearance(String key, String value) {
@@ -89,6 +91,7 @@ public class ControlActivity extends AppCompatActivity {
         }
         client = ControlClient.get(this);
         observedAccountRevision = saved == null ? client.accountRevision() : saved.getLong("accountRevision", -1);
+        observedOperationRevision = client.observationRevision();
         WindowCompat.setDecorFitsSystemWindows(getWindow(), false);
         buildShell();
         setContentView(root); ViewCompat.requestApplyInsets(root); showPage(destination); showOperation();
@@ -145,18 +148,20 @@ public class ControlActivity extends AppCompatActivity {
             View border = new View(this); border.setBackgroundColor(color(com.google.android.material.R.attr.colorOutlineVariant)); LinearLayout.LayoutParams borderParams = new LinearLayout.LayoutParams(dp(1), dp(48)); borderParams.setMarginStart(dp(24)); header.addView(border, borderParams); service.setPadding(dp(24), 0, 0, 0);
         } else { serviceParams.topMargin = dp(10); line(service); }
         header.addView(service, serviceParams);
-        LinearLayout controls = row(); if (width < 1200) controls.setPadding(0, dp(10), 0, 0); service.addView(controls);
+        LinearLayout controls = row(); controls.setGravity(Gravity.CENTER_VERTICAL);
+        if (width < 1200) controls.setPadding(0, dp(10), 0, 0); service.addView(controls);
         TextView serviceLabel = text(getString(R.string.web_net_controls_service), 12, false); serviceLabel.setTypeface(null, android.graphics.Typeface.BOLD); controls.addView(serviceLabel);
         serviceSwitch = new WebSwitch(this); serviceSwitch.setContentDescription(getString(R.string.web_net_controls_service)); serviceSwitch.setOnCheckedChangeListener((button, checked) -> { if (!stripBound) { renderStrip(); stripControl(checked ? "start" : "stop", null); } });
         LinearLayout.LayoutParams switchParams = new LinearLayout.LayoutParams(dp(52), dp(48)); switchParams.setMarginStart(dp(8)); controls.addView(serviceSwitch, switchParams);
         serviceModes = new MaterialChoice(this, new String[]{getString(R.string.web_net_mode_tun), getString(R.string.web_net_mode_bridge), getString(R.string.web_net_mode_proxy)}, -1, this::stripMode); serviceModes.setContentDescription(getString(R.string.web_dash_mode)); serviceModes.getEditText().setTextSize(12);
         serviceModes.setMinimumHeight(dp(48)); serviceModes.getEditText().setPadding(dp(13), dp(10), dp(36), dp(10));
         LinearLayout.LayoutParams modeParams = new LinearLayout.LayoutParams(0, -2, 1); modeParams.setMargins(dp(10), 0, dp(10), 0); controls.addView(serviceModes, modeParams);
-        stripRestart = ControlUi.iconButton(this, R.drawable.ic_restart_alt, getString(R.string.web_dash_restart), () -> stripControl("restart", null)); stripRestart.setBackground(surface(10, true)); controls.addView(stripRestart, new LinearLayout.LayoutParams(dp(44), dp(44)));
-        stripStop = ControlUi.iconButton(this, R.drawable.ic_stop, getString(R.string.repair_shell_stop), () -> stripControl("stop", null)); stripStop.setBackground(surface(10, true)); LinearLayout.LayoutParams stopParams = new LinearLayout.LayoutParams(dp(44), dp(44)); stopParams.topMargin = dp(8); stopParams.gravity = android.view.Gravity.END; service.addView(stripStop, stopParams);
+        LinearLayout serviceActions = row(); controls.addView(serviceActions);
+        stripRestart = ControlUi.iconButton(this, R.drawable.ic_restart_alt, getString(R.string.web_dash_restart), () -> stripControl("restart", null)); stripRestart.setBackground(surface(10, true)); serviceActions.addView(stripRestart, new LinearLayout.LayoutParams(dp(44), dp(44)));
+        stripStop = ControlUi.iconButton(this, R.drawable.ic_stop, getString(R.string.repair_shell_stop), () -> stripControl("stop", null)); stripStop.setBackground(surface(10, true)); LinearLayout.LayoutParams stopParams = new LinearLayout.LayoutParams(dp(44), dp(44)); stopParams.setMarginStart(dp(8)); serviceActions.addView(stripStop, stopParams);
         serviceNotice = row(); LinearLayout.LayoutParams noticeParams = new LinearLayout.LayoutParams(-1, -2); noticeParams.topMargin = dp(8); service.addView(serviceNotice, noticeParams);
         serviceFeedback = text("", 11, true); serviceFeedback.setAccessibilityLiveRegion(View.ACCESSIBILITY_LIVE_REGION_POLITE); serviceNotice.addView(serviceFeedback, new LinearLayout.LayoutParams(0, -2, 1));
-        serviceRetry = ControlUi.textButton(this, getString(R.string.web_retry), this::refreshShell); serviceNotice.addView(serviceRetry); serviceNotice.setVisibility(View.GONE);
+        serviceRetry = ControlUi.iconButton(this, R.drawable.ic_refresh, getString(R.string.web_retry), this::refreshShell); serviceNotice.addView(serviceRetry); serviceNotice.setVisibility(View.GONE);
         line(main);
         scroll = new androidx.core.widget.NestedScrollView(this); scroll.setFillViewport(true); main.addView(scroll, new LinearLayout.LayoutParams(-1, 0, 1));
         LinearLayout scrollBody = column(); scrollBody.setPadding(0, dp(wide ? 36 : width >= 640 ? 32 : 24), 0, 0); scroll.addView(scrollBody, new FrameLayout.LayoutParams(-1, -2));
@@ -164,9 +169,10 @@ public class ControlActivity extends AppCompatActivity {
         heading = text("", Math.min(32, Math.max(26, Math.round(width * 0.04f))), false); heading.setTypeface(null, android.graphics.Typeface.BOLD); heading.setLetterSpacing(-0.025f); heading.setLineHeight(Math.round(heading.getTextSize() * 1.25f)); heading.setPadding(dp(inset), 0, dp(inset), dp(24)); scrollBody.addView(heading);
         status = text("", 12, true); status.setPadding(dp(inset), 0, dp(inset), dp(8)); status.setAccessibilityLiveRegion(View.ACCESSIBILITY_LIVE_REGION_POLITE); status.setVisibility(View.GONE); scrollBody.addView(status);
         operationActions = row(); operationActions.setPadding(dp(inset), 0, dp(inset), 0);
-        cancel = ControlUi.textButton(this, getString(R.string.web_cancel), client::cancelCurrent); operationActions.addView(cancel, new LinearLayout.LayoutParams(0, -2, 1));
-        Button reconnect = ControlUi.textButton(this, getString(R.string.control_reconnect), () -> { client.reconnect(); refreshAvailability(); }); operationActions.addView(reconnect, new LinearLayout.LayoutParams(0, -2, 1));
-        acknowledge = ControlUi.textButton(this, getString(R.string.control_acknowledge), () -> new MaterialAlertDialogBuilder(this).setTitle(R.string.control_unknown_title).setMessage(R.string.control_unknown_warning).setNegativeButton(android.R.string.cancel, null).setPositiveButton(android.R.string.ok, (d, w) -> { client.acknowledgeUnknown(); if (page != null) page.load(); }).show()); operationActions.addView(acknowledge, new LinearLayout.LayoutParams(0, -2, 1)); scrollBody.addView(operationActions);
+        cancel = ControlUi.iconButton(this, R.drawable.ic_close, getString(R.string.web_cancel), client::cancelCurrent);
+        View reconnect = ControlUi.iconButton(this, R.drawable.ic_restart_alt, getString(R.string.control_reconnect), () -> { client.reconnect(); refreshAvailability(); });
+        acknowledge = ControlUi.iconButton(this, R.drawable.ic_check_circle, getString(R.string.control_acknowledge), () -> new MaterialAlertDialogBuilder(this).setTitle(R.string.control_unknown_title).setMessage(R.string.control_unknown_warning).setNegativeButton(android.R.string.cancel, null).setPositiveButton(android.R.string.ok, (d, w) -> { client.acknowledgeUnknown(); if (page != null) page.load(); }).show());
+        ControlUi.iconGroup(operationActions, cancel, reconnect, acknowledge); scrollBody.addView(operationActions);
         feedback = text("", 13, true); feedback.setPadding(dp(inset), dp(4), dp(inset), dp(8)); feedback.setAccessibilityLiveRegion(View.ACCESSIBILITY_LIVE_REGION_POLITE); feedback.setVisibility(View.GONE); scrollBody.addView(feedback);
         pageHost = column(); scrollBody.addView(pageHost, new LinearLayout.LayoutParams(-1, -2));
         footerHost = column(); main.addView(footerHost, new LinearLayout.LayoutParams(-1, -2));
@@ -213,7 +219,7 @@ public class ControlActivity extends AppCompatActivity {
     private String taskDestination(String command) {
         switch (command) {
             case "control": case "mode-set": return "overview";
-            case "speedtest-exitnodes": case "exitnode": return "exitnodes";
+
             case "derp-speedtest": return "tunnel";
             case "diag": case "diag-check": return "diagnostics";
             case "file-receive": case "file-delete": return "files";
@@ -310,7 +316,7 @@ public class ControlActivity extends AppCompatActivity {
         switch (name) {
             case "peers": page = new PeersPage(this); break;
             case "account": page = new AccountPage(this); break;
-            case "exitnodes": page = new ExitNodesPage(this); break;
+
             case "tunnel": page = new TunnelPage(this); break;
             case "routing": page = new RoutingPage(this); break;
             case "settings": page = new SettingsPage(this); break;
@@ -344,6 +350,7 @@ public class ControlActivity extends AppCompatActivity {
             android.graphics.drawable.GradientDrawable background = surface(10, false); background.setColor(selected ? color(com.google.android.material.R.attr.colorPrimaryContainer) : android.graphics.Color.TRANSPARENT);
             if (wide) item.setBackground(background); else icon.setBackground(background);
         }
+        renderStrip();
         if (resumed) page.start();
     }
     void openFiles() { startActivity(new Intent(this, MainActivity.class).addFlags(Intent.FLAG_ACTIVITY_REORDER_TO_FRONT | Intent.FLAG_ACTIVITY_SINGLE_TOP)); }
@@ -361,6 +368,11 @@ public class ControlActivity extends AppCompatActivity {
     private String statusError;
     private boolean statusFresh, statusLoading, statusEverLoaded;
     private int statusSequence, statusRevision;
+    private JSONObject sharedExitRouting;
+    private boolean exitRoutingFresh, exitRoutingLoading;
+    private int exitRoutingSequence;
+    private RootApi.Call exitRoutingCall;
+    JSONObject tunnelSnapshot;
     private RootApi.Call statusCall, settingsCall;
     private final ArrayList<RootApi.Call> shellCalls = new ArrayList<>();
     private final Map<ControlPage, StatusRead> statusReads = new LinkedHashMap<>();
@@ -374,6 +386,8 @@ public class ControlActivity extends AppCompatActivity {
     String statusError() { return statusError; }
     boolean statusFresh() { return statusFresh; }
     boolean statusEverLoaded() { return statusEverLoaded; }
+    JSONObject exitRoutingSnapshot() { return exitRoutingFresh && statusFresh ? sharedExitRouting : null; }
+    int statusRevision() { return statusRevision; }
     void addStatusListener(java.util.function.Consumer<JSONObject> listener) {
         statusListeners.add(listener);
         if (statusEverLoaded || statusError != null) listener.accept(sharedStatus);
@@ -384,12 +398,12 @@ public class ControlActivity extends AppCompatActivity {
     }
     void removeStatusRead(ControlPage owner) { statusReads.remove(owner); }
     void refreshStatus() {
-        if (!resumed || isDestroyed() || statusLoading || client.busy()) return;
+        if (!resumed || isDestroyed() || statusLoading) return;
         statusLoading = true; final int token = ++statusSequence, revision = statusRevision;
         RootApi.Call call = new RootApi.Call(); statusCall = call; shellCalls.add(call);
         Context context = getApplicationContext();
         WeakReference<ControlActivity> owner = new WeakReference<>(this);
-        call.submit(FILES, () -> {
+        call.submit(ControlPage.READS, () -> {
             JSONObject result = null; Exception error = null;
             try { result = RootApi.json(context, RootApi.requestId(), null, null, 30, call, "status"); }
             catch (Exception e) { error = e; }
@@ -407,32 +421,80 @@ public class ControlActivity extends AppCompatActivity {
     }
     private void completeStatus(JSONObject result, Exception error, int revision) {
         statusLoading = false;
-        if (revision != statusRevision || client.busy()) {
+        if (revision != statusRevision) {
             statusFresh = false;
             refreshStatus();
             return;
         }
         statusEverLoaded = true; statusError = error == null ? null : RootApi.message(error);
         statusFresh = error == null;
+        if (!exitRoutingLoading) exitRoutingFresh = false;
+        if (result != null && !observationIdentity(result).equals(observationIdentity(sharedStatus))) {
+            tunnelSnapshot = null;
+            invalidateExitRouting();
+        }
         if (result != null) sharedStatus = result;
         ArrayList<Map.Entry<ControlPage, StatusRead>> consumers = new ArrayList<>(statusReads.entrySet());
         statusReads.clear();
         publishStatus();
         for (Map.Entry<ControlPage, StatusRead> consumer : consumers) {
             if (!consumer.getKey().isCurrent()) continue;
-            if (revision != statusRevision || client.busy()) { statusReads.putIfAbsent(consumer.getKey(), consumer.getValue()); continue; }
+            if (revision != statusRevision) { statusReads.putIfAbsent(consumer.getKey(), consumer.getValue()); continue; }
             if (error == null) consumer.getValue().success.accept(result); else consumer.getValue().failure.accept(error);
         }
         if (!statusReads.isEmpty()) refreshStatus();
+        if (error == null && ("overview".equals(destination) || "peers".equals(destination))) refreshExitRouting();
+    }
+    private static String observationIdentity(JSONObject value) {
+        JSONObject node = value == null ? null : value.optJSONObject("exitNode");
+        return ExitNodesPage.identityOf(value) + "|" + (value == null ? "" : value.optString("mode")) + "|" + (node == null ? "" : node.optString("id")) + "|" + (value == null ? "" : value.optString("daemon") + "|" + value.optString("backend"));
+    }
+    static boolean routingMatches(JSONObject status, JSONObject result) {
+        String identity = ExitNodesPage.identityOf(status);
+        return !identity.isEmpty() && result != null && identity.equals(result.optString("selfId")) && result.optJSONObject("exitRouting") != null;
+    }
+    void refreshExitRouting() {
+        if (!resumed || isDestroyed() || exitRoutingLoading || !statusFresh || ExitNodesPage.identityOf(sharedStatus).isEmpty()) return;
+        exitRoutingLoading = true;
+        final int token = ++exitRoutingSequence, revision = statusRevision;
+        final String identity = observationIdentity(sharedStatus);
+        RootApi.Call call = new RootApi.Call(); exitRoutingCall = call; shellCalls.add(call);
+        Context context = getApplicationContext(); WeakReference<ControlActivity> owner = new WeakReference<>(this);
+        call.submit(ControlPage.READS, () -> {
+            JSONObject result = null;
+            try { result = RootApi.json(context, RootApi.requestId(), null, null, 30, call, "exit-routing"); }
+            catch (Exception ignored) { /* Deep failures never replace the live daemon observation. */ }
+            finally { call.finished = true; }
+            JSONObject loaded = result;
+            new Handler(Looper.getMainLooper()).post(() -> {
+                ControlActivity current = owner.get(); if (current == null) return;
+                current.shellCalls.remove(call);
+                if (current.isDestroyed() || !current.resumed || token != current.exitRoutingSequence) return;
+                current.exitRoutingCall = null; current.exitRoutingLoading = false;
+                current.completeExitRouting(loaded, revision, identity);
+            });
+        });
+    }
+    private void completeExitRouting(JSONObject result, int revision, String identity) {
+        exitRoutingFresh = revision == statusRevision && identity.equals(observationIdentity(sharedStatus)) && routingMatches(sharedStatus, result);
+        sharedExitRouting = exitRoutingFresh ? result.optJSONObject("exitRouting") : null;
+        publishStatus();
+    }
+    private void invalidateExitRouting() {
+        exitRoutingSequence++; exitRoutingFresh = false; exitRoutingLoading = false; sharedExitRouting = null;
+        if (exitRoutingCall != null) { exitRoutingCall.cancel(); exitRoutingCall = null; }
     }
     private void cancelShellReads() {
         statusSequence++; statusLoading = false; statusFresh = false;
+        invalidateExitRouting();
         statusCall = null; settingsCall = null; statusReads.clear();
         for (RootApi.Call call : new ArrayList<>(shellCalls)) call.cancel();
         shellCalls.removeIf(call -> call.finished);
     }
     private void invalidateStatus() {
         statusRevision++; statusFresh = false;
+        invalidateExitRouting();
+        tunnelSnapshot = null;
         if (statusCall != null) {
             statusCall.cancel();
             if (statusCall.finished) {
@@ -464,7 +526,7 @@ public class ControlActivity extends AppCompatActivity {
         stripStop.setVisibility(canStop && (!known || !client.canWrite()) ? View.VISIBLE : View.GONE);
         stripStop.setEnabled(canStop && !busy);
         int connection = OverviewPage.connectionLabel(sharedStatus);
-        int label = statusError != null ? R.string.web_dash_status_stale : !statusEverLoaded ? R.string.web_shell_starting
+        int label = statusEverLoaded && !statusFresh ? R.string.web_dash_status_stale : !statusEverLoaded ? R.string.web_shell_starting
                 : connection == R.string.network_connected ? R.string.web_shell_connected
                 : connection == R.string.network_login_needed ? R.string.web_shell_login
                 : connection == R.string.network_stopped ? R.string.web_shell_stopped
@@ -524,10 +586,11 @@ public class ControlActivity extends AppCompatActivity {
     private void showOperation() {
         if (isDestroyed()) return;
         boolean active = client.busy();
-        if (active != operationWasBusy) invalidateStatus();
+        boolean observationChanged = observedOperationRevision != client.observationRevision();
+        if (observationChanged) { observedOperationRevision = client.observationRevision(); invalidateStatus(); publishStatus(); }
         if (observedAccountRevision != client.accountRevision()) {
             observedAccountRevision = client.accountRevision(); invalidateAccountState();
-            if (resumed && page != null && ("peers".equals(destination) || "exitnodes".equals(destination) || "coexist".equals(destination))) showPage(destination);
+            if (resumed && page != null && ("peers".equals(destination) || "coexist".equals(destination))) showPage(destination);
         }
         status.setText(client.message());
         status.setVisibility(client.hasNotice() ? View.VISIBLE : View.GONE);
@@ -536,8 +599,8 @@ public class ControlActivity extends AppCompatActivity {
         acknowledge.setVisibility(client.isUnknown() ? View.VISIBLE : View.GONE);
         operationActions.setVisibility(client.busy() ? View.VISIBLE : View.GONE);
         String completed = client.lastCommand();
-        if (operationWasBusy && !active && resumed && page != null) page.operationFinished(completed);
-        if (operationWasBusy && !active) refreshStatus();
+        if (operationWasBusy && !active && resumed && page != null && !ControlClient.readOnlyOperation(completed)) page.operationFinished(completed);
+        if (observationChanged) refreshStatus();
         operationWasBusy = active;
         renderStrip();
     }
@@ -573,7 +636,7 @@ public class ControlActivity extends AppCompatActivity {
         invalidateStatus(); sharedStatus = null; statusEverLoaded = false; statusError = null;
         publishStatus();
         for (String key : new java.util.HashSet<>(drafts.keySet())) {
-            if (key.startsWith("peers.") || key.startsWith("exitnodes.") || key.startsWith("coexist.")) drafts.remove(key);
+            if (key.startsWith("peers.") || key.startsWith("coexist.")) drafts.remove(key);
             if (key.startsWith("network.peer") || key.startsWith("network.exit")) drafts.remove(key);
         }
         refreshStatus();

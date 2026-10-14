@@ -19,6 +19,7 @@ final class ControlChecks {
         try { RootApi.decode(context, bytes, 1); throw new AssertionError("Failure accepted"); }
         catch (RootApi.Failure failure) {
             require(failure.exitCode == 1 && "not-effective".equals(failure.result.getJSONObject("exitRouting").getString("effective")), "Failure preserves actual state");
+            transferFeedback(context, failure);
         }
         bytes.reset(); bytes.write("{\"ok\":true}".getBytes(StandardCharsets.UTF_8));
         try { RootApi.decode(context, bytes, 7); throw new AssertionError("Exit code ignored"); }
@@ -36,6 +37,23 @@ final class ControlChecks {
         RootApi.Call cancelled = new RootApi.Call(); cancelled.cancel();
         require(cancelled.cancelled.get(), "Unlaunched reads cancel locally");
         cancellation(context);
+    }
+    private static void transferFeedback(Context context, RootApi.Failure failure) {
+        String backend = context.getString(R.string.backend_failed) + "\nroute failed";
+        IOException lost = new IOException("connection closed before response");
+        IOException invalid = new IOException(context.getString(R.string.invalid_response));
+        for (boolean cancelled : new boolean[]{false, true}) {
+            for (boolean staged : new boolean[]{false, true}) {
+                require(backend.equals(TransferService.failureMessage(context, failure, cancelled, true, null, staged)), "Decoded submission failure stays explicit even after staging or cancellation");
+                for (IOException transport : new IOException[]{lost, invalid}) {
+                    require(context.getString(R.string.submission_unknown, transport.getMessage()).equals(TransferService.failureMessage(context, transport, cancelled, true, null, staged)), "Lost or invalid submission response stays unknown and retains readable detail");
+                }
+                require(context.getString(R.string.cancelled_local).equals(TransferService.failureMessage(context, failure, true, false, null, staged)), "Pre-submit local cancellation keeps precedence");
+            }
+        }
+        require(context.getString(R.string.staging_failed, "route failed").equals(TransferService.failureMessage(context, failure, false, false, null, true)), "Pre-submit staged failure remains a preparation failure");
+        require(lost.getMessage().equals(TransferService.failureMessage(context, lost, false, false, null, false)), "Unstaged low-level failure remains readable");
+        require("route failed".equals(TransferService.failureMessage(context, failure, true, true, "0123456789abcdef", false)), "Known job failure is neither local cancellation nor unknown submission");
     }
     private static void cancellation(Context context) throws Exception {
         ExecutorService worker = Executors.newSingleThreadExecutor();

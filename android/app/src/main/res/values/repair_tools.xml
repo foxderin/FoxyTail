@@ -1,13 +1,4 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="repair_tools_diag_unconfirmed">Latest check has no confirmed result yet. Previous checks are not current.</string>
-    <string name="repair_tools_log_daemon">Daemon</string>
-    <string name="repair_tools_log_service">Service</string>
-    <string name="repair_tools_copy_filtered">Copy filtered</string>
-    <string name="repair_tools_log_live">Live</string>
-    <string name="repair_tools_log_follow">Follow</string>
-    <string name="repair_tools_log_wrap">Wrap</string>
-    <string name="repair_tools_log_case">Match case</string>
-    <string name="repair_tools_coexist_no_peers">No current peers are available for checks.</string>
-    <string name="repair_tools_coexist_no_addresses">This peer has no advertised address to check.</string>
+    <string name="repair_tools_diag_unconfirmed">The latest check has no confirmed result yet.</string>
 </resources>

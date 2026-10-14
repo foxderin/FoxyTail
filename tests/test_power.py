@@ -193,7 +193,7 @@ rotate_all; test "$_la_interval" = 60 || exit 10
 daemon_up() { return 1; }; daemon_exists() { return 1; }
 cmd_status
 daemon_up() { return 0; }; daemon_uptime() { echo 12; }
-_op_exec() { echo '{"status":{"BackendState":"Running"},"exitRouting":{"known":false}}'; }
+ts_status_json() { echo '{"BackendState":"Running","Self":{"ID":"self-a"},"Peer":{}}'; }
 cmd_status
 ''')
         for line in result.stdout.splitlines():

@@ -60,6 +60,54 @@ class ControlOperationTests(ApiTestCase):
         self.assertTrue(path.exists(), name)
         return path
 
+    def test_taildrop_history_and_batch_durable_write_contracts(self):
+        self.overrides.write_text('''
+_test_taildrop_write() {
+  printf '%s\\n' "$1" >>"$TS_DIR/invocations"
+  touch "$TS_DIR/entered"
+  while [ ! -f "$TS_DIR/release" ]; do sleep 0.03; done
+  echo '{"ok":true,"removed":1,"retained":2}'
+}
+cmd_file_send_delete() { _test_taildrop_write file-send-delete; }
+cmd_file_send_clear() { _test_taildrop_write file-send-clear; }
+cmd_file_delete_many() { _test_taildrop_write file-delete-many; }
+cmd_file_export_many() { _test_taildrop_write file-export-many; }
+''')
+        commands = [('file-send-delete', 'a' * 32), ('file-send-clear',),
+                    ('file-delete-many', '["one"]'), ('file-export-many', '["one"]')]
+        (self.conf / 'foxytail.conf').write_text('TS_MODE=invalid\n')
+        for index, args in enumerate(commands):
+            with self.subTest(command=args[0]):
+                request = self.request('taildrop_write_' + str(index))
+                self.entry('operation-start', request, *args)
+                self.await_path('entered')
+                status = self.entry('operation-status', request)['operation']
+                self.assertFalse(status['cancellable'])
+                self.assertEqual(os.readlink(self.run / 'operations' / request / 'phase'), 'committing')
+                self.entry('cancel', request, ok=False)
+                (self.base / 'release').touch()
+                terminal = self.terminal(request)
+                self.assertEqual(terminal['state'], 'completed')
+                self.assertEqual(terminal['result'], {'ok': True, 'removed': 1, 'retained': 2})
+                self.assertEqual(self.entry('operation-start', request, *args)['operation'], terminal)
+                self.assertEqual((self.base / 'invocations').read_text().splitlines().count(args[0]), 1)
+                (self.base / 'release').unlink()
+                (self.base / 'entered').unlink()
+
+    def test_taildrop_write_operations_reject_wrong_argument_counts_and_large_batches(self):
+        commands = [('file-send-delete', 'a' * 32), ('file-send-clear',),
+                    ('file-delete-many', '["one"]'), ('file-export-many', '["one"]')]
+        for index, args in enumerate(commands):
+            request = self.request('taildrop_args_' + str(index))
+            self.assertIn('argument count', self.entry('operation-start', request, *args, 'extra', ok=False)['error'])
+            if len(args) == 2:
+                self.assertIn('argument count', self.entry('operation-start', request, args[0], ok=False)['error'])
+            self.assertFalse((self.run / 'operations' / request).exists())
+        for index, command in enumerate(('file-delete-many', 'file-export-many')):
+            request = self.request('taildrop_large_' + str(index))
+            self.assertIn('too large', self.entry('operation-start', request, command, 'x' * 16385, ok=False)['error'])
+            self.assertFalse((self.run / 'operations' / request).exists())
+
     def test_accepted_operation_survives_caller_and_deduplicates_without_replay(self):
         self.overrides.write_text('''cmd_control() {
   echo invocation >>"$TS_DIR/invocations"
@@ -179,7 +227,7 @@ while :; do sleep 1; done
         (module / 'disable').touch()
         (self.conf / 'foxytail.conf').write_text('ROUTE_TABLE=1053\n')
         info = self.entry('backend-info')
-        self.assertEqual((info['protocol'], info['moduleVersion'], info['versionCode']), (1, 'vtest', 123))
+        self.assertEqual((info['protocol'], info['moduleVersion'], info['versionCode']), (2, 'vtest', 123))
         self.assertTrue(info['disabled'])
         self.assertIn('hooks-get', info['commands'])
         request = self.request('bad_config_stop')

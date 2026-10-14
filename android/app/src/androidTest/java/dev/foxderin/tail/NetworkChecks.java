@@ -26,6 +26,18 @@ final class NetworkChecks {
         check(PeersPage.decodePeers(new JSONObject().put("peers", new JSONArray().put(peer))).size() == 1, "Inventory decoder");
         try { PeersPage.decodePeers(new JSONObject().put("peers", new JSONArray().put(new JSONObject().put("id", "broken")))); throw new AssertionError("Missing online state accepted"); }
         catch (org.json.JSONException expected) { }
+        JSONObject light = new JSONObject().put("ok", true).put("self", new JSONObject().put("id", "self-a")).put("peerList", new JSONArray().put(peer));
+        check(PeersPage.decodePeerList(light).size() == 1, "Light status owns the peer inventory without another query");
+        JSONObject deep = new JSONObject().put("selfId", "self-a").put("exitRouting", new JSONObject().put("known", false));
+        check(ControlActivity.routingMatches(light, deep), "Identity-matched unknown routing remains an independent observation");
+        check(!ControlActivity.routingMatches(light, deep.put("selfId", "self-b")), "A deep read from another identity cannot attach");
+        check(!ControlActivity.routingMatches(new JSONObject(), deep), "Missing stable identity never authorizes attachment");
+        light.getJSONObject("self").remove("id");
+        try { PeersPage.decodePeerList(light); throw new AssertionError("Unscoped peer list accepted"); } catch (org.json.JSONException expected) { }
+        for (String command : new String[]{"peer-ping", "speedtest-exitnodes", "derp-speedtest", "coexist-info", "coexist-check", "diag-check", "socks-check", "dns-probe"})
+            check(ControlClient.readOnlyOperation(command), "Probe does not invalidate live state: " + command);
+        for (String command : new String[]{"control", "settings-set", "switch", "exitnode-set", "exitnode-clear", "future-command"})
+            check(!ControlClient.readOnlyOperation(command), "Unclassified writes retain mutation ownership: " + command);
         JSONObject ping = new JSONObject().put("ok", true).put("peerId", "node1").put("ip", "100.64.0.1").put("latencyMs", 0).put("via", "DERP(sin)").put("path", "derp");
         check(PeersPage.validProbe(ping, "node1", "100.64.0.1"), "Measured zero latency valid");
         check(!PeersPage.validProbe(ping, "node2", "100.64.0.1"), "Probe cannot belong to another peer");

@@ -24,6 +24,7 @@ final class SettingsPage extends ControlPage {
     private LinearLayout hooks, diagnostics;
     private ContextPage context;
     private final Button restart;
+    private final TrialPage trial;
     private Field dnsField;
     private boolean advancedOpen, capabilityProbed, diagnosticsOpen;
     private boolean loaded, binding;
@@ -34,7 +35,6 @@ final class SettingsPage extends ControlPage {
         super(activity);
         pending = section();
         label(pending, s(R.string.web_tools_saved_pending));
-        hint(pending, s(R.string.web_tools_saved_pending_desc));
         restart = primary(pending, s(R.string.web_tools_restart), R.drawable.ic_refresh, this::restart);
         ControlUi.setCardVisible(pending, false);
         LinearLayout appearance = section(s(R.string.web_tools_appearance), R.drawable.ic_dark_mode, null);
@@ -45,7 +45,7 @@ final class SettingsPage extends ControlPage {
         String language = activity.getResources().getConfiguration().getLocales().get(0).getLanguage();
         appearanceChoice(appearance, R.string.web_set_language, new String[]{"中文", "English"}, "zh".equals(language) ? 0 : 1,
                 i -> activity.setAppearance("language", i == 0 ? "zh" : "en"));
-        LinearLayout network = section(s(R.string.web_tools_network_settings), R.drawable.ic_router, s(R.string.replica_settings_save_hint));
+        LinearLayout network = section(s(R.string.web_tools_network_settings), R.drawable.ic_router, null);
         bool(network, "MAGIC_DNS", R.string.web_tools_magicdns, R.string.web_tools_magicdns_desc);
         dnsField = new Field("DNS_MODE", 0, 0);
         LinearLayout dnsRow = settingRow(network, true);
@@ -59,10 +59,10 @@ final class SettingsPage extends ControlPage {
         finish(network, dnsField);
         bool(network, "IPV6", R.string.web_tools_ipv6, R.string.web_set_ipv6_hint);
         number(network, "SOCKS_PORT", R.string.web_tools_socks_port, 0, 1024, 65535);
-        number(network, "DNS_PORT", R.string.web_tools_dns_port, R.string.web_tools_dns_port_hint, 1024, 65535);
+        number(network, "DNS_PORT", R.string.web_tools_dns_port, 0, 1024, 65535);
         LinearLayout networkStatus = row(network);
         savedState = badge(networkStatus, s(R.string.cs_unknown), ControlUi.TONE_NEUTRAL);
-        textButton(networkStatus, s(R.string.web_tools_mode_link), () -> activity.navigate("tunnel"));
+        iconButton(networkStatus, R.drawable.ic_router, s(R.string.web_tools_mode_link), () -> activity.navigate("tunnel"));
         LinearLayout background = section(s(R.string.web_tools_background), R.drawable.ic_sync, null);
         bool(background, "POWER_SAVE", R.string.web_tools_power_save, R.string.web_tools_power_save_desc);
         bool(background, "WATCHDOG", R.string.web_tools_watchdog, R.string.web_tools_watchdog_desc);
@@ -74,7 +74,8 @@ final class SettingsPage extends ControlPage {
         number(background, "WATCHDOG_INTERVAL", R.string.web_tools_watchdog_interval, 0, 5, 300);
         number(background, "STATS_INTERVAL", R.string.web_tools_stats_interval, 0, 10, 3600);
         number(background, "LOG_MAX_KB", R.string.web_tools_log_limit, 0, 64, 10240);
-        embed(new TrialPage(activity, this::load), content);
+        trial = new TrialPage(activity, this::load, restart::setEnabled);
+        embed(trial, content);
         advancedBody = ControlUi.disclosure(content, s(R.string.web_tools_advanced), R.drawable.ic_settings, this::toggleAdvanced);
         advancedBody.setVisibility(View.GONE);
         embed(new BackupPage(activity), content);
@@ -83,6 +84,10 @@ final class SettingsPage extends ControlPage {
     }
     @Override String title() { return s(R.string.web_set_title); }
     @Override void onPause() { for (Field field : fields) field.discardRequested = false; }
+    @Override void operationFinished(String command) {
+        if (command.startsWith("trial-")) trial.operationFinished(command);
+        else super.operationFinished(command);
+    }
     private LinearLayout settingRow(LinearLayout parent, boolean stacked) {
         boolean disclosure = "web-disclosure-body".equals(parent.getTag());
         if (parent.getChildCount() > 0 && !disclosure) ControlUi.divider(parent);
@@ -129,12 +134,12 @@ final class SettingsPage extends ControlPage {
         mask = readOnly(advancedBody, R.string.web_tools_mark_mask);
         hint(advancedBody, s(R.string.cs_readonly));
         context = new ContextPage(activity, true); embed(context, advancedBody);
-        hooks = ControlUi.card(advancedBody, s(R.string.web_set_hooks), R.drawable.ic_article, s(R.string.web_set_hooks_hint));
+        hooks = ControlUi.card(advancedBody, s(R.string.web_set_hooks), R.drawable.ic_article, null);
         hint(hooks, s(R.string.web_loading));
-        textButton(advancedBody, s(R.string.web_diag_title), this::toggleDiagnostics);
+        iconButton(advancedBody, R.drawable.ic_monitoring, s(R.string.web_diag_title), this::toggleDiagnostics);
         diagnostics = new LinearLayout(activity); diagnostics.setOrientation(LinearLayout.VERTICAL); advancedBody.addView(diagnostics); diagnostics.setVisibility(View.GONE);
         hint(diagnostics, s(R.string.cs_dns_state)); dnsState = mono(diagnostics, s(R.string.cs_unknown));
-        textButton(diagnostics, s(R.string.cs_dns_probe), () -> probe(s(R.string.cs_dns_probe), result -> {
+        iconButton(diagnostics, R.drawable.ic_dns, s(R.string.cs_dns_probe), () -> probe(s(R.string.cs_dns_probe), result -> {
             if (!result.optBoolean("ok")) notice(s(R.string.cs_failed, result.optString("error", result.toString())));
             readDns();
         }, "dns-probe"));
@@ -164,7 +169,7 @@ final class SettingsPage extends ControlPage {
     private final class Field {
         final String key;
         final int min, max;
-        EditText text; CompoundButton toggle; MaterialChoice spinner; TextView state; Button save; LinearLayout actions, copy;
+        EditText text; CompoundButton toggle; MaterialChoice spinner; TextView state; View save; LinearLayout actions, copy;
         boolean discardRequested;
         Field(String key, int min, int max) { this.key = key; this.min = min; this.max = max; }
         String value() { return activity.drafts.getString("settings." + key, ""); }
@@ -193,8 +198,8 @@ final class SettingsPage extends ControlPage {
     private void finish(LinearLayout box, Field field) {
         field.state = hint(box, ""); field.state.setVisibility(View.GONE);
         field.actions = row(box); field.actions.setVisibility(View.GONE);
-        field.save = textButton(field.actions, s(R.string.cs_save), () -> save(field));
-        textButton(field.actions, s(R.string.cs_reload_draft), () -> confirm(s(R.string.cs_reload_draft), s(R.string.cs_reload_confirm), () -> { field.discardRequested = true; load(); }));
+        field.save = iconButton(field.actions, R.drawable.ic_save, s(R.string.cs_save), () -> save(field));
+        iconButton(field.actions, R.drawable.ic_restart_alt, s(R.string.cs_reload_draft), () -> confirm(s(R.string.cs_reload_draft), s(R.string.cs_reload_confirm), () -> { field.discardRequested = true; load(); }));
         fields.add(field);
     }
     private void draft(Field field, String value) {
@@ -257,12 +262,6 @@ final class SettingsPage extends ControlPage {
         readDns();
         readRuntime();
         if (advancedOpen) loadHooks();
-        read(result -> {
-            Object value = result.opt("trial");
-            JSONObject trial = result.optJSONObject("trial");
-            boolean known = value == JSONObject.NULL || trial != null && SettingsRules.trialState(trial.optString("status"));
-            restart.setEnabled(known && (trial == null || !SettingsRules.trialActive(trial.optString("status"))));
-        }, e -> { restart.setEnabled(false); error(e); }, "trial-status");
     }
     private void settingsFailure(Exception e) {
         loaded = false; setEnabled(false);
@@ -314,18 +313,16 @@ final class SettingsPage extends ControlPage {
         else write.run();
     }
     private void restart() {
-        read(result -> {
-            Object value = result.opt("trial");
-            JSONObject trial = result.optJSONObject("trial");
-            if (value != JSONObject.NULL && (trial == null || !SettingsRules.trialState(trial.optString("status")) || SettingsRules.trialActive(trial.optString("status")))) { notice(s(R.string.cs_restart_blocked)); return; }
-            confirm(s(R.string.cs_restart), s(R.string.cs_network_warning), () -> mutate(s(R.string.cs_restart), terminal -> {
+        trial.checkRestart(() -> confirm(s(R.string.cs_restart), s(R.string.cs_network_warning), () -> {
+            if (!trial.restartAllowed()) { notice(s(R.string.cs_restart_blocked)); return; }
+            mutate(s(R.string.cs_restart), terminal -> {
                 if (!terminal.optBoolean("ok")) { notice(s(R.string.cs_failed, terminal.optString("error", terminal.toString()))); load(); return; }
                 read(verified -> {
                     if (Boolean.FALSE.equals(verified.opt("restartRequired"))) notice(s(R.string.cs_restart_verified));
                     else notice(s(R.string.cs_pending));
                     load();
                 }, "settings-get");
-            }, "control", "restart"));
-        }, "trial-status");
+            }, "control", "restart");
+        }));
     }
 }

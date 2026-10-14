@@ -30,27 +30,60 @@ class NetworkApiTests(ApiTestCase):
         result = self.shell('load_conf; _op_exec() { shift; "$@"; }; cmd_exitnode_clear', ok=False)
         self.assertFalse(json.loads(result.stdout)['ok'])
 
-    def test_status_discards_failed_helper_output_and_skips_stopped_daemon(self):
-        helper = self.scripts / 'foxytail.exitnode'
-        helper.write_text('#!/bin/sh\necho \'{"status":{"BackendState":"Running"},"exitRouting":{"known":true}}\'\nexit 1\n')
-        helper.chmod(0o755)
+    def test_light_status_uses_one_cli_and_shares_identity_scoped_peer_list(self):
+        status = {'BackendState': 'Running', 'Self': {'ID': 'self-a', 'HostName': 'phone'},
+                  'Peer': {'a': {'ID': 'node-a', 'HostName': 'one', 'Online': True, 'ExitNodeOption': True,
+                                 'TailscaleIPs': ['100.64.0.1', 'fd7a::1']},
+                           'b': {'ID': 'node-b', 'HostName': 'two', 'Online': False}}}
+        (self.base / 'status.json').write_text(json.dumps(status))
+        prefix = '''load_conf
+daemon_up() { return 0; }
+daemon_uptime() { echo 2; }
+ts_cli() { printf '%s\\n' "$*" >>"$TS_RUN_DIR/status-calls"; cat "$TS_DIR/status.json"; }
+_op_exec() { touch "$TS_RUN_DIR/unexpected-heavy"; return 9; }
+'''
+        result = json.loads(self.shell(prefix + 'cmd_status').stdout)
+        self.assertEqual((result['daemon'], result['backend'], result['self']['id']), ('running', 'Running', 'self-a'))
+        self.assertEqual(result['peers'], {'online': 1, 'offline': 1})
+        self.assertEqual([p['id'] for p in result['peerList']], ['node-a', 'node-b'])
+        self.assertEqual(result['peerList'][0]['ips'], ['100.64.0.1', 'fd7a::1'])
+        self.assertTrue(result['peerList'][0]['exitNodeOption'])
+        self.assertNotIn('exitRouting', result)
+        self.assertEqual((self.run / 'status-calls').read_text().splitlines(), ['10 status --json'])
+        self.assertFalse((self.run / 'unexpected-heavy').exists())
+        status['Self']['ID'] = 'self-b'; status['Peer'] = {}
+        (self.base / 'status.json').write_text(json.dumps(status))
+        changed = json.loads(self.shell(prefix + 'cmd_status').stdout)
+        self.assertEqual(changed['self']['id'], 'self-b'); self.assertEqual(changed['peerList'], [])
+
+    def test_status_unreachable_and_stopped_never_fabricate_peer_inventory(self):
         result = json.loads(self.shell('''load_conf
 daemon_up() { return 0; }
 daemon_exists() { return 0; }
 daemon_uptime() { echo 2; }
+ts_status_json() { return 1; }
 cmd_status''').stdout)
         self.assertEqual((result['daemon'], result['backend']), ('running', 'unreachable'))
-        self.assertFalse(result['exitRouting']['known'])
+        self.assertIsNone(result['peerList'])
         result = json.loads(self.shell('''load_conf
 daemon_up() { return 1; }
 daemon_exists() { return 1; }
-_op_exec() { touch "$TS_RUN_DIR/unexpected-helper"; return 9; }
+ts_status_json() { touch "$TS_RUN_DIR/unexpected-cli"; return 9; }
 cmd_status''').stdout)
         self.assertEqual((result['daemon'], result['backend']), ('stopped', '-'))
-        self.assertFalse((self.run / 'unexpected-helper').exists())
+        self.assertIsNone(result['peerList'])
+        self.assertFalse((self.run / 'unexpected-cli').exists())
+
+    def test_failed_deep_helper_does_not_publish_success_payload(self):
+        helper = self.scripts / 'foxytail.exitnode'
+        helper.write_text('#!/bin/sh\necho \'{"ok":true,"selfId":"self-a","exitRouting":{"known":true}}\'\nexit 1\n')
+        helper.chmod(0o755)
+        result = self.shell('load_conf; _op_exec() { shift; "$@"; }; cmd_exit_routing', ok=False)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertFalse(json.loads(result.stdout)['ok'])
 
     def test_read_helpers_never_publish_success_after_cancellation(self):
-        for command in ('cmd_status', 'cmd_dns', 'cmd_dns_probe', 'cmd_trial_status', 'cmd_context_get'):
+        for command in ('cmd_status', 'cmd_exit_routing', 'cmd_dns', 'cmd_dns_probe', 'cmd_trial_status', 'cmd_context_status'):
             with self.subTest(command=command):
                 for name in ('foxytail.exitnode', 'foxytail.dns', 'foxytail.trial'):
                     helper = self.scripts / name
@@ -460,11 +493,10 @@ ts_cli() { cat "$TS_RUN_DIR/status.json"; }
         for stopped in (False, True):
             with self.subTest(stopped=stopped):
                 (self.run / 'alive').touch()
-                helper = self.scripts / 'foxytail.exitnode'
-                helper.write_text('#!/bin/sh\n' + ('rm "' + str(self.run / 'alive') + '"\n' if stopped else '') + 'exit 1\n')
-                helper.chmod(0o755)
+                fail = 'rm "$TS_RUN_DIR/alive"; ' if stopped else ''
                 result = json.loads(self.shell('''load_conf
 daemon_exists() { [ -f "$TS_RUN_DIR/alive" ]; }
+ts_status_json() { ''' + fail + '''return 1; }
 cmd_status''').stdout)
                 expected = ('stopped', '-') if stopped else ('running', 'unreachable')
                 self.assertEqual((result['daemon'], result['backend']), expected)
@@ -476,15 +508,10 @@ cmd_status''').stdout)
         for backend in ('NoState', 'NeedsLogin', 'NeedsMachineAuth'):
             with self.subTest(backend=backend):
                 (self.run / 'status.json').write_text(json.dumps({'BackendState': backend, 'Peer': {}, 'Self': None}))
-                helper = self.scripts / 'foxytail.exitnode'
-                helper.write_text('#!/bin/sh\nprintf %s ' + shlex.quote(json.dumps({
-                    'status': {'BackendState': backend, 'Peer': {}, 'Self': None},
-                    'exitRouting': {'known': False, 'selected': None, 'effective': 'unknown'}})) + '\n')
-                helper.chmod(0o755)
                 result = json.loads(self.shell('''load_conf
 daemon_exists() { return 0; }
 daemon_uptime() { echo 1; }
-ts_cli() { touch "$TS_RUN_DIR/unexpected-auth-probe"; return 99; }
+ts_cli() { test "$1:$2:$3" = 10:status:--json || { touch "$TS_RUN_DIR/unexpected-auth-probe"; return 99; }; cat "$TS_RUN_DIR/status.json"; }
 cmd_status''').stdout)
                 self.assertTrue(result['ok'])
                 self.assertEqual((result['daemon'], result['backend']), ('running', backend))

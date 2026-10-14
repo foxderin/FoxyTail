@@ -8,8 +8,12 @@ import android.os.*;
 import android.view.*;
 import android.widget.*;
 import com.google.android.material.button.MaterialButton;
+import com.google.android.material.checkbox.MaterialCheckBox;
 import com.google.android.material.dialog.MaterialAlertDialogBuilder;
 import com.google.android.material.progressindicator.LinearProgressIndicator;
+import androidx.recyclerview.widget.LinearLayoutManager;
+import androidx.recyclerview.widget.RecyclerView;
+import androidx.recyclerview.widget.DiffUtil;
 import org.json.*;
 import java.io.*;
 import java.util.*;
@@ -19,24 +23,39 @@ public final class MainActivity extends ControlActivity {
     private static final int PICK = 10, SAVE = 11, NOTIFY = 12;
     private final ExecutorService io = Executors.newFixedThreadPool(3);
     private final ExecutorService fileIo = Executors.newSingleThreadExecutor();
+    private final ExecutorService exportIo = Executors.newSingleThreadExecutor();
     private final ArrayList<Models.Source> selection = new ArrayList<>();
     private final ArrayList<Models.Peer> peers = new ArrayList<>();
     private final ArrayList<Models.Transfer> history = new ArrayList<>();
     private JSONArray inbox = new JSONArray();
+    private final LinkedHashSet<String> inboxSelected = new LinkedHashSet<>();
+    private int inboxSort, selectionRevision;
+    private TextView inboxSelectionCount;
+    private ToolsFlowLayout inboxBatchActions;
+    private ImageButton selectMatches, deselectInbox, shareSelected, exportSelected, deleteSelected, clearHistory;
     private int inboxIgnored;
     private LinearLayout inboxSection, sendSection, targetRows, historySection, selectedRows, browserHost;
     private FilesBrowser browser;
     private MaterialButton browseControl;
     private TextView message;
-    private Button cancelControl, sendControl;
+    private View cancelControl; private Button sendControl;
     private MaterialChoice target;
     private String selectedPeer, saveName;
     private String inboxSearch = "", browseDirectory = "";
     private LinearLayout inboxRows;
+    private RecyclerView inboxList, historyList;
+    private InboxAdapter inboxAdapter;
+    private HistoryAdapter historyAdapter;
+    private TextView historyNotice;
+    private ImageButton historyRefresh;
     private boolean inboxLoaded, historyLoaded;
     private final Runnable controlUpdates = this::updateProgress;
     private java.util.function.Consumer<JSONObject> fileCompletion;
-    private Uri saveSource;
+    private RootApi.Call exportCall;
+    private volatile RootApi.Call exportReadCall;
+    private androidx.appcompat.app.AlertDialog exportDialog;
+    private TextView exportProgress;
+    private volatile boolean exportCommitting, exportCancelled;
     private int inboxGeneration, targetsGeneration, historyGeneration, historyRevision;
     private boolean resumed, receiverRegistered, targetsLoaded;
     private boolean inboxLoading, targetsLoading, historyLoading, inboxQueued, targetsQueued, historyQueued;
@@ -54,12 +73,15 @@ public final class MainActivity extends ControlActivity {
             selectedPeer = saved.getString("peer"); focusSection = saved.getString("focusSection", "");
             saveName = saved.getString("saveName");
             inboxSearch = saved.getString("inboxSearch", ""); browseDirectory = saved.getString("browseDirectory", "");
+            inboxSort = Math.max(0, Math.min(3, saved.getInt("inboxSort", 0)));
+            ArrayList<String> selected = saved.getStringArrayList("inboxSelected");
+            if (selected != null && selected.size() <= 32) for (String name : selected) try { Models.requireName(name); inboxSelected.add(name); } catch (IOException ignored) { }
             ArrayList<String> paths = saved.getStringArrayList("sharedSelection");
             long[] sizes = saved.getLongArray("sharedSizes");
             if (paths != null && sizes != null && paths.size() == sizes.length && paths.size() <= 32) {
                 for (int i = 0; i < paths.size(); i++) try { selection.add(Models.Source.shared(paths.get(i), sizes[i])); } catch (IOException ignored) { }
             }
-            String source = saved.getString("saveSource"); if (source != null) saveSource = Uri.parse(source);
+            // Only the chosen name survives the picker; source bytes are read after its result.
             ArrayList<String> uris = saved.getStringArrayList("selection");
             if (uris != null) {
                 ArrayList<Uri> restored = new ArrayList<>();
@@ -80,7 +102,7 @@ public final class MainActivity extends ControlActivity {
         long[] sharedSizes = new long[sizes.size()]; for (int i = 0; i < sizes.size(); i++) sharedSizes[i] = sizes.get(i);
         state.putStringArrayList("selection", uris); state.putStringArrayList("sharedSelection", paths); state.putLongArray("sharedSizes", sharedSizes);
         state.putString("inboxSearch", inboxSearch); state.putString("browseDirectory", browseDirectory); state.putString("saveName", saveName);
-        if (saveSource != null) state.putString("saveSource", saveSource.toString());
+        state.putInt("inboxSort", inboxSort); state.putStringArrayList("inboxSelected", new ArrayList<>(inboxSelected));
     }
     @Override protected void onResume() {
         resumed = true; super.onResume();
@@ -96,7 +118,12 @@ public final class MainActivity extends ControlActivity {
         if (receiverRegistered) { unregisterReceiver(updates); receiverRegistered = false; }
         super.onPause();
     }
-    @Override protected void onDestroy() { fileCompletion = null; if (browser != null) browser.close(); io.shutdown(); fileIo.shutdown(); super.onDestroy(); }
+    @Override protected void onDestroy() {
+        fileCompletion = null; if (browser != null) browser.close();
+        if (exportCall != null && !exportCommitting) { exportCancelled = true; exportCall.cancel(); RootApi.Call read = exportReadCall; if (read != null) read.cancel(); }
+        if (exportDialog != null) exportDialog.dismiss();
+        io.shutdown(); fileIo.shutdown(); exportIo.shutdown(); super.onDestroy();
+    }
     private int dp(int value) { return ControlUi.dp(this, value); }
     private TextView text(String value, int sp) {
         TextView view = ControlUi.text(this, value, sp); view.setTextIsSelectable(true); view.setPadding(0, dp(6), 0, dp(6)); return view;
@@ -121,17 +148,15 @@ public final class MainActivity extends ControlActivity {
         @Override String title() { return getString(R.string.web_files_title); }
         @Override void load() {
             if (!isCurrent()) return;
-            refreshInbox(); refreshTargets(); refreshHistory();
+            if (!inboxLoading) refreshInbox();
+            if (!targetsLoading) refreshTargets();
+            if (!historyLoading) refreshHistory();
         }
-        @Override void onPause() {
-            inboxGeneration++; targetsGeneration++; historyGeneration++;
-            inboxLoading = targetsLoading = historyLoading = false;
-            inboxQueued = targetsQueued = historyQueued = false;
-        }
+        @Override void onPause() { /* Retain section requests: reentry joins the same guarded result. */ }
     }
     private void buildPage(LinearLayout content) {
         message = text("", 13); message.setAccessibilityLiveRegion(View.ACCESSIBILITY_LIVE_REGION_POLITE); content.addView(message);
-        cancelControl = button(R.string.cancel, () -> startService(new Intent(this, TransferService.class).setAction(TransferService.CANCEL)));
+        cancelControl = ControlUi.iconButton(this, R.drawable.ic_close, getString(R.string.cancel), () -> startService(new Intent(this, TransferService.class).setAction(TransferService.CANCEL)));
         content.addView(cancelControl);
         inboxSection = section(); content.addView(inboxSection);
         sendSection = section(); content.addView(sendSection);
@@ -154,21 +179,32 @@ public final class MainActivity extends ControlActivity {
             ControlUi.metric(metrics, R.drawable.ic_download, getString(R.string.web_tools_total_size)).value.setText(WebFormat.bytes(bytes));
         }
         LinearLayout card = ControlUi.card(inboxSection, getString(R.string.web_files_inbox), R.drawable.ic_folder, null);
-        Button refresh = button(inboxLoading ? R.string.web_loading : R.string.web_tools_refresh, this::refreshInbox);
+        ImageButton refresh = ControlUi.iconButton(this, R.drawable.ic_refresh, getString(inboxLoading ? R.string.web_loading : R.string.web_tools_refresh), this::refreshInbox);
         refresh.setEnabled(!inboxLoading); ControlUi.cardAction(card, refresh);
         if (!inboxError.isEmpty()) ControlUi.banner(card, R.drawable.ic_error, inboxError, ControlUi.TONE_ERROR);
         if (inboxLoaded && inboxIgnored > 0) ControlUi.hint(card, getString(R.string.repair_files_ignored_inbox, inboxIgnored));
         EditText search = null;
         if (inboxLoaded && inbox.length() > 0) {
-            LinearLayout controls = new LinearLayout(this); controls.setGravity(Gravity.BOTTOM); card.addView(controls);
+            LinearLayout controls = new LinearLayout(this); controls.setGravity(Gravity.CENTER_VERTICAL); card.addView(controls);
             LinearLayout field = new LinearLayout(this); field.setOrientation(LinearLayout.VERTICAL); controls.addView(field, new LinearLayout.LayoutParams(0, -2, 1));
             search = ControlUi.input(field, getString(R.string.web_tools_file_search), inboxSearch, android.text.InputType.TYPE_CLASS_TEXT);
             search.setSingleLine(true); search.setContentDescription(getString(R.string.web_tools_file_search));
-            controls.addView(button(R.string.web_files_clear, () -> confirmFileAction(R.string.web_files_clear, getString(R.string.files_clear_confirm), "file-clear")));
+            LinearLayout controlActions = new LinearLayout(this); controlActions.setGravity(Gravity.CENTER_VERTICAL); controls.addView(controlActions);
+            ControlUi.iconGroup(controlActions, ControlUi.iconButton(this, R.drawable.ic_sort, getString(R.string.taildrop_sort), this::chooseInboxOrder));
+            ControlUi.iconGroup(controlActions, ControlUi.iconButton(this, R.drawable.ic_delete, getString(R.string.web_files_clear), () -> confirmFileAction(R.string.web_files_clear, getString(R.string.files_clear_confirm), "file-clear")));
         }
-        inboxRows = section(); card.addView(inboxRows); renderInboxRows();
-        ControlUi.hint(card, getString(R.string.web_files_receive_hint));
-        card.addView(ControlUi.tonalButton(this, getString(R.string.web_files_receive), R.drawable.ic_download, this::importFiles));
+        inboxSelectionCount = ControlUi.muted(this, "", R.dimen.ft_caption); card.addView(inboxSelectionCount);
+        inboxBatchActions = new ToolsFlowLayout(this, 4, 4); card.addView(inboxBatchActions, new LinearLayout.LayoutParams(-1, -2));
+        selectMatches = ControlUi.iconButton(this, R.drawable.ic_select_all, getString(R.string.taildrop_select_matches), this::selectInboxMatches);
+        deselectInbox = ControlUi.iconButton(this, R.drawable.ic_deselect, getString(R.string.taildrop_deselect), () -> { inboxSelected.clear(); renderInboxRows(); });
+        shareSelected = ControlUi.iconButton(this, R.drawable.ic_share, getString(R.string.taildrop_share_selected), this::shareInboxSelection);
+        exportSelected = ControlUi.iconButton(this, R.drawable.ic_open_in_new, getString(R.string.taildrop_export_selected), () -> confirmInboxBatch(false));
+        deleteSelected = ControlUi.iconButton(this, R.drawable.ic_delete, getString(R.string.taildrop_delete_selected), () -> confirmInboxBatch(true));
+        ControlUi.iconGroup(inboxBatchActions, selectMatches, deselectInbox, shareSelected, exportSelected);
+        ControlUi.iconGroup(inboxBatchActions, deleteSelected);
+        inboxRows = section(); card.addView(inboxRows);
+        inboxList = boundedList(inboxRows); inboxAdapter = new InboxAdapter(); inboxList.setAdapter(inboxAdapter); renderInboxRows();
+        card.addView(ControlUi.iconButton(this, R.drawable.ic_download, getString(R.string.web_files_receive), this::importFiles));
         if (search != null) search.addTextChangedListener(new android.text.TextWatcher() {
             public void beforeTextChanged(CharSequence s, int start, int count, int after) { }
             public void onTextChanged(CharSequence s, int start, int before, int count) { inboxSearch = s.toString(); renderInboxRows(); }
@@ -188,39 +224,119 @@ public final class MainActivity extends ControlActivity {
         TextView sub = ControlUi.muted(this, detail, R.dimen.ft_body_small); sub.setTextSize(12); sub.setPadding(0, dp(3), 0, 0); sub.setTextIsSelectable(true); main.addView(sub);
         return row;
     }
+    private RecyclerView boundedList(LinearLayout parent) {
+        RecyclerView list = new RecyclerView(this); list.setLayoutManager(new LinearLayoutManager(this));
+        list.setItemAnimator(null); list.setNestedScrollingEnabled(true);
+        parent.addView(list, new LinearLayout.LayoutParams(-1, dp(420))); return list;
+    }
+    private static final class FileHolder extends RecyclerView.ViewHolder {
+        final LinearLayout content;
+        FileHolder(LinearLayout content) { super(content); this.content = content; content.setLayoutParams(new RecyclerView.LayoutParams(-1, -2)); }
+    }
     private void renderInboxRows() {
-        if (inboxRows == null) return;
-        inboxRows.removeAllViews(); int visible = 0;
-        if (!inboxLoaded) { if (inboxError.isEmpty()) inboxRows.addView(text(getString(R.string.web_loading), 14)); return; }
-        for (int i = 0; i < inbox.length(); i++) {
-            try {
-                JSONObject item = inbox.getJSONObject(i); String name = Models.required(item, "name"); Models.requireName(name);
-                if (!name.toLowerCase(Locale.ROOT).contains(inboxSearch.toLowerCase(Locale.ROOT))) continue;
-                if (visible++ > 0) ControlUi.divider(inboxRows);
-                long size = Models.number(item, "size"), modified = Models.number(item, "mtime");
-                LinearLayout row = fileRow(inboxRows, name, WebFormat.bytes(size) + " · " + WebFormat.time(modified), R.drawable.ic_article);
-                LinearLayout actions = new LinearLayout(this); actions.setGravity(Gravity.END); row.addView(actions);
-                actions.addView(ControlUi.iconButton(this, R.drawable.ic_content_copy, getString(R.string.web_tools_copy_path) + " " + name, () -> {
-                    getSystemService(ClipboardManager.class).setPrimaryClip(ClipData.newPlainText(name, "/data/adb/foxytail/files/" + name));
-                    toast(getString(R.string.files_copied));
-                }));
-                actions.addView(ControlUi.iconButton(this, R.drawable.ic_download, getString(R.string.web_files_download) + " " + name, () -> export(name, "save")));
-                actions.addView(ControlUi.iconButton(this, R.drawable.ic_open_in_new, getString(R.string.web_files_export) + " " + name, () -> confirmFileAction(R.string.web_files_export, getString(R.string.files_export_confirm, name), "file-export", name)));
-                actions.addView(ControlUi.iconButton(this, R.drawable.ic_delete, getString(R.string.web_files_delete) + " " + name, () -> confirmFileAction(R.string.web_files_delete, getString(R.string.files_delete_confirm, name), "file-delete", name)));
-                LinearLayout nativeActions = new LinearLayout(this); nativeActions.setGravity(Gravity.END); inboxRows.addView(nativeActions);
-                nativeActions.addView(button(R.string.open, () -> export(name, "open")));
-                nativeActions.addView(button(R.string.share, () -> export(name, "share")));
-            } catch (Exception e) { inboxRows.addView(text(getString(R.string.web_files_invalid_response), 14)); }
+        if (inboxAdapter == null) return;
+        inboxAdapter.filter();
+        updateInboxSelection();
+    }
+    private boolean inboxSelectionAllowed() {
+        return inboxLoaded && !inboxLoading && inboxError.isEmpty() && exportCall == null && saveName == null && !client.busy();
+    }
+    private void updateInboxSelection() {
+        if (inboxBatchActions == null || inboxAdapter == null) return;
+        boolean enabled = inboxSelectionAllowed(), selected = !inboxSelected.isEmpty();
+        inboxBatchActions.setVisibility(selected ? View.VISIBLE : View.GONE);
+        inboxSelectionCount.setVisibility(inboxBatchActions.getVisibility());
+        inboxSelectionCount.setText(getString(R.string.taildrop_selected_count, inboxSelected.size(), inboxAdapter.visible.size()));
+        selectMatches.setEnabled(enabled && !inboxAdapter.visible.isEmpty()); deselectInbox.setEnabled(enabled && selected);
+        shareSelected.setEnabled(enabled && selected); exportSelected.setEnabled(enabled && selected && client.canWrite()); deleteSelected.setEnabled(enabled && selected && client.canWrite());
+        for (int i = 0; i < inboxList.getChildCount(); i++) {
+            View child = inboxList.getChildAt(i);
+            updateInboxCheckboxes(child, enabled);
         }
-        if (visible == 0) inboxRows.addView(text(getString(inboxSearch.isEmpty() ? R.string.web_files_empty : R.string.web_empty), 14));
+    }
+    private void updateInboxCheckboxes(View view, boolean enabled) {
+        if (view instanceof MaterialCheckBox) view.setEnabled(enabled && (inboxSelected.contains(view.getTag()) || inboxSelected.size() < 32));
+        if (view instanceof ViewGroup) for (int i = 0; i < ((ViewGroup) view).getChildCount(); i++) updateInboxCheckboxes(((ViewGroup) view).getChildAt(i), enabled);
+    }
+    private void selectInboxMatches() {
+        if (!inboxSelectionAllowed()) return;
+        LinkedHashSet<String> selected = new LinkedHashSet<>(inboxSelected);
+        for (JSONObject item : inboxAdapter.visible) selected.add(item.optString("name"));
+        if (selected.size() > 32) { toast(getString(R.string.taildrop_selection_limit)); return; }
+        inboxSelected.clear(); inboxSelected.addAll(selected); renderInboxRows();
+    }
+    private void confirmInboxBatch(boolean delete) {
+        if (!inboxSelectionAllowed() || inboxSelected.isEmpty()) return;
+        ArrayList<String> names = new ArrayList<>(inboxSelected);
+        confirmFileAction(delete ? R.string.taildrop_delete_selected : R.string.taildrop_export_selected,
+                getString(delete ? R.string.taildrop_delete_confirm : R.string.taildrop_export_confirm, names.size()) + "\n" + String.join("\n", names),
+                delete ? "file-delete-many" : "file-export-many", new JSONArray(names).toString());
+    }
+    private void chooseInboxOrder() {
+        new MaterialAlertDialogBuilder(this).setTitle(R.string.taildrop_sort)
+                .setSingleChoiceItems(R.array.taildrop_sort_orders, inboxSort, (dialog, index) -> { inboxSort = index; renderInboxRows(); dialog.dismiss(); })
+                .setNegativeButton(R.string.cancel, null).show();
+    }
+    private final class InboxAdapter extends RecyclerView.Adapter<FileHolder> {
+        private final ArrayList<JSONObject> visible = new ArrayList<>();
+        private final ArrayList<JSONObject> ordered = new ArrayList<>();
+        private JSONArray orderedSource;
+        private int orderedBy = -1;
+        void filter() {
+            if (orderedSource != inbox || orderedBy != inboxSort) {
+                ordered.clear(); for (int i = 0; i < inbox.length(); i++) ordered.add(inbox.optJSONObject(i));
+                Comparator<JSONObject> names = Comparator.comparing(item -> item.optString("name"), java.text.Collator.getInstance());
+                Comparator<JSONObject> order = switch (inboxSort) {
+                    case 1 -> Comparator.comparingLong(item -> item.optLong("mtime"));
+                    case 2 -> names;
+                    case 3 -> Comparator.<JSONObject>comparingLong(item -> item.optLong("size")).reversed();
+                    default -> Comparator.<JSONObject>comparingLong(item -> item.optLong("mtime")).reversed();
+                };
+                ordered.sort(order.thenComparing(names)); orderedSource = inbox; orderedBy = inboxSort;
+            }
+            visible.clear(); String query = inboxSearch.toLowerCase(Locale.ROOT);
+            for (JSONObject item : ordered) if (item.optString("name").toLowerCase(Locale.ROOT).contains(query)) visible.add(item);
+            notifyDataSetChanged();
+        }
+        @Override public int getItemCount() { return Math.max(1, visible.size()); }
+        @Override public FileHolder onCreateViewHolder(ViewGroup parent, int type) { return new FileHolder(section()); }
+        @Override public void onBindViewHolder(FileHolder holder, int position) {
+            LinearLayout container = holder.content; container.removeAllViews();
+            if (visible.isEmpty()) {
+                container.addView(text(getString(!inboxLoaded ? R.string.web_loading : inboxSearch.isEmpty() ? R.string.web_files_empty : R.string.web_empty), 14)); return;
+            }
+            try {
+                JSONObject item = visible.get(position); String name = Models.required(item, "name"); Models.requireName(name);
+                long size = Models.number(item, "size"), modified = Models.number(item, "mtime");
+                LinearLayout file = fileRow(container, name, WebFormat.bytes(size) + " · " + WebFormat.time(modified), R.drawable.ic_article);
+                MaterialCheckBox check = new MaterialCheckBox(MainActivity.this); check.setMinHeight(dp(48)); check.setMinimumWidth(dp(48));
+                check.setContentDescription(getString(R.string.web_files_select) + " " + name); check.setTag(name); check.setChecked(inboxSelected.contains(name));
+                check.setEnabled(inboxSelectionAllowed() && (check.isChecked() || inboxSelected.size() < 32));
+                check.setOnCheckedChangeListener((view, checked) -> {
+                    if (checked && !inboxSelected.contains(name) && inboxSelected.size() >= 32) { check.setChecked(false); toast(getString(R.string.taildrop_selection_limit)); return; }
+                    if (checked) inboxSelected.add(name); else inboxSelected.remove(name);
+                    updateInboxSelection();
+                });
+                file.addView(check);
+                LinearLayout actions = new LinearLayout(MainActivity.this); actions.setGravity(Gravity.END); container.addView(actions);
+                ControlUi.iconGroup(actions,
+                    ControlUi.iconButton(MainActivity.this, R.drawable.ic_content_copy, getString(R.string.web_tools_copy_path) + " " + name, () -> {
+                        getSystemService(ClipboardManager.class).setPrimaryClip(ClipData.newPlainText(name, "/data/adb/foxytail/files/" + name)); toast(getString(R.string.files_copied));
+                    }),
+                    ControlUi.iconButton(MainActivity.this, R.drawable.ic_download, getString(R.string.web_files_download) + " " + name, () -> export(name, "save")),
+                    ControlUi.iconButton(MainActivity.this, R.drawable.ic_open_in_new, getString(R.string.web_files_export) + " " + name, () -> confirmFileAction(R.string.web_files_export, getString(R.string.files_export_confirm, name), "file-export", name)),
+                    ControlUi.iconButton(MainActivity.this, R.drawable.ic_file_open, getString(R.string.open) + " " + name, () -> export(name, "open")),
+                    ControlUi.iconButton(MainActivity.this, R.drawable.ic_share, getString(R.string.share) + " " + name, () -> export(name, "share")));
+                ControlUi.divider(container);
+            } catch (Exception e) { container.removeAllViews(); container.addView(text(getString(R.string.web_files_invalid_response), 14)); }
+        }
     }
     private void buildSend() {
         LinearLayout card = ControlUi.card(sendSection, getString(R.string.web_files_send), R.drawable.ic_send, null);
-        ControlUi.hint(card, getString(R.string.web_files_send_hint));
         targetRows = section(); card.addView(targetRows); renderTargets();
         browseControl = ControlUi.tonalButton(this, getString(R.string.web_files_choose), R.drawable.ic_folder, this::browseFiles);
         browseControl.setLayoutParams(new LinearLayout.LayoutParams(-2, -2)); card.addView(browseControl);
-        card.addView(button(R.string.pick_files, this::pickFiles));
+        card.addView(ControlUi.iconButton(this, R.drawable.ic_add, getString(R.string.pick_files), this::pickFiles));
         browserHost = section(); browserHost.setVisibility(View.GONE); card.addView(browserHost);
         selectedRows = section(); card.addView(selectedRows);
         sendControl = ControlUi.primaryButton(this, getString(R.string.web_files_send_btn), R.drawable.ic_send, this::confirmSend);
@@ -242,8 +358,8 @@ public final class MainActivity extends ControlActivity {
         target.setHint(getString(R.string.web_files_peer)); target.setEnabled(!peers.isEmpty() && !TransferService.isRunning()); target.setContentDescription(getString(R.string.web_files_peer));
         if (!peers.isEmpty()) selectedPeer = peers.get(selected).id;
         targetRows.addView(target);
-        Button refresh = button(targetsLoading ? R.string.web_loading : R.string.web_files_refresh_targets, this::refreshTargets);
-        refresh.setEnabled(!targetsLoading && !TransferService.isRunning()); targetRows.addView(refresh);
+        ImageButton refresh = ControlUi.iconButton(this, R.drawable.ic_refresh, getString(targetsLoading ? R.string.web_loading : R.string.web_files_refresh_targets), this::refreshTargets);
+        refresh.setEnabled(!targetsLoading && !TransferService.isRunning()); ControlUi.iconGroup(targetRows, refresh);
         renderSelection();
     }
     static int targetPlaceholder(boolean loaded, boolean failed) {
@@ -253,8 +369,13 @@ public final class MainActivity extends ControlActivity {
         if (selectedRows == null) return;
         selectedRows.removeAllViews(); long bytes = 0; boolean known = true;
         for (Models.Source source : selection) { if (source.size < 0) known = false; else bytes += source.size; }
-        ControlUi.hint(selectedRows, getString(R.string.web_files_selected) + " " + selection.size() + "/32 · " + (known ? WebFormat.bytes(bytes) : "—"));
-        if (selection.isEmpty()) ControlUi.hint(selectedRows, getString(R.string.web_files_selection_empty));
+        LinearLayout summary = new LinearLayout(this); summary.setGravity(Gravity.CENTER_VERTICAL); selectedRows.addView(summary);
+        TextView count = ControlUi.muted(this, getString(R.string.web_files_selected) + " " + selection.size() + "/32 · " + (known ? WebFormat.bytes(bytes) : "—"), R.dimen.ft_caption);
+        summary.addView(count, new LinearLayout.LayoutParams(0, -2, 1));
+        if (!selection.isEmpty()) {
+            ImageButton clear = ControlUi.iconButton(this, R.drawable.ic_deselect, getString(R.string.taildrop_clear_selection), () -> { if (!TransferService.isRunning()) { selectionRevision++; selection.clear(); renderSelection(); } });
+            clear.setEnabled(!TransferService.isRunning()); ControlUi.iconGroup(summary, clear);
+        }
         for (Models.Source source : selection) {
             String location = source.path == null ? source.uri.toString() : source.path;
             LinearLayout row = fileRow(selectedRows, source.name, location + " · " + (source.size < 0 ? "—" : WebFormat.bytes(source.size)), 0);
@@ -265,54 +386,103 @@ public final class MainActivity extends ControlActivity {
         if (browser != null) browser.updateSelection();
     }
     private String transferState(String status) {
+        if ("completed".equals(status)) return null;
         return getString(switch (status) {
             case "queued" -> R.string.web_files_queued; case "sending" -> R.string.web_files_sending;
-            case "completed" -> R.string.web_files_completed; case "failed" -> R.string.web_files_failed;
+            case "failed" -> R.string.web_files_failed;
             case "cancelled" -> R.string.web_files_cancelled; default -> R.string.web_files_interrupted;
         });
     }
     private void renderHistory() {
-        historySection.removeAllViews();
-        LinearLayout card = ControlUi.card(historySection, getString(R.string.web_files_history), R.drawable.ic_send, null);
-        Button refresh = button(historyLoading ? R.string.web_loading : R.string.web_tools_refresh, this::refreshHistory);
-        refresh.setEnabled(!historyLoading); ControlUi.cardAction(card, refresh);
-        if (!historyError.isEmpty()) ControlUi.banner(card, R.drawable.ic_error, historyError, ControlUi.TONE_ERROR);
-        if (history.isEmpty() && historyError.isEmpty()) card.addView(text(getString(historyLoaded ? R.string.web_files_history_empty : R.string.web_loading), 14));
-        for (int i = 0; i < history.size(); i++) {
-            if (i > 0) ControlUi.divider(card);
-            addTransfer(card, history.get(i));
+        if (historyAdapter == null) {
+            LinearLayout card = ControlUi.card(historySection, getString(R.string.web_files_history), R.drawable.ic_send, null);
+            historyRefresh = ControlUi.iconButton(this, R.drawable.ic_refresh, getString(R.string.web_tools_refresh), this::refreshHistory);
+            clearHistory = ControlUi.iconButton(this, R.drawable.ic_delete, getString(R.string.taildrop_clear_history), () -> confirmFileAction(R.string.taildrop_clear_history, getString(R.string.taildrop_clear_history_confirm), "file-send-clear"));
+            ControlUi.cardAction(card, ControlUi.iconGroup(card, historyRefresh, clearHistory));
+            historyNotice = text("", 14); card.addView(historyNotice);
+            historyList = boundedList(card); historyAdapter = new HistoryAdapter(); historyList.setAdapter(historyAdapter);
+        }
+        String historyState = getString(historyLoading ? R.string.web_loading : R.string.web_tools_refresh); historyRefresh.setContentDescription(historyState); historyRefresh.setTooltipText(historyState); historyRefresh.setEnabled(!historyLoading);
+        clearHistory.setEnabled(historyLoaded && historyError.isEmpty() && history.stream().anyMatch(item -> !Models.active(item.status)) && !client.busy());
+        historyNotice.setText(!historyError.isEmpty() ? historyError : history.isEmpty() ? getString(historyLoaded ? R.string.web_files_history_empty : R.string.web_loading) : "");
+        historyNotice.setVisibility(historyNotice.length() == 0 ? View.GONE : View.VISIBLE);
+        historyList.setVisibility(history.isEmpty() ? View.GONE : View.VISIBLE);
+        historyAdapter.update();
+    }
+    private final class HistoryAdapter extends RecyclerView.Adapter<FileHolder> {
+        private ArrayList<Models.Transfer> rows = new ArrayList<>();
+        void update() {
+            ArrayList<Models.Transfer> previous = rows, next = new ArrayList<>(history);
+            DiffUtil.DiffResult changes = DiffUtil.calculateDiff(new DiffUtil.Callback() {
+                public int getOldListSize() { return previous.size(); }
+                public int getNewListSize() { return next.size(); }
+                public boolean areItemsTheSame(int oldPosition, int newPosition) { return previous.get(oldPosition).id.equals(next.get(newPosition).id); }
+                public boolean areContentsTheSame(int oldPosition, int newPosition) {
+                    Models.Transfer old = previous.get(oldPosition), current = next.get(newPosition);
+                    return old == current || old.json.toString().equals(current.json.toString());
+                }
+            });
+            rows = next; changes.dispatchUpdatesTo(this);
+            for (int i = 0; i < historyList.getChildCount(); i++) {
+                View child = historyList.getChildAt(i);
+                if (child.getTag() instanceof Models.Transfer) updateRetry((LinearLayout) child, (Models.Transfer) child.getTag());
+            }
+        }
+        @Override public int getItemCount() { return rows.size(); }
+        @Override public FileHolder onCreateViewHolder(ViewGroup parent, int type) { return new FileHolder(section()); }
+        @Override public void onBindViewHolder(FileHolder holder, int position) {
+            holder.content.removeAllViews(); Models.Transfer transfer = rows.get(position); holder.content.setTag(transfer);
+            addTransfer(holder.content, transfer); ControlUi.divider(holder.content);
+        }
+        @Override public void onViewAttachedToWindow(FileHolder holder) {
+            super.onViewAttachedToWindow(holder);
+            if (holder.content.getTag() instanceof Models.Transfer) updateRetry(holder.content, (Models.Transfer) holder.content.getTag());
         }
     }
+    private void updateRetry(LinearLayout row, Models.Transfer transfer) {
+        View retry = row.findViewWithTag("retry");
+        if (retry != null) retry.setEnabled(historyLoaded && historyError.isEmpty() && targetsError.isEmpty() && !TransferService.isRunning()
+                && history.stream().noneMatch(item -> Models.active(item.status)) && peers.stream().anyMatch(peer -> peer.id.equals(transfer.peerId)));
+        View missing = row.findViewWithTag("retry-missing");
+        if (missing != null) missing.setVisibility(targetsLoaded && peers.stream().noneMatch(peer -> peer.id.equals(transfer.peerId)) ? View.VISIBLE : View.GONE);
+        View remove = row.findViewWithTag("delete-history");
+        if (remove != null) remove.setEnabled(!client.busy());
+    }
     private void addTransfer(LinearLayout container, Models.Transfer transfer) {
-        TextView title = text((transfer.peerName.isEmpty() ? transfer.peerId : transfer.peerName) + " · " + transfer.peerIp, 16); title.setTypeface(null, android.graphics.Typeface.BOLD); container.addView(title);
+        LinearLayout heading = new LinearLayout(this); heading.setGravity(Gravity.CENTER_VERTICAL); container.addView(heading);
+        TextView title = text((transfer.peerName.isEmpty() ? transfer.peerId : transfer.peerName) + " · " + transfer.peerIp, 16); title.setTypeface(null, android.graphics.Typeface.BOLD); heading.addView(title, new LinearLayout.LayoutParams(0, -2, 1));
         long completed = transfer.files.stream().filter(file -> "completed".equals(file.status)).count();
-        ControlUi.hint(container, WebFormat.time(transfer.started) + " · " + getString(R.string.web_files_completed_count) + " " + completed + "/" + transfer.files.size());
-        TextView status = text(transferState(transfer.status), 14); status.setAccessibilityLiveRegion(View.ACCESSIBILITY_LIVE_REGION_POLITE); container.addView(status);
-        if (Models.active(transfer.status)) ControlUi.hint(container, getString(R.string.web_files_accepted_hint));
+        ControlUi.hint(container, WebFormat.time(transfer.started) + " · " + completed + "/" + transfer.files.size());
+        String state = transferState(transfer.status);
+        if (state != null) { TextView status = text(state, 14); status.setAccessibilityLiveRegion(View.ACCESSIBILITY_LIVE_REGION_POLITE); container.addView(status); }
         if (!transfer.error.isEmpty()) ControlUi.banner(container, R.drawable.ic_error, transfer.error, ControlUi.TONE_ERROR);
         addFiles(container, transfer);
-        if (Models.active(transfer.status)) container.addView(button(R.string.web_files_cancel_send, () -> cancelJob(transfer.id)));
+        if (Models.active(transfer.status)) container.addView(ControlUi.iconButton(this, R.drawable.ic_close, getString(R.string.web_files_cancel_send), () -> cancelJob(transfer.id)));
         else {
+            ImageButton remove = ControlUi.iconButton(this, R.drawable.ic_delete, getString(R.string.taildrop_delete_history), () -> confirmFileAction(R.string.taildrop_delete_history, getString(R.string.taildrop_delete_history_confirm), "file-send-delete", transfer.id));
+            remove.setEnabled(!client.busy());
+            remove.setTag("delete-history"); ControlUi.iconGroup(heading, remove);
             long unsuccessful = transfer.files.stream().filter(file -> "failed".equals(file.status) || "cancelled".equals(file.status)).count();
             if (unsuccessful > 0) {
-                MaterialButton retry = ControlUi.tonalButton(this, getString(R.string.web_files_retry_unsuccessful) + " (" + unsuccessful + ")", () -> confirmRetry(transfer));
+                ImageButton retry = ControlUi.iconButton(this, R.drawable.ic_refresh, getString(R.string.web_files_retry_unsuccessful) + " (" + unsuccessful + ")", () -> confirmRetry(transfer));
+                retry.setTag("retry");
                 retry.setEnabled(historyLoaded && historyError.isEmpty() && targetsError.isEmpty() && !TransferService.isRunning() && history.stream().noneMatch(item -> Models.active(item.status)) && peers.stream().anyMatch(peer -> peer.id.equals(transfer.peerId)));
-                container.addView(retry, new LinearLayout.LayoutParams(-2, -2));
-                if (targetsLoaded && peers.stream().noneMatch(peer -> peer.id.equals(transfer.peerId))) ControlUi.hint(container, getString(R.string.web_files_retry_target_missing));
+                ControlUi.iconGroup(container, retry);
+                TextView missing = text(getString(R.string.web_files_retry_target_missing), 13); missing.setTag("retry-missing"); container.addView(missing);
+                updateRetry(container, transfer);
             }
         }
     }
     private void addFiles(LinearLayout container, Models.Transfer transfer) {
         for (Models.FileState file : transfer.files) {
-            LinearLayout row = fileRow(container, file.name, transferState(file.status) + " · " + WebFormat.bytes(file.size), 0);
+            String fileState = transferState(file.status);
+            LinearLayout row = fileRow(container, file.name, (fileState == null ? "" : fileState + " · ") + WebFormat.bytes(file.size), 0);
             LinearLayout main = (LinearLayout) row.getChildAt(0);
-            if ("sending".equals(file.status)) {
-                if (file.known) {
-                    String progress = WebFormat.bytes(file.sent) + " / " + WebFormat.bytes(file.size) + " · " + WebFormat.bytes(file.speed) + "/s";
-                    ControlUi.hint(main, progress);
-                    LinearProgressIndicator bar = new LinearProgressIndicator(this); bar.setMax(1000); bar.setProgress(file.size == 0 ? 0 : (int) (1000.0 * file.sent / file.size));
-                    bar.setContentDescription(getString(R.string.web_files_sending) + " " + file.name + " " + progress); main.addView(bar);
-                } else ControlUi.hint(main, getString(R.string.web_files_progress_unknown));
+            if ("sending".equals(file.status) && file.known) {
+                String progress = WebFormat.bytes(file.sent) + " / " + WebFormat.bytes(file.size) + " · " + WebFormat.bytes(file.speed) + "/s";
+                ControlUi.hint(main, progress);
+                LinearProgressIndicator bar = new LinearProgressIndicator(this); bar.setMax(1000); bar.setProgress(file.size == 0 ? 0 : (int) (1000.0 * file.sent / file.size));
+                bar.setContentDescription(getString(R.string.web_files_sending) + " " + file.name + " " + progress); main.addView(bar);
             }
             if (!file.error.isEmpty()) {
                 TextView error = text(file.error, 13); error.setTextColor(com.google.android.material.color.MaterialColors.getColor(error, androidx.appcompat.R.attr.colorError)); main.addView(error);
@@ -342,6 +512,11 @@ public final class MainActivity extends ControlActivity {
             }
         } catch (Exception ignored) { }
         renderSelection();
+        updateInboxSelection();
+        if (clearHistory != null) clearHistory.setEnabled(historyLoaded && historyError.isEmpty() && history.stream().anyMatch(item -> !Models.active(item.status)) && !client.busy());
+        if (historyList != null) for (int i = 0; i < historyList.getChildCount(); i++) {
+            View row = historyList.getChildAt(i); if (row.getTag() instanceof Models.Transfer) updateRetry((LinearLayout) row, (Models.Transfer) row.getTag());
+        }
     }
     private void refreshInbox() {
         if (inboxLoading) { inboxQueued = true; return; }
@@ -352,7 +527,9 @@ public final class MainActivity extends ControlActivity {
                 Models.Inbox loaded = new Models.Inbox(RootApi.json(this, "files-inbox"));
                 runOnUiThread(() -> {
                     if (isDestroyed() || token != inboxGeneration) return;
-                    inbox = loaded.files; inboxIgnored = loaded.ignored; inboxLoaded = true; inboxError = ""; finishInbox();
+                    inbox = loaded.files; inboxIgnored = loaded.ignored; inboxLoaded = true; inboxError = "";
+                    HashSet<String> names = new HashSet<>(); for (int i = 0; i < inbox.length(); i++) names.add(inbox.optJSONObject(i).optString("name"));
+                    inboxSelected.retainAll(names); finishInbox();
                 });
             } catch (Exception error) { runOnUiThread(() -> {
                 if (isDestroyed() || token != inboxGeneration) return;
@@ -455,6 +632,7 @@ public final class MainActivity extends ControlActivity {
     private void resolveUris(List<Uri> uris, boolean report) {
         if (uris.isEmpty()) { if (report) error(getString(R.string.invalid_uri)); return; }
         if (uris.size() > 32) { if (report) error(getString(R.string.file_limit)); return; }
+        final int revision = selectionRevision;
         fileIo.execute(() -> {
             ArrayList<Models.Source> accepted = new ArrayList<>(); StringBuilder errors = new StringBuilder();
             for (Uri uri : new LinkedHashSet<>(uris)) {
@@ -464,7 +642,7 @@ public final class MainActivity extends ControlActivity {
                 } catch (Exception e) { if (errors.length() > 0) errors.append('\n'); errors.append(uri == null ? "?" : uri.getLastPathSegment()).append(": ").append(RootApi.message(e)); }
             }
             runOnUiThread(() -> {
-                if (isDestroyed()) return;
+                if (isDestroyed() || revision != selectionRevision || TransferService.isRunning()) return;
                 for (Models.Source source : accepted) {
                     if (selection.stream().noneMatch(existing -> existing.key().equals(source.key())) && selection.size() < 32) selection.add(source);
                     else if (selection.size() >= 32) errors.append('\n').append(getString(R.string.file_limit));
@@ -479,7 +657,7 @@ public final class MainActivity extends ControlActivity {
     }
     @Override protected void onActivityResult(int request, int result, Intent data) {
         super.onActivityResult(request, result, data);
-        if (result != RESULT_OK || data == null) return;
+        if (result != RESULT_OK || data == null) { if (request == SAVE) { saveName = null; updateInboxSelection(); } return; }
         if (request == PICK) {
             ArrayList<Uri> uris = new ArrayList<>();
             if (data.getClipData() != null) for (int i = 0; i < data.getClipData().getItemCount(); i++) uris.add(data.getClipData().getItemAt(i).getUri());
@@ -487,15 +665,9 @@ public final class MainActivity extends ControlActivity {
             if (uris.size() > 32) { error(getString(R.string.file_limit)); return; }
             for (Uri uri : uris) try { if ((data.getFlags() & Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION) != 0) getContentResolver().takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION); } catch (SecurityException ignored) { }
             resolveUris(uris, true);
-        } else if (request == SAVE && data.getData() != null && saveSource != null) {
-            Uri from = saveSource, to = data.getData(); saveSource = null;
-            fileIo.execute(() -> {
-                try (InputStream input = getContentResolver().openInputStream(from); OutputStream output = getContentResolver().openOutputStream(to, "wt")) {
-                    if (input == null || output == null) throw new IOException(getString(R.string.export_failed));
-                    RootApi.copy(input, output, RootApi.MAX_FILE, null, null);
-                    runOnUiThread(() -> toast(getString(R.string.saved)));
-                } catch (Exception e) { runOnUiThread(() -> error(getString(R.string.export_failed) + "\n" + RootApi.message(e))); }
-            });
+        } else if (request == SAVE) {
+            String name = saveName; saveName = null;
+            if (name != null && data.getData() != null) startExport(name, "save", data.getData());
         }
     }
     private void confirmSend() {
@@ -561,17 +733,48 @@ public final class MainActivity extends ControlActivity {
                     fileCompletion = result -> {
                         MainActivity activity = owner.get();
                         if (activity == null || activity.isDestroyed()) return;
-                        activity.fileCompletion = null;
-                        if (!result.optBoolean("ok")) { activity.error(result.optString("error", activity.getString(R.string.backend_failed))); return; }
-                        String notice = command[0].equals("file-export") ? activity.getString(R.string.web_files_exported_to) + " " + result.optString("path")
-                                : command[0].equals("file-clear") ? activity.getString(R.string.web_files_cleared) + " (" + result.optInt("removed") + ")" : activity.getString(R.string.web_files_deleted);
-                        if (command[0].equals("file-clear") && result.optInt("ignored") > 0) notice += "\n" + activity.getString(R.string.repair_files_ignored_clear, result.optInt("ignored"));
-                        activity.toast(notice);
-                        activity.refreshInbox();
+                        activity.fileCompletion = null; activity.completeFileAction(result, command);
                     };
                     client.submit(getString(title), fileCompletion, command);
                     if (!client.busy()) fileCompletion = null;
+                    dialog.dismiss();
                 }).show();
+    }
+    private void completeFileAction(JSONObject result, String... command) {
+        boolean historyAction = command[0].equals("file-send-delete") || command[0].equals("file-send-clear");
+        try {
+            if (!result.getBoolean("ok")) throw new IOException(result.optString("error", getString(R.string.backend_failed)));
+            if (historyAction) {
+                long removed = Models.number(result, "removed"), retained = Models.number(result, "retained");
+                history.removeIf(item -> !Models.active(item.status) && (command[0].equals("file-send-clear") || item.id.equals(command[1])));
+                historyRevision++;
+                SharedPreferences state = TransferService.state(this); String snapshot = state.getString("snapshot", null);
+                if (snapshot != null) {
+                    Models.Transfer saved = new Models.Transfer(new JSONObject(snapshot));
+                    if (!Models.active(saved.status) && (command[0].equals("file-send-clear") || saved.id.equals(command[1]))) state.edit().remove("snapshot").apply();
+                }
+                toast(getString(R.string.taildrop_history_removed, removed, retained));
+            } else if (command[0].endsWith("-many")) {
+                JSONArray results = result.getJSONArray("results"), requested = new JSONArray(command[1]);
+                if (results.length() != requested.length()) throw new IOException(getString(R.string.invalid_response));
+                int succeeded = 0; StringBuilder failures = new StringBuilder(); ArrayList<String> completed = new ArrayList<>();
+                for (int i = 0; i < results.length(); i++) {
+                    JSONObject item = results.getJSONObject(i); String name = Models.required(item, "name");
+                    if (!name.equals(requested.getString(i)) || !(item.get("ok") instanceof Boolean)) throw new IOException(getString(R.string.invalid_response));
+                    if (item.getBoolean("ok")) { succeeded++; completed.add(name); }
+                    else { if (failures.length() > 0) failures.append('\n'); failures.append(name).append(": ").append(Models.required(item, "error")); }
+                }
+                inboxSelected.removeAll(completed);
+                String notice = getString(R.string.taildrop_batch_result, succeeded, results.length() - succeeded);
+                if (failures.length() == 0) toast(notice); else error(notice + "\n" + failures);
+            } else {
+                String notice = command[0].equals("file-export") ? getString(R.string.web_files_exported_to) + " " + result.optString("path")
+                        : command[0].equals("file-clear") ? getString(R.string.web_files_cleared) + " (" + result.optInt("removed") + ")" : getString(R.string.web_files_deleted);
+                if (command[0].equals("file-clear") && result.optInt("ignored") > 0) notice += "\n" + getString(R.string.repair_files_ignored_clear, result.optInt("ignored"));
+                toast(notice);
+            }
+        } catch (Exception error) { error(RootApi.message(error)); }
+        finally { if (historyAction) refreshHistory(); else refreshInbox(); }
     }
     private void cancelJob(String id) {
         if (TransferService.isRunning()) { startService(new Intent(this, TransferService.class).setAction(TransferService.CANCEL)); return; }
@@ -593,29 +796,122 @@ public final class MainActivity extends ControlActivity {
         if (request == NOTIFY && (results.length == 0 || results[0] != PackageManager.PERMISSION_GRANTED)) toast(getString(R.string.notifications_hint));
     }
     private void export(String name, String action) {
-        operationMessage = getString(R.string.web_loading); updateProgress();
-        fileIo.execute(() -> {
-            try {
-                Uri uri = ExportProvider.export(this, name);
-                runOnUiThread(() -> {
-                    if (isDestroyed() || !resumed) return;
-                    operationMessage = ""; updateProgress();
-                    try {
-                        if (action.equals("save")) {
-                            saveSource = uri; saveName = name;
-                            startActivityForResult(new Intent(Intent.ACTION_CREATE_DOCUMENT).addCategory(Intent.CATEGORY_OPENABLE).setType(ExportProvider.mime(name)).putExtra(Intent.EXTRA_TITLE, name), SAVE);
-                        } else {
-                            Intent intent;
-                            if (action.equals("share")) intent = new Intent(Intent.ACTION_SEND).setType(ExportProvider.mime(name)).putExtra(Intent.EXTRA_STREAM, uri);
-                            else intent = new Intent(Intent.ACTION_VIEW).setDataAndType(uri, ExportProvider.mime(name));
-                            intent.setClipData(ClipData.newRawUri(name, uri));
-                            intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
-                            startActivity(Intent.createChooser(intent, getString(action.equals("share") ? R.string.share : R.string.open)));
-                        }
-                    } catch (ActivityNotFoundException e) { error(getString(R.string.no_viewer)); }
-                });
-            } catch (Exception e) { runOnUiThread(() -> { operationMessage = ""; updateProgress(); error(RootApi.message(e)); }); }
+        if (exportCall != null || saveName != null) { error(getString(R.string.busy)); return; }
+        if ("save".equals(action)) {
+            saveName = name;
+            try { startActivityForResult(new Intent(Intent.ACTION_CREATE_DOCUMENT).addCategory(Intent.CATEGORY_OPENABLE).setType(ExportProvider.mime(name)).putExtra(Intent.EXTRA_TITLE, name), SAVE); }
+            catch (ActivityNotFoundException e) { saveName = null; error(getString(R.string.no_viewer)); }
+            return;
+        }
+        startExport(name, action, null);
+    }
+    private RootApi.Call beginExport(String name, int title) {
+        if (exportCall != null || saveName != null) { error(getString(R.string.busy)); return null; }
+        RootApi.Call call = new RootApi.Call(); exportCall = call; exportCancelled = false; exportCommitting = false; updateInboxSelection();
+        LinearLayout content = section(); int gap = dp(20); content.setPadding(gap, gap, gap, gap);
+        exportProgress = text(getString(R.string.repair_files_saving, name, WebFormat.bytes(0)), 14);
+        exportProgress.setAccessibilityLiveRegion(View.ACCESSIBILITY_LIVE_REGION_POLITE); content.addView(exportProgress);
+        LinearProgressIndicator progress = new LinearProgressIndicator(this); progress.setIndeterminate(true); content.addView(progress);
+        exportDialog = new MaterialAlertDialogBuilder(this).setTitle(title)
+                .setView(content).setNegativeButton(R.string.cancel, null).setCancelable(false).create();
+        exportDialog.show();
+        exportDialog.getButton(android.content.DialogInterface.BUTTON_NEGATIVE).setOnClickListener(view -> {
+            if (!exportCommitting) { exportCancelled = true; call.cancel(); RootApi.Call read = exportReadCall; if (read != null) read.cancel(); view.setEnabled(false); }
         });
+        return call;
+    }
+    private void shareInboxSelection() {
+        if (!inboxSelectionAllowed() || inboxSelected.isEmpty()) return;
+        ArrayList<String> names = new ArrayList<>(inboxSelected);
+        RootApi.Call call = beginExport(names.get(0), R.string.share); if (call == null) return;
+        exportIo.execute(() -> {
+            ArrayList<Uri> ready = new ArrayList<>();
+            try {
+                for (int i = 0; i < names.size(); i++) {
+                    if (exportCancelled || call.cancelled.get()) throw new InterruptedIOException(getString(R.string.cancelled));
+                    String name = names.get(i); int index = i + 1; long[] last = {0};
+                    runOnUiThread(() -> { if (!isDestroyed() && exportCall == call) exportProgress.setText(getString(R.string.taildrop_share_progress, index, names.size(), name, WebFormat.bytes(0))); });
+                    RootApi.Call read = new RootApi.Call(); exportReadCall = read;
+                    if (exportCancelled || call.cancelled.get()) { read.cancel(); throw new InterruptedIOException(getString(R.string.cancelled)); }
+                    ready.add(ExportProvider.export(this, name, bytes -> {
+                        long now = SystemClock.elapsedRealtime(); if (now - last[0] < 250) return; last[0] = now;
+                        runOnUiThread(() -> { if (!isDestroyed() && exportCall == call) exportProgress.setText(getString(R.string.taildrop_share_progress, index, names.size(), name, WebFormat.bytes(bytes))); });
+                    }, read));
+                }
+                if (exportCancelled || call.cancelled.get()) throw new InterruptedIOException(getString(R.string.cancelled));
+                runOnUiThread(() -> {
+                    boolean cancelled = exportCancelled; finishExport(call);
+                    if (isDestroyed() || !resumed || cancelled) { discardExports(ready); return; }
+                    try { startActivity(Intent.createChooser(shareIntent(names, ready), getString(R.string.share))); }
+                    catch (ActivityNotFoundException error) { discardExports(ready); error(getString(R.string.no_viewer)); }
+                });
+            } catch (Exception error) { discardExports(ready); runOnUiThread(() -> { finishExport(call); error(RootApi.message(error)); }); }
+            finally { exportReadCall = null; call.finished = true; }
+        });
+    }
+    static Intent shareIntent(List<String> names, ArrayList<Uri> uris) {
+        if (uris.isEmpty() || uris.size() != names.size() || uris.size() > 32) throw new IllegalArgumentException("Invalid shared file selection");
+        String type = ExportProvider.mime(names.get(0));
+        for (String name : names) if (!type.equals(ExportProvider.mime(name))) { type = "*/*"; break; }
+        Intent intent = new Intent(uris.size() == 1 ? Intent.ACTION_SEND : Intent.ACTION_SEND_MULTIPLE).setType(type);
+        if (uris.size() == 1) intent.putExtra(Intent.EXTRA_STREAM, uris.get(0)); else intent.putParcelableArrayListExtra(Intent.EXTRA_STREAM, uris);
+        ClipData clip = ClipData.newRawUri("Taildrop", uris.get(0)); for (int i = 1; i < uris.size(); i++) clip.addItem(new ClipData.Item(uris.get(i)));
+        intent.setClipData(clip); return intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+    }
+    private void discardExports(List<Uri> uris) {
+        for (Uri uri : uris) try { ExportProvider.discard(this, uri); } catch (IOException ignored) { }
+    }
+    private void startExport(String name, String action, Uri targetUri) {
+        RootApi.Call call = beginExport(name, "save".equals(action) ? R.string.web_files_download : "share".equals(action) ? R.string.share : R.string.open);
+        if (call == null) return;
+        final long[] lastProgress = {0};
+        RootApi.Progress copied = bytes -> {
+            long now = SystemClock.elapsedRealtime(); if (now - lastProgress[0] < 250) return; lastProgress[0] = now;
+            runOnUiThread(() -> {
+                if (!isDestroyed() && exportCall == call) exportProgress.setText(getString(exportCommitting ? R.string.repair_files_save_committing : R.string.repair_files_saving, name, WebFormat.bytes(bytes)));
+            });
+        };
+        exportIo.execute(() -> {
+            try {
+                if (targetUri != null) {
+                    ExportProvider.save(this, name, targetUri, output -> {
+                        if (exportCancelled) throw new InterruptedIOException(getString(R.string.cancelled));
+                        RootApi.readInbox(this, name, output, copied, call);
+                    }, () -> {
+                        FutureTask<Void> fence = new FutureTask<>(() -> {
+                            if (isDestroyed() || exportCancelled || call.cancelled.get()) throw new InterruptedIOException(getString(R.string.cancelled));
+                            exportCommitting = true;
+                            exportDialog.getButton(android.content.DialogInterface.BUTTON_NEGATIVE).setEnabled(false);
+                            exportProgress.setText(getString(R.string.repair_files_save_committing, name, WebFormat.bytes(0))); return null;
+                        });
+                        runOnUiThread(fence); fence.get();
+                    }, copied);
+                    runOnUiThread(() -> { finishExport(call); toast(getString(R.string.saved)); });
+                } else {
+                    Uri uri = ExportProvider.export(this, name, copied, call);
+                    if (exportCancelled || call.cancelled.get()) { ExportProvider.discard(this, uri); throw new InterruptedIOException(getString(R.string.cancelled)); }
+                    runOnUiThread(() -> {
+                        boolean cancelled = exportCancelled; finishExport(call);
+                        if (isDestroyed() || !resumed || cancelled) return;
+                        try {
+                            Intent intent = "share".equals(action) ? new Intent(Intent.ACTION_SEND).setType(ExportProvider.mime(name)).putExtra(Intent.EXTRA_STREAM, uri)
+                                    : new Intent(Intent.ACTION_VIEW).setDataAndType(uri, ExportProvider.mime(name));
+                            intent.setClipData(ClipData.newRawUri(name, uri)); intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+                            startActivity(Intent.createChooser(intent, getString("share".equals(action) ? R.string.share : R.string.open)));
+                        } catch (ActivityNotFoundException e) { error(getString(R.string.no_viewer)); }
+                    });
+                }
+            } catch (Exception e) {
+                boolean partial = exportCommitting;
+                runOnUiThread(() -> { finishExport(call); error(RootApi.message(e) + (partial ? "\n" + getString(R.string.repair_files_save_partial) : "")); });
+            } finally { call.finished = true; }
+        });
+    }
+    private void finishExport(RootApi.Call call) {
+        if (exportCall != call) return;
+        exportCall = null; exportCommitting = false;
+        if (exportDialog != null) { exportDialog.dismiss(); exportDialog = null; }
+        updateInboxSelection();
     }
     private void error(String text) { if (!isDestroyed() && !isFinishing()) new MaterialAlertDialogBuilder(this).setTitle(R.string.error_title).setMessage(text).setPositiveButton(R.string.close, null).show(); }
     private void toast(String text) { if (!isDestroyed()) Toast.makeText(this, text, Toast.LENGTH_LONG).show(); }

@@ -202,8 +202,11 @@ func runSendQuery(command string, args []string) error {
 	if flags.NArg() != 0 {
 		return errors.New("unexpected send query arguments")
 	}
-	if command != "send-history" && command != "send-stop" && !validID(*id) {
+	if command != "send-history" && command != "send-stop" && command != "send-clear" && !validID(*id) {
 		return errors.New("invalid transfer ID")
+	}
+	if command == "send-clear" && *id != "" {
+		return errors.New("send-clear takes no transfer ID")
 	}
 	store, err := openTransferStore(*root)
 	if err != nil {
@@ -218,10 +221,21 @@ func runSendQuery(command string, args []string) error {
 		return err
 	}
 	defer guard.Close()
-	if err = store.maintain(); err != nil {
-		return err
+	if command == "send-delete" || command == "send-clear" {
+		removed, retained, err := store.removeHistory(*id)
+		if err != nil {
+			return err
+		}
+		return json.NewEncoder(os.Stdout).Encode(struct {
+			OK       bool `json:"ok"`
+			Removed  int  `json:"removed"`
+			Retained int  `json:"retained"`
+		}{true, removed, retained})
 	}
 	if command == "send-history" {
+		if err = store.maintain(); err != nil {
+			return err
+		}
 		records, err := store.records()
 		if err != nil {
 			return err
@@ -238,6 +252,17 @@ func runSendQuery(command string, args []string) error {
 	record, err := store.load(*id)
 	if err != nil {
 		return err
+	}
+	if activeTransfer(record.Status) {
+		active, lockErr := store.activeLock()
+		if lockErr == nil {
+			defer active.Close()
+			if err = store.interruptRecord(record); err != nil {
+				return err
+			}
+		} else if !lockBusy(lockErr) {
+			return lockErr
+		}
 	}
 	if command == "send-cancel" && activeTransfer(record.Status) {
 		if err = store.requestCancel(record.ID); err != nil {

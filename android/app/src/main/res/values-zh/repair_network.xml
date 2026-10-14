@@ -1,5 +1,2 @@
 <resources>
-    <string name="repair_network_manage_exit">管理出口节点</string>
-    <string name="repair_network_topology_list">全部设备 · %1$d</string>
-    <string name="repair_network_topology_shown">拓扑 · %1$d / %2$d 台设备</string>
 </resources>

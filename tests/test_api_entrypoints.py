@@ -44,6 +44,41 @@ class ApiEntrypointTests(ApiTestCase):
         self.assertEqual(result.returncode == 0, ok, result.stdout + result.stderr)
         return data
 
+    def test_taildrop_history_and_batch_dispatch_contracts(self):
+        self.entry_fixture()
+        self.script('bin/id', 'echo 0\n')
+        self.api.write_text(self.api.read_text().replace('# --- dispatch', '''
+cmd_file_delete_many() { jqr -n --arg names "$1" '{ok:true,names:$names}'; }
+cmd_file_export_many() { jqr -n --arg names "$1" '{ok:true,names:$names}'; }
+# --- dispatch''', 1))
+        self.script('bin/foxyfiles', '''
+printf '%s\\n' "$@" >"$TEST_DIR/helper-args"
+printf '%s\\n' '{"ok":true,"removed":1,"retained":2}'
+''')
+        commands = [('file-send-delete', 'a' * 32), ('file-send-clear',),
+                    ('file-delete-many', '["quote \' and space.txt"]'),
+                    ('file-export-many', '["quote \' and space.txt"]')]
+        advertised = self.entry('backend-info')['commands']
+        (self.conf / 'foxytail.conf').write_text('TS_MODE=invalid\n')
+        for args in commands:
+            with self.subTest(command=args[0]):
+                self.assertIn(args[0], advertised)
+                result = self.entry(*args)
+                if args[0].startswith('file-send-'):
+                    self.assertEqual(result, {'ok': True, 'removed': 1, 'retained': 2})
+                    expected = [args[0][5:], '--root', str(self.base)]
+                    if len(args) == 2:
+                        expected += ['--id', args[1]]
+                    self.assertEqual((self.base / 'helper-args').read_text().splitlines(), expected)
+                else:
+                    self.assertEqual(result['names'], args[1])
+                self.entry(*args, 'extra', ok=False)
+                if len(args) == 2:
+                    self.entry(args[0], ok=False)
+                (self.base / '.installing').touch()
+                self.assertIn('upgrade', self.entry(*args, ok=False)['error'])
+                (self.base / '.installing').unlink()
+
     def test_invalid_main_and_routes_preserve_recovery_dispatch(self):
         self.entry_fixture()
         good = self.snapshot()
@@ -70,6 +105,35 @@ class ApiEntrypointTests(ApiTestCase):
                 self.entry('restore', str(archive), hashlib.sha256(archive.read_bytes()).hexdigest(), baseline)
                 self.assertEqual(self.snapshot(), good)
         self.assertEqual((self.base / 'service-calls').read_text().splitlines(), ['stop', 'stop'])
+
+    def test_independent_reads_do_not_wait_for_configuration_writer(self):
+        self.entry_fixture()
+        self.script('bin/pm', 'printf "package:com.example.reader uid:10101\\n"\n')
+        holder = subprocess.Popen(['sh', '-c', '. "$1"; ensure_run_dirs; conf_lock_acquire || exit 1; '
+            'trap conf_lock_release EXIT; printf "ready\\n"; IFS= read -r release',
+            'hold', str(self.base / 'settings.sh')], env=self.env,
+            stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        try:
+            self.assertEqual(holder.stdout.readline().strip(), 'ready')
+            (self.conf / 'foxytail.conf').write_text('TS_MODE=invalid\n')
+            result = subprocess.run(['sh', str(self.api), 'apps'], env=self.env,
+                capture_output=True, text=True, timeout=3)
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            self.assertEqual(json.loads(result.stdout)['apps'],
+                [{'label': 'com.example.reader', 'package': 'com.example.reader', 'uid': 10101}])
+            self.assertIsNone(holder.poll(), 'read must complete before the writer releases ownership')
+        finally:
+            holder.communicate('release\n', timeout=5)
+        self.assertFalse(self.entry('settings-get', ok=False)['ok'])
+
+    def test_independent_device_read_ignores_broken_saved_configuration(self):
+        self.entry_fixture()
+        self.api.write_text(self.api.read_text().replace('# --- dispatch',
+            'daemon_up() { return 0; }\n# --- dispatch', 1))
+        self.script('bin/tailscale', '''printf '%s' '{"BackendState":"Running","Self":{"ID":"self-one"},"Peer":{"peer":{"ID":"peer-one","HostName":"peer-one","TailscaleIPs":["100.64.0.2"],"Online":true}}}'
+''')
+        (self.conf / 'foxytail.conf').write_text('TS_MODE=invalid\n')
+        self.assertEqual(self.entry('peers')['peers'][0]['id'], 'peer-one')
 
     def slow_fixture(self):
         self.entry_fixture()
@@ -188,7 +252,7 @@ printf '{"state":"stopped","suffix":"","port":%s,"mode":"%s"}' "$DNS_PORT" "$DNS
                 process.kill()
         process.communicate(timeout=3)
 
-    def test_status_cancels_owned_exit_route_descendants_without_success_payload(self):
+    def test_exit_routing_cancels_owned_descendants_without_success_payload(self):
         self.slow_fixture()
         source = (ROOT / 'tailscale/scripts/foxytail.exitnode').read_text()
         self.script('scripts/foxytail.exitnode', source.replace('#!/system/bin/sh\n', '', 1))
@@ -203,8 +267,8 @@ esac
 ''')
         with (self.scripts / 'foxytail.webapi-network.sh').open('a') as network:
             network.write('\ndaemon_up() { return 0; }\ndaemon_exists() { return 0; }\n')
-        request = str(int(time.time())) + '_status_route_cancel'
-        runner = subprocess.Popen(['sh', str(self.api), '--request-id', request, 'status'],
+        request = str(int(time.time())) + '_exit_route_cancel'
+        runner = subprocess.Popen(['sh', str(self.api), '--request-id', request, 'exit-routing'],
             env=self.env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, start_new_session=True)
         bystander = subprocess.Popen(['sleep', '30'], start_new_session=True)
         try:
@@ -212,7 +276,7 @@ esac
             deadline = time.monotonic() + 8
             while not pidfile.exists() and runner.poll() is None and time.monotonic() < deadline:
                 time.sleep(0.02)
-            self.assertTrue(pidfile.exists(), 'status never reached nested route read')
+            self.assertTrue(pidfile.exists(), 'exit routing never reached nested route read')
             registry = self.run / 'operations' / request
             self.assertTrue(list(registry.glob('child.*')))
             started = time.monotonic()
@@ -231,7 +295,8 @@ esac
 
     def test_real_slow_helpers_cancel_descendants_and_leave_bystander_alive(self):
         self.slow_fixture()
-        bystander = subprocess.Popen(['sleep', '30'], start_new_session=True)
+        bystander = subprocess.Popen([sys.executable, '-c', 'import sys; sys.stdin.buffer.read()'],
+            stdin=subprocess.PIPE, start_new_session=True)
         self.addCleanup(self.terminate, bystander)
         for index, (command, phase) in enumerate([
             ('diag', 'status'), ('diag', 'netcheck'), ('diag', 'bugreport'),

@@ -19,16 +19,13 @@ ensure_run_dirs
 ALERT_FILE="${TS_RUN_DIR}/compat-alert"
 trap 'exit 130' HUP INT TERM
 
-# Map a lower-case name to a category: proxy | firewall | vpn (empty = ignore).
-classify() {
-  case "$1" in
-    # Explicit exclusions: system/vendor apps that merely contain a keyword.
-    *sandbox* | *searchbox*) ;;
-    *clash* | *mihomo* | *sing-box* | *singbox* | *box4magisk* | *box-for-magisk* | *nekobox* | *hiddify* | *surfing*) echo "proxy" ;;
-    *afwall*) echo "firewall" ;;
-    *netguard*) echo "vpn" ;;
-  esac
-}
+# Share one classifier across module names and the complete package inventory.
+_compat_kind='def kind: ascii_downcase |
+  if test("sandbox|searchbox") then ""
+  elif test("clash|mihomo|sing-box|singbox|box4magisk|box-for-magisk|nekobox|hiddify|surfing") then "proxy"
+  elif contains("afwall") then "firewall"
+  elif contains("netguard") then "vpn"
+  else "" end;'
 
 probe() {
   if ! have_jq; then
@@ -37,67 +34,32 @@ probe() {
   fi
 
   _mods=""
-  _apps=""
-  _warns=""
-  _firewall_names=""
-  _vpn_names=""
-
-  # Magisk/KernelSU modules.
   for _d in /data/adb/modules/*/; do
     [ -d "$_d" ] || continue
-    _n=$(basename "$_d")
-    [ "$_n" = "foxytail" ] && continue
-    _l=$(echo "$_n" | tr 'A-Z' 'a-z')
-    _k=$(classify "$_l")
-    [ -n "$_k" ] || continue
-    _mods="${_mods}$(jqr -n -c --arg n "$_n" --arg p "${_d%/}" --arg k "$_k" \
-      '{name:$n,path:$p,kind:$k}')
+    _path=${_d%/}; _n=${_path##*/}
+    [ "$_n" = foxytail ] && continue
+    _mods="${_mods}$(jqr -n -c --arg n "$_n" --arg p "$_path" "${_compat_kind}"'
+      ($n | kind) as $kind | select($kind != "") | {name:$n,path:$p,kind:$kind}')
 "
-    case "$_k" in
-      firewall) _firewall_names="${_firewall_names}${_n} " ;;
-      vpn) _vpn_names="${_vpn_names}${_n} " ;;
-    esac
   done
-
-  # Installed apps (works in a su context).
+  _apps='[]'
   if command -v pm >/dev/null 2>&1; then
-    for _p in $(pm list packages 2>/dev/null | sed 's/^package://'); do
-      _l=$(echo "$_p" | tr 'A-Z' 'a-z')
-      _k=$(classify "$_l")
-      [ -n "$_k" ] || continue
-      _apps="${_apps}$(jqr -n -c --arg p "$_p" --arg k "$_k" \
-        '{package:$p,kind:$k}')
-"
-      case "$_k" in
-        firewall) _firewall_names="${_firewall_names}${_p} " ;;
-        vpn) _vpn_names="${_vpn_names}${_p} " ;;
-      esac
-    done
+    _apps=$(pm list packages 2>/dev/null | jqr -R -s -c "${_compat_kind}"'
+      split("\n") | map(sub("\r$"; "") | select(startswith("package:")) | ltrimstr("package:") |
+        . as $package | kind as $kind | select($kind != "") | {package:$package,kind:$kind})') || return 1
   fi
-
-  # Installed proxy packages are inventory, not evidence of a running DNS
-  # conflict. Only the reachable kernel DNS redirect probe below warns about
-  # MagicDNS; an installed but inactive Clash app must not raise an alarm.
-  [ -n "$_firewall_names" ] && _warns="${_warns}$(jqr -n -c \
-    --arg w "Firewall tool detected: ${_firewall_names% }. Its rule reloads may wipe the FOXY_* chains; run foxytail.compat check periodically" \
-    '$w')
-"
-  [ -n "$_vpn_names" ] && _warns="${_warns}$(jqr -n -c \
-    --arg w "VPN app detected: ${_vpn_names% }. Android allows only one VPN interface at a time; it may grab the tunnel" \
-    '$w')
-"
-  if check_dns_hijack_quiet; then
-    _warns="${_warns}$(jqr -n -c \
-      --arg w "IPv4/IPv6 nat or mangle redirects/TPROXYs port 53; confirm the owner before enabling MagicDNS" \
-      '$w')
-"
-  fi
-
-  _m_json=$(printf '%s' "$_mods" | jqr -s '.')
-  _a_json=$(printf '%s' "$_apps" | jqr -s '.')
-  _w_json=$(printf '%s' "$_warns" | jqr -s '.')
-  jqr -n --argjson m "$_m_json" --argjson a "$_a_json" --argjson w "$_w_json" \
-    '{modules:$m,apps:$a,warnings:$w}'
+  # Installed apps are inventory, not evidence of a live DNS conflict.
+  _dns_conflict=false
+  if check_dns_hijack_quiet; then _dns_conflict=true; fi
+  printf '%s' "$_mods" | jqr -s --argjson apps "$_apps" --argjson dnsConflict "$_dns_conflict" '
+    . as $modules | ($modules + $apps) as $inventory |
+    ($inventory | map(select(.kind=="firewall") | .name // .package) | join(" ")) as $firewalls |
+    ($inventory | map(select(.kind=="vpn") | .name // .package) | join(" ")) as $vpns |
+    {modules:$modules,apps:$apps,warnings:[
+      (if $firewalls!="" then "Firewall tool detected: \($firewalls). Its rule reloads may wipe the FOXY_* chains; run foxytail.compat check periodically" else empty end),
+      (if $vpns!="" then "VPN app detected: \($vpns). Android allows only one VPN interface at a time; it may grab the tunnel" else empty end),
+      (if $dnsConflict then "IPv4/IPv6 nat or mangle redirects/TPROXYs port 53; confirm the owner before enabling MagicDNS" else empty end)
+    ]}'
 }
 
 # Conservatively follow paths that can carry UDP/TCP destination port 53.

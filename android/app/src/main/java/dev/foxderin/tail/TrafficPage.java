@@ -17,7 +17,7 @@ final class TrafficPage extends ControlPage {
     private final LinearLayout chartRows, peerRows, uidRows;
     private final TextView totalMetric, downloadMetric, uploadMetric;
     private final View refresh;
-    private Button tableToggle;
+    private ImageButton tableToggle;
     private final Map<String, String> peerNames = new HashMap<>(), appNames = new HashMap<>();
     TrafficPage(ControlActivity activity) {
         super(activity); daily = activity.drafts.getBoolean("traffic.daily", false);
@@ -49,8 +49,7 @@ final class TrafficPage extends ControlPage {
         if (wide) appParams.setMarginStart(dp(16)); breakdown.addView(apps, appParams);
         peerRows = ControlUi.card(peers, s(R.string.web_traffic_topn), R.drawable.ic_group, null);
         uidRows = ControlUi.card(apps, s(R.string.web_traffic_by_app), R.drawable.ic_router, null);
-        hint(chartRows, s(R.string.web_net_traffic_chart_hint));
-        hint(peerRows, s(R.string.web_net_traffic_top_hint)); hint(uidRows, s(R.string.web_traffic_app_tx_hint));
+        hint(uidRows, s(R.string.web_traffic_app_tx_hint));
     }
     String title() { return s(R.string.web_traffic_title); }
     void load() {
@@ -82,12 +81,11 @@ final class TrafficPage extends ControlPage {
     private void showFailure(String message) {
         summary = null; totalMetric.setText("—"); downloadMetric.setText("—"); uploadMetric.setText("—");
         for (LinearLayout box : new LinearLayout[]{chartRows, peerRows, uidRows}) {
-            box.removeAllViews(); hint(box, message); textButton(box, s(R.string.web_tools_refresh), this::load);
+            box.removeAllViews(); hint(box, message); iconButton(box, R.drawable.ic_refresh, s(R.string.web_tools_refresh), this::load);
         }
     }
     private void renderChart() {
         if (summary == null) return;
-        chartRows.removeAllViews(); hint(chartRows, s(R.string.web_net_traffic_chart_hint));
         try {
             List<ToolsData.Sample> samples = ToolsData.samples(summary, daily);
             if (daily) for (int i = 0; i < samples.size(); i++) { ToolsData.Sample sample = samples.get(i); samples.set(i, new ToolsData.Sample(sample.label.length() >= 5 ? sample.label.substring(5) : sample.label, sample.rx, sample.tx)); }
@@ -115,10 +113,9 @@ final class TrafficPage extends ControlPage {
             LinearLayout table = new LinearLayout(activity); table.setOrientation(LinearLayout.VERTICAL);
             HorizontalScrollView tableScroll = new HorizontalScrollView(activity); tableScroll.setFillViewport(true); tableScroll.addView(table, new HorizontalScrollView.LayoutParams(-1, -2));
             table.setMinimumWidth((int) (dp(270) * Math.max(1, activity.getResources().getConfiguration().fontScale)));
-            tableToggle = textButton(chartRows, s(R.string.web_net_traffic_table), () -> {
-                tableExpanded = !tableExpanded; tableScroll.setVisibility(tableExpanded ? View.VISIBLE : View.GONE); tableToggle.setSelected(tableExpanded);
-            });
-            tableToggle.setTextSize(11); tableToggle.setGravity(Gravity.START | Gravity.CENTER_VERTICAL); tableToggle.setSelected(tableExpanded);
+            tableToggle = ControlUi.iconButton(activity, R.drawable.ic_article, s(R.string.web_net_traffic_table), () -> {
+                if (isCurrent()) { tableExpanded = !tableExpanded; tableScroll.setVisibility(tableExpanded ? View.VISIBLE : View.GONE); tableToggle.setSelected(tableExpanded); }
+            }); chartRows.addView(tableToggle); tableToggle.setSelected(tableExpanded);
             chartRows.addView(tableScroll, new LinearLayout.LayoutParams(-1, -2)); tableScroll.setVisibility(tableExpanded ? View.VISIBLE : View.GONE);
             tableRow(table, s(R.string.web_net_traffic_time), s(R.string.web_traffic_rx), s(R.string.web_traffic_tx), true);
             for (ToolsData.Sample sample : samples) tableRow(table, sample.label, sample.rx == null ? "—" : bytes(sample.rx), sample.tx == null ? "—" : bytes(sample.tx), false);
@@ -145,7 +142,7 @@ final class TrafficPage extends ControlPage {
     private void renderRanks() {
         if (summary == null) return;
         peerRows.removeAllViews(); uidRows.removeAllViews();
-        hint(peerRows, s(R.string.web_net_traffic_top_hint)); hint(uidRows, s(R.string.web_traffic_app_tx_hint));
+        hint(uidRows, s(R.string.web_traffic_app_tx_hint));
         List<JSONObject> peers = new ArrayList<>(); JSONArray source = ToolsData.array(summary, "topn");
         for (int i = 0; i < source.length(); i++) { JSONObject entry = source.optJSONObject(i); if (entry != null && total(entry, true) > 0) peers.add(entry); }
         peers.sort((a, b) -> Double.compare(total(b, true), total(a, true)));

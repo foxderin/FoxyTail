@@ -56,12 +56,25 @@ final class ControlUi {
         MaterialButton button = new MaterialButton(context, null, androidx.appcompat.R.attr.borderlessButtonStyle);
         configure(button, text, 0, action); button.setStrokeWidth(0); button.setPadding(dp(context, 12), dp(context, 10), dp(context, 12), dp(context, 10)); return button;
     }
-    static ImageButton iconButton(Context context, int icon, String description, Runnable action) {
-        ImageButton button = new ImageButton(context); button.setImageResource(icon); button.setContentDescription(description);
+    static ImageButton iconButton(Context context, int icon, String description, Runnable action) { return iconButton(context, icon, description, action, 44); }
+    static ImageButton iconButton(Context context, int icon, String description, Runnable action, int size) {
+        ImageButton button = new ImageButton(context); button.setImageResource(icon); button.setContentDescription(description); button.setTooltipText(description);
         button.setColorFilter(MaterialColors.getColor(button, com.google.android.material.R.attr.colorOnSurfaceVariant));
         android.util.TypedValue ripple = new android.util.TypedValue(); context.getTheme().resolveAttribute(android.R.attr.selectableItemBackgroundBorderless, ripple, true);
         button.setBackgroundResource(ripple.resourceId); button.setPadding(dp(context, 12), dp(context, 12), dp(context, 12), dp(context, 12));
-        button.setLayoutParams(new LinearLayout.LayoutParams(dp(context, 44), dp(context, 44))); button.setOnClickListener(v -> action.run()); return button;
+        button.setLayoutParams(new LinearLayout.LayoutParams(dp(context, size), dp(context, size))); button.setOnClickListener(v -> action.run()); return button;
+    }
+    /** Group icon buttons by meaning: refresh first, then neutral, then destructive. */
+    static LinearLayout iconGroup(android.view.ViewGroup parent, View... buttons) {
+        LinearLayout group = new LinearLayout(parent.getContext()); group.setOrientation(LinearLayout.HORIZONTAL);
+        group.setGravity(android.view.Gravity.CENTER_VERTICAL);
+        for (View button : buttons) if (button != null) {
+            if (button.getParent() instanceof android.view.ViewGroup) ((android.view.ViewGroup) button.getParent()).removeView(button);
+            group.addView(button);
+        }
+        android.view.ViewGroup.LayoutParams params = parent instanceof LinearLayout ? new LinearLayout.LayoutParams(-2, -2) : new android.view.ViewGroup.MarginLayoutParams(-2, -2);
+        if (params instanceof LinearLayout.LayoutParams && ((LinearLayout) parent).getOrientation() == LinearLayout.VERTICAL) ((LinearLayout.LayoutParams) params).topMargin = dp(parent.getContext(), 4);
+        parent.addView(group, params); return group;
     }
     static CompoundButton switchView(Context context, boolean checked, java.util.function.Consumer<Boolean> change) {
         WebSwitch control = new WebSwitch(context); control.setChecked(checked);
@@ -200,7 +213,7 @@ final class ControlUi {
             header.addView(first, new LinearLayout.LayoutParams(0, -2, 1)); frame.addView(header, 0, new LinearLayout.LayoutParams(-1, -2));
         }
         if (action.getParent() instanceof android.view.ViewGroup) ((android.view.ViewGroup) action.getParent()).removeView(action);
-        LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(-2, -2); params.setMarginStart(dp(body.getContext(), 10)); params.setMarginEnd(-dp(body.getContext(), 6)); params.topMargin = -dp(body.getContext(), 8); header.addView(action, params);
+        LinearLayout.LayoutParams params = action.getLayoutParams() instanceof LinearLayout.LayoutParams ? (LinearLayout.LayoutParams) action.getLayoutParams() : new LinearLayout.LayoutParams(-2, -2); params.setMarginStart(dp(body.getContext(), 10)); params.setMarginEnd(-dp(body.getContext(), 6)); params.topMargin = -dp(body.getContext(), 8); header.addView(action, params);
     }
     static LinearLayout disclosure(LinearLayout parent, String title, int icon) { return disclosure(parent, title, icon, open -> { }); }
     static LinearLayout disclosure(LinearLayout parent, String title, int icon, java.util.function.Consumer<Boolean> changed) {
@@ -316,6 +329,7 @@ final class ControlUi {
         int padding = dp(context, width <= 380 ? 14 : 18);
         box.setPadding(compact ? dp(context, 12) : padding, compact ? dp(context, 15) : padding, compact ? dp(context, 12) : padding, compact ? dp(context, 15) : padding);
         LinearLayout head = new LinearLayout(context); head.setOrientation(LinearLayout.HORIZONTAL); head.setGravity(android.view.Gravity.CENTER_VERTICAL);
+        head.setClipToPadding(false); head.setClipChildren(false);
         MetricTile tile = new MetricTile(); tile.context = context;
         tile.icon = new ImageView(context); tile.icon.setImageResource(icon);
         tile.icon.setColorFilter(attr(tile.icon, com.google.android.material.R.attr.colorOnSurfaceVariant));
@@ -325,6 +339,7 @@ final class ControlUi {
         tile.icon.setBackground(iconBg);
         int iconPad = dp(context, 7);
         tile.icon.setPadding(iconPad, iconPad, iconPad, iconPad);
+        tile.icon.setScaleType(ImageView.ScaleType.FIT_CENTER);
         TextView label = muted(context, caption, R.dimen.ft_section_desc); label.setPadding(0, 0, 0, 0); label.setTextSize(compact ? width <= 480 ? 11 : 10 : 12); label.setLineHeight(Math.round(label.getTextSize() * 1.4f));
         LinearLayout.LayoutParams labelParams = new LinearLayout.LayoutParams(0, -2, 1);
         head.setMinimumHeight(dp(context, 32));
@@ -333,7 +348,7 @@ final class ControlUi {
         box.addView(head, new LinearLayout.LayoutParams(-1, -2));
         LinearLayout valueRow = new LinearLayout(context); valueRow.setOrientation(LinearLayout.HORIZONTAL);
         valueRow.setGravity(android.view.Gravity.BOTTOM); valueRow.setPadding(0, dp(context, 14), 0, 0);
-        tile.value = text(context, "—", dashboard && width <= 480 ? 28 : compact ? 24 : Math.min(34, Math.max(25, Math.round(width * .04f))));
+        tile.value = text(context, "—", dashboard && width <= 480 ? 28 : compact ? 24 : Math.min(28, Math.max(22, Math.round(width * .032f))));
         tile.value.setTypeface(null, android.graphics.Typeface.BOLD); tile.value.setPadding(0, 0, 0, 0); tile.value.setLineHeight(Math.round(tile.value.getTextSize() * 1.2f));
         if (android.os.Build.VERSION.SDK_INT >= 21) tile.value.setLetterSpacing(-0.03f);
         valueRow.addView(tile.value, new LinearLayout.LayoutParams(-2, -2));
@@ -471,7 +486,7 @@ final class ControlUi {
         TextView[] buttons = new TextView[labels.length];
         for (int i = 0; i < labels.length; i++) {
             final int index = i; TextView button = text(context, labels[i], 12); button.setTypeface(Typeface.create("sans-serif-medium", Typeface.NORMAL)); button.setMinHeight(dp(context, 44)); button.setGravity(android.view.Gravity.CENTER); button.setPadding(dp(context, 12), dp(context, 8), dp(context, 12), dp(context, 8)); button.setFocusable(true);
-            buttons[i] = button; LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(0, -2, 1); if (i > 0) params.setMarginStart(dp(context, 4)); group.addView(button, params);
+            buttons[i] = button; LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(0, -2, 1); group.addView(button, params);
             button.setOnClickListener(v -> { selectTabs(buttons, index); change.accept(index); });
         }
         selectTabs(buttons, selected); LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(-1, -2); params.bottomMargin = dp(context, 20); parent.addView(group, params); return group;

@@ -6,14 +6,9 @@
 
 cmd_status() {
   _cs_st=""
-  _cs_exit='{"known":false,"selected":null,"effective":"unknown","ipv4":false,"ipv6":false,"warning":"preference-unavailable"}'
   if daemon_up; then
-    _cs_read=$(_op_exec 20 "${TS_SCRIPTS_DIR}/foxytail.exitnode" network-status \
-      "${TS_MODE}|${ROUTE_SCOPE}|${UID_LIST}|${ROUTE_SUBNETS}|${IPV6}|${ROUTE_TABLE}|${FWMARK}/${FWMARK_MASK}|${MAGIC_DNS}" 2>/dev/null) || _cs_read='{}'
-    _op_cancelled && jerr 'status cancelled'
-    _cs_st=$(printf '%s' "${_cs_read}" | jqr -e -c '.status | select(type=="object")' 2>/dev/null)
-    _cs_exit=$(printf '%s' "${_cs_read}" | jqr -e -c '.exitRouting | select(type=="object" and (.known|type)=="boolean")' 2>/dev/null) ||
-      _cs_exit='{"known":false,"selected":null,"effective":"unknown","ipv4":false,"ipv6":false,"warning":"preference-unavailable"}'
+    _cs_st=$(ts_status_json ts_cli 10 status --json) || _cs_st=
+    _cs_st=$(printf '%s' "${_cs_st}" | jqr -e -c 'select(type=="object" and (.BackendState|type)=="string")' 2>/dev/null) || _cs_st=
   fi
   _op_cancelled && jerr 'status cancelled'
   if [ -z "${_cs_st}" ]; then
@@ -26,14 +21,13 @@ cmd_status() {
     jqr -n -c --arg mode "${TS_MODE}" --arg daemon "${_cs_daemon}" \
       --arg backend "${_cs_backend}" --argjson uptime "${_cs_uptime}" \
       --arg power "${POWER_SAVE:-off}" --arg refresh "${WEBUI_AUTO_REFRESH:-on}" \
-      --argjson exitRouting "${_cs_exit}" \
-      '{ok:true,daemon:$daemon,backend:$backend,mode:$mode,self:null,exitNode:null,exitRouting:$exitRouting,peers:{online:0,offline:0},magicDns:false,keyExpiry:null,uptime:$uptime,powerSave:($power=="on"),autoRefresh:($refresh=="on")}'
+      '{ok:true,daemon:$daemon,backend:$backend,mode:$mode,self:null,exitNode:null,peerList:null,peers:{online:0,offline:0},magicDns:false,keyExpiry:null,uptime:$uptime,powerSave:($power=="on"),autoRefresh:($refresh=="on")}'
     return 0
   fi
   _cs_up=$(daemon_uptime)
   printf '%s' "${_cs_st}" | jqr -c --arg mode "${TS_MODE}" --argjson uptime "${_cs_up}" \
-    --argjson exitRouting "${_cs_exit}" --arg power "${POWER_SAVE:-off}" --arg refresh "${WEBUI_AUTO_REFRESH:-on}" '
-    (.Peer // {} | to_entries | map(.value)) as $peers
+    --arg power "${POWER_SAVE:-off}" --arg refresh "${WEBUI_AUTO_REFRESH:-on}" '
+    (if (.Peer|type)=="object" then .Peer | to_entries | map(.value) else [] end) as $peers
     | (.ExitNodeStatus // null) as $en
     | {
         ok: true,
@@ -41,9 +35,9 @@ cmd_status() {
         backend: (.BackendState // "unknown"),
         mode: $mode,
         powerSave: ($power=="on"),
-        exitRouting: $exitRouting,
         autoRefresh: ($refresh=="on"),
         self: (.Self // {} | {
+          id: (.ID // ""),
           hostname: (.HostName // "-"),
           ips: (.TailscaleIPs // []),
           relay: (.Relay // "-")
@@ -62,10 +56,21 @@ cmd_status() {
           online: ($peers | map(select(.Online == true)) | length),
           offline: ($peers | map(select(.Online != true)) | length)
         },
+        peerList: (if .BackendState=="Running" and (.Self.ID|type)=="string" and (.Self.ID|length)>0 and
+          (.Peer==null or (.Peer|type)=="object") then '"${_peers_jq}"' else null end),
         magicDns: (.CurrentTailnet.MagicDNSEnabled // false),
         keyExpiry: (.Self.KeyExpiry // null),
         uptime: $uptime
       }'
+}
+
+cmd_exit_routing() {
+  _cer_result=$(_op_exec 20 "${TS_SCRIPTS_DIR}/foxytail.exitnode" exit-routing \
+    "${TS_MODE}|${ROUTE_SCOPE}|${UID_LIST}|${ROUTE_SUBNETS}|${IPV6}|${ROUTE_TABLE}|${FWMARK}/${FWMARK_MASK}|${MAGIC_DNS}" 2>/dev/null) || _cer_result=
+  _op_cancelled && jerr 'exit routing cancelled'
+  printf '%s' "${_cer_result}" | jqr -e -c 'select(type=="object" and .ok==true and
+    (.selfId==null or (.selfId|type)=="string") and (.exitRouting.known|type)=="boolean")' 2>/dev/null ||
+    jerr 'exit routing is unavailable'
 }
 
 _peers_jq='

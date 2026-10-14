@@ -6,10 +6,21 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"strings"
 	"testing"
 )
+
+func orderedStats(ctx context.Context, input io.Reader, output io.Writer, temp string) error {
+	return visitOrderedStats(ctx, input, temp, func(body []byte) error {
+		if _, err := output.Write(body); err != nil {
+			return err
+		}
+		_, err := output.Write([]byte{'\n'})
+		return err
+	})
+}
 
 func TestStatsOrderingAcrossChunksAndClockChanges(t *testing.T) {
 	var input bytes.Buffer

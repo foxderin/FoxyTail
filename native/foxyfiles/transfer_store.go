@@ -234,6 +234,62 @@ func (s *transferStore) records() ([]*transferRecord, error) {
 	return records, nil
 }
 
+// Called under state.lock; history removal never recovers workers or expires sources.
+func (s *transferStore) removeHistory(id string) (removed, retained int, err error) {
+	if id != "" && !validID(id) {
+		return 0, 0, errors.New("invalid transfer ID")
+	}
+	records, err := s.records()
+	if err != nil {
+		return 0, 0, err
+	}
+	found := id == ""
+	for _, record := range records {
+		if activeTransfer(record.Status) {
+			retained++
+		}
+		if id != "" && record.ID != id {
+			continue
+		}
+		found = true
+		if activeTransfer(record.Status) {
+			if id != "" {
+				return 0, retained, errors.New("cannot delete an active transfer")
+			}
+			continue
+		}
+		switch record.Status {
+		case "completed", "failed", "cancelled", "interrupted":
+		default:
+			return 0, retained, errors.New("invalid terminal transfer status")
+		}
+		if _, err = s.cancelled(record.ID); err != nil {
+			return 0, retained, err
+		}
+	}
+	if !found {
+		return 0, retained, fmt.Errorf("transfer not found: %w", os.ErrNotExist)
+	}
+	defer func() {
+		if syncErr := syncRoot(s.root); err == nil {
+			err = syncErr
+		}
+	}()
+	for _, record := range records {
+		if activeTransfer(record.Status) || (id != "" && record.ID != id) {
+			continue
+		}
+		if err = s.root.Remove(record.ID + ".cancel"); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return removed, retained, err
+		}
+		if err = s.root.Remove(record.ID + ".json"); err != nil {
+			return removed, retained, err
+		}
+		removed++
+	}
+	return removed, retained, nil
+}
+
 func (s *transferStore) recoverInterrupted() error {
 	lock, err := s.activeLock()
 	if lockBusy(err) {
@@ -248,25 +304,33 @@ func (s *transferStore) recoverInterrupted() error {
 		return err
 	}
 	for _, record := range records {
-		if !activeTransfer(record.Status) {
-			continue
-		}
-		record.Status = "interrupted"
-		record.Error = "Transfer worker stopped before a final result; retry only unfinished files"
-		record.UpdatedAt = time.Now().Unix()
-		for i := range record.Files {
-			if activeTransfer(record.Files[i].Status) {
-				record.Files[i].Status = "failed"
-				record.Files[i].Error = record.Error
-				record.Files[i].BytesPerSecond = 0
-			}
-		}
-		if err = s.save(record); err != nil {
+		if err = s.interruptRecord(record); err != nil {
 			return err
 		}
-		if err = s.root.Remove(record.ID + ".cancel"); err != nil && !errors.Is(err, os.ErrNotExist) {
-			return err
+	}
+	return nil
+}
+
+// Both state.lock and active.lock must be held before recovering a record.
+func (s *transferStore) interruptRecord(record *transferRecord) error {
+	if !activeTransfer(record.Status) {
+		return nil
+	}
+	record.Status = "interrupted"
+	record.Error = "Transfer worker stopped before a final result; retry only unfinished files"
+	record.UpdatedAt = time.Now().Unix()
+	for i := range record.Files {
+		if activeTransfer(record.Files[i].Status) {
+			record.Files[i].Status = "failed"
+			record.Files[i].Error = record.Error
+			record.Files[i].BytesPerSecond = 0
 		}
+	}
+	if err := s.save(record); err != nil {
+		return err
+	}
+	if err := s.root.Remove(record.ID + ".cancel"); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return err
 	}
 	return nil
 }

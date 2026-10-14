@@ -16,19 +16,19 @@ final class BackupPage extends ControlPage {
     private final Runnable operationChanged = () -> { if (activity.client.busy()) invalidatePreview(); };
     BackupPage(ControlActivity activity) {
         super(activity);
-        LinearLayout backup = section(s(R.string.web_set_backup), R.drawable.ic_backup, s(R.string.web_tools_backup_desc));
+        LinearLayout backup = section(s(R.string.web_set_backup), R.drawable.ic_backup, null);
         tonal(backup, s(R.string.web_set_backup), () -> {
             invalidatePreview(); mutate(s(R.string.web_set_backup), result -> {
                 if (ToolsUi.success(this, result)) { activity.drafts.putString("backup.latest", result.toString()); renderArtifact(result); refreshList(); }
             }, "backup");
         });
         latest = ControlUi.result(backup); latest.setVisibility(View.GONE);
-        LinearLayout restore = section(s(R.string.web_set_restore), R.drawable.ic_refresh, s(R.string.web_backup_picker_hint));
+        LinearLayout restore = section(s(R.string.web_set_restore), R.drawable.ic_refresh, null);
         archives = new LinearLayout(activity); archives.setOrientation(LinearLayout.VERTICAL); restore.addView(archives);
         LinearLayout actions = row(restore);
-        textButton(actions, s(R.string.web_backup_refresh), this::refreshList);
+        ControlUi.iconGroup(actions, iconButton(actions, R.drawable.ic_refresh, s(R.string.web_backup_refresh), this::refreshList));
         previewButton = primary(actions, s(R.string.web_backup_preview), this::inspect); previewButton.setEnabled(false);
-        textButton(restore, s(R.string.tools_import), () -> activity.pickBackup(id -> {
+        iconButton(restore, R.drawable.ic_upload_file, s(R.string.tools_import), () -> activity.pickBackup(id -> {
             if (!isCurrent()) return;
             activity.drafts.remove("backup.importedArtifact"); select(id); refreshList(); inspect();
         }));
@@ -63,8 +63,9 @@ final class BackupPage extends ControlPage {
         if (path.matches("art-[a-f0-9]{32}")) {
             latest.removeAllViews(); latest.setVisibility(View.VISIBLE); hint(latest, s(R.string.tools_imported_archive));
             LinearLayout actions = row(latest);
-            textButton(actions, s(R.string.tools_save), () -> activity.saveArtifact(path, "foxytail-backup-import.tar.gz"));
-            textButton(actions, s(R.string.tools_share), () -> confirm(s(R.string.tools_share), s(R.string.tools_backup_sensitive), () -> activity.shareArtifact(path, "foxytail-backup-import.tar.gz")));
+            ControlUi.iconGroup(actions,
+                iconButton(actions, R.drawable.ic_save, s(R.string.tools_save), () -> activity.saveArtifact(path, "foxytail-backup-import.tar.gz")),
+                iconButton(actions, R.drawable.ic_share, s(R.string.tools_share), () -> confirm(s(R.string.tools_share), s(R.string.tools_backup_sensitive), () -> activity.shareArtifact(path, "foxytail-backup-import.tar.gz"))));
         }
     }
     private void refreshList() {
@@ -112,7 +113,7 @@ final class BackupPage extends ControlPage {
             java.util.ArrayList<String> names = new java.util.ArrayList<>(); for (int i = 0; i < hooks.length(); i++) names.add(hooks.optString(i));
             hint(previewRows, s(R.string.web_backup_hooks) + ": " + String.join(", ", names));
         }
-        button(previewRows, s(R.string.web_set_restore), () -> {
+        iconButton(previewRows, R.drawable.ic_restart_alt, s(R.string.web_set_restore), () -> {
             JSONObject current = preview; if (current == null || current != result || !selected.equals(current.optString("path"))) return;
             confirm(s(R.string.web_set_restore), s(R.string.web_set_restore_confirm) + "\n" + current.optString("path") + "\nSHA-256: " + current.optString("sha256") + "\n" + s(R.string.tools_baseline) + ": " + current.optString("baselineSha256"), () -> {
                 if (preview != current || !selected.equals(current.optString("path"))) { notice(s(R.string.tools_preview_expired)); return; }
@@ -125,12 +126,13 @@ final class BackupPage extends ControlPage {
     private void renderArtifact(JSONObject result) {
         latest.removeAllViews(); latest.setVisibility(View.VISIBLE); String id = result.optString("artifactId"), path = result.optString("path");
         if (!id.matches("art-[a-f0-9]{32}")) { label(latest, s(R.string.web_backup_invalid_response)); return; }
-        label(latest, s(R.string.web_tools_backup_latest)).setTypeface(null, android.graphics.Typeface.BOLD); mono(latest, path); hint(latest, s(R.string.web_tools_backup_file_hint));
-        textButton(latest, s(R.string.web_tools_copy_path), () -> copy(s(R.string.web_set_backup), path));
+        label(latest, s(R.string.web_tools_backup_latest)).setTypeface(null, android.graphics.Typeface.BOLD); mono(latest, path);
+        ControlUi.iconGroup(latest, iconButton(latest, R.drawable.ic_content_copy, s(R.string.web_tools_copy_path), () -> copy(s(R.string.web_set_backup), path)));
         LinearLayout actions = row(latest);
-        textButton(actions, s(R.string.tools_save), () -> activity.saveArtifact(id, "foxytail-backup.tar.gz"));
-        textButton(actions, s(R.string.tools_share), () -> confirm(s(R.string.tools_share), s(R.string.tools_backup_sensitive), () -> activity.shareArtifact(id, "foxytail-backup.tar.gz")));
-        textButton(actions, s(R.string.tools_select), () -> { select(id); refreshList(); });
+        ControlUi.iconGroup(actions,
+            iconButton(actions, R.drawable.ic_save, s(R.string.tools_save), () -> activity.saveArtifact(id, "foxytail-backup.tar.gz")),
+            iconButton(actions, R.drawable.ic_share, s(R.string.tools_share), () -> confirm(s(R.string.tools_share), s(R.string.tools_backup_sensitive), () -> activity.shareArtifact(id, "foxytail-backup.tar.gz"))));
+        ControlUi.iconGroup(actions, iconButton(actions, R.drawable.ic_check_circle, s(R.string.tools_select), () -> { select(id); refreshList(); }));
     }
     private void renderRestore(JSONObject result) {
         restored.removeAllViews(); ControlUi.setCardVisible(restored, true);

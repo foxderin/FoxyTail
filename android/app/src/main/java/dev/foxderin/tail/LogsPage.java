@@ -27,15 +27,15 @@ final class LogsPage extends ControlPage {
     private final LinearLayout status;
     private final LogList output;
     private final LogAdapter rows;
-    private final TextView metadata, updatedText, errorText, empty, refreshDisabled;
+    private final TextView metadata, updatedText, errorText, empty;
     private final HorizontalScrollView horizontal;
-    private final Button refresh, copyButton;
+    private final ImageButton refresh; private final Button copyButton;
     private final CompoundButton liveToggle;
     LogsPage(ControlActivity activity) {
         super(activity);
         source = activity.drafts.getString("logs.source", "daemon"); limit = activity.drafts.getInt("logs.limit", 200);
         live = activity.drafts.getBoolean("logs.live", true); follow = activity.drafts.getBoolean("logs.follow", true); wrap = activity.drafts.getBoolean("logs.wrap", true); matchCase = activity.drafts.getBoolean("logs.case", false);
-        LinearLayout controls = section(); hint(controls, s(R.string.web_tools_logs_scope));
+        LinearLayout controls = section();
         LinearLayout sourceTabs = new LinearLayout(activity); controls.addView(sourceTabs, new LinearLayout.LayoutParams(-1, -2));
         sourceTabs.setPadding(0, 0, 0, dp(16));
         ControlUi.tabs(sourceTabs, new String[]{s(R.string.web_logs_daemon), s(R.string.web_logs_service)}, source.equals("daemon") ? 0 : 1, index -> {
@@ -61,10 +61,9 @@ final class LogsPage extends ControlPage {
         ToolsFlowLayout actions = new ToolsFlowLayout(activity, 10, 10); actions.setPadding(0, dp(16), 0, 0); controls.addView(actions, new LinearLayout.LayoutParams(-1, -2));
         status = new LinearLayout(activity); actions.addView(status);
         ToolsFlowLayout buttons = new ToolsFlowLayout(activity, 10, 10); actions.addView(buttons);
-        refresh = ControlUi.textButton(activity, s(R.string.web_tools_refresh), () -> { if (isCurrent()) load(); });
-        ((com.google.android.material.button.MaterialButton) refresh).setIconResource(R.drawable.ic_refresh); buttons.addView(refresh);
+        refresh = ControlUi.iconButton(activity, R.drawable.ic_refresh, s(R.string.web_tools_refresh), () -> { if (isCurrent()) load(); }); buttons.addView(refresh);
         copyButton = ControlUi.tonalButton(activity, s(R.string.web_tools_logs_copy), R.drawable.ic_content_copy, () -> { if (isCurrent()) copy(s(R.string.web_logs_title), copied); }); buttons.addView(copyButton);
-        refreshDisabled = ControlUi.text(activity, s(R.string.web_tools_refresh_disabled), 13); refreshDisabled.setLineHeight(Math.round(refreshDisabled.getTextSize() * 1.65f)); controls.addView(refreshDisabled, new LinearLayout.LayoutParams(-1, -2));
+        android.view.ViewGroup.MarginLayoutParams copyParams = (android.view.ViewGroup.MarginLayoutParams) copyButton.getLayoutParams(); copyParams.setMarginStart(dp(8));
         LinearLayout viewer = section();
         ToolsFlowLayout meta = new ToolsFlowLayout(activity, 8, 8); viewer.addView(meta, new LinearLayout.LayoutParams(-1, -2));
         metadata = ControlUi.text(activity, "", 11); metadata.setTextColor(color(com.google.android.material.R.attr.colorOnSurfaceVariant)); meta.addView(metadata);
@@ -92,12 +91,11 @@ final class LogsPage extends ControlPage {
         boolean enabled = activity.autoRefresh(); boolean refreshing = live && enabled;
         bindingStatus = true; liveToggle.setEnabled(enabled); liveToggle.setChecked(refreshing); bindingStatus = false;
         status.removeAllViews(); badge(status, s(refreshing ? R.string.web_tools_logs_live : R.string.web_tools_logs_paused), refreshing ? ControlUi.TONE_OK : ControlUi.TONE_NEUTRAL);
-        refreshDisabled.setVisibility(enabled ? View.GONE : View.VISIBLE);
     }
     void onPause() { readingLogs = false; queued = false; }
     void load() {
         if (readingLogs) { queued = true; return; }
-        readingLogs = true; refresh.setEnabled(false); refresh.setText(s(R.string.web_loading));
+        readingLogs = true; refresh.setEnabled(false); refresh.setContentDescription(s(R.string.web_loading)); refresh.setTooltipText(s(R.string.web_loading));
         String requestedSource = source; int requestedLimit = limit;
         read(result -> {
             if (source.equals(requestedSource) && limit == requestedLimit) {
@@ -113,7 +111,7 @@ final class LogsPage extends ControlPage {
         }, error -> { if (source.equals(requestedSource) && limit == requestedLimit) { failure = RootApi.message(error); render(false); } finishRead(); }, "logs", requestedSource, String.valueOf(requestedLimit));
     }
     private void finishRead() {
-        readingLogs = false; refresh.setEnabled(true); refresh.setText(s(R.string.web_tools_refresh));
+        readingLogs = false; refresh.setEnabled(true); refresh.setContentDescription(s(R.string.web_tools_refresh)); refresh.setTooltipText(s(R.string.web_tools_refresh));
         if (queued) { queued = false; content.post(() -> { if (isCurrent()) load(); }); }
     }
     private void render() { render(true); }

@@ -13,6 +13,11 @@ Copyright JetBrains s.r.o. and Kotlin Programming Language contributors
 https://github.com/JetBrains/kotlin
 https://github.com/Kotlin/kotlinx.coroutines
 
+Material Symbols Outlined
+Copyright Google LLC
+https://github.com/google/material-design-icons
+Icon geometry converted from SVG to Android vector drawables.
+
 These components are distributed under the Apache License, Version 2.0 below.
 Their library sources have not been modified by FoxyTail.
 

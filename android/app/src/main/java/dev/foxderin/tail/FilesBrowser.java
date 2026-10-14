@@ -8,7 +8,7 @@ import android.widget.*;
 import org.json.*;
 import java.io.IOException;
 import java.util.*;
-import java.util.concurrent.Executor;
+import java.util.concurrent.ExecutorService;
 import java.util.function.*;
 
 final class FilesBrowser {
@@ -34,7 +34,7 @@ final class FilesBrowser {
         return parsed;
     }
     private final Activity activity;
-    private final Executor io;
+    private final ExecutorService io;
     private final Predicate<Models.Source> select;
     private final Predicate<String> selected;
     private final Consumer<String> remove, remember;
@@ -43,14 +43,15 @@ final class FilesBrowser {
     private final LinearLayout rows;
     private String directory;
     private int revision;
+    private RootApi.Call pending;
     private boolean closed, browsing, updatingSelection;
-    FilesBrowser(Activity activity, Executor io, LinearLayout rows, String directory, Predicate<Models.Source> select, Predicate<String> selected, Consumer<String> remove, Consumer<String> remember, BooleanSupplier locked, BooleanSupplier capacity) {
+    FilesBrowser(Activity activity, ExecutorService io, LinearLayout rows, String directory, Predicate<Models.Source> select, Predicate<String> selected, Consumer<String> remove, Consumer<String> remember, BooleanSupplier locked, BooleanSupplier capacity) {
         this.activity = activity; this.io = io; this.directory = Models.relativePath(directory) ? directory : "";
         this.select = select; this.selected = selected; this.remove = remove; this.remember = remember;
         this.rows = rows; this.locked = locked; this.capacity = capacity;
         browse(this.directory);
     }
-    void close() { closed = true; revision++; }
+    void close() { closed = true; revision++; if (pending != null) pending.cancel(); }
     void updateSelection() {
         updatingSelection = true;
         for (Map.Entry<MaterialCheckBox, Entry> choice : choices.entrySet()) {
@@ -66,26 +67,28 @@ final class FilesBrowser {
         HorizontalScrollView scroll = new HorizontalScrollView(activity); scroll.setHorizontalScrollBarEnabled(false); rows.addView(scroll);
         LinearLayout crumbs = new LinearLayout(activity); scroll.addView(crumbs);
         crumbs.setContentDescription(activity.getString(R.string.web_files_location));
-        MaterialButton root = ControlUi.textButton(activity, "/sdcard", () -> browse("")); root.setEnabled(!browsing); crumbs.addView(root);
+        MaterialButton root = ControlUi.textButton(activity, "/sdcard", () -> browse("")); crumbs.addView(root);
         String path = "";
         for (String part : directory.split("/")) {
             if (part.isEmpty()) continue;
             path += (path.isEmpty() ? "" : "/") + part; String destination = path;
-            MaterialButton crumb = ControlUi.textButton(activity, part, () -> browse(destination)); crumb.setEnabled(!browsing); crumbs.addView(crumb);
+            MaterialButton crumb = ControlUi.textButton(activity, part, () -> browse(destination)); crumbs.addView(crumb);
         }
         LinearLayout actions = new LinearLayout(activity); rows.addView(actions);
-        MaterialButton parent = ControlUi.textButton(activity, activity.getString(R.string.web_files_parent), () -> { int slash = directory.lastIndexOf('/'); browse(slash < 0 ? "" : directory.substring(0, slash)); });
-        parent.setEnabled(!browsing && !directory.isEmpty()); actions.addView(parent);
-        MaterialButton refresh = ControlUi.textButton(activity, activity.getString(browsing ? R.string.web_loading : R.string.web_tools_refresh), () -> browse(directory));
+        ImageButton parent = ControlUi.iconButton(activity, R.drawable.ic_arrow_back, activity.getString(R.string.web_files_parent), () -> { int slash = directory.lastIndexOf('/'); browse(slash < 0 ? "" : directory.substring(0, slash)); });
+        parent.setEnabled(!directory.isEmpty()); actions.addView(parent);
+        ImageButton refresh = ControlUi.iconButton(activity, R.drawable.ic_refresh, activity.getString(browsing ? R.string.web_loading : R.string.web_tools_refresh), () -> browse(directory));
         refresh.setEnabled(!browsing); actions.addView(refresh);
     }
     private void browse(String path) {
-        if (closed || browsing) return;
+        if (closed || !Models.relativePath(path) || (browsing && directory.equals(path))) return;
+        if (pending != null) pending.cancel();
+        RootApi.Call call = new RootApi.Call(); pending = call;
         browsing = true; directory = path; remember.accept(path); final int token = ++revision;
         header(); text(activity.getString(R.string.web_loading));
-        io.execute(() -> {
+        call.submit(io, () -> {
             try {
-                JSONObject result = RootApi.json(activity, "files-browse", path.isEmpty() ? "-" : path);
+                JSONObject result = RootApi.json(activity, null, null, null, 90, call, "files-browse", path.isEmpty() ? "-" : path);
                 List<Entry> entries = parse(result, path); boolean truncated = result.getBoolean("truncated");
                 activity.runOnUiThread(() -> {
                     if (activity.isDestroyed() || closed || token != revision) return;
@@ -105,9 +108,8 @@ final class FilesBrowser {
                         TextView detail = ControlUi.muted(activity, (entry.directory ? activity.getString(R.string.web_files_directory) : WebFormat.bytes(entry.size)) + " · " + WebFormat.time(entry.mtime), R.dimen.ft_body_small);
                         detail.setTextSize(12); detail.setPadding(0, ControlUi.dp(activity, 3), 0, 0); main.addView(detail);
                         if (entry.directory) {
-                            MaterialButton folder = ControlUi.textButton(activity, activity.getString(R.string.web_files_open_directory), () -> browse(entry.path.substring(8)));
-                            folder.setContentDescription(activity.getString(R.string.web_files_open_directory) + " " + entry.name);
-                            row.addView(folder, new LinearLayout.LayoutParams(ControlUi.dp(activity, 100), -2));
+                            ImageButton folder = ControlUi.iconButton(activity, R.drawable.ic_folder, activity.getString(R.string.web_files_open_directory) + " " + entry.name, () -> browse(entry.path.substring(8)));
+                            row.addView(folder);
                         } else {
                             MaterialCheckBox check = new MaterialCheckBox(activity);
                             check.setContentDescription(activity.getString(R.string.web_files_select) + " " + entry.name);
@@ -132,9 +134,8 @@ final class FilesBrowser {
                     if (activity.isDestroyed() || closed || token != revision) return;
                     browsing = false; header();
                     ControlUi.banner(rows, R.drawable.ic_error, RootApi.message(error), ControlUi.TONE_ERROR);
-                    text(activity.getString(R.string.web_files_storage_hint));
                 });
-            }
+            } finally { call.finished = true; }
         });
     }
 }

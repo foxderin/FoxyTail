@@ -20,7 +20,7 @@ import java.util.function.Consumer;
 import java.util.function.IntConsumer;
 
 abstract class ControlPage {
-    private static final ExecutorService READS = Executors.newFixedThreadPool(4);
+    static final ExecutorService READS = Executors.newFixedThreadPool(4);
     final ControlActivity activity;
     final LinearLayout content;
     final LinearLayout stickyActions;
@@ -115,6 +115,8 @@ abstract class ControlPage {
     LinearLayout section(String heading, int icon, String description) { return ControlUi.card(content, heading, icon, description); }
     TextView hint(LinearLayout parent, String value) { return ControlUi.hint(parent, value); }
     Button textButton(LinearLayout parent, String value, Runnable action) { return place(parent, ControlUi.textButton(activity, value, () -> { if (isCurrent()) action.run(); })); }
+    ImageButton iconButton(LinearLayout parent, int icon, String description, Runnable action) { return place(parent, ControlUi.iconButton(activity, icon, description, () -> { if (isCurrent()) action.run(); })); }
+    LinearLayout iconGroup(android.view.ViewGroup parent, View... buttons) { return ControlUi.iconGroup(parent, buttons); }
     LinearLayout row(LinearLayout parent) {
         LinearLayout row = new LinearLayout(activity); row.setOrientation(LinearLayout.HORIZONTAL); row.setBaselineAligned(false); row.setGravity(android.view.Gravity.CENTER_VERTICAL);
         parent.addView(row, new LinearLayout.LayoutParams(-1, -2)); return row;
@@ -152,9 +154,9 @@ abstract class ControlPage {
     LinearLayout quickCard(LinearLayout row, int icon, String title, String description, Runnable action) {
         return ControlUi.quickCard(row, icon, title, description, () -> { if (isCurrent()) action.run(); });
     }
-    private Button place(LinearLayout parent, Button view) {
+    private <T extends View> T place(LinearLayout parent, T view) {
         boolean horizontal = parent.getOrientation() == LinearLayout.HORIZONTAL;
-        LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(-2, -2);
+        LinearLayout.LayoutParams params = view.getLayoutParams() instanceof LinearLayout.LayoutParams ? (LinearLayout.LayoutParams) view.getLayoutParams() : new LinearLayout.LayoutParams(-2, -2);
         if (horizontal && parent.getChildCount() > 0) params.setMarginStart(dp(10));
         else if (!horizontal) params.topMargin = dp(16);
         parent.addView(view, params); return view;

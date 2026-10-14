@@ -146,15 +146,18 @@ PY
                 self.assertEqual(result['effective'], 'unknown')
                 self.assertEqual((self.root / 'writes').read_text(), writes)
 
-    def test_network_read_envelope_retains_startup_but_rejects_config_mismatch(self):
+    def test_exit_read_envelope_scopes_identity_and_rejects_config_mismatch(self):
         fingerprint = 'bridge|all|||on||/|'
+        result = self.run_exit('exit-routing', fingerprint)
+        self.assertEqual(result['selfId'], 'self-a')
+        self.assertTrue(result['ok']); self.assertTrue(result['exitRouting']['known'])
         self.daemon['status'] = {'BackendState': 'NeedsLogin', 'Self': None, 'Peer': {}}
         self.save()
-        result = self.run_exit('network-status', fingerprint)
-        self.assertEqual(result['status']['BackendState'], 'NeedsLogin')
+        result = self.run_exit('exit-routing', fingerprint)
+        self.assertIsNone(result['selfId'])
         self.assertFalse(result['exitRouting']['known'])
-        result = self.run_exit('network-status', 'different-config')
-        self.assertIsNone(result['status'])
+        result = self.run_exit('exit-routing', 'different-config')
+        self.assertIsNone(result['selfId'])
         self.assertFalse(result['exitRouting']['known'])
 
     def test_exact_identity_and_route_failure_are_not_success(self):

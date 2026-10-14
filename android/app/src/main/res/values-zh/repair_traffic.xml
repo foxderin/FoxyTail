@@ -1,13 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="repair_traffic_download">下载</string>
-    <string name="repair_traffic_upload">上传</string>
-    <string name="repair_traffic_sample">%1$s · 下载 %2$s · 上传 %3$s</string>
-    <string name="repair_traffic_chart">已记录流量图 · %1$d 个时段</string>
     <string name="repair_traffic_previous">上一个时段</string>
     <string name="repair_traffic_next">下一个时段</string>
     <string name="repair_traffic_select">选择时段</string>
-    <string name="repair_traffic_show_table">查看图表数据（%1$d 个时段）</string>
-    <string name="repair_traffic_hide_table">收起图表数据（%1$d 个时段）</string>
-    <string name="repair_traffic_period">%1$s · %2$s</string>
 </resources>

@@ -27,6 +27,5 @@
     <color name="foxy_error_container">#3B252A</color>
     <color name="foxy_on_error_container">#FFB4BA</color>
     <color name="foxy_ok">#83D5AB</color>
-    <color name="foxy_on_ok">#143526</color>
     <color name="foxy_ok_soft">#20352D</color>
 </resources>
