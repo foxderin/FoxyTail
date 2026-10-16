@@ -18,8 +18,8 @@ import java.util.function.Consumer;
 final class ControlClient {
     private static ControlClient instance;
     static synchronized ControlClient get(Context context) {
-        if (instance == null) instance = new ControlClient(ControlUi.localized(context.getApplicationContext()));
-        else instance.context = ControlUi.localized(context.getApplicationContext());
+        if (instance == null) instance = new ControlClient(PlatformLocale.localized(context.getApplicationContext()));
+        else instance.context = PlatformLocale.localized(context.getApplicationContext());
         return instance;
     }
     private volatile Context context;
@@ -86,6 +86,24 @@ final class ControlClient {
         if (result == null) return null;
         try { return new JSONObject(result); } catch (org.json.JSONException e) { return null; }
     }
+    boolean supports(String name) { return commands.contains(name); }
+    JSONObject snapshot() {
+        try {
+            JSONObject results = new JSONObject(), times = new JSONObject();
+            for (String name : new String[]{"backup", "diag", "restore", "diag-check"}) {
+                results.put(name, lastResult(name) == null ? JSONObject.NULL : lastResult(name));
+                times.put(name, lastResultTime(name));
+            }
+            JSONArray entries = new JSONArray();
+            for (TaskEntry task : tasks) entries.put(new JSONObject().put("id", task.id).put("command", task.command)
+                    .put("label", task.label).put("state", task.state).put("detail", task.detail).put("cancellation", task.cancellation));
+            return new JSONObject().put("busy", busy()).put("submitting", submitting).put("unknown", isUnknown())
+                    .put("canWrite", canWrite()).put("canStop", canStop()).put("canCancel", canCancel()).put("ownsMutation", ownsMutation())
+                    .put("id", id == null ? JSONObject.NULL : id).put("command", command).put("message", message).put("hasNotice", hasNotice())
+                    .put("observationRevision", observationRevision).put("accountRevision", accountRevision())
+                    .put("result", lastResult == null ? JSONObject.NULL : lastResult).put("results", results).put("resultTimes", times).put("tasks", entries);
+        } catch (org.json.JSONException impossible) { throw new IllegalStateException(impossible); }
+    }
     void addListener(Runnable listener) {
         if (!listeners.contains(listener)) listeners.add(listener);
         reconnect();
@@ -128,7 +146,9 @@ final class ControlClient {
         if (busy()) { message = context.getString(R.string.control_busy, label); changed(); return; }
         if (args.length == 0 || !commands.contains(args[0])) { message = context.getString(R.string.control_incompatible); changed(); return; }
         String next = RootApi.requestId();
-        if (!preferences.edit().putString("id", next).putString("command", args[0]).putString("label", operationLabel).commit()) {
+        SharedPreferences.Editor started = preferences.edit().putString("id", next).putString("command", args[0]).putString("label", operationLabel).remove("historyTarget");
+        if ("file-send-delete".equals(args[0]) && args.length == 2) started.putString("historyTarget", args[1]);
+        if (!started.commit()) {
             message = context.getString(R.string.control_record_failed); changed(); return;
         }
         id = next; command = args[0]; label = operationLabel; submitting = true;
@@ -179,6 +199,7 @@ final class ControlClient {
             result.put("ok", false);
             if (!result.has("error")) result.put("error", "Operation did not complete successfully");
         }
+        result.put("operationState", state).put("exitCode", operation.opt("exitCode") == null ? JSONObject.NULL : operation.opt("exitCode"));
         return result;
     }
     private void accept(String expected, JSONObject response) {
@@ -196,7 +217,19 @@ final class ControlClient {
             }
             lastResult = result;
             message = result.optBoolean("ok") ? context.getString(R.string.control_finished, label) : label + ": " + result.optString("error", context.getString(R.string.backend_failed));
-            SharedPreferences.Editor finished = preferences.edit().remove("id").remove("command").remove("label");
+            if (result.optBoolean("ok") && ("file-send-delete".equals(command) || "file-send-clear".equals(command))) {
+                SharedPreferences transfer = TransferService.state(context);
+                String saved = transfer.getString("snapshot", null);
+                if (saved != null) {
+                    boolean remove;
+                    try {
+                        Models.Transfer previous = new Models.Transfer(new JSONObject(saved));
+                        remove = !Models.active(previous.status) && ("file-send-clear".equals(command) || previous.id.equals(preferences.getString("historyTarget", "")));
+                    } catch (Exception invalidSnapshot) { remove = true; }
+                    if (remove && !transfer.edit().remove("snapshot").commit()) throw new IOException(context.getString(R.string.control_record_failed));
+                }
+            }
+            SharedPreferences.Editor finished = preferences.edit().remove("id").remove("command").remove("label").remove("historyTarget");
             if ("backup".equals(command) || "diag".equals(command) || "restore".equals(command) || "diag-check".equals(command)) {
                 finished.putString("result." + command, result.toString()).putLong("resultTime." + command, System.currentTimeMillis());
             }

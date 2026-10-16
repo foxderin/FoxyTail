@@ -1,10 +1,15 @@
 #!/usr/bin/env bash
-# One local/CI gate; all runtime tests use mocks and temporary data directories.
+# One local/CI gate; device integration runs separately on an isolated device.
 set -euo pipefail
 cd "$(dirname "$0")/../.."
 for cmd in shellcheck python3 jq go sha256sum; do
   command -v "$cmd" >/dev/null || { echo "missing verifier: $cmd" >&2; exit 1; }
 done
+# shellcheck source=.github/tools/flutter-env.sh
+source .github/tools/flutter-env.sh
+prepare_flutter
+"$FLUTTER_BIN" analyze --no-pub
+"$FLUTTER_BIN" test --no-pub
 scripts=(customize.sh service.sh install-recovery.sh uninstall.sh tailscale/settings.sh META-INF/com/google/android/update-binary)
 for file in tailscale/scripts/*; do
   case "$file" in *.yaml) ;; *) scripts+=("$file") ;; esac
@@ -28,7 +33,6 @@ export FOXYDNS_TEST_BINARY="$build_dir/foxydns"
 bash .github/tools/build-native.sh "$build_dir/native"
 python3 .github/tools/native-notices.py --check
 bash .github/tools/build-android.sh debug "$build_dir/FoxyTail-debug.apk"
-javac -d "$build_dir/settings-check" android/app/src/main/java/dev/foxderin/tail/SettingsRules.java android/app/src/test/java/dev/foxderin/tail/SettingsRulesTest.java
-java -cp "$build_dir/settings-check" dev.foxderin.tail.SettingsRulesTest
+android/gradlew --no-daemon -p android :app:assembleDebugAndroidTest
 python3 .github/tools/verify-backend.py
 python3 .github/tools/check-metadata.py

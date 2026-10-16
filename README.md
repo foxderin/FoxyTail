@@ -26,7 +26,7 @@ FoxyTail is inspired by [anasfanani/Magisk-Tailscaled](https://github.com/anasfa
 | Network-context awareness (`foxytail.context`) | ✅ | rules by Wi-Fi SSID / cellular |
 | One-shot diagnostics bundle (`foxytail.diag`) | ✅ | tar.gz to `/sdcard/Download` |
 | Module toggle via manager | ✅ | inotify watcher on the disable flag |
-| Native Android control | Implemented | Accounts/login, service, peers, exits, routing/DNS, traffic, Serve/Funnel, contexts, trials, diagnostics and backup/restore |
+| Flutter Android control | Implemented | Accounts/login, service, peers, exits, routing/DNS, traffic, Serve/Funnel, contexts, trials, diagnostics and backup/restore |
 | Taildrop batch transfers and persistent history | Implemented | File browsing, actual byte progress, cancellation and unsuccessful-only retries |
 | Android app `dev.foxderin.tail` | Implemented | Android 8.0+; English/Chinese, themes, system sharing and SAF |
 | Light / full release zips, `update.json` OTA | ✅ | |
@@ -102,16 +102,17 @@ Plus the stock `tailscale` CLI (`tailscale` is a symlink to `tailscaled`; for ra
 
 Open **FoxyTail** from the launcher and grant root to the app in Magisk/KernelSU. Manager WebUI support is not required.
 
-- The native interface follows the former WebUI's fields, English/Chinese copy, section order and binary-unit/time formats. Settings embed configuration trials, collapsed advanced network rules/hooks and backup/restore; Tunnel embeds the progressive coexistence wizard.
-- Java/View with Material Components 1.14.0, the shared service/task header, five fully labeled phone destinations and a sidebar from 960dp; light/dark/system appearance and system font scaling. Files use the same shell, with Inbox → Send → History stacked on one page and an inline storage browser. No WebView, root HTTP endpoint or app-hosted VPN. Closing the app does not stop networking or accepted module jobs.
+- Flutter owns all pages and navigation, using Material 3 rather than reproducing the old WebUI pixel layout. English/Chinese resources retain field meanings, format parameters and binary-unit/time formats; platform notifications and errors retain native resources.
+- Five phone destinations use NavigationBar; layouts at least 720dp wide use NavigationRail unless large text needs the compact layout. Light/dark/system appearance, font scaling, selectable text, keyboard and accessibility semantics use Flutter's standard components. Files has Inbox, Send and History tabs and a separate directory browser within the same host.
+- The Java layer owns trusted root execution, persistent control receipts, SAF/URI access, streaming files, transfer notifications and the read-only provider. No Java View pages, WebView, root HTTP endpoint or app-hosted VPN remain. Closing the UI does not stop networking or accepted module jobs. Package name, signing identity, SharedPreferences and module data formats are unchanged.
 - Control writes use durable module receipts. Saved is not applied; failure responses retain verified actual-state fields. Lost responses remain unknown and are never automatically replayed. Commit rejects cancellation; acknowledging an unknown result only clears app observation, not the underlying operation.
 - Before account changes, cancel active sends in file History and await their terminal result. Device, exit and coexistence state is re-read after account transitions.
 - Configuration backups exclude account identity. SAF import reads granted URIs under the app UID and stages bounded private archive tokens (1 MiB); diagnostics allow 16 MiB. Artifacts have a 128-entry/24-hour on-demand retention limit, with active restore sources locked against deletion. Restore binds both archive and saved-configuration digests.
 - A separate Stop action remains available with a compatible backend when current service state is unknown or an upgrade blocks ordinary writes. Confirmation cancellation preserves observed state; completed mutations trigger a fresh status read, including when an older read is already running. Browser and Headscale login follow the same compatibility gate.
-- Service mode, Restart and the conditional Stop action share one horizontal row, including narrow screens and enlarged fonts. Lightweight service/device reads do not wait for deep exit-route checks; cached rows remain visible on page reentry. Read-only probes, including an unknown probe receipt, no longer freeze independent reads; mutating operations retain their write and state-verification gates.
+- Service controls wrap on narrow or large-text layouts rather than shrinking touch targets. Lightweight service/device reads do not wait for deep exit-route checks; cached rows remain visible on page reentry. Read-only probes, including an unknown probe receipt, do not freeze independent reads; mutating operations retain their write and state-verification gates.
 - Settings expose save/reload only for changed or conflicting fields. Routing keeps save/draft status below the scroll area and bounds its app list; selected/bypass editing is available only with bridge mode and owner support. Hiding a selector does not discard its draft. Trial estimates tick locally while the module remains authoritative for expiry/rollback.
 - Known routing switches stay usable during background refresh. Advanced network rules load independently of current SSID/network status, and Settings shares its trial-status read with the embedded trial controls.
-- Traffic supports interval selection and a collapsed data table. Devices provide inline address copying and a bounded observed-path diagram with a full accessible list. Overview separates exit selection/effectiveness from Tailnet connection health. Logs retain the original compact controls and separate viewer; diagnostics never reuse an earlier Pass as the result of a failed or unconfirmed rerun.
+- Traffic supports interval selection, keyboard/reader controls and a collapsed data table. Devices provide address copying and a bounded observed-path diagram with a complete list. Overview separates exit selection/effectiveness from Tailnet connection health. Logs retain full original text for copying and virtualized display; diagnostics never reuse an earlier Pass as the result of a failed or unconfirmed rerun.
 
 For Funnel, choose a supported public listener: HTTPS, TCP or TLS-terminated TCP on port 443, 8443 or 10000. A local HTTP service such as `http://localhost:3000` normally uses a public **HTTPS** listener; the target's protocol and port are independent of the public listener. Plain HTTP listeners remain available for private Serve mappings.
 
@@ -122,7 +123,7 @@ Automatic and manual exports preserve existing Download files, try numbered name
 ### Everyday Taildrop
 
 - **Shared-storage browser**: browse `/sdcard` directories and select up to 32 files, each at most 2 GiB, for a currently send-capable peer. Listings stop at 1000 entries with a truncation notice. External Intent root paths are never accepted.
-- **Android**: Inbox, Send and History sections share one native file page; each refreshes independently, without discarding selections or another section's data. Use the multi-file system document picker or a file manager's **Share → FoxyTail** entry. Shares and transfer notifications return to the appropriate section; single/multiple shares only populate the selection, and reading/sending begin after explicit device/file confirmation.
+- **Android**: Inbox, Send and History tabs share one lazily retained Flutter file page; each refreshes independently, without discarding selections or another section's data. Use the multi-file system document picker or a file manager's **Share → FoxyTail** entry. Shares and transfer notifications return to the appropriate tab; single/multiple shares only populate the selection, and sending begins after explicit confirmation.
 - **Receiving**: tailscaled receives into `Download/Taildrop`. Import completed files into the private inbox to search, open, share, save, export to Download, delete or clear. Import does not wait for new files or remove shared originals. The per-file limit is 2 GiB.
 - **Inbox management**: sort by newest/oldest/name/size and select up to 32 files across search filters. Select-matches never silently selects only part of an oversized result set. Batch share uses read-only URI grants and prepares every file before opening the chooser; cancellation/source failure discards the prepared copies. Batch Download export and deletion use durable receipts, report each failed item, and keep unselected files; export never overwrites existing Download files.
 - **Save as** opens the destination picker before reading source bytes. After selection, cancellable private staging reports byte progress; only a successfully verified source enters destination commit. Cancellation is disabled during commit. A provider-side write failure is reported, but Android document providers cannot guarantee rollback of a partially written destination.
@@ -137,17 +138,25 @@ The app distinguishes root launch failure, insufficient grant, unreadable module
 
 ### Android builds and signing
 
-`android/` uses JDK 21, Gradle 9.7.1 (checksum-pinned wrapper), AGP 9.3.2, SDK `platforms;android-37.0` and `build-tools;36.0.0`, minimum API 26 and target API 36. Versions come directly from `module.prop`.
+Flutter is pinned to stable **3.47.7**, revision `abaf9c523780a608bd46686fd5e53740a07077f8` in `.github/tools/flutter-env.sh`; application dependencies use committed `pubspec.lock`. `android/` uses JDK 21, Gradle 9.7.1 (checksum-pinned wrapper), AGP 9.3.2, SDK `platforms;android-37.0`, build tools 36.0.0 and Flutter NDK 28.2.13676358, minimum API 26 and target API 36. Versions come directly from `module.prop`. The pinned Flutter plugin uses the legacy AGP DSL; `android.newDsl=false` and `android.builtInKotlin=false` are committed instead of allowing release builds to rewrite them.
 
-With `JAVA_HOME` and `ANDROID_HOME` set, run `bash .github/tools/build-android.sh debug dist/FoxyTail-debug.apk`. For `release`, supply `FOXYTAIL_KEYSTORE_PATH`, `FOXYTAIL_KEYSTORE_PASSWORD`, `FOXYTAIL_KEY_ALIAS` and `FOXYTAIL_KEY_PASSWORD`. Missing credentials fail rather than generating a replacement signing identity. Never commit private keys; keep an offline backup because losing the key prevents in-place updates. Only trusted CI packaging reads signing secrets; PRs build debug APKs.
+The pinned Flutter plugin applies Kotlin internally even though FoxyTail platform source remains Java. KGP 2.4.0 is pinned beside AGP in the settings plugin scope; no dependency-validation bypass is used.
 
-Instrumentation: run `./gradlew :app:assembleDebugAndroidTest` to produce the test APK, install both APKs on an isolated test device, then run `adb -s <device> shell am instrument -w dev.foxderin.tail.test/dev.foxderin.tail.BridgeInstrumentation`. It exercises control receipts/errors, network/tool contracts, filename and mixed-inbox boundaries, chart touch/accessibility, routing choices, countdowns, draft ownership, diagnostic freshness, binary streaming and read-only exports. Actual UI/root smoke remains required; build and host fixtures do not establish app-UID grants, OEM background behavior or live connectivity.
+Set `JAVA_HOME`, `ANDROID_HOME`, and either `FLUTTER_ROOT` or a matching `flutter` on PATH. Run `bash .github/tools/build-android.sh debug dist/FoxyTail-debug.apk`. The script enforces the lockfile, generates ARB localization and checks the actual APK before copying it to the requested output. Flutter intermediates live in root `build/`; release is one ARM32/ARM64 APK, not per-ABI downloads. For `release`, supply `FOXYTAIL_KEYSTORE_PATH`, `FOXYTAIL_KEYSTORE_PASSWORD`, `FOXYTAIL_KEY_ALIAS` and `FOXYTAIL_KEY_PASSWORD`. Missing credentials fail rather than generating a replacement signing identity. Never commit private keys; only trusted CI packaging reads signing secrets, while PRs build debug APKs.
+
+APK builds intentionally allow Flutter's platform-tooling step after locked dependency preparation: `--no-pub` also skips release-specific plugin registration in this SDK and would leave test-only plugins in the registrant. Analysis and host tests can still use `--no-pub`.
+
+Run `bash .github/tools/verify.sh` for the unified host checks, including Flutter analysis/behavior tests, backend/native gates and both Android debug APKs. On an **exclusive test device**, install the ordinary debug APK and `build/app/outputs/apk/androidTest/debug/app-debug-androidTest.apk`, then run `adb -s <device> shell am instrument -w dev.foxderin.tail.test/dev.foxderin.tail.BridgeInstrumentation` for native receipts, errors, streaming, URI and cancellation boundaries. Run `flutter test integration_test/app_test.dart -d <device>` separately for the Flutter surface. These paths coexist; Flutter CLI uses the VM service, not a replacement instrumentation runner. Never run them on production devices or uninstall another session's app to bypass signing/version checks.
+
+Generated localization is ignored under `lib/l10n/generated/`; edit ARB, not generated Dart. Flutter bundles dependency licenses and exposes them from More; Android native notices remain bundled separately. Test fixtures do not establish real App-UID root authorization, OEM background behavior, live Tailnet transfers or signed in-place upgrade compatibility.
 
 <!-- Screenshots: docs/screenshots/*.png (to be added, see Roadmap) -->
 
 ## Control protocol and development
 
-`android/` is the only graphical control surface. `ControlActivity` and domain pages handle interaction; `ControlClient` retains operation ownership and reconnects to outcomes; `RootApi` owns trusted su and JSON/binary pipes. `TransferService` prepares/observes files, not the network daemon.
+`lib/` is the only graphical control surface; `android/` hosts Flutter and the retained platform capabilities. Flutter pages and shared state handle interaction; `ControlClient` retains operation ownership and reconnects to outcomes; `RootApi` owns trusted su and JSON/binary pipes. `TransferService` prepares/observes files, not the network daemon.
+
+All tabs, including Files, switch inside the Flutter shell. `FilesPage` retains pending reads and file selections while another tab is visible; system shares, file-picker results and transfer notifications are delivered by `ControlActivity` through the native bridge.
 
 The module entry remains `/data/adb/foxytail/scripts/foxytail.webapi.sh`. `backend-info` reports protocol/capabilities; `operation-start <id> <command> [arguments]` accepts allowlisted detached work; `operation-status <id>` returns authoritative outcomes; `cancel <id>` requests acknowledged cancellation. Arguments are not journaled; browser authentication URLs never enter durable jobs. Private receipts retain at most 128 operations/24 hours and 1 MiB per result. Interrupted/expired outcomes never imply success.
 
@@ -159,7 +168,7 @@ The Tunnel SOCKS check uses the bundled `foxydns socks-check` in both module pac
 
 ## Verification and release
 
-Use Go 1.27.1, Python, ShellCheck and the Android toolchain above; Node/pnpm/WebView are no longer required. Run `bash .github/tools/verify.sh` for shell validation, isolated backend regressions, native race/vet, Android debug APK assembly, pure settings logic, cross-compiled helpers and release metadata.
+Use Go 1.27.1, Python, ShellCheck and the Flutter/Android toolchain above; Node/pnpm/WebView are not required. Run `bash .github/tools/verify.sh` for shell validation, isolated backend regressions, native race/vet, Flutter analysis and behavioral checks, Android debug APK assembly, cross-compiled helpers and release metadata.
 
 CI runs isolated Python test modules with at most four workers, preserving all tests and failure statuses. Go/Gradle dependency caches exclude signing keys and release outputs. The release workflow verifies, packages and publishes in one run: module ZIPs plus the sibling companion APK, all covered by SHA256SUMS. Native race checks and the isolated Linux kernel gate remain required.
 
@@ -236,9 +245,9 @@ The Routing page can accept subnet routes from other Tailscale nodes. The switch
 
 The two controls have different scopes: accepting routes lets Tailscale use permitted peer routes, while the custom list selects destinations for FoxyTail's local policy routing. The list is not an acceptance whitelist and importing a subnet does not pin its next hop to that node. Node online status is not a reachability test; the advertising router, administrative route approval and Tailnet access policy still determine access.
 
-Native TUN receives routes through tailscaled; adding a custom CIDR is useful when it must also follow FoxyTail's local routing priority. Bridge mode needs the target CIDR in the custom list and remains subject to the selected application scope. Proxy mode handles traffic sent through its SOCKS5 listener and does not install an Android system route. Exit-node default routes are managed on the Exit page.
+Native TUN receives routes through tailscaled; adding a custom CIDR is useful when it must also follow FoxyTail's local routing priority. Bridge mode needs the target CIDR in the custom list and remains subject to the selected application scope. Proxy mode handles traffic sent through its SOCKS5 listener and does not install an Android system route. Exit-node default routes are managed from peer details.
 
-Bridge public defaults require a matching selected and actual exit identity and remain limited to `all`/`selected`/`bypass` scope. UID 0 and Tailscale-marked traffic stay exempt; IPv6-off leaves IPv6 uncovered. Proxy mode covers explicit proxy clients only; native TUN is daemon-owned and not claimed as independently verified. The Exit page reports failed/unknown policy separately from a saved selection. Use the coordinated exit helper rather than raw `tailscale set` when immediate bridge reconciliation is required.
+Bridge public defaults require a matching selected and actual exit identity and remain limited to `all`/`selected`/`bypass` scope. UID 0 and Tailscale-marked traffic stay exempt; IPv6-off leaves IPv6 uncovered. Proxy mode covers explicit proxy clients only; native TUN is daemon-owned and not claimed as independently verified. The Peers page reports failed/unknown exit policy separately from a saved selection. Use the coordinated exit helper rather than raw `tailscale set` when immediate bridge reconciliation is required.
 
 Custom CIDRs are normalized to network addresses (`192.168.1.42/24` becomes `192.168.1.0/24`) and duplicates are removed. IPv6 CIDRs may be saved before enabling IPv6; the page explicitly reports that those destinations are not applied until IPv6 is enabled in Settings.
 
@@ -293,7 +302,7 @@ FoxyTail never touches other modules' chains and probes for neighbors at boot (`
 
 ### App proxy coexistence wizard
 
-Open **Navigate → Proxy coexistence → Detect environment**. It reads applied settings, the current Tailnet and actual DNS state without changing FoxyTail or another module. A ready FoxyTail-owned `local` / `transparent` DNS listener is required. Disabled, legacy or repair-pending DNS shows prerequisites and a Settings link rather than an unusable snippet. Installed modules/apps do not prove a proxy is running.
+Open **More → Proxy coexistence → Detect environment**. It reads applied settings, the current Tailnet and actual DNS state without changing FoxyTail or another module. A ready FoxyTail-owned `local` / `transparent` DNS listener is required. Disabled, legacy or repair-pending DNS shows prerequisites and a Settings link rather than an unusable snippet. Installed modules/apps do not prove a proxy is running.
 
 1. Confirm the destination is **mihomo / Clash.Meta** with the required fields, and select its existing fake-IP blacklist, rule mode or `redir-host`. Whitelist semantics require reviewing the existing list; the wizard does not silently convert it.
 2. Preview, copy and **merge** into existing `dns.nameserver-policy`, `proxies`, `rules` and applicable `fake-ip-filter` entries. Preserve other entries; prepend routing and rule-mode filter entries before catchalls. Do not replace the complete configuration or use the local endpoint as global DNS.
@@ -370,7 +379,7 @@ The watchdog restarts a crashed tailscaled automatically (rate-limited: 5 restar
 
 ## Roadmap
 
-- Screenshots of the native Material 3 app under `docs/screenshots/`, embedded in this README
+- Screenshots of the Flutter Material 3 app under `docs/screenshots/`, embedded in this README
 - A trusted static `dnsmasq` source for Android, so MagicDNS works out of the box
 - Real-device compatibility matrix (Android versions × kernels × coexisting proxy modules)
 

@@ -24,6 +24,7 @@ public final class TransferService extends Service {
     private Handler main;
     private SharedPreferences prefs;
     private long lastProgress;
+    @Override protected void attachBaseContext(Context base) { super.attachBaseContext(PlatformLocale.localized(base)); }
     @Override public void onCreate() {
         super.onCreate(); main = new Handler(getMainLooper()); prefs = getSharedPreferences("transfer", MODE_PRIVATE);
         getSystemService(NotificationManager.class).createNotificationChannel(new NotificationChannel(CHANNEL, getString(R.string.service_channel), NotificationManager.IMPORTANCE_LOW));
@@ -33,7 +34,8 @@ public final class TransferService extends Service {
     @Override public int onStartCommand(Intent intent, int flags, int startId) {
         if (intent != null && CANCEL.equals(intent.getAction())) {
             cancelRequested = true;
-            final String job = jobId, request = requestId;
+            final String suppliedJob = intent.getStringExtra("job");
+            final String job = jobId != null ? jobId : suppliedJob != null && suppliedJob.matches("[a-fA-F0-9]{16,128}") ? suppliedJob : null, request = requestId;
             final RootApi.Call call = currentCall;
             control.execute(() -> {
                 try {
@@ -49,7 +51,7 @@ public final class TransferService extends Service {
         }
         if (busy) return START_NOT_STICKY;
         busy = true; running = true; stopping = false; cancelRequested = false;
-        prefs.edit().remove("snapshot").putString("message", getString(R.string.working)).apply();
+        prefs.edit().remove("snapshot").putLong("accountRevision", ControlClient.get(this).accountRevision()).putString("message", getString(R.string.working)).apply();
         startForeground(NOTIFICATION, notification(getString(R.string.working)));
         sendBroadcast(new Intent(UPDATE).setPackage(getPackageName()));
         final Intent task = intent;
@@ -96,6 +98,7 @@ public final class TransferService extends Service {
                     if (uris.size() + paths.length() == 0 || uris.size() + paths.length() > 32) throw new IOException(getString(R.string.file_limit));
                     for (Uri uri : uris) {
                         if (cancelRequested || stopping) throw new InterruptedIOException(getString(R.string.cancelled_local));
+                        if (uri == null || !"content".equals(uri.getScheme()) || checkUriPermission(uri, android.os.Process.myPid(), android.os.Process.myUid(), Intent.FLAG_GRANT_READ_URI_PERMISSION) != android.content.pm.PackageManager.PERMISSION_GRANTED) throw new IOException(getString(R.string.invalid_uri));
                         Models.Source source = Models.Source.resolve(this, uri);
                         requestId = RootApi.requestId(); currentCall = new RootApi.Call();
                         prefs.edit().putString("request", requestId).putBoolean("preparing", true).commit();
@@ -117,12 +120,13 @@ public final class TransferService extends Service {
                 }
                 if (cancelRequested || stopping) throw new InterruptedIOException(getString(R.string.cancelled_local));
                 if (paths.length() == 0 || paths.length() > 32 || peerId == null || peerIp == null) throw new IOException(getString(R.string.choose_first));
-                submissionAttempted = true;
                 // Publish the ownership boundary before root submission; uncertain jobs retain sources for 24h.
-                prefs.edit().remove("staged").remove("preparing").commit();
+                if (!prefs.edit().remove("staged").remove("preparing").putBoolean("submissionUnknown", true)
+                        .putString("attemptPeer", peerId).putString("attemptPaths", paths.toString()).putLong("attemptTime", System.currentTimeMillis() / 1000).commit()) throw new IOException(getString(R.string.control_record_failed));
+                submissionAttempted = true;
                 Models.Transfer transfer = new Models.Transfer(RootApi.json(this, "file-send-start", peerId, peerIp, paths.toString()).getJSONObject("transfer"));
                 jobId = transfer.id;
-                prefs.edit().remove("staged").remove("preparing").putString("job", jobId).commit();
+                prefs.edit().remove("staged").remove("preparing").remove("submissionUnknown").remove("attemptPeer").remove("attemptPaths").remove("attemptTime").putString("job", jobId).commit();
                 publish(Models.state(this, transfer.status), transfer);
             } else return;
             prefs.edit().putString("job", jobId).apply();
@@ -141,6 +145,7 @@ public final class TransferService extends Service {
                 Thread.sleep(1000);
             }
         } catch (Exception e) {
+            if (submissionAttempted && jobId == null) clearRejectedSubmission(prefs, e);
             publish(failureMessage(this, e, cancelRequested, submissionAttempted, jobId, !staged.isEmpty()), null);
         } finally {
             if (requestId != null) {
@@ -165,17 +170,22 @@ public final class TransferService extends Service {
             main.post(this::finish);
         }
     }
+    static boolean clearRejectedSubmission(SharedPreferences prefs, Exception error) {
+        if (!(error instanceof RootApi.Failure) && !(error instanceof RootApi.NotStarted)) return false;
+        return prefs.edit().remove("submissionUnknown").remove("attemptPeer").remove("attemptPaths").remove("attemptTime").commit();
+    }
     static String failureMessage(Context context, Exception error, boolean cancelRequested, boolean submissionAttempted, String jobId, boolean hasStaged) {
         String message = RootApi.message(error);
         if (cancelRequested && jobId == null && !submissionAttempted) return context.getString(R.string.cancelled_local);
         if (submissionAttempted && jobId == null) {
+            if (error instanceof RootApi.NotStarted) return message;
             return error instanceof RootApi.Failure ? context.getString(R.string.backend_failed) + "\n" + message
                     : context.getString(R.string.submission_unknown, message);
         }
         return hasStaged ? context.getString(R.string.staging_failed, message) : message;
     }
     static JSONArray sharedSources(Intent intent) throws IOException {
-        // Only the unexported service accepts these extras; MainActivity never forwards external paths.
+        // External intents supply only granted content URIs; shared paths come from the app's validated selection.
         ArrayList<String> sources = intent.getStringArrayListExtra("paths");
         JSONArray paths = new JSONArray();
         if (sources == null) return paths;
@@ -206,7 +216,7 @@ public final class TransferService extends Service {
         cleanup.commit();
     }
     private Notification notification(String text) {
-        PendingIntent open = PendingIntent.getActivity(this, 0, new Intent(this, MainActivity.class).putExtra("history", true).addFlags(Intent.FLAG_ACTIVITY_REORDER_TO_FRONT | Intent.FLAG_ACTIVITY_SINGLE_TOP), PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
+        PendingIntent open = PendingIntent.getActivity(this, 0, new Intent(this, ControlActivity.class).putExtra(ControlActivity.DESTINATION, "files").putExtra("history", true).addFlags(Intent.FLAG_ACTIVITY_REORDER_TO_FRONT | Intent.FLAG_ACTIVITY_SINGLE_TOP), PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
         PendingIntent cancel = PendingIntent.getService(this, 1, new Intent(this, TransferService.class).setAction(CANCEL), PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
         return new Notification.Builder(this, CHANNEL).setSmallIcon(R.drawable.ic_tail).setContentTitle(getString(R.string.app_name))
                 .setContentText(text).setStyle(new Notification.BigTextStyle().bigText(text)).setContentIntent(open).setOngoing(true).setOnlyAlertOnce(true)

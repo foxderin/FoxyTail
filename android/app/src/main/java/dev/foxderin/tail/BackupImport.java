@@ -18,10 +18,11 @@ import java.util.concurrent.Executors;
 final class BackupImport {
     private static BackupImport instance;
     static synchronized BackupImport get(Context context) {
-        if (instance == null) instance = new BackupImport(context.getApplicationContext());
+        if (instance == null) instance = new BackupImport(PlatformLocale.localized(context.getApplicationContext()));
+        else instance.context = PlatformLocale.localized(context.getApplicationContext());
         return instance;
     }
-    private final Context context;
+    private volatile Context context;
     private final SharedPreferences preferences;
     private final ExecutorService io = Executors.newSingleThreadExecutor();
     private final Handler main = new Handler(Looper.getMainLooper());
@@ -40,7 +41,7 @@ final class BackupImport {
     boolean busy() { return busy; }
     String error() { return error; }
     String token() { return preferences.getString("token", null); }
-    void consume(String token) { if (token.equals(token())) preferences.edit().remove("token").apply(); }
+    void consume(String token) { if (token.equals(token())) { preferences.edit().remove("token").apply(); changed(); } }
     private void changed() { for (Runnable listener : new ArrayList<>(listeners)) listener.run(); }
     void start(Uri uri, int flags) {
         if (busy) return;

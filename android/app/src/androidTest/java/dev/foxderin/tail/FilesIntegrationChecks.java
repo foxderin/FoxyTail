@@ -45,28 +45,28 @@ final class FilesIntegrationChecks {
         reject(() -> Models.Source.shared("/sdcard/large", RootApi.MAX_FILE + 1));
         Intent paths = new Intent().putStringArrayListExtra("paths", new ArrayList<>(Arrays.asList("/sdcard/one", "/sdcard/two")));
         check(TransferService.sharedSources(paths).length() == 2, "Restricted service shared sources");
-        check(MainActivity.sharedUris(new Intent(paths).setAction(Intent.ACTION_SEND).putExtra("peer", "external")).isEmpty(), "External root path extras never become sources");
+        check(NativeFiles.sharedUris(new Intent(paths).setAction(Intent.ACTION_SEND).putExtra("peer", "external")).isEmpty(), "External root path extras never become sources");
         Uri readable = Uri.parse("content://example.documents/document/one");
-        check(MainActivity.sharedUris(new Intent(Intent.ACTION_SEND).putExtra(Intent.EXTRA_STREAM, readable)).equals(Collections.singletonList(readable)), "System share URI remains supported");
+        check(NativeFiles.sharedUris(new Intent(Intent.ACTION_SEND).putExtra(Intent.EXTRA_STREAM, readable)).equals(Collections.singletonList(readable)), "System share URI remains supported");
         Intent clipShare = new Intent(Intent.ACTION_SEND_MULTIPLE);
         clipShare.setClipData(ClipData.newRawUri("file", readable));
-        check(MainActivity.sharedUris(clipShare).equals(Collections.singletonList(readable)), "ClipData share fallback remains supported");
-        check(MainActivity.sharedUris(new Intent("start").putExtra(Intent.EXTRA_STREAM, readable)).isEmpty(), "Unknown external actions cannot submit transfers");
+        check(NativeFiles.sharedUris(clipShare).equals(Collections.singletonList(readable)), "ClipData share fallback remains supported");
+        check(NativeFiles.sharedUris(new Intent("start").putExtra(Intent.EXTRA_STREAM, readable)).isEmpty(), "Unknown external actions cannot submit transfers");
         reject(() -> TransferService.sharedSources(new Intent().putStringArrayListExtra("paths", new ArrayList<>(Arrays.asList("/sdcard/one", "/sdcard/one")))));
         ArrayList<String> tooMany = new ArrayList<>(); for (int i = 0; i < 33; i++) tooMany.add("/sdcard/file" + i);
         reject(() -> TransferService.sharedSources(new Intent().putStringArrayListExtra("paths", tooMany)));
         JSONObject entry = new JSONObject().put("name", "file.bin").put("path", "/sdcard/Download/file.bin").put("directory", false).put("size", 0).put("mtime", 1);
         JSONObject response = new JSONObject().put("ok", true).put("path", "Download").put("entries", new JSONArray().put(entry)).put("truncated", false);
-        check(FilesBrowser.parse(response, "Download").size() == 1, "Valid browse result");
-        reject(() -> FilesBrowser.parse(response, "Pictures"));
-        reject(() -> FilesBrowser.parse(new JSONObject(response.toString()).put("truncated", "false"), "Download"));
-        reject(() -> FilesBrowser.parse(new JSONObject(response.toString()).put("entries", new JSONArray().put(entry).put(entry)), "Download"));
+        check(NativeFiles.validateBrowse(response, "Download").length() == 1, "Valid browse result");
+        reject(() -> NativeFiles.validateBrowse(response, "Pictures"));
+        reject(() -> NativeFiles.validateBrowse(new JSONObject(response.toString()).put("truncated", "false"), "Download"));
+        reject(() -> NativeFiles.validateBrowse(new JSONObject(response.toString()).put("entries", new JSONArray().put(entry).put(entry)), "Download"));
         for (String path : Arrays.asList("/data/private", "/sdcard/Other/file.bin", "/sdcard/Download/../file.bin")) {
             JSONObject badEntry = new JSONObject(entry.toString()).put("path", path);
-            reject(() -> FilesBrowser.parse(new JSONObject(response.toString()).put("entries", new JSONArray().put(badEntry)), "Download"));
+            reject(() -> NativeFiles.validateBrowse(new JSONObject(response.toString()).put("entries", new JSONArray().put(badEntry)), "Download"));
         }
         JSONArray count = new JSONArray(); for (int i = 0; i < 1001; i++) count.put(entry);
-        reject(() -> FilesBrowser.parse(new JSONObject(response.toString()).put("entries", count), "Download"));
+        reject(() -> NativeFiles.validateBrowse(new JSONObject(response.toString()).put("entries", count), "Download"));
         for (String id : Arrays.asList(null, "", "/data/private", "0123456789abcdef0123456789abcdef", "art-../private")) reject(() -> ExportProvider.exportArtifact(context, id, "archive.tar.gz"));
         Set<String> before = exportFiles(context);
         reject(() -> ExportProvider.cache(context, "partial.bin", output -> { output.write(new byte[]{1, 2, 3}); throw new IOException("source failed"); }));
@@ -100,7 +100,7 @@ final class FilesIntegrationChecks {
         try {
             exports.add(ExportProvider.cache(context, "one.txt", output -> output.write(new byte[]{1, 2})));
             exports.add(ExportProvider.cache(context, "two.png", output -> output.write(new byte[]{3, 4, 5})));
-            Intent share = MainActivity.shareIntent(Arrays.asList("one.txt", "two.png"), exports);
+            Intent share = NativeFiles.shareIntent(Arrays.asList("one.txt", "two.png"), exports);
             check(Intent.ACTION_SEND_MULTIPLE.equals(share.getAction()) && "*/*".equals(share.getType()), "Mixed types use multi-file sharing without falsely advertising one MIME type");
             check((share.getFlags() & Intent.FLAG_GRANT_READ_URI_PERMISSION) != 0 && (share.getFlags() & Intent.FLAG_GRANT_WRITE_URI_PERMISSION) == 0, "Shared exports grant only read access");
             ArrayList<Uri> streams = share.getParcelableArrayListExtra(Intent.EXTRA_STREAM);
@@ -109,7 +109,7 @@ final class FilesIntegrationChecks {
                 check(exports.get(i).equals(share.getClipData().getItemAt(i).getUri()), "Shared ClipData keeps file order");
                 try (InputStream input = context.getContentResolver().openInputStream(streams.get(i))) { check(Arrays.equals(input.readAllBytes(), i == 0 ? new byte[]{1, 2} : new byte[]{3, 4, 5}), "Shared stream resolves to the exact selected bytes"); }
             }
-            Intent single = MainActivity.shareIntent(Collections.singletonList("one.txt"), new ArrayList<>(Collections.singletonList(exports.get(0))));
+            Intent single = NativeFiles.shareIntent(Collections.singletonList("one.txt"), new ArrayList<>(Collections.singletonList(exports.get(0))));
             check(Intent.ACTION_SEND.equals(single.getAction()) && "text/plain".equals(single.getType()), "One selection retains ordinary file sharing");
         } finally { for (Uri uri : exports) ExportProvider.discard(context, uri); }
     }

@@ -24,6 +24,19 @@ jobs:
         with:
           distribution: temurin
           java-version: '21'
+      - name: Read the Flutter SDK pin
+        id: flutter-pin
+        run: |
+          source .github/tools/flutter-env.sh
+          echo "version=$FOXYTAIL_FLUTTER_VERSION" >> "$GITHUB_OUTPUT"
+          echo "revision=$FOXYTAIL_FLUTTER_REVISION" >> "$GITHUB_OUTPUT"
+      - uses: subosito/flutter-action@fd55f4c5af5b953cc57a2be44cb082c8f6635e8e # v2.21.0
+        with:
+          flutter-version: ${{ steps.flutter-pin.outputs.version }}
+          channel: stable
+          cache: true
+          cache-key: ${{ runner.os }}-${{ runner.arch }}-flutter-${{ steps.flutter-pin.outputs.revision }}-${{ hashFiles('pubspec.lock') }}
+          pub-cache-key: ${{ runner.os }}-${{ runner.arch }}-pub-${{ steps.flutter-pin.outputs.revision }}-${{ hashFiles('pubspec.lock') }}
       - name: Cache Gradle dependencies only
         uses: actions/cache@v4
         with:
@@ -35,9 +48,11 @@ jobs:
       - uses: android-actions/setup-android@v3
         with:
           packages: platform-tools
-      - run: sdkmanager 'platforms;android-37.0' 'build-tools;36.0.0'
+      - run: sdkmanager 'platforms;android-37.0' 'build-tools;36.0.0' 'ndk;28.2.13676358'
       - run: sudo apt-get update && sudo apt-get install -y shellcheck jq mksh
       - run: bash .github/tools/verify.sh
+      - name: Reject generated changes to tracked sources
+        run: test -z "$(git status --porcelain --untracked-files=no)"
   native-kernel:
     runs-on: ubuntu-latest
     steps:

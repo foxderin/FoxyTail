@@ -1,3 +1,15 @@
-plugins {
-    id 'com.android.application' version '9.3.2' apply false
+allprojects {
+    repositories { google(); mavenCentral() }
+}
+
+rootProject.layout.buildDirectory.set(file('../build'))
+subprojects {
+    layout.buildDirectory.set(rootProject.layout.buildDirectory.dir(project.name))
+}
+subprojects {
+    evaluationDependsOn(':app')
+}
+
+tasks.register('clean', Delete) {
+    delete rootProject.layout.buildDirectory
 }

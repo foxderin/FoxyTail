@@ -1,13 +1,7 @@
 <resources>
+    <string name="web_files_retry_target_missing" formatted="false">The original target cannot receive right now. Refresh receiving devices before retrying.</string>
     <string name="app_name">FoxyTail</string>
-    <string name="send">Send</string>
-    <string name="pick_files">Choose files</string>
-    <string name="targets_failed">Devices could not be loaded.</string>
-    <string name="send_confirm">Send %1$d file(s) to %2$s?</string>
-    <string name="retry_confirm">Retry only unsuccessful files to %1$s? Already completed files will not be sent again.</string>
-    <string name="retry">Retry unsuccessful files</string>
     <string name="cancel">Cancel</string>
-    <string name="close">Close</string>
     <string name="open">Open</string>
     <string name="share">Share</string>
     <string name="working">Preparing transfer…</string>
@@ -20,7 +14,6 @@
     <string name="busy">A transfer is already active.</string>
     <string name="imported">Imported %1$d completed file(s).</string>
     <string name="saved">Copy saved.</string>
-    <string name="error_title">FoxyTail could not complete this operation</string>
     <string name="root_unavailable">Could not start su. Allow superuser access for FoxyTail in Magisk/KernelSU, then reopen the app.</string>
     <string name="root_denied">The root command did not receive UID 0. Check superuser authorization in Magisk/KernelSU.</string>
     <string name="root_failed">su exited before starting the module command. Check superuser authorization.</string>
@@ -32,7 +25,6 @@
     <string name="file_limit">Choose at most 32 files, no larger than 2 GiB each.</string>
     <string name="choose_first">Choose files and a device first.</string>
     <string name="export_failed">Could not read/save the file. Check free space and try again.</string>
-    <string name="no_viewer">No app can open this file. Use Share or Save a copy instead.</string>
     <string name="service_channel">Taildrop transfers</string>
     <string name="service_timeout">Foreground monitoring stopped; reopen History for the task state.</string>
     <string name="poll_failed">Cannot read transfer status; the result is unknown. Reopen the history. %1$s</string>
@@ -43,15 +35,28 @@
     <string name="failed">Failed</string>
     <string name="cancelled">Cancelled</string>
     <string name="interrupted">Interrupted</string>
-    <string name="selection_errors">Some files could not be selected:\n%1$s</string>
     <string name="staging_failed">Local preparation failed; no send was submitted. %1$s</string>
     <string name="submission_unknown">Submission is unconfirmed; check the transfer history. %1$s</string>
     <string name="notifications_hint">Notifications are disabled; transfers still run.</string>
-    <string name="files_clear_confirm">Permanently delete all files from the private inbox, including files hidden by search? Saved and shared copies are not deleted.</string>
-    <string name="files_export_confirm">Copy %1$s to shared Download storage? Other apps with storage access may read this copy.</string>
-    <string name="files_copied">Path copied.</string>
-    <string name="repair_files_saving">Preparing %1$s · %2$s copied</string>
-    <string name="repair_files_save_committing">Saving %1$s · %2$s written. Do not close the app.</string>
     <string name="repair_files_save_partial">Save failed. The destination may contain incomplete data.</string>
-    <string name="files_operation_busy">A control operation is in progress; try again shortly.</string>
+    <string name="repair_files_ignored_import">%1$d files have unsupported names and were not imported.</string>
+    <string name="control_unknown_acknowledged">Observation cleared; verify the actual state.</string>
+    <string name="control_reconnecting">Reconnecting to: %1$s</string>
+    <string name="control_incompatible">App and module control protocols are incompatible; install the matching signed module and app.</string>
+    <string name="control_upgrading">Module %1$s is upgrading. Changes are disabled.</string>
+    <string name="control_disabled">Module %1$s is disabled in the root manager.</string>
+    <string name="control_ready">Module %1$s · root control ready</string>
+    <string name="control_unavailable">Root control is not ready. Check module compatibility and app authorization.</string>
+    <string name="control_busy">Operation in progress: %1$s.</string>
+    <string name="control_record_failed">Cannot retain operation ownership. No command was submitted.</string>
+    <string name="control_running">Running: %1$s</string>
+    <string name="control_finished">Completed: %1$s.</string>
+    <string name="control_unknown">The operation result is unknown; do not repeat the change. %1$s</string>
+    <string name="control_invalid_url">Only valid HTTP or HTTPS links can be opened.</string>
+    <string name="control_archive_limit">Configuration archives must not exceed 1 MiB.</string>
+    <string name="control_import_interrupted">Archive import was interrupted; no restore was submitted.</string>
+    <string name="login_failed">Sign-in request failed. Refresh account status before retrying.</string>
+    <string name="control_operation_busy">Another operation is in progress.</string>
+    <string name="control_transfer_pending">Resolve the current file transfer before continuing.</string>
+    <string name="appearance_save_failed">Could not save appearance settings.</string>
 </resources>

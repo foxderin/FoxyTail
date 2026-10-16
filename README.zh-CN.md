@@ -26,7 +26,7 @@ FoxyTail 的灵感来自 [anasfanani/Magisk-Tailscaled](https://github.com/anasf
 | 网络环境感知（`foxytail.context`） | ✅ | 按 Wi-Fi SSID / 蜂窝执行规则 |
 | 一键诊断包（`foxytail.diag`） | ✅ | tar.gz 输出到 `/sdcard/Download` |
 | 管理器开关联动 | ✅ | inotify 监听 disable 标志 |
-| 原生 Android 控制面 | 已实现 | 登录/账号、服务、设备、出口、路由、DNS、流量、Serve/Funnel、场景、试运行、诊断及备份恢复 |
+| Flutter Android 控制面 | 已实现 | 登录/账号、服务、设备、出口、路由、DNS、流量、Serve/Funnel、场景、试运行、诊断及备份恢复 |
 | Taildrop 批量传输与持久历史 | 已实现 | 文件浏览、真实字节进度、取消与仅重试未成功项 |
 | Android 应用 `dev.foxderin.tail` | 已实现 | Android 8.0+；中英界面、系统主题/语言、系统分享和 SAF |
 | light/full 双 zip、`update.json` OTA | ✅ | |
@@ -102,16 +102,17 @@ su -c 'foxytail.service mode tun'          # 切换运行模式并重启
 
 从桌面打开 **FoxyTail**，在 Magisk/KernelSU 单独授予该 App root 权限；不需要管理器提供 WebUI。
 
-- 原生界面按原 WebUI 的字段、中英文文案、分组顺序及二进制流量/时间格式还原。设置页内嵌配置试用、默认折叠的高级场景/钩子和备份恢复；隧道页内嵌逐步解锁的共存向导。
-- Java/View + Material Components 1.14.0，共享服务/任务顶栏、手机五项完整标签底栏、960dp 起的侧栏，支持浅色/深色/跟随系统和系统字号。文件页复用同一外壳，按收件箱 → 发送文件 → 发送记录纵向排列，目录浏览在发送区内展开。无 WebView、root HTTP 服务或 App 内 VPN；关闭 App 不停止模块网络，也不撤销模块已接受的任务。
+- 全部页面与导航由 Flutter 实现，采用 Material 3，不逐像素复刻旧 WebUI。中英资源保留字段语义、格式参数及二进制流量/时间格式；后台通知和原生错误保留 Android 资源。
+- 手机五个主目的地使用 NavigationBar；720dp 起使用 NavigationRail，大字号需要时退回紧凑布局。浅色/深色/系统外观、字号、文本选择、键盘及无障碍使用 Flutter 标准组件。文件页采用收件、发送、历史三个标签，目录浏览仍在同一宿主内打开。
+- Java 仅负责可信 root 执行、持久回执、SAF/URI、文件流、传输通知和只读 Provider。没有旧 Java View 页面、WebView、root HTTP 服务或 App 内 VPN；关闭界面不停止模块网络和已接受任务。包名、签名身份、SharedPreferences 与模块存储格式不变。
 - 服务、配置和账号写操作使用模块持久回执。保存不等于应用；退出码非零仍保留实际状态字段。失联显示未知，不自动重放；提交期拒绝取消，确认未知只清除 App 观察记录，不终止或回滚后台操作。
 - 账号切换前如存在活动发送，先在文件历史取消并等待终态；切换后重新读取设备、出口和共存快照。
 - 配置备份不包含登录身份。SAF 导入由 App 自身读取授权 URI，私有归档令牌限制为 1 MiB；诊断产物最多 16 MiB，128 个产物保留 24 小时、按需清理，活动恢复源受锁保护。恢复预览必须同时匹配归档和保存配置摘要。
 - 协议兼容时，未知服务状态及升级限制下仍保留独立停止入口；取消确认不改变快照显示。写操作结束后必须取得新状态，已有读取不会吞掉这次核验；浏览器与 Headscale 登录同样受兼容写入门禁约束。
-- 模式选择、重启及按状态出现的停止按钮保持同一横行，窄屏和放大字号不拆开。轻量服务/设备状态不再等待出口路由深检查；切页返回保留已有行。只读探测及其未知回执不冻结独立读取，写操作仍保留写入门禁和写后核验。
+- 服务操作在窄屏与大字号下换行，不缩小触摸目标。轻量服务/设备状态不等待出口路由深检查；切页返回保留已有行。只读探测及其未知回执不冻结独立读取，写操作仍保留写入门禁和写后核验。
 - 设置只在字段修改或冲突时显示保存/重载；路由保存和草稿状态固定在主滚动区外，应用列表有界滚动，selected/bypass 只在 bridge + owner 支持时可编辑，隐藏选择器不丢草稿。试运行在前台按单调时钟估算倒计时，实际到期与回退仍由模块负责。
 - 路由后台刷新不再禁用已确认的开关；高级场景规则不等待实时 SSID/网络状态，设置页与内嵌试运行控件共用一次试运行状态读取。
-- 流量图支持时段选点与折叠数据表；设备提供内联地址复制、有限节点图及完整可访问列表。总览将出口选中/生效状态与 Tailnet 连接健康分开；日志保留原版紧凑控制区与独立正文卡，诊断新失败或未确认结果不会复用旧“通过”。
+- 流量图支持时段选点、键盘/读屏与折叠数据表；设备提供地址复制、有限节点图及完整列表。总览将出口选中/生效与 Tailnet 连接健康分开；日志保留完整原文复制和虚拟列表，诊断新失败或未确认结果不会复用旧“通过”。
 
 固定 Android CLI 直接收件至 `/sdcard/Download/Taildrop`。**导入已接收文件**只复制已完成普通文件到私有收件箱，不等待缓冲模式的 `tailscale file get`，共享原件保留。私有收据去重，排除 partial/deleted 和软链接。若开机共享存储未就绪导致记录缺失，导入前可用当前 daemon 的 LocalAPI 严格确认 direct mode，并在 PID/启动时间/boot ID 前后不变时恢复记录；不凭目录存在推断。daemon 未确认 direct mode 时，仍须解锁并重启 FoxyTail。发送使用稳定节点 ID 与其当前 IP（含 IPv6）。
 
@@ -120,7 +121,7 @@ su -c 'foxytail.service mode tun'          # 切换运行模式并重启
 ### Taildrop 日常使用
 
 - **共享目录浏览**：文件页可逐层浏览 `/sdcard`，勾选最多 32 个文件（每个 ≤2 GiB），选择实际支持 Taildrop 的节点后发送；单目录最多列出 1000 项并提示截断，不接受外部 Intent 指定 root 路径。
-- **Android**：收件箱、发送、历史纵向分区共用一个原生文件页；各区独立刷新，失败不清除其他区数据或待发选择。系统文件选择器支持多选；文件管理器“分享 → FoxyTail”和传输通知定位到对应分区。分享只打开待发送列表，选择设备并确认后才开始读取与发送。
+- **Android**：收件、发送、历史标签共用惰性保留的 Flutter 文件页；各区独立刷新，失败不清除其他区数据或待发选择。系统文件选择器支持多选；文件管理器“分享 → FoxyTail”和传输通知定位到对应标签。分享只填充待发列表，明确确认后才发送。
 - **收件**：tailscaled 继续直接接收到 `Download/Taildrop`。导入已完成普通文件后可在私有收件箱搜索、打开、分享、另存、导出到 Download、删除或清空；不等待新文件、不删除共享原件。App 单文件限制为 2 GiB。
 - **收件管理**：按最新、最早、名称或大小排序，可跨搜索筛选选择最多 32 个文件；筛选结果超限时不会悄悄只选部分。批量分享先准备全部文件，再以只读 URI 授权打开系统分享；取消或源读取失败会清理已准备副本。批量导出到 Download、删除均走持久回执，逐项报告失败，保留未选择文件；导出不覆盖已有文件。
 - **另存为**先打开目标选择器，再读取源文件。选定目标后，私有暂存阶段显示字节进度并允许取消；源文件完整验证后才提交目标，提交阶段禁用取消。目标提供者写入失败会明确报告，但 Android 文档提供者无法保证回滚已写入的部分目标内容。
@@ -135,17 +136,25 @@ App 区分 root 启动失败、授权不足、模块不可读、协议不兼容�
 
 ### Android 构建与签名
 
-`android/` 使用 JDK 21、Gradle 9.7.1（wrapper SHA256 固定）、AGP 9.3.2、SDK `platforms;android-37.0` / `build-tools;36.0.0`；最低 API 26、目标 API 36。版本号直接来自 `module.prop`。
+Flutter 固定为 stable **3.47.7**、revision `abaf9c523780a608bd46686fd5e53740a07077f8`，单一版本源为 `.github/tools/flutter-env.sh`；应用依赖提交 `pubspec.lock`。`android/` 使用 JDK 21、Gradle 9.7.1（wrapper SHA256 固定）、AGP 9.3.2、SDK `platforms;android-37.0`、build tools 36.0.0 和 Flutter NDK 28.2.13676358；最低 API 26、目标 API 36。版本号来自 `module.prop`。固定 Flutter plugin 仍使用 AGP 旧 DSL，因此显式提交 `android.newDsl=false` 与 `android.builtInKotlin=false`，不让正式构建自动改写它们。
 
-设置 `JAVA_HOME` 与 `ANDROID_HOME` 后运行 `bash .github/tools/build-android.sh debug dist/FoxyTail-debug.apk`。正式构建把 `debug` 改为 `release`，必须提供 `FOXYTAIL_KEYSTORE_PATH`、`FOXYTAIL_KEYSTORE_PASSWORD`、`FOXYTAIL_KEY_ALIAS`、`FOXYTAIL_KEY_PASSWORD`；缺失即失败，不回退到临时签名。签名文件不入仓库，应离线备份；丢失后不能无损升级已安装应用。CI 仅可信打包任务读取签名 secrets，PR 只构建 debug。
+虽然平台源码保持 Java，固定 Flutter plugin 仍会在内部应用 Kotlin；settings 插件范围一并固定 KGP 2.4.0 与 AGP，不跳过依赖版本校验。
 
-原生 App 仪器回归：先执行 `./gradlew :app:assembleDebugAndroidTest` 生成测试 APK，在隔离测试设备安装两者后运行 `adb -s <设备> shell am instrument -w dev.foxderin.tail.test/dev.foxderin.tail.BridgeInstrumentation`。覆盖 root 错误/回执、网络与工具契约、文件名与混合收件箱、图表触摸/无障碍、路由选项、倒计时、草稿归属、诊断新旧结果、二进制与只读导出边界。实际界面和 root 后端仍需设备 smoke；构建或主机测试不能替代 App UID 授权、OEM 后台限制和真实网络验收。
+设置 `JAVA_HOME`、`ANDROID_HOME`，并配置 `FLUTTER_ROOT` 或将固定版本 `flutter` 加入 PATH；运行 `bash .github/tools/build-android.sh debug dist/FoxyTail-debug.apk`。脚本强校验锁文件、生成 ARB 本地化、验证实际 APK 后复制到指定路径。Flutter 中间产物位于根 `build/`；正式版仍是覆盖 ARM32/ARM64 的单 APK，不按 ABI 分开发下载。正式构建改用 `release`，必须提供 `FOXYTAIL_KEYSTORE_PATH`、`FOXYTAIL_KEYSTORE_PASSWORD`、`FOXYTAIL_KEY_ALIAS`、`FOXYTAIL_KEY_PASSWORD`；缺失即失败，不生成替代正式密钥。签名文件不入仓库，只有可信 CI 打包任务读取签名 secrets，PR 只构建 debug。
+
+APK 构建在锁文件强校验后保留 Flutter 平台工具生成步骤：固定 SDK 的 `--no-pub` 也会跳过按发布模式生成插件注册，误留测试插件引用。分析与主机测试仍可使用 `--no-pub`。
+
+统一主机门禁为 `bash .github/tools/verify.sh`，包含 Flutter 分析/行为测试、后端/native 检查和两份 Android debug APK。在**独占验收设备**安装普通 debug APK 与 `build/app/outputs/apk/androidTest/debug/app-debug-androidTest.apk` 后，执行 `adb -s <设备> shell am instrument -w dev.foxderin.tail.test/dev.foxderin.tail.BridgeInstrumentation`，检查原生回执、错误、流、URI 与取消边界。Flutter 界面另用 `flutter test integration_test/app_test.dart -d <设备>`；它通过 VM service 运行，不替换现有 instrumentation runner。不得指向生产设备，也不得卸载其他会话应用绕过签名或版本检查。
+
+本地化生成物 `lib/l10n/generated/` 已忽略，只改 ARB、不手改生成 Dart。Flutter 依赖许可证由构建打包，可从更多页打开；原生许可证另随 APK 保留。夹具验证不能证明真实 App UID root 授权、OEM 后台行为、真实 Tailnet 传输或正式同签名升级。
 
 <!-- 截图占位：docs/screenshots/*.png（待补充，见 Roadmap） -->
 
 ## 控制接口与开发
 
-`android/` 是唯一图形控制面；`ControlActivity` 与分域页面负责交互，`ControlClient` 负责操作身份和结果接管，`RootApi` 负责可信 su、JSON 与二进制管道。`TransferService` 仅负责文件准备及观察，不托管网络服务。
+`lib/` 是唯一图形控制面；`android/` 承载 Flutter 与保留的平台能力。Flutter 页面和共享状态负责交互，`ControlClient` 负责操作身份和结果接管，`RootApi` 负责可信 su、JSON 与二进制管道。`TransferService` 仅负责文件准备及观察，不托管网络服务。
+
+所有标签页（包括文件页）都在 Flutter 外壳内切换。`FilesPage` 在切到其他页面时保留在途读取和文件选择；系统分享、文件选择器结果与传输通知由 `ControlActivity` 经原生桥接交付。
 
 模块入口仍为 `/data/adb/foxytail/scripts/foxytail.webapi.sh`：`backend-info` 返回协议与能力；`operation-start <id> <命令> [参数]` 接受受限后台操作；`operation-status <id>` 查询真实终态；`cancel <id>` 请求取消。参数不写回执，认证链接不进入持久任务。回执私有保存，最多 128 项/24 小时，每项结果最多 1 MiB；过期/中断绝不推断成功。
 
@@ -157,7 +166,7 @@ App 区分 root 启动失败、授权不足、模块不可读、协议不兼容�
 
 ## 验证与发布
 
-开发工具链为 Go 1.27.1、Python、ShellCheck 及上述 Android 工具链，不再需要 Node/pnpm/WebView。运行 `bash .github/tools/verify.sh`，检查 shell、隔离后端回归、native race/vet、Android debug APK 构建、设置纯逻辑回归、原生二进制和版本元数据。
+开发工具链为 Go 1.27.1、Python、ShellCheck 及上述 Flutter/Android 工具链，不需要 Node/pnpm/WebView。运行 `bash .github/tools/verify.sh`，检查 shell、隔离后端回归、native race/vet、Flutter 分析与行为检查、Android debug APK、原生二进制和版本元数据。
 
 CI 对独立 Python 测试模块最多四路并行，保留全部测试及失败状态。Go 与 Gradle 依赖缓存不含签名密钥/发布产物。发版工作流在一次运行内完成验证、打包与发布：模块 ZIP 加独立 APK 产物，全部纳入 SHA256SUMS；native race 与独立 Linux 内核门禁不跳过。
 
@@ -230,7 +239,7 @@ CI 对独立 Python 测试模块最多四路并行，保留全部测试及失败
 | `UID_LIST` | 空 | 空格分隔的 App UID 列表 |
 | `ROUTE_SUBNETS` | `100.64.0.0/10` | 走隧道的 CIDR 列表 |
 
-Bridge 公网默认目标需要选中偏好与实际出口身份一致，且仍受 all/selected/bypass 范围限制。UID 0 与 Tailscale 标记流量绕行；关闭 IPv6 时不保护 IPv6。proxy 仅处理显式代理客户端；原生 TUN 由 daemon 管理，不宣称已独立验证。出口页区分已选择、未生效和未知状态；需要立即协调 bridge 时使用 `foxytail.exitnode` 而非裸 `tailscale set`。
+Bridge 公网默认目标需要选中偏好与实际出口身份一致，且仍受 all/selected/bypass 范围限制。UID 0 与 Tailscale 标记流量绕行；关闭 IPv6 时不保护 IPv6。proxy 仅处理显式代理客户端；原生 TUN 由 daemon 管理，不宣称已独立验证。节点页区分出口已选择、未生效和未知状态，具体选择位于节点详情；需要立即协调 bridge 时使用 `foxytail.exitnode` 而非裸 `tailscale set`。
 
 ### `context.conf`（网络环境感知）
 
@@ -283,7 +292,7 @@ FoxyTail 从不动其他模块的链，开机时自动探测邻居（`foxytail.c
 
 ### App 代理共存向导
 
-在 **导航 → 代理共存** 点击“检测环境”。读取已应用配置、当前 Tailnet 和实际 DNS 状态，不自动改动 FoxyTail 或其他模块配置。需要已就绪且归 FoxyTail 管理的 `local` / `transparent` 本地 DNS；MagicDNS 关闭、旧模式或状态待修复时，只显示前提和设置入口，不生成不可用片段。模块/应用清单不代表代理正在运行。
+在 **更多 → 代理共存** 点击“检测环境”。读取已应用配置、当前 Tailnet 和实际 DNS 状态，不自动改动 FoxyTail 或其他模块配置。需要已就绪且归 FoxyTail 管理的 `local` / `transparent` 本地 DNS；MagicDNS 关闭、旧模式或状态待修复时，只显示前提和设置入口，不生成不可用片段。模块/应用清单不代表代理正在运行。
 
 1. 确认目标为支持相关字段的 **mihomo / Clash.Meta**，选择现有 `fake-ip` 黑名单、规则模式或 `redir-host`。白名单语义不同，向导不会未经审阅自动转换。
 2. 预览、复制并**合并**片段到原有 `dns.nameserver-policy`、`proxies`、`rules` 和适用的 `fake-ip-filter` 中；保留其他条目，新路由及规则模式过滤项应置于兜底规则前。不要整段覆盖原配置，也不要将本地端点用作全局 DNS。
@@ -356,7 +365,7 @@ Android 16 + FlClash 测试机已通过本地 UDP/TCP 与 IPv6 DNS 验证，但�
 
 ## Roadmap
 
-- 补全 `docs/screenshots/` 下的原生 Material 3 界面截图并嵌入本文档
+- 补全 `docs/screenshots/` 下的 Flutter Material 3 界面截图并嵌入本文档
 - 接入可信的 Android 静态 dnsmasq 来源，让 MagicDNS 开箱即用
 - 真机兼容性矩阵（Android 版本 × 内核 × 共存代理模块）
 

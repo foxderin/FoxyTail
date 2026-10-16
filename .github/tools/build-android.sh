@@ -16,23 +16,34 @@ if [ "$variant" = release ]; then
   : "${FOXYTAIL_KEYSTORE_PASSWORD:?release signing password is required}"
   : "${FOXYTAIL_KEY_ALIAS:?release signing alias is required}"
   : "${FOXYTAIL_KEY_PASSWORD:?release signing key password is required}"
-  tasks=(:app:assembleRelease)
-else
-  tasks=(:app:assembleDebug)
 fi
-android/gradlew --no-daemon -p android "${tasks[@]}"
-apk="android/app/build/outputs/apk/$variant/app-$variant.apk"
+# shellcheck source=.github/tools/flutter-env.sh
+source .github/tools/flutter-env.sh
+prepare_flutter
+version=$(sed -n 's/^version=//p' module.prop)
+version=${version#v}
+code=$(sed -n 's/^versionCode=//p' module.prop)
+# --no-pub also skips mode-specific plugin generation, leaking test plugins into release.
+build_args=(build apk "--$variant" --target lib/main.dart --build-name "$version" --build-number "$code")
+if [ "$variant" = release ]; then
+  build_args+=(--target-platform 'android-arm,android-arm64')
+fi
+"$FLUTTER_BIN" "${build_args[@]}"
+apk="build/app/outputs/flutter-apk/app-$variant.apk"
 "$build_tools/apksigner" verify --verbose "$apk"
 metadata=$("$build_tools/aapt" dump badging "$apk")
-version=$(sed -n 's/^version=v//p' module.prop)
-code=$(sed -n 's/^versionCode=//p' module.prop)
 printf '%s\n' "$metadata" | python3 -c '
-import re,sys
+import re,sys,zipfile
 line=sys.stdin.readline()
 values=dict(re.findall(r"(\w+)=\x27([^\x27]*)\x27",line))
 assert values.get("name")=="dev.foxderin.tail", values
 assert values.get("versionName")==sys.argv[1] and values.get("versionCode")==sys.argv[2], values
-' "$version" "$code"
+if sys.argv[3]=="release":
+    with zipfile.ZipFile(sys.argv[4]) as apk:
+        for library in ("libflutter.so", "libapp.so"):
+            abis={name.split("/")[1] for name in apk.namelist() if re.fullmatch(r"lib/[^/]+/"+re.escape(library),name)}
+            assert abis=={"armeabi-v7a","arm64-v8a"}, (library,abis)
+' "$version" "$code" "$variant" "$apk"
 if [ "$variant" = release ]; then
   if printf '%s\n' "$metadata" | grep -q '^application-debuggable'; then
     echo 'release companion must not be debuggable' >&2; exit 1

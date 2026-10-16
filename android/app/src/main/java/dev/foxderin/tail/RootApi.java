@@ -21,7 +21,7 @@ final class RootApi {
         }
         // KernelSU may intercept this absolute exec even when stat cannot see su.
         try { return starter.start(new ProcessBuilder(executable, "-c", command)); }
-        catch (IOException e) { throw new IOException(context.getString(R.string.root_unavailable) + "\n" + executable + ": " + launchDetail(e), e); }
+        catch (IOException e) { throw new NotStarted(context.getString(R.string.root_unavailable) + "\n" + executable + ": " + launchDetail(e), e); }
     }
     static String launchDetail(IOException error) {
         Throwable cause = error;
@@ -42,6 +42,20 @@ final class RootApi {
             if (line.equals("FOXYTAIL_ROOT_READY")) root = true;
         }
         return root ? R.string.backend_failed : R.string.root_failed;
+    }
+    static final class NotStarted extends IOException {
+        NotStarted(String message, Throwable cause) { super(message, cause); }
+    }
+    static void requireStarted(Context context, String errors, int exit) throws NotStarted {
+        boolean ready = false, denied = false, missing = false;
+        for (String line : errors.split("\n")) {
+            ready |= line.equals("FOXYTAIL_ROOT_READY");
+            denied |= line.equals("FOXYTAIL_ROOT_DENIED");
+            missing |= line.equals("FOXYTAIL_MODULE_MISSING");
+        }
+        // Only the pre-exec marker and matching shell exit prove the backend never ran.
+        if (!ready && ((denied && !missing && exit == 77) || (missing && !denied && exit == 72)))
+            throw new NotStarted(context.getString(denied ? R.string.root_denied : R.string.module_missing) + "\n" + errors, null);
     }
     static final class Failure extends IOException {
         final JSONObject result;
@@ -118,7 +132,7 @@ final class RootApi {
         return json(context, null, null, null, 90, new Call(), args);
     }
     static JSONObject json(Context context, String request, InputStream source, Progress progress, int seconds, Call call, String... args) throws Exception {
-        context = ControlUi.localized(context);
+        context = PlatformLocale.localized(context);
         ByteArrayOutputStream response = new ByteArrayOutputStream();
         execute(context, request, source, response, 4 * 1024 * 1024, progress, seconds, call, args);
         return decode(context, response, 0);
@@ -135,15 +149,18 @@ final class RootApi {
         } catch (org.json.JSONException e) { throw new IOException(context.getString(R.string.invalid_response), e); }
     }
     static void readArtifact(Context context, String id, OutputStream destination) throws Exception {
-        context = ControlUi.localized(context);
+        readArtifact(context, id, destination, new Call());
+    }
+    static void readArtifact(Context context, String id, OutputStream destination, Call call) throws Exception {
+        context = PlatformLocale.localized(context);
         if (id == null || !id.matches("art-[a-f0-9]{32}")) throw new IOException(context.getString(R.string.invalid_response));
-        execute(context, null, null, destination, MAX_FILE, null, 1800, new Call(), "artifact-read", id);
+        execute(context, null, null, destination, MAX_FILE, null, 1800, call, "artifact-read", id);
     }
     static void readInbox(Context context, String name, OutputStream destination) throws Exception {
         readInbox(context, name, destination, null, new Call());
     }
     static void readInbox(Context context, String name, OutputStream destination, Progress progress, Call call) throws Exception {
-        context = ControlUi.localized(context);
+        context = PlatformLocale.localized(context);
         Models.requireName(name);
         OutputStream output = progress == null ? destination : new FilterOutputStream(destination) {
             long copied;
@@ -187,6 +204,7 @@ final class RootApi {
             catch (Exception e) { readFailure = e; process.destroy(); }
             int exit = process.waitFor();
             String errors = stderr.get(5, TimeUnit.SECONDS).trim();
+            requireStarted(context, errors, exit);
             if (call.cancelled.get()) throw new InterruptedIOException(context.getString(call.timedOut ? R.string.timeout : R.string.cancelled));
             int failure = failureMessage(errors);
             if (exit != 0 || failure != R.string.backend_failed) {

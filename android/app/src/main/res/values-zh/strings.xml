@@ -1,13 +1,7 @@
 <resources>
+    <string name="web_files_retry_target_missing" formatted="false">原目标当前不可接收；请刷新接收设备后重试。</string>
     <string name="app_name">FoxyTail</string>
-    <string name="send">发送</string>
-    <string name="pick_files">选择文件</string>
-    <string name="targets_failed">无法加载设备。</string>
-    <string name="send_confirm">将 %1$d 个文件发送到 %2$s？</string>
-    <string name="retry_confirm">仅重试向 %1$s 发送未成功的文件？已完成的文件不会重复发送。</string>
-    <string name="retry">重试未成功的文件</string>
     <string name="cancel">取消</string>
-    <string name="close">关闭</string>
     <string name="open">打开</string>
     <string name="share">分享</string>
     <string name="working">正在准备传输…</string>
@@ -20,7 +14,6 @@
     <string name="busy">已有传输正在进行。</string>
     <string name="imported">已导入 %1$d 个完成的文件。</string>
     <string name="saved">副本已保存。</string>
-    <string name="error_title">FoxyTail 无法完成此操作</string>
     <string name="root_unavailable">无法启动 su。请在 Magisk/KernelSU 中允许 FoxyTail 使用超级用户权限，然后重新打开应用。</string>
     <string name="root_denied">Root 命令未获得 UID 0，请检查 Magisk/KernelSU 中的授权。</string>
     <string name="root_failed">su 在启动模块命令前退出，请检查超级用户授权。</string>
@@ -32,7 +25,6 @@
     <string name="file_limit">最多选择 32 个文件，每个不超过 2 GiB。</string>
     <string name="choose_first">请先选择文件和设备。</string>
     <string name="export_failed">无法读取或保存文件，请检查剩余空间后重试。</string>
-    <string name="no_viewer">没有应用可以打开此文件，请使用分享或保存副本。</string>
     <string name="service_channel">Taildrop 传输</string>
     <string name="service_timeout">前台监控已停止；请重新打开历史记录查看任务状态。</string>
     <string name="poll_failed">无法读取传输状态，结果未知，请重新打开历史记录。%1$s</string>
@@ -43,15 +35,28 @@
     <string name="failed">失败</string>
     <string name="cancelled">已取消</string>
     <string name="interrupted">已中断</string>
-    <string name="selection_errors">部分文件无法选择：\n%1$s</string>
     <string name="staging_failed">本地准备失败，未提交发送。%1$s</string>
     <string name="submission_unknown">提交结果未知，请查看传输历史。%1$s</string>
     <string name="notifications_hint">通知权限未开启，任务仍会运行。</string>
-    <string name="files_clear_confirm">永久删除私有收件箱中的全部文件（包括被搜索隐藏的文件）？已保存或分享的副本不受影响。</string>
-    <string name="files_export_confirm">将 %1$s 复制到共享 Download 目录？拥有存储访问权限的其他应用可能读取此副本。</string>
-    <string name="files_copied">路径已复制。</string>
-    <string name="repair_files_saving">正在准备 %1$s · 已复制 %2$s</string>
-    <string name="repair_files_save_committing">正在保存 %1$s · 已写入 %2$s，请勿关闭应用。</string>
     <string name="repair_files_save_partial">保存失败，目标文件可能不完整。</string>
-    <string name="files_operation_busy">控制操作进行中，请稍后重试。</string>
+    <string name="repair_files_ignored_import">%1$d 个文件名不受支持，未导入。</string>
+    <string name="control_unknown_acknowledged">已清除观察记录，请核验实际状态。</string>
+    <string name="control_reconnecting">正在重新观察：%1$s</string>
+    <string name="control_incompatible">App 与模块控制协议不兼容；请安装配套版本。</string>
+    <string name="control_upgrading">模块 %1$s 正在升级，暂不能修改。</string>
+    <string name="control_disabled">模块 %1$s 已在 root 管理器中禁用。</string>
+    <string name="control_ready">模块 %1$s · root 控制已就绪</string>
+    <string name="control_unavailable">root 控制尚未就绪，请检查模块兼容性与 App 授权。</string>
+    <string name="control_busy">操作进行中：%1$s。</string>
+    <string name="control_record_failed">无法保存操作所有权；尚未提交任何命令。</string>
+    <string name="control_running">正在执行：%1$s</string>
+    <string name="control_finished">已完成：%1$s。</string>
+    <string name="control_unknown">操作结果未知，请勿重复修改。%1$s</string>
+    <string name="control_invalid_url">只能打开有效的 HTTP 或 HTTPS 链接。</string>
+    <string name="control_archive_limit">配置归档不能超过 1 MiB。</string>
+    <string name="control_import_interrupted">归档导入被中断，未提交恢复。</string>
+    <string name="login_failed">登录请求失败，请刷新账号状态后重试。</string>
+    <string name="control_operation_busy">其他操作正在进行。</string>
+    <string name="control_transfer_pending">当前文件传输处理完毕后才能继续。</string>
+    <string name="appearance_save_failed">无法保存外观设置。</string>
 </resources>

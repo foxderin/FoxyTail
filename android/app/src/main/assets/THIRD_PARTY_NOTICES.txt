@@ -1,9 +1,5 @@
 FoxyTail Android third-party components
 
-Material Components for Android 1.14.0
-Copyright The Android Open Source Project
-https://github.com/material-components/material-components-android
-
 AndroidX support libraries
 Copyright The Android Open Source Project
 https://android.googlesource.com/platform/frameworks/support/
@@ -16,7 +12,7 @@ https://github.com/Kotlin/kotlinx.coroutines
 Material Symbols Outlined
 Copyright Google LLC
 https://github.com/google/material-design-icons
-Icon geometry converted from SVG to Android vector drawables.
+Launcher and foreground notification vector drawables; Flutter Material icons are covered by the generated Flutter license bundle.
 
 These components are distributed under the Apache License, Version 2.0 below.
 Their library sources have not been modified by FoxyTail.

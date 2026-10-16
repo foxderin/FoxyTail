@@ -1,0 +1,1126 @@
+{
+  "@@locale": "zh",
+  "network_unknown": "未知",
+  "network_stale": "读取失败，下方为过期值。",
+  "network_connected": "已连接",
+  "network_stopped": "已停止",
+  "network_login_needed": "需要登录",
+  "network_machine_auth": "等待管理员批准设备",
+  "network_starting": "正在启动或确定连接状态",
+  "network_service": "服务",
+  "network_interrupt": "此操作会改变网络连接，可能中断正在进行的传输。是否继续？",
+  "network_unverified": "操作已结束，请求的状态尚未确认。",
+  "network_failed": "操作失败：{arg1}",
+  "@network_failed": {
+    "placeholders": {
+      "arg1": {
+        "type": "String"
+      }
+    }
+  },
+  "network_yes": "是",
+  "network_no": "否",
+  "network_invalid_result": "响应字段缺失或不一致，状态未知。",
+  "network_account_interrupt": "切换账号、登录或退出可能中断正在进行的 Taildrop 传输，并使设备、出口与共存选择失效。是否继续？",
+  "network_transfer_active": "存在活动 Taildrop 传输；请取消或等待结束后重试。",
+  "network_selected": "已选偏好",
+  "network_effective": "实际路由状态",
+  "cs_unknown": "未知",
+  "cs_save": "保存",
+  "cs_applied": "已应用",
+  "cs_pending": "已保存，待应用",
+  "cs_failed": "请求失败：{arg1}",
+  "@cs_failed": {
+    "placeholders": {
+      "arg1": {
+        "type": "String"
+      }
+    }
+  },
+  "cs_invalid_response": "模块响应格式无效，状态未知。",
+  "cs_network_warning": "此操作会改变网络连接，可能中断远程访问。请确保可以在本机恢复。",
+  "cs_scope_all": "全部应用",
+  "cs_scope_selected": "仅选中的应用 UID",
+  "cs_scope_bypass": "绕过选中的应用 UID",
+  "cs_owner_required": "selected/bypass 需要 bridge 模式和 owner 支持。",
+  "cs_readonly": "保留路由标识",
+  "cs_magic_dns": "MagicDNS",
+  "cs_dns_port": "DNS 端口",
+  "cs_power_save": "省电模式",
+  "cs_number_range": "请输入 {arg1} 至 {arg2} 的整数。",
+  "@cs_number_range": {
+    "placeholders": {
+      "arg1": {
+        "type": "int"
+      },
+      "arg2": {
+        "type": "int"
+      }
+    }
+  },
+  "cs_restart": "重启并核验已保存配置",
+  "cs_restart_blocked": "试运行进行中或状态未知，暂不能重启。",
+  "cs_restart_verified": "重启完成，没有待应用配置。",
+  "cs_dns_state": "DNS 能力、冲突和修复状态",
+  "cs_dns_probe": "显式探测 DNS 能力",
+  "cs_dns_unavailable": "当前内核不支持透明 DNS。",
+  "cs_status": "模块实际状态",
+  "cs_rule_draft_open": "请先应用或取消规则编辑。",
+  "cs_trial_confirm_warning": "保留此候选配置吗？请先核验实际连通性。",
+  "cs_trial_revert_warning": "恢复试运行前捕获的配置吗？App 中未保存的编辑草稿仍会保留。",
+  "cs_context_limit": "场景原文超过 48 KiB，未发送。",
+  "cs_value_unknown": "未知／模块未报告",
+  "cs_yes": "是",
+  "cs_no": "否",
+  "cs_actual_mode": "实际运行模式",
+  "cs_configured_mode": "已保存模式",
+  "cs_pending_mode": "模式变更待应用",
+  "cs_daemon_state": "守护进程状态",
+  "cs_backend_state": "Tailscale 状态",
+  "cs_host_name": "设备名称",
+  "cs_dns_enabled": "DNS 已启用",
+  "cs_state": "状态",
+  "cs_reason": "原因",
+  "cs_listener_ready": "本地监听器就绪",
+  "cs_interception4": "IPv4 截获活动中",
+  "cs_interception6": "IPv6 截获活动中",
+  "cs_repair_needed": "需要修复",
+  "cs_policy_state": "策略所有权",
+  "cs_capability_error": "能力检查错误",
+  "cs_transparent_available": "支持透明 DNS",
+  "cs_unavailable_reason": "能力限制原因",
+  "cs_dns_suffix": "Tailnet DNS 后缀",
+  "cs_upstream_native": "使用原生上游策略",
+  "cs_ipv6_path": "IPv6 DNS 路径",
+  "cs_ipv6_module": "IPv6 模块状态",
+  "cs_current_context": "当前网络场景",
+  "cs_watcher_running": "场景监听器运行中",
+  "cs_last_context": "上次执行场景",
+  "cs_last_ok": "上次执行成功",
+  "cs_last_time": "上次执行时间",
+  "cs_last_error": "执行错误",
+  "cs_running": "运行中",
+  "cs_stopped": "已停止",
+  "cs_disabled": "已禁用",
+  "cs_degraded": "降级运行",
+  "cs_conflict": "存在冲突",
+  "cs_owned": "模块持有",
+  "cs_restore_pending": "等待恢复",
+  "cs_apply_pending": "等待应用",
+  "cs_disable_pending": "等待禁用",
+  "cs_preparing": "准备中",
+  "cs_rolling_back": "回退中",
+  "cs_confirmed": "已确认",
+  "cs_rolled_back": "已回退",
+  "cs_rollback_failed": "回退失败，可重试",
+  "cs_superseded": "已被新配置取代",
+  "cs_draft_conflict": "已保存配置在草稿之外发生变化；继续保存将覆盖较新的值。",
+  "cs_reload_draft": "重新载入已保存值／丢弃草稿",
+  "cs_reload_confirm": "丢弃此草稿及未完成的规则编辑，改用最新已保存配置吗？",
+  "cs_draft_changed": "本地修改尚未保存",
+  "web_trial_title": "配置试用与自动回退",
+  "web_trial_invalid_response": "无法确认试用状态，请刷新后重试。",
+  "web_backup_invalid_response": "备份列表或预览数据无效，请刷新后重试。",
+  "web_trial_candidate": "试用候选模式",
+  "web_trial_saved": "使用已保存模式",
+  "web_trial_previous": "回退到已应用配置",
+  "web_trial_duration": "确认时限",
+  "web_trial_start": "开始试用",
+  "web_trial_confirm": "确认保留",
+  "web_trial_revert": "立即回退",
+  "web_trial_remaining": "剩余确认时间",
+  "web_trial_preparing": "正在应用并检查候选配置",
+  "web_trial_running": "试用中，请确认实际连接可用",
+  "web_trial_reverting": "正在回退",
+  "web_trial_confirmed": "已确认保留",
+  "web_trial_reverted": "已恢复之前的已应用配置",
+  "web_trial_failed": "回退失败，请重试或重启模块",
+  "web_trial_superseded": "试用已被停止或新的应用操作取代",
+  "web_backup_select": "选择配置备份",
+  "web_backup_refresh": "刷新备份列表",
+  "web_backup_preview": "预览恢复差异",
+  "web_backup_changes": "将修改的配置",
+  "web_backup_unchanged": "配置内容没有变化",
+  "web_backup_before": "当前保存值",
+  "web_backup_after": "恢复后保存值",
+  "web_backup_hooks": "以下钩子仅保留供审阅，不会执行",
+  "web_tools_network": "网络工具",
+  "web_tools_device": "设备与账户",
+  "web_tools_maintenance": "维护与偏好",
+  "web_tools_appearance": "外观与语言",
+  "web_tools_network_settings": "网络配置",
+  "web_tools_background": "节能与后台",
+  "web_tools_power_save": "节能模式",
+  "web_tools_power_save_desc": "降低巡检、流量采样与场景检查频率，暂停后台主动网络探测，保留主连接。独立关闭的功能保持关闭。",
+  "web_tools_watchdog_probe": "后台连通探测",
+  "web_tools_watchdog_probe_desc": "由连接守护检测网络可达性。关闭后保留进程巡检，不再发送后台探测包。",
+  "web_tools_probe_paused": "节能模式已生效：后台主动探测暂停，此开关的保存值不变。",
+  "web_tools_stats_enabled": "流量统计",
+  "web_tools_stats_enabled_desc": "采集并保存流量历史；关闭后停止采样与统计进程。",
+  "web_tools_context_enabled": "网络场景自动化",
+  "web_tools_context_enabled_desc": "网络切换时执行场景规则；关闭后保留规则，停止自动检查与执行。",
+  "web_tools_auto_refresh": "界面自动刷新",
+  "web_tools_auto_refresh_desc": "定期更新状态、设备、隧道与日志。关闭后仍可手动刷新，活动试用的倒计时与状态检查不受影响。",
+  "web_tools_advanced": "高级选项",
+  "web_tools_saved_pending": "已保存，等待应用",
+  "web_tools_all_applied": "配置已应用",
+  "web_tools_restart": "重启并应用",
+  "web_tools_magicdns": "本机 MagicDNS",
+  "web_tools_magicdns_desc": "为本机应用解析 Tailnet 短名称与完整域名。",
+  "web_tools_ipv6": "IPv6 流量",
+  "web_tools_watchdog": "连接守护",
+  "web_tools_watchdog_desc": "服务退出或网络变化后自动恢复连接。",
+  "web_tools_socks_port": "SOCKS5 端口",
+  "web_tools_dns_port": "DNS 监听端口",
+  "web_tools_dns_mode": "DNS 工作方式",
+  "web_tools_dns_mode_legacy": "兼容模式",
+  "web_tools_dns_mode_local": "本地解析",
+  "web_tools_dns_mode_transparent_option": "透明分流（需内核支持）",
+  "web_tools_dns_mode_legacy_hint": "沿用系统解析器与 DNS 端口重定向。",
+  "web_tools_dns_mode_local_hint": "提供 Tailnet DNS 上游；公网与公司 DNS 由使用端配置。",
+  "web_tools_dns_mode_transparent_hint": "普通 DNS 保留原选路，不含 DoH / DoT；Tailscale 公司 DNS 需另外配置。",
+  "web_tools_dns_mode_transparent_unavailable": "当前内核缺少透明分流能力；请使用本地解析。",
+  "web_tools_route_table": "策略路由表",
+  "web_tools_watchdog_interval": "守护检查间隔（秒）",
+  "web_tools_stats_interval": "流量采样间隔（秒）",
+  "web_tools_log_limit": "单个日志大小上限（KB）",
+  "web_tools_mark": "流量标记",
+  "web_tools_mark_mask": "流量标记掩码",
+  "web_tools_mode_link": "前往隧道工具",
+  "web_tools_range": "允许范围",
+  "web_tools_backup_latest": "最近一次成功备份",
+  "web_tools_copy_path": "复制路径",
+  "web_tools_restore_result": "最近一次成功恢复",
+  "web_tools_restore_previous": "恢复前配置备份",
+  "web_tools_advanced_login": "其他登录方式",
+  "web_tools_server_invalid": "请输入有效的 http:// 或 https:// 服务器地址。",
+  "web_tools_refresh": "刷新",
+  "web_tools_tunnel_overview": "连接路径",
+  "web_tools_dns_unchecked": "尚未检查 DNS",
+  "web_tools_dns_settings": "配置 MagicDNS",
+  "web_tools_dns_check_again": "重新检查",
+  "web_tools_dns_native_yes": "已检测到",
+  "web_tools_dns_native_no": "未检测到",
+  "web_tools_dns_local_ready": "本地解析可用",
+  "web_tools_dns_local_only": "仅本地解析可用",
+  "web_tools_dns_transparent_ready": "透明分流已启用",
+  "web_tools_dns_transparent_ipv4": "透明分流（IPv4）",
+  "web_tools_dns_transparent_inactive": "透明分流未启用",
+  "web_tools_dns_listener_unready": "本地解析尚未就绪",
+  "web_tools_dns_endpoint": "本地 DNS 上游",
+  "web_tools_dns_endpoint_copy": "复制地址",
+  "web_tools_dns_transparent_unavailable": "内核分流不可用，可手动接入本地 DNS 上游。",
+  "web_tools_dns_native_policy_unavailable": "无法协调原生 DNS 策略",
+  "web_tools_dns_native_policy_changed": "原生 DNS 策略已变更",
+  "web_tools_dns_restore_pending": "原生 DNS 策略待恢复",
+  "web_tools_dns_invalid_config": "DNS 配置无效",
+  "web_tools_dns_helper_missing": "找不到 FoxyTail DNS 组件",
+  "web_tools_dns_listener_failed": "监听失败，请检查端口是否被占用",
+  "web_tools_dns_interception_failed": "无法启用透明分流",
+  "web_tools_dns_context_changed": "网络上下文已变化，等待协调",
+  "web_tools_dns_interception_lost": "透明分流已中断",
+  "web_tools_dns_guard_failed": "透明分流保护未就绪",
+  "web_tools_dns_mark_conflict": "透明分流标记与其他规则冲突",
+  "web_tools_dns_interception_conflict": "DNS 已由其他工具接管，请配置本地域名分流",
+  "web_tools_dns_ipv6_unavailable": "IPv6 DNS 透明转发不可用",
+  "web_tools_dns_ipv6_path": "IPv6 DNS 路径",
+  "web_tools_dns_ipv6_native": "原生",
+  "web_tools_dns_ipv6_module": "内核模块",
+  "web_tools_dns_ipv6_fallback": "兼容",
+  "web_tools_dns_ipv6_disabled": "已关闭",
+  "web_tools_dns_ipv6_module_missing": "无可用模块",
+  "web_tools_dns_ipv6_module_failed": "模块加载失败",
+  "web_tools_dns_ipv6_loader_missing": "无模块加载工具",
+  "web_tools_dns_ipv6_module_unchecked": "模块尚未检查",
+  "web_coexist_title": "代理共存向导",
+  "web_coexist_detect": "检测环境",
+  "web_coexist_refresh": "重新检测",
+  "web_coexist_unchecked": "尚未检测。仅点击后读取环境，不会自动执行 DNS 或连通性探测。",
+  "web_coexist_environment": "1. 环境与前提",
+  "web_coexist_inventory_empty": "未发现已知代理模块或应用；这不代表没有其他代理。",
+  "web_coexist_applied_mode": "当前已应用模式",
+  "web_coexist_filter_step": "2. 确认现有 DNS 模式",
+  "web_coexist_filter_label": "目标配置当前使用的模式",
+  "web_coexist_filter_choose": "请选择现有模式",
+  "web_coexist_filter_whitelist": "fake-ip · whitelist（不支持自动生成）",
+  "web_coexist_whitelist_hint": "whitelist 的排除语义不同；未审阅现有列表无法安全生成。请先手动审阅并调整目标策略，再选择其真实模式。不会自动转成 blacklist。",
+  "web_coexist_invalid_snapshot": "当前配置包含无效的后缀、监听状态、端口或节点地址，无法生成安全片段。请重新检测。",
+  "web_coexist_snippet_step": "3. 手动合并与复制",
+  "web_coexist_yaml": "YAML 合并片段（只读）",
+  "web_coexist_check_step": "4. 独立验证指定目标",
+  "web_coexist_no_peers": "没有可验证的当前节点；仍可生成包含本机地址的片段。",
+  "web_coexist_peer": "当前节点完整域名",
+  "web_coexist_peer_choose": "请选择节点",
+  "web_coexist_address": "当前节点地址",
+  "web_coexist_address_choose": "请选择地址",
+  "web_coexist_port": "目标 TCP 端口（必填）",
+  "web_coexist_resolver_port": "代理 DNS 端口（可选）",
+  "web_coexist_invalid_port": "端口必须为 1–65535；可选代理 DNS 端口不能等于 FoxyTail DNS 端口。",
+  "web_coexist_check": "验证指定目标",
+  "web_coexist_context_changed": "当前状态已变化或结果身份不匹配，请重新检测。",
+  "web_coexist_target": "TCP 目标",
+  "web_coexist_target_path": "目标连接路径",
+  "web_coexist_path_socks": "root → 本机 SOCKS5 → 当前节点",
+  "web_coexist_path_system": "root / 系统路由 → 当前节点（未验证代理接口绑定）",
+  "web_coexist_dns_udp": "FoxyTail DNS · UDP",
+  "web_coexist_dns_tcp": "FoxyTail DNS · TCP",
+  "web_coexist_resolver_udp": "可选代理 DNS · UDP",
+  "web_coexist_resolver_tcp": "可选代理 DNS · TCP",
+  "web_coexist_tcp": "指定端口 TCP 连接",
+  "web_coexist_pass": "该项通过",
+  "web_coexist_fail": "该项失败",
+  "web_coexist_skipped": "已跳过（未提供端口）",
+  "web_coexist_not_checked": "未返回检查结果",
+  "web_coexist_observed": "实际解析地址",
+  "web_tools_route_policy": "流量范围",
+  "web_tools_route_targets": "自定义网段",
+  "web_tools_selected": "已选",
+  "web_tools_items": "项",
+  "web_tools_route_pending": "有未保存的修改",
+  "web_tools_route_saved": "规则已保存",
+  "web_tools_route_empty_subnets": "尚未配置目标网段；此规则不会匹配任何目标。",
+  "web_tools_route_empty_selection": "尚未选择应用。当前“仅选中应用”范围不会匹配流量。",
+  "web_tools_route_duplicate": "该网段已存在。",
+  "web_tools_route_show_all": "显示更多应用",
+  "web_tools_route_probe": "正在检查应用范围支持…",
+  "web_tools_route_load_error": "无法读取当前路由规则，请先重新读取。",
+  "web_tools_subnet_accept": "接收节点路由",
+  "web_tools_subnet_refresh": "刷新节点路由",
+  "web_tools_subnet_title": "节点路由",
+  "web_tools_subnet_empty": "暂无可接收的节点路由",
+  "web_tools_subnet_unknown": "接收状态待确认，请刷新重试。",
+  "web_tools_subnet_mismatch": "接收设置与请求不一致，可重试。",
+  "web_tools_subnet_enable_confirm": "允许接收其他节点通告的子网路由？",
+  "web_tools_subnet_disable_confirm": "停止接收其他节点通告的子网路由？",
+  "web_tools_subnet_add_network": "添加网段",
+  "web_tools_subnet_primary": "主用",
+  "web_tools_subnet_online": "在线",
+  "web_tools_subnet_ipv6_disabled": "IPv6 未启用",
+  "web_tools_subnet_ipv6_unknown": "IPv6 状态待确认",
+  "web_tools_subnet_ipv6_saved": "IPv6 网段已保存，启用 IPv6 后生效。",
+  "web_tools_apply_rules": "保存并应用规则",
+  "web_tools_search_apps": "搜索应用、包名或 UID",
+  "web_tools_serve_private": "仅 Tailnet 可访问",
+  "web_tools_serve_public": "互联网可访问",
+  "web_tools_serve_listener_protocol": "监听协议",
+  "web_tools_serve_listener_port": "监听端口",
+  "web_tools_serve_local_target": "本机服务地址",
+  "web_tools_funnel_port_invalid": "Funnel 监听端口仅支持 443、8443 或 10000。",
+  "web_tools_port_invalid": "端口必须为 1–65535 的整数。",
+  "web_tools_serve_public_hint": "Funnel 将服务公开到互联网；本地 HTTP 服务可使用 HTTPS 监听。",
+  "web_tools_serve_add_done": "服务映射已添加。",
+  "web_tools_mapping_count": "个映射",
+  "web_tools_no_peers": "暂无可接收文件的设备。连接 Tailnet 后重新读取。",
+  "web_tools_file_count": "个文件",
+  "web_tools_file_search": "查找收件文件",
+  "web_tools_total_size": "收件大小",
+  "web_tools_logs_find": "在当前日志中查找",
+  "web_tools_logs_rows": "读取行数",
+  "web_tools_logs_live": "自动刷新",
+  "web_tools_logs_paused": "已暂停自动刷新",
+  "web_tools_logs_count": "匹配 / 已读取",
+  "web_tools_logs_copy": "复制当前结果",
+  "web_tools_logs_no_match": "当前日志中没有匹配的行。",
+  "web_tools_logs_match_case": "区分大小写",
+  "web_tools_logs_wrap": "自动换行",
+  "web_tools_logs_updated": "最近更新",
+  "web_tools_diag_collect": "收集诊断包",
+  "web_tools_diag_ready": "诊断包已生成",
+  "web_tools_diag_waiting": "还没有诊断包。准备好后开始收集。",
+  "web_shell_workspace": "网络控制台",
+  "web_shell_network": "网络",
+  "web_shell_services": "连接与服务",
+  "web_shell_manage": "管理",
+  "web_shell_back_tools": "返回工具",
+  "web_shell_connected": "已连接",
+  "web_shell_starting": "连接中",
+  "web_shell_login": "等待登录",
+  "web_shell_stopped": "未连接",
+  "web_shell_unknown": "状态未知",
+  "web_shell_tasks": "后台任务",
+  "web_shell_task_running": "进行中",
+  "web_shell_task_done": "已完成",
+  "web_shell_task_error": "未完成",
+  "web_shell_task_cancelled": "已取消",
+  "web_shell_no_tasks": "暂无后台任务",
+  "web_task_cancel_pending": "正在等待后台确认取消。",
+  "web_task_cancel_failed": "取消尚未确认，任务可能仍在运行。可重试取消。",
+  "web_context_refresh": "刷新执行状态",
+  "web_context_visual": "可视编辑",
+  "web_context_text": "高级文本",
+  "web_context_current": "当前网络",
+  "web_context_running": "监听中",
+  "web_context_stopped": "监听未运行",
+  "web_context_last": "最近一次执行",
+  "web_context_unconfirmed": "尚无确认的执行结果",
+  "web_context_success": "整组执行成功",
+  "web_context_failed": "执行失败或部分失败",
+  "web_context_empty": "尚未配置网络规则",
+  "web_context_unsupported": "无法识别此行；原文已保留，可在高级文本中修正。",
+  "web_context_invalid": "规则无效：SSID 不能包含冒号、#、双引号或控制字符；出口需填写节点名或 IP。",
+  "web_context_network": "网络条件",
+  "web_context_wifi": "Wi-Fi",
+  "web_context_cellular": "蜂窝网络",
+  "web_context_action": "动作",
+  "web_context_up": "启动隧道",
+  "web_context_down": "停止隧道",
+  "web_context_exit": "使用出口节点",
+  "web_context_no_exit": "取消出口节点",
+  "web_context_target": "出口节点名称或 IP",
+  "web_context_add": "添加规则",
+  "web_context_edit": "编辑",
+  "web_context_move_up": "上移规则",
+  "web_context_move_down": "下移规则",
+  "web_context_apply_rule": "写入草稿",
+  "web_net_controls_service": "服务",
+  "web_net_controls_verifying": "正在确认设备状态…",
+  "web_net_controls_unknown": "状态尚未确认，暂时无法修改。",
+  "web_net_connected": "已接入 Tailnet",
+  "web_net_connecting": "正在连接网络",
+  "web_net_connecting_hint": "服务已启动，正在等待网络连接或设备授权。",
+  "web_net_unknown_hint": "暂时无法读取设备状态，请刷新重试。",
+  "web_net_status_stale": "连接状态待确认",
+  "web_net_service_runtime": "服务运行时长",
+  "web_net_peer_total": "个节点",
+  "web_net_offline_count": "个离线",
+  "web_net_mode_tun": "原生 TUN",
+  "web_net_mode_bridge": "桥接隧道",
+  "web_net_mode_proxy": "SOCKS5 代理",
+  "web_net_working": "正在处理…",
+  "web_net_device_address": "Tailscale 地址",
+  "web_net_address_pending": "连接成功后显示本机地址",
+  "web_net_copy_address": "复制地址",
+  "web_net_quick_access": "常用功能",
+  "web_net_quick_peers": "查找设备与复制地址",
+  "web_net_quick_routing": "管理应用与子网范围",
+  "web_net_quick_dns": "检查隧道与域名解析",
+  "web_net_quick_logs": "查看运行记录与错误",
+  "web_net_exit_scope": "应用范围（始终排除 root 和 Tailscale 标记流量）",
+  "web_net_exit_proxy": "仅显式使用 SOCKS5 代理的应用使用此出口；不会接管普通应用流量。",
+  "web_net_exit_daemon": "原生 TUN 路由由 tailscaled 管理；此页面未验证内核出口覆盖。",
+  "web_net_exit_failed": "路由尚未匹配所选出口偏好，或出口不可用；不可认为互联网流量已受保护。可重试应用。",
+  "web_net_exit_bridge_dual": "已验证所选应用范围的 IPv4/IPv6 桥接策略；不代表出口可达性测试。",
+  "web_net_exit_bridge_v4": "仅 IPv4 已应用桥接出口策略；IPv6 未覆盖，可能仍使用本地网络。",
+  "web_net_manage_exit": "管理出口",
+  "web_net_enabled": "已启用",
+  "web_net_disabled": "未启用",
+  "web_net_unknown": "未知",
+  "web_net_peers_search": "搜索名称、IP 或系统",
+  "web_net_filter_all": "全部",
+  "web_net_filter_online": "在线",
+  "web_net_filter_offline": "离线",
+  "web_net_no_results": "没有匹配的节点",
+  "web_net_reset_filter": "清除筛选",
+  "web_net_os": "操作系统",
+  "web_net_relay_region": "中继区域",
+  "web_net_peer_details": "查看节点详情",
+  "web_net_peer_probe": "测试连接",
+  "web_net_peer_probe_invalid": "测试未返回有效结果，请重试。",
+  "web_net_peer_direct": "直连",
+  "web_net_peer_relay": "节点中继",
+  "web_net_refresh": "刷新",
+  "web_net_result_count": "个结果",
+  "web_net_exit_selection": "已选择的出口偏好",
+  "web_net_exit_unknown": "当前出口尚未确认",
+  "web_net_exit_unknown_hint": "等待有效连接状态。请确认服务运行后重试。",
+  "web_net_exit_confirming": "变更已发送，等待当前出口确认",
+  "web_net_exit_local": "本机网络",
+  "web_net_exit_local_hint": "直接使用本机互联网连接",
+  "web_net_exit_choose": "选择出口节点",
+  "web_net_exit_apply": "应用所选出口",
+  "web_net_exit_unreachable": "探测无响应",
+  "web_net_exit_unavailable": "当前节点已离线，可选择其他节点恢复连接。",
+  "web_net_traffic_period": "统计周期",
+  "web_net_traffic_total": "总传输量",
+  "web_net_traffic_chart": "流量趋势",
+  "web_net_traffic_no_samples": "等待流量采集",
+  "web_net_traffic_no_peer": "还没有节点传输记录",
+  "web_net_traffic_no_app": "还没有应用发送记录",
+  "web_net_traffic_table": "查看图表数据",
+  "web_net_traffic_time": "时间",
+  "web_net_traffic_unrecorded": "未采集",
+  "web_net_topo_direct": "直连",
+  "web_net_topo_relay": "中继",
+  "web_net_topo_exit": "出口",
+  "web_net_topology_hint": "实线为已建立的直连，虚线经对应 DERP 中继，点线为离线成员。",
+  "web_net_topology_list": "可操作节点列表",
+  "web_net_login_secure": "设备授权",
+  "web_nav_dashboard": "仪表盘",
+  "web_nav_peers": "节点",
+  "web_nav_exitnodes": "出口",
+  "web_nav_traffic": "流量",
+  "web_nav_more": "更多",
+  "web_loading": "加载中…",
+  "web_empty": "暂无数据",
+  "web_error": "出错了",
+  "web_save": "保存",
+  "web_cancel": "取消",
+  "web_delete": "删除",
+  "web_add": "添加",
+  "web_copy": "复制",
+  "web_open_browser": "浏览器打开",
+  "web_offline": "离线",
+  "web_close": "关闭",
+  "web_retry": "重试",
+  "web_op_failed": "操作失败",
+  "web_misc_missing": "（缺失）",
+  "web_misc_empty": "（空）",
+  "web_misc_unavailable": "（不可用）",
+  "web_dash_mode": "运行模式",
+  "web_dash_stopped": "已停止",
+  "web_dash_restart": "重启",
+  "web_dash_self": "本机",
+  "web_dash_magicdns": "Tailnet MagicDNS",
+  "web_dash_exitnode": "出口节点",
+  "web_dash_traffic": "流量",
+  "web_dash_peers_online": "在线节点",
+  "web_dash_key_expiring": "节点密钥即将到期：",
+  "web_dash_compat_warning": "共存告警",
+  "web_dash_status_stale": "数据可能过期",
+  "web_hero_login_title": "登录到 Tailscale",
+  "web_hero_get_link": "获取登录链接",
+  "web_hero_minimize": "收起",
+  "web_hero_expand": "登录 / 启动",
+  "web_peers_title": "节点",
+  "web_peers_list": "列表",
+  "web_peers_topology": "拓扑",
+  "web_peers_empty": "没有发现其他节点",
+  "web_peers_detail": "节点详情",
+  "web_peers_rx": "接收",
+  "web_peers_tx": "发送",
+  "web_exit_title": "出口节点",
+  "web_exit_test": "测速",
+  "web_exit_current": "当前",
+  "web_exit_empty": "没有可用的出口节点",
+  "web_exit_set_done": "出口节点已切换",
+  "web_exit_cleared": "已取消出口节点",
+  "web_net_exit_clear": "取消出口节点",
+  "web_acc_title": "账号",
+  "web_acc_login": "登录",
+  "web_acc_login_url_hint": "复制下面的链接并在浏览器中完成授权：",
+  "web_acc_already": "当前已登录，无需再次授权",
+  "web_acc_waiting": "正在获取登录链接…",
+  "web_acc_authkey": "Auth Key 登录",
+  "web_acc_authkey_hint": "粘贴 tskey-auth- 开头的密钥",
+  "web_acc_login_authkey": "使用 Auth Key 登录",
+  "web_acc_headscale": "Headscale / 自建控制服务器",
+  "web_acc_headscale_hint": "https://headscale.example.com",
+  "web_acc_login_server": "登录到该服务器",
+  "web_acc_accounts": "多账号切换",
+  "web_acc_current_badge": "当前",
+  "web_acc_switch": "切换",
+  "web_acc_logout": "退出登录",
+  "web_acc_logout_confirm": "确定退出登录？需要重新授权才能使用。",
+  "web_acc_switched": "已切换账号",
+  "web_acc_logged_out": "已退出登录",
+  "web_acc_logged_in": "登录成功",
+  "web_acc_not_logged_in": "未登录",
+  "web_tun_title": "隧道",
+  "web_tun_iface": "tailscale0 接口",
+  "web_tun_up": "已启用",
+  "web_tun_down": "未启用",
+  "web_tun_gateway": "网关",
+  "web_tun_hev": "hev-socks5-tunnel",
+  "web_tun_not_running": "未运行",
+  "web_tun_socks_check": "SOCKS5 自检",
+  "web_tun_socks_checking": "自检中…",
+  "web_tun_socks_ok": "代理可用",
+  "web_tun_socks_fail": "代理不可用",
+  "web_tun_derp": "DERP 中继测速",
+  "web_tun_derp_testing": "测速中…",
+  "web_tun_preferred": "当前最优",
+  "web_dns_title": "MagicDNS 状态",
+  "web_dns_check": "检查 DNS 状态",
+  "web_dns_native": "原生 DNS 规则已安装",
+  "web_dns_suffix": "域名后缀",
+  "web_dns_running": "运行中",
+  "web_dns_disabled": "已关闭（不代表 Tailnet MagicDNS 关闭）",
+  "web_dns_apply_pending": "设置已保存，待应用",
+  "web_dns_disable_pending": "等待关闭",
+  "web_dns_tailnet_unavailable": "Tailnet 不可用，请检查登录状态",
+  "web_dns_missing_binary": "找不到 dnsmasq",
+  "web_dns_conflict": "与其他 DNS 代理冲突",
+  "web_dns_redirect_failed": "DNS 转发规则应用失败",
+  "web_dns_cleanup_failed": "旧 DNS 规则清理失败",
+  "web_dns_process_failed": "DNS 进程启动失败",
+  "web_dns_reconcile_needed": "节点或配置变化，等待更新",
+  "web_dns_private_dns": "系统严格私人 DNS 可能绕过本机解析",
+  "web_dns_stopped": "已停止",
+  "web_dns_degraded": "状态异常，请查看服务日志",
+  "web_route_title": "路由",
+  "web_route_scope_all": "全局",
+  "web_route_scope_selected": "仅选中应用",
+  "web_route_scope_bypass": "绕过选中应用",
+  "web_route_scope_all_hint": "所有应用流量都经过隧道（受子网列表约束）",
+  "web_route_scope_selected_hint": "只有勾选的应用经过隧道",
+  "web_route_scope_bypass_hint": "勾选的应用不走隧道，其余全部走隧道",
+  "web_route_no_owner": "内核不支持 xt_owner，按应用路由不可用。请选择全局范围。",
+  "web_route_native_scope": "原生 TUN 模式由 Tailscale 管理路由，仅支持全局范围。按应用路由需切换为 bridge 模式。",
+  "web_route_apps": "应用列表",
+  "web_route_subnets": "路由子网",
+  "web_route_subnets_add_hint": "CIDR，例如 100.64.0.0/10",
+  "web_route_subnets_invalid": "无效的 CIDR 格式",
+  "web_route_apply_done": "路由配置已应用",
+  "web_traffic_title": "流量",
+  "web_traffic_hourly": "按小时（今日）",
+  "web_traffic_daily": "按天（近 7 天）",
+  "web_traffic_app_tx_hint": "显示已配置子网的应用发送量（IPv4 + IPv6），不含接收量。",
+  "web_traffic_topn": "节点排行",
+  "web_traffic_by_app": "按应用",
+  "web_traffic_rx": "下载",
+  "web_traffic_tx": "上传",
+  "web_traffic_touch_hint": "触摸图表查看数值",
+  "web_traffic_uid": "UID ",
+  "web_serve_title": "Serve / Funnel",
+  "web_serve_serve": "Serve（tailnet 内）",
+  "web_serve_funnel": "Funnel（公网）",
+  "web_serve_kind": "类型",
+  "web_serve_add": "添加映射",
+  "web_serve_empty": "暂无映射",
+  "web_serve_del_confirm": "删除该映射？",
+  "web_files_title": "文件",
+  "web_files_inbox": "收件箱",
+  "web_files_empty": "收件箱为空",
+  "web_files_send": "发送文件",
+  "web_files_peer": "目标节点",
+  "web_files_send_btn": "发送",
+  "web_files_receive": "导入已接收文件",
+  "web_files_choose": "选择共享存储文件",
+  "web_files_close_browser": "收起文件浏览器",
+  "web_files_location": "当前位置",
+  "web_files_parent": "上级目录",
+  "web_files_directory": "文件夹",
+  "web_files_open_directory": "打开文件夹",
+  "web_files_directory_empty": "此目录没有可浏览的文件或文件夹。",
+  "web_files_select": "选择",
+  "web_files_selected": "已选择",
+  "web_files_remove_selection": "移除所选文件",
+  "web_files_truncated": "此目录仅显示前 1000 项，并非全部内容。请进入更具体的文件夹。",
+  "web_files_refresh_targets": "刷新接收设备",
+  "web_files_history": "发送记录",
+  "web_files_history_empty": "尚无发送记录。",
+  "web_files_invalid_response": "Taildrop 返回了无效数据，请刷新后重试。",
+  "web_files_queued": "已排队，尚未发送",
+  "web_files_sending": "正在发送",
+  "web_files_failed": "发送失败",
+  "web_files_cancelled": "已取消",
+  "web_files_interrupted": "传输已中断",
+  "web_files_cancel_send": "取消发送",
+  "web_files_cancel_requested": "已请求取消，正在等待后台任务确认。",
+  "web_files_retry_unsuccessful": "仅重试失败或取消的文件",
+  "web_files_retry_target_missing": "原目标当前不可接收；请刷新接收设备后重试。",
+  "web_files_download": "下载",
+  "web_files_export": "导出到 Download",
+  "web_files_delete": "删除",
+  "web_files_clear": "清空收件箱",
+  "web_files_deleted": "已删除",
+  "web_files_cleared": "已清空",
+  "web_files_exported_to": "已导出到",
+  "web_logs_title": "日志",
+  "web_logs_daemon": "守护进程",
+  "web_logs_service": "服务脚本",
+  "web_logs_follow": "跟随滚动",
+  "web_logs_empty": "日志为空",
+  "web_set_ipv6_hint": "启用前请先在路由子网添加 IPv6 CIDR，例如 fd7a:115c:a1e0::/48，否则无法应用。",
+  "web_set_title": "设置",
+  "web_set_context": "网络环境感知规则",
+  "web_set_context_hint": "每行一条：<触发>:<值>:<动作>[:<参数>]，如 ssid:HomeWifi:down、cellular:-:no-exit-node",
+  "web_set_hooks": "tun 钩子（只读）",
+  "web_set_hook_up": "tun.up",
+  "web_set_hook_down": "tun.down",
+  "web_set_backup": "备份配置",
+  "web_set_restore": "恢复配置",
+  "web_set_restore_confirm": "恢复会覆盖当前配置，继续？",
+  "web_set_theme": "主题",
+  "web_set_theme_dark": "深色",
+  "web_set_theme_light": "浅色",
+  "web_set_theme_auto": "跟随系统",
+  "web_set_language": "语言",
+  "web_diag_title": "诊断",
+  "web_diag_run": "生成诊断包",
+  "web_diag_running": "正在收集（可能需要半分钟）…",
+  "web_diag_done": "诊断包已生成：",
+  "web_diag_check": "检查本机状态",
+  "web_diag_item_config": "运行配置",
+  "web_diag_item_service": "服务连接",
+  "web_diag_item_tunnel": "隧道接口",
+  "web_diag_item_routes": "策略路由",
+  "web_diag_level_pass": "正常",
+  "web_diag_level_warn": "需留意",
+  "web_diag_level_fail": "异常",
+  "web_diag_level_skip": "未检查",
+  "web_diag_invalid_config": "无法读取运行配置。请查看日志，在设置中修复或恢复备份。",
+  "web_diag_pending": "有已保存但未应用的设置；本次检查依据当前运行配置。",
+  "web_diag_applied": "运行配置可读取，无待应用标记。",
+  "web_diag_stopped": "服务已停止，需要连接时请从仪表盘启动。",
+  "web_diag_connected": "Tailscale 后端处于运行状态。",
+  "web_diag_login": "设备需要登录或管理员授权，请前往账户页。",
+  "web_diag_unreachable": "无法确认后端连接状态，请查看服务日志。",
+  "web_diag_needs_connection": "服务尚未连接，暂不判断隧道和路由是否异常。",
+  "web_diag_proxy": "代理模式不创建隧道接口，请在隧道工具中运行 SOCKS5 自检。",
+  "web_diag_interface_ready": "隧道接口及所需桥接进程存在；不代表目标节点一定可达。",
+  "web_diag_interface_missing": "隧道接口或桥接进程缺失，请检查隧道状态和日志。",
+  "web_diag_managed_routes": "当前模式不使用模块的桥接策略路由。",
+  "web_diag_routes_ready": "模块路由及防火墙规则与运行配置一致。",
+  "web_diag_routes_incomplete": "无法确认完整路由规则，可能被其他模块修改；请查看路由设置和服务日志。",
+  "web_diag_dns_disabled": "本机 MagicDNS 已关闭，未检查解析器。",
+  "web_diag_dns_conflict": "DNS 策略或规则存在冲突，请前往隧道工具查看具体原因。",
+  "web_diag_dns_limited": "DNS 部分能力不可用，请查看实际监听端点和 IPv6 路径。",
+  "web_diag_dns_ready": "DNS 控制器报告运行正常；未向外部域名发起测试。",
+  "web_diag_dns_unavailable": "DNS 未就绪或状态不可读取，请检查监听端口、内核能力和日志。",
+  "web_diag_unknown": "无法识别检查结果，请查看日志。",
+  "web_diag_view_details": "查看与处理",
+  "web_diag_bundle_mode": "诊断包内容",
+  "web_diag_share": "分享脱敏包",
+  "web_diag_local": "本机详细包",
+  "web_diag_share_hint": "使用同一组代号替换账户、设备名、SSID 和地址，保留排障关联；分享前仍可检查内容。",
+  "web_diag_local_hint": "保留网络地址、账户和设备信息，仅用于本机排查，请勿公开分享。",
+  "web_more_title": "更多",
+  "web_more_tunnel": "隧道",
+  "web_more_routing": "路由",
+  "web_more_account": "账号",
+  "web_more_serve": "Serve/Funnel",
+  "web_more_logs": "日志",
+  "web_more_settings": "设置",
+  "web_more_diag": "诊断",
+  "web_tools_subnet_unconfirmed": "操作结果未确认。",
+  "web_trial_description": "试用已保存的 DNS、路由与运行模式配置。确认后保留；关闭页面或超时未确认，会恢复试用前的已应用配置，之后保存的修改仍然保留。",
+  "web_trial_health_hint": "启动检查验证本机 Tailscale、DNS 与隧道状态；请自行确认所需的远端连接。试用期间可继续保存设置，应用其他配置需先确认或回退。",
+  "web_backup_picker_hint": "仅列出 Download 目录中的 FoxyTail 配置备份。先预览差异，再确认恢复；不会显示或恢复账户身份。",
+  "web_tools_tunnel_desc": "查看隧道、检查 DNS 与代理连通性",
+  "web_tools_routing_desc": "选择经过隧道的应用和目标网段",
+  "web_tools_serve_desc": "向私有网络或互联网开放本机服务",
+  "web_tools_account_desc": "登录、切换账户与连接 Headscale",
+  "web_tools_logs_desc": "实时查看、筛选与复制运行日志",
+  "web_tools_settings_desc": "外观、网络参数与配置备份",
+  "web_tools_diag_desc": "收集排障信息并获取诊断包路径",
+  "web_tools_refresh_disabled": "自动刷新已在设置中关闭，仍可手动刷新。",
+  "web_tools_saved_pending_desc": "重启服务后，这些网络与后台参数才会生效。连接会短暂中断。",
+  "web_tools_dns_port_hint": "被其他应用占用时，请更换端口。",
+  "web_tools_invalid_number": "请输入允许范围内的整数。",
+  "web_tools_backup_desc": "保存配置与钩子，便于迁移或恢复。",
+  "web_tools_backup_file_hint": "文件已保存到手机，可在文件管理器中按此路径查找。",
+  "web_tools_context_load_error": "无法读取网络切换规则，请重试后再编辑。",
+  "web_tools_account_list_desc": "切换账户会重新连接网络。",
+  "web_tools_logout_desc": "退出当前账户会中断这台设备的 Tailnet 连接。",
+  "web_tools_bridge_desc": "本地 SOCKS5 代理通过桥接隧道接管选定流量。",
+  "web_tools_tun_desc": "Tailscale 直接管理原生隧道。当前支持全部应用范围。",
+  "web_tools_proxy_desc": "应用需要主动使用本地 SOCKS5 代理；不创建隧道接口。",
+  "web_tools_dns_endpoint_hint": "仅解析 Tailnet 域名与设备短名。",
+  "web_tools_dns_transparent_limit": "无法确认网络路径的查询交回原解析器；不接管 DoH / DoT。",
+  "web_tools_dns_packet_policy_conflict": "保留现有防火墙策略，仅提供本地解析",
+  "web_tools_dns_ipv6_fallback_hint": "兼容路径不拦截 IPv6 DNS",
+  "web_coexist_intro": "按当前已应用配置生成 mihomo / Clash.Meta 合并片段。只读，不改写代理配置或设备网络。",
+  "web_coexist_inventory_hint": "模块与应用清单仅供参考，不代表正在运行，也不能判断核心或 fake-IP 模式。",
+  "web_coexist_prerequisite": "需要当前 Tailnet 的本地或透明 MagicDNS 监听器就绪且策略归 FoxyTail 管理。请在设置中配置并应用，再重新检测；legacy 模式不支持此向导。",
+  "web_coexist_core_hint": "仅适用于支持这些字段的 mihomo / Clash.Meta 核心。请查阅目标配置并明确选择，向导不会推断或切换现有模式。",
+  "web_coexist_merge_hint": "这不是完整配置！合并到现有 dns 映射、nameserver-policy 映射及 proxies / rules / fake-ip-filter 列表；保留其他条目。将新增路由规则和 rule 模式过滤规则放在兜底规则之前。不要整段覆盖原配置，不要把本地监听器设为全局 DNS 上游。",
+  "web_coexist_scope_hint": "仅当前完整 Tailnet 域名后缀与本机/节点精确 /32、/128 地址。不导入短名、公司 DNS、子网或出口路由；新增 IP 字面量目标后须重新生成。",
+  "web_coexist_name_hint": "目标配置中的 FoxyTail-Tailnet 名称必须唯一；如需改名，请同步更新所有规则引用。复制不代表目标配置已应用。",
+  "web_coexist_tun_hint": "tun 使用绑定 tailscale0 的 direct 出站；目标核心需支持 interface-name 且有接口访问权限。其他 VPN 应用不一定能使用该绑定。",
+  "web_coexist_socks_hint": "bridge / proxy 使用实际已应用的本机 SOCKS5 端口；目标代理必须能访问该监听器。",
+  "web_coexist_ipv6_hint": "不修改全局 IPv6 设置。如需 AAAA，请另行确认 FoxyTail 的 IPv6 与目标 mihomo 的 AAAA 支持均已启用。",
+  "web_coexist_check_hint": "仅用户点击后探测。DNS 经 root 回环访问；TCP 连接指定数字地址与端口，不发送应用数据。无须先生成片段，结果也不代表已应用片段。",
+  "web_coexist_ports_hint": "填写你确认的服务端口（1–65535），不会自动发现。可选 DNS 监听器固定为 127.0.0.1，端口不能与 FoxyTail DNS 相同；留空明确跳过。",
+  "web_coexist_checking": "正在分别验证 DNS 与目标 TCP…",
+  "web_coexist_result_boundary": "只证明此刻所列 root 探测结果。DNS、代理 DNS、TCP 独立，不能互相替代；不证明第三方应用的实际路径、代理规则或配置已生效，也不验证 UDP 业务、ACL 或应用层服务健康。",
+  "web_tools_route_apps_desc": "相同 UID 的应用共享选择结果。",
+  "web_tools_route_subnets_desc": "按应用范围，将这些目的网段的流量送入隧道。",
+  "web_tools_subnet_native_hint": "Tailscale 自动管理接收的路由；本地网段不限制接收范围。",
+  "web_tools_subnet_bridge_hint": "将节点网段加入下方列表后，可按应用范围导流。",
+  "web_tools_subnet_proxy_hint": "节点路由仅供代理连接使用；本地网段不接管系统流量。",
+  "web_tools_subnet_added": "已添加",
+  "web_tools_logs_scope": "仅筛选已读取的日志行。",
+  "web_tools_diag_contents": "包含服务日志、网络状态、兼容性检查与运行配置，供排障使用。",
+  "web_context_description": "按网络变化执行规则。同一网络的多条动作按顺序执行，保存不代表动作已执行成功。",
+  "web_net_stopped_hint": "启动服务，让本机重新接入你的私有网络。",
+  "web_net_login_hint": "完成账号授权后，本机即可加入你的私有网络。",
+  "web_net_no_exit_hint": "未选择出口节点；已保存的子网路由仍然生效。",
+  "web_net_exit_hint": "节点选择与实际路由范围分别显示；不代表端到端连接已验证。",
+  "web_net_no_results_hint": "尝试其他关键词，或清除筛选条件。",
+  "web_net_peer_probe_hint": "按所选地址测试 Tailscale 链路，显示本次响应的路径；不代表设备上的应用服务可用。",
+  "web_net_exit_pending": "待应用",
+  "web_net_exit_untested": "尚未测速",
+  "web_net_traffic_chart_hint": "每个时间段的传输总量，不代表即时网速。",
+  "web_net_traffic_top_hint": "按当前保留记录中的收发总量排序，与上方周期筛选独立。",
+  "web_hero_login_desc": "设备尚未接入 tailnet，完成登录后即可使用全部功能",
+  "web_hero_banner_login": "尚未登录 tailnet",
+  "web_files_selection_empty": "请浏览共享存储并选择文件，最多 32 个。",
+  "web_files_storage_hint": "请先解锁 Android 共享存储并检查 root 授权。符号链接和非普通文件不会显示。",
+  "web_files_send_hint": "仅列出 Taildrop 可接收设备。选择文件和目标后点击发送；发送在后台继续，返回本页可查看进度。",
+  "web_files_completed": "接收设备已接受",
+  "web_files_completed_count": "已接受文件",
+  "web_files_accepted_hint": "任务已提交不代表发送成功；只有接收设备接受文件后才标记完成。",
+  "web_files_progress_unknown": "正在等待守护进程进度，已发送字节数未知。",
+  "web_files_receive_hint": "从 /sdcard/Download/Taildrop 导入已完整接收的文件，保留原文件。若直接接收模式未知，请解锁共享存储后重启 FoxyTail。",
+  "web_set_restart_required": "配置已保存，重启服务后生效",
+  "web_set_applied": "配置已应用",
+  "web_set_hooks_hint": "请通过终端编辑：/data/adb/foxytail/scripts/foxytail.tun.up / .down",
+  "web_diag_check_hint": "按需检查服务、隧道、路由与 DNS。节点实际连通性请在设备详情中测试。",
+  "tools_failed": "操作失败",
+  "tools_detect_first": "请先检测环境。",
+  "tools_invalid_response": "后端返回了不完整或不支持的结果。",
+  "tools_save": "通过文件选择器保存",
+  "tools_share": "分享压缩包",
+  "tools_import": "通过文件选择器导入",
+  "tools_imported_archive": "已导入私有压缩包",
+  "tools_backup_sensitive": "备份可能包含私密配置和钩子内容。仅与可信接收者分享。",
+  "tools_select": "选择",
+  "tools_select_archive": "请先选择压缩包。",
+  "tools_baseline": "已保存配置基线 SHA-256",
+  "tools_preview_expired": "预览已失效。",
+  "app_name": "FoxyTail",
+  "send": "发送",
+  "pick_files": "选择文件",
+  "targets_failed": "无法加载设备。",
+  "send_confirm": "将 {arg1} 个文件发送到 {arg2}？",
+  "@send_confirm": {
+    "placeholders": {
+      "arg1": {
+        "type": "int"
+      },
+      "arg2": {
+        "type": "String"
+      }
+    }
+  },
+  "retry_confirm": "仅重试向 {arg1} 发送未成功的文件？已完成的文件不会重复发送。",
+  "@retry_confirm": {
+    "placeholders": {
+      "arg1": {
+        "type": "String"
+      }
+    }
+  },
+  "retry": "重试未成功的文件",
+  "cancel": "取消",
+  "close": "关闭",
+  "open": "打开",
+  "share": "分享",
+  "working": "正在准备传输…",
+  "staging": "准备本地副本：{arg1} · {arg2}",
+  "@staging": {
+    "placeholders": {
+      "arg1": {
+        "type": "String"
+      },
+      "arg2": {
+        "type": "String"
+      }
+    }
+  },
+  "waiting": "等待进度报告",
+  "progress_unavailable": "没有最终字节进度报告。",
+  "known_progress": "{arg1} / {arg2} · {arg3}/秒",
+  "@known_progress": {
+    "placeholders": {
+      "arg1": {
+        "type": "String"
+      },
+      "arg2": {
+        "type": "String"
+      },
+      "arg3": {
+        "type": "String"
+      }
+    }
+  },
+  "cancel_requested": "已请求取消，正在等待工作进程确认。",
+  "cancelled_local": "已取消，未提交传输。",
+  "busy": "已有传输正在进行。",
+  "imported": "已导入 {arg1} 个完成的文件。",
+  "@imported": {
+    "placeholders": {
+      "arg1": {
+        "type": "int"
+      }
+    }
+  },
+  "saved": "副本已保存。",
+  "error_title": "FoxyTail 无法完成此操作",
+  "root_unavailable": "无法启动 su。请在 Magisk/KernelSU 中允许 FoxyTail 使用超级用户权限，然后重新打开应用。",
+  "root_denied": "Root 命令未获得 UID 0，请检查 Magisk/KernelSU 中的授权。",
+  "root_failed": "su 在启动模块命令前退出，请检查超级用户授权。",
+  "backend_failed": "Root 授权已成功，但 FoxyTail 模块命令执行失败。",
+  "module_missing": "模块脚本不存在或不可读，请确认模块已安装并启用。",
+  "timeout": "操作超时，请检查 Root 授权与模块状态。",
+  "invalid_response": "模块返回无效响应，请更新模块与应用。",
+  "invalid_uri": "仅接受可读取的 content URI。请重新分享文件或使用“选择文件”。",
+  "file_limit": "最多选择 32 个文件，每个不超过 2 GiB。",
+  "choose_first": "请先选择文件和设备。",
+  "export_failed": "无法读取或保存文件，请检查剩余空间后重试。",
+  "no_viewer": "没有应用可以打开此文件，请使用分享或保存副本。",
+  "service_channel": "Taildrop 传输",
+  "service_timeout": "前台监控已停止；请重新打开历史记录查看任务状态。",
+  "poll_failed": "无法读取传输状态，结果未知，请重新打开历史记录。{arg1}",
+  "@poll_failed": {
+    "placeholders": {
+      "arg1": {
+        "type": "String"
+      }
+    }
+  },
+  "interrupted_stage": "上次本地准备被中断。请重新选择文件，未提交的私有副本将被清理。",
+  "queued": "排队中",
+  "sending": "发送中",
+  "completed": "已完成",
+  "failed": "失败",
+  "cancelled": "已取消",
+  "interrupted": "已中断",
+  "selection_errors": "部分文件无法选择：\n{arg1}",
+  "@selection_errors": {
+    "placeholders": {
+      "arg1": {
+        "type": "String"
+      }
+    }
+  },
+  "staging_failed": "本地准备失败，未提交发送。{arg1}",
+  "@staging_failed": {
+    "placeholders": {
+      "arg1": {
+        "type": "String"
+      }
+    }
+  },
+  "submission_unknown": "提交结果未知，请查看传输历史。{arg1}",
+  "@submission_unknown": {
+    "placeholders": {
+      "arg1": {
+        "type": "String"
+      }
+    }
+  },
+  "notifications_hint": "通知权限未开启，任务仍会运行。",
+  "files_clear_confirm": "永久删除私有收件箱中的全部文件（包括被搜索隐藏的文件）？已保存或分享的副本不受影响。",
+  "files_export_confirm": "将 {arg1} 复制到共享 Download 目录？拥有存储访问权限的其他应用可能读取此副本。",
+  "@files_export_confirm": {
+    "placeholders": {
+      "arg1": {
+        "type": "String"
+      }
+    }
+  },
+  "files_copied": "路径已复制。",
+  "repair_files_saving": "正在准备 {arg1} · 已复制 {arg2}",
+  "@repair_files_saving": {
+    "placeholders": {
+      "arg1": {
+        "type": "String"
+      },
+      "arg2": {
+        "type": "String"
+      }
+    }
+  },
+  "repair_files_save_committing": "正在保存 {arg1} · 已写入 {arg2}，请勿关闭应用。",
+  "@repair_files_save_committing": {
+    "placeholders": {
+      "arg1": {
+        "type": "String"
+      },
+      "arg2": {
+        "type": "String"
+      }
+    }
+  },
+  "repair_files_save_partial": "保存失败，目标文件可能不完整。",
+  "files_operation_busy": "控制操作进行中，请稍后重试。",
+  "repair_shell_stop": "停止服务",
+  "repair_traffic_previous": "上一个时段",
+  "repair_traffic_next": "下一个时段",
+  "repair_traffic_select": "选择时段",
+  "repair_files_ignored_inbox": "{arg1} 个不兼容条目已隐藏。",
+  "@repair_files_ignored_inbox": {
+    "placeholders": {
+      "arg1": {
+        "type": "int"
+      }
+    }
+  },
+  "repair_files_ignored_import": "{arg1} 个文件名不受支持，未导入。",
+  "@repair_files_ignored_import": {
+    "placeholders": {
+      "arg1": {
+        "type": "int"
+      }
+    }
+  },
+  "repair_files_ignored_clear": "已保留 {arg1} 个不兼容条目。",
+  "@repair_files_ignored_clear": {
+    "placeholders": {
+      "arg1": {
+        "type": "int"
+      }
+    }
+  },
+  "taildrop_sort": "收件排序",
+  "taildrop_sort_orders_0": "最新优先",
+  "taildrop_sort_orders_1": "最早优先",
+  "taildrop_sort_orders_2": "名称升序",
+  "taildrop_sort_orders_3": "最大优先",
+  "taildrop_selected_count": "已选 {arg1} 项 · 筛选结果 {arg2} 项",
+  "@taildrop_selected_count": {
+    "placeholders": {
+      "arg1": {
+        "type": "int"
+      },
+      "arg2": {
+        "type": "int"
+      }
+    }
+  },
+  "taildrop_select_matches": "选择筛选结果",
+  "taildrop_deselect": "取消全选",
+  "taildrop_share_selected": "分享所选",
+  "taildrop_export_selected": "导出所选",
+  "taildrop_delete_selected": "删除所选",
+  "taildrop_delete_confirm": "从私有收件箱删除这 {arg1} 个文件？已保存和共享的副本不受影响。",
+  "@taildrop_delete_confirm": {
+    "placeholders": {
+      "arg1": {
+        "type": "int"
+      }
+    }
+  },
+  "taildrop_export_confirm": "将这 {arg1} 个文件复制到 Download？拥有存储权限的其他应用可以读取副本。",
+  "@taildrop_export_confirm": {
+    "placeholders": {
+      "arg1": {
+        "type": "int"
+      }
+    }
+  },
+  "taildrop_batch_result": "成功 {arg1} 项 · 失败 {arg2} 项",
+  "@taildrop_batch_result": {
+    "placeholders": {
+      "arg1": {
+        "type": "int"
+      },
+      "arg2": {
+        "type": "int"
+      }
+    }
+  },
+  "taildrop_share_progress": "正在准备 {arg1}/{arg2} · {arg3} · 已复制 {arg4}",
+  "@taildrop_share_progress": {
+    "placeholders": {
+      "arg1": {
+        "type": "int"
+      },
+      "arg2": {
+        "type": "int"
+      },
+      "arg3": {
+        "type": "String"
+      },
+      "arg4": {
+        "type": "String"
+      }
+    }
+  },
+  "taildrop_clear_selection": "清空待发列表",
+  "taildrop_delete_history": "删除记录",
+  "taildrop_clear_history": "清空已结束记录",
+  "taildrop_delete_history_confirm": "删除这条发送记录？原文件和对端已收到的副本不受影响，删除后不能再从此记录重试。",
+  "taildrop_clear_history_confirm": "删除所有已结束的发送记录？正在传输的任务和原文件不受影响，删除后不能再从这些记录重试。",
+  "taildrop_history_removed": "已删除 {arg1} 条记录 · 保留 {arg2} 条活动记录",
+  "@taildrop_history_removed": {
+    "placeholders": {
+      "arg1": {
+        "type": "int"
+      },
+      "arg2": {
+        "type": "int"
+      }
+    }
+  },
+  "taildrop_selection_limit": "上限 32 个文件。",
+  "repair_tools_diag_unconfirmed": "最新检查尚无确认结果。",
+  "control_reconnect": "核验操作",
+  "control_acknowledge": "确认未知状态",
+  "control_unknown_title": "尚未确认实际结果",
+  "control_unknown_warning": "再次修改前请核验服务、账号与配置的实际状态。",
+  "control_unknown_acknowledged": "已清除观察记录，请核验实际状态。",
+  "control_reconnecting": "正在重新观察：{arg1}",
+  "@control_reconnecting": {
+    "placeholders": {
+      "arg1": {
+        "type": "String"
+      }
+    }
+  },
+  "control_incompatible": "App 与模块控制协议不兼容；请安装配套版本。",
+  "control_upgrading": "模块 {arg1} 正在升级，暂不能修改。",
+  "@control_upgrading": {
+    "placeholders": {
+      "arg1": {
+        "type": "String"
+      }
+    }
+  },
+  "control_disabled": "模块 {arg1} 已在 root 管理器中禁用。",
+  "@control_disabled": {
+    "placeholders": {
+      "arg1": {
+        "type": "String"
+      }
+    }
+  },
+  "control_ready": "模块 {arg1} · root 控制已就绪",
+  "@control_ready": {
+    "placeholders": {
+      "arg1": {
+        "type": "String"
+      }
+    }
+  },
+  "control_unavailable": "root 控制尚未就绪，请检查模块兼容性与 App 授权。",
+  "control_busy": "操作进行中：{arg1}。",
+  "@control_busy": {
+    "placeholders": {
+      "arg1": {
+        "type": "String"
+      }
+    }
+  },
+  "control_record_failed": "无法保存操作所有权；尚未提交任何命令。",
+  "control_running": "正在执行：{arg1}",
+  "@control_running": {
+    "placeholders": {
+      "arg1": {
+        "type": "String"
+      }
+    }
+  },
+  "control_finished": "已完成：{arg1}。",
+  "@control_finished": {
+    "placeholders": {
+      "arg1": {
+        "type": "String"
+      }
+    }
+  },
+  "control_unknown": "操作结果未知，请勿重复修改。{arg1}",
+  "@control_unknown": {
+    "placeholders": {
+      "arg1": {
+        "type": "String"
+      }
+    }
+  },
+  "control_copied": "已复制",
+  "control_invalid_url": "只能打开有效的 HTTP 或 HTTPS 链接。",
+  "control_archive_limit": "配置归档不能超过 1 MiB。",
+  "control_importing": "正在导入所选归档；旋转屏幕不会重新上传。",
+  "control_import_interrupted": "归档导入被中断，未提交恢复。",
+  "files_export_directory": "将所选文件保存到文件夹",
+  "files_export_directory_confirm": "将这 {arg1} 个文件的副本保存到所选文件夹？不会覆盖已有文件。",
+  "@files_export_directory_confirm": {
+    "placeholders": {
+      "arg1": {
+        "type": "int"
+      }
+    }
+  }
+}

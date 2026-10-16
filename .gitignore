@@ -15,3 +15,11 @@ android/local.properties
 *.keystore
 *.jks
 *.p12
+
+# Flutter generated output; pubspec.lock remains tracked.
+/.dart_tool/
+/build/
+/.flutter-plugins
+/.flutter-plugins-dependencies
+/lib/l10n/generated/
+/android/app/src/main/java/io/flutter/plugins/GeneratedPluginRegistrant.java

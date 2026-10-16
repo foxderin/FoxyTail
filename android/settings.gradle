@@ -1,9 +1,18 @@
 pluginManagement {
+    def properties = new Properties()
+    def localProperties = file('local.properties')
+    if (localProperties.exists()) localProperties.withInputStream { properties.load(it) }
+    def flutterSdk = properties.getProperty('flutter.sdk') ?: System.getenv('FLUTTER_ROOT')
+    if (!flutterSdk) throw new GradleException('Set FLUTTER_ROOT or flutter.sdk in android/local.properties')
+    includeBuild("${flutterSdk}/packages/flutter_tools/gradle")
     repositories { google(); mavenCentral(); gradlePluginPortal() }
 }
-dependencyResolutionManagement {
-    repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
-    repositories { google(); mavenCentral() }
+plugins {
+    id 'dev.flutter.flutter-plugin-loader' version '1.0.0'
+    // Flutter's loader and project plugin share a JAR, so AGP must be visible in this scope.
+    id 'com.android.application' version '9.3.2' apply false
+    // Flutter applies KGP when built-in Kotlin is disabled; override AGP's older transitive KGP.
+    id 'org.jetbrains.kotlin.android' version '2.4.0' apply false
 }
 rootProject.name = 'FoxyTail'
 include ':app'

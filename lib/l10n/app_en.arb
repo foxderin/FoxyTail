@@ -1,0 +1,1126 @@
+{
+  "@@locale": "en",
+  "network_unknown": "Unknown",
+  "network_stale": "Read failed; the values below are stale.",
+  "network_connected": "Connected",
+  "network_stopped": "Stopped",
+  "network_login_needed": "Sign in required",
+  "network_machine_auth": "Waiting for administrator approval",
+  "network_starting": "Starting / determining connection state",
+  "network_service": "Service",
+  "network_interrupt": "This changes network connectivity and may interrupt active transfers. Continue?",
+  "network_unverified": "The operation finished, but the requested state is unconfirmed.",
+  "network_failed": "Operation failed: {arg1}",
+  "@network_failed": {
+    "placeholders": {
+      "arg1": {
+        "type": "String"
+      }
+    }
+  },
+  "network_yes": "Yes",
+  "network_no": "No",
+  "network_invalid_result": "Missing or inconsistent response fields; state is unknown.",
+  "network_account_interrupt": "Switching accounts or signing in/out can interrupt active Taildrop transfers and invalidates device, exit and coexistence selections. Continue?",
+  "network_transfer_active": "An active Taildrop transfer was reported. Cancel it or wait for it to finish, then retry.",
+  "network_selected": "Selected preference",
+  "network_effective": "Effective routing",
+  "cs_unknown": "Unknown",
+  "cs_save": "Save",
+  "cs_applied": "Applied",
+  "cs_pending": "Saved, pending",
+  "cs_failed": "Request failed: {arg1}",
+  "@cs_failed": {
+    "placeholders": {
+      "arg1": {
+        "type": "String"
+      }
+    }
+  },
+  "cs_invalid_response": "Invalid module response; state is unknown.",
+  "cs_network_warning": "This changes network connectivity and may interrupt remote access. Make sure you can recover locally.",
+  "cs_scope_all": "All applications",
+  "cs_scope_selected": "Selected application UIDs only",
+  "cs_scope_bypass": "All except selected application UIDs",
+  "cs_owner_required": "Selected/bypass requires bridge mode and owner support.",
+  "cs_readonly": "Reserved routing identifiers",
+  "cs_magic_dns": "MagicDNS",
+  "cs_dns_port": "DNS port",
+  "cs_power_save": "Power saving",
+  "cs_number_range": "Enter an integer between {arg1} and {arg2}.",
+  "@cs_number_range": {
+    "placeholders": {
+      "arg1": {
+        "type": "int"
+      },
+      "arg2": {
+        "type": "int"
+      }
+    }
+  },
+  "cs_restart": "Restart and verify saved settings",
+  "cs_restart_blocked": "Restart is unavailable while a trial is active or its state is unknown.",
+  "cs_restart_verified": "Restart completed; no pending settings.",
+  "cs_dns_state": "DNS capability, conflicts and repair state",
+  "cs_dns_probe": "Explicitly probe DNS capability",
+  "cs_dns_unavailable": "Transparent DNS is not supported by the running kernel.",
+  "cs_status": "Authoritative module state",
+  "cs_rule_draft_open": "Apply or cancel the rule editor first.",
+  "cs_trial_confirm_warning": "Keep this candidate configuration? Verify actual connectivity first.",
+  "cs_trial_revert_warning": "Restore the configuration captured before this trial? Unsaved editor drafts remain in the app.",
+  "cs_context_limit": "Scenario text exceeds 48 KiB and was not sent.",
+  "cs_value_unknown": "Unknown / not reported",
+  "cs_yes": "Yes",
+  "cs_no": "No",
+  "cs_actual_mode": "Actual mode",
+  "cs_configured_mode": "Saved mode",
+  "cs_pending_mode": "Mode change pending",
+  "cs_daemon_state": "Daemon state",
+  "cs_backend_state": "Tailscale state",
+  "cs_host_name": "Device name",
+  "cs_dns_enabled": "DNS enabled",
+  "cs_state": "State",
+  "cs_reason": "Reason",
+  "cs_listener_ready": "Local listener ready",
+  "cs_interception4": "IPv4 capture active",
+  "cs_interception6": "IPv6 capture active",
+  "cs_repair_needed": "Repair required",
+  "cs_policy_state": "Policy ownership",
+  "cs_capability_error": "Capability error",
+  "cs_transparent_available": "Transparent DNS supported",
+  "cs_unavailable_reason": "Capability limitation",
+  "cs_dns_suffix": "Tailnet DNS suffix",
+  "cs_upstream_native": "Native upstream policy",
+  "cs_ipv6_path": "IPv6 DNS path",
+  "cs_ipv6_module": "IPv6 module status",
+  "cs_current_context": "Current network context",
+  "cs_watcher_running": "Scenario watcher running",
+  "cs_last_context": "Last executed context",
+  "cs_last_ok": "Last execution succeeded",
+  "cs_last_time": "Last execution time",
+  "cs_last_error": "Execution error",
+  "cs_running": "Running",
+  "cs_stopped": "Stopped",
+  "cs_disabled": "Disabled",
+  "cs_degraded": "Degraded",
+  "cs_conflict": "Conflict",
+  "cs_owned": "Owned by the module",
+  "cs_restore_pending": "Restore pending",
+  "cs_apply_pending": "Apply pending",
+  "cs_disable_pending": "Disable pending",
+  "cs_preparing": "Preparing",
+  "cs_rolling_back": "Rolling back",
+  "cs_confirmed": "Confirmed",
+  "cs_rolled_back": "Rolled back",
+  "cs_rollback_failed": "Rollback failed — retry available",
+  "cs_superseded": "Superseded",
+  "cs_draft_conflict": "The saved configuration changed outside this draft; saving will overwrite the newer value.",
+  "cs_reload_draft": "Reload saved value / discard draft",
+  "cs_reload_confirm": "Discard this draft and any open rule edit, then use the latest saved configuration?",
+  "cs_draft_changed": "Unsaved local edits",
+  "web_trial_title": "Try configuration with automatic rollback",
+  "web_trial_invalid_response": "Trial state could not be verified. Refresh before continuing.",
+  "web_backup_invalid_response": "Invalid backup list or preview. Refresh before continuing.",
+  "web_trial_candidate": "Candidate mode",
+  "web_trial_saved": "Use saved mode",
+  "web_trial_previous": "Rollback configuration",
+  "web_trial_duration": "Confirmation window",
+  "web_trial_start": "Start trial",
+  "web_trial_confirm": "Confirm and keep",
+  "web_trial_revert": "Revert now",
+  "web_trial_remaining": "Time remaining",
+  "web_trial_preparing": "Applying and checking candidate settings",
+  "web_trial_running": "Trial active — verify your connection",
+  "web_trial_reverting": "Rolling back",
+  "web_trial_confirmed": "Configuration confirmed",
+  "web_trial_reverted": "Previous applied configuration restored",
+  "web_trial_failed": "Rollback failed; retry or restart the module",
+  "web_trial_superseded": "Trial superseded by a stop or newer application",
+  "web_backup_select": "Choose a configuration backup",
+  "web_backup_refresh": "Refresh backups",
+  "web_backup_preview": "Preview restore changes",
+  "web_backup_changes": "Configuration changes",
+  "web_backup_unchanged": "No configuration changes",
+  "web_backup_before": "Currently saved",
+  "web_backup_after": "Saved after restore",
+  "web_backup_hooks": "These hooks will only be retained for review, never executed",
+  "web_tools_network": "Network tools",
+  "web_tools_device": "Device & account",
+  "web_tools_maintenance": "Maintenance & preferences",
+  "web_tools_appearance": "Appearance & language",
+  "web_tools_network_settings": "Network configuration",
+  "web_tools_background": "Power & background",
+  "web_tools_power_save": "Power saving",
+  "web_tools_power_save_desc": "Slow watchdog, traffic and context checks; pause automatic network probes while keeping the main connection. Independently disabled features stay off.",
+  "web_tools_watchdog_probe": "Background connectivity probes",
+  "web_tools_watchdog_probe_desc": "Let the watchdog test network reachability. Turning this off keeps process checks but stops background probe packets.",
+  "web_tools_probe_paused": "Power saving is active: background probes are paused. This switch retains its saved preference.",
+  "web_tools_stats_enabled": "Traffic statistics",
+  "web_tools_stats_enabled_desc": "Collect and retain traffic history. Turning this off stops sampling and the statistics process.",
+  "web_tools_context_enabled": "Network context automation",
+  "web_tools_context_enabled_desc": "Run context rules when networks change. Turning this off keeps the rules but stops automatic checks and actions.",
+  "web_tools_auto_refresh": "Interface auto-refresh",
+  "web_tools_auto_refresh_desc": "Periodically update status, devices, tunnel and logs. Manual refresh and active trial countdowns and status checks remain available when disabled.",
+  "web_tools_advanced": "Advanced options",
+  "web_tools_saved_pending": "Saved, awaiting application",
+  "web_tools_all_applied": "Configuration applied",
+  "web_tools_restart": "Restart & apply",
+  "web_tools_magicdns": "Local MagicDNS",
+  "web_tools_magicdns_desc": "Resolve Tailnet short names and full domain names for local apps.",
+  "web_tools_ipv6": "IPv6 traffic",
+  "web_tools_watchdog": "Connection watchdog",
+  "web_tools_watchdog_desc": "Recover after service exits or network changes.",
+  "web_tools_socks_port": "SOCKS5 port",
+  "web_tools_dns_port": "DNS listener port",
+  "web_tools_dns_mode": "DNS mode",
+  "web_tools_dns_mode_legacy": "Compatibility",
+  "web_tools_dns_mode_local": "Local resolver",
+  "web_tools_dns_mode_transparent_option": "Transparent split DNS (kernel support required)",
+  "web_tools_dns_mode_legacy_hint": "Use the system resolver and DNS port redirection.",
+  "web_tools_dns_mode_local_hint": "Provide Tailnet DNS; configure public and corporate DNS in the consuming resolver.",
+  "web_tools_dns_mode_transparent_hint": "Preserve plain DNS routing, excluding DoH / DoT. Configure Tailscale corporate DNS separately.",
+  "web_tools_dns_mode_transparent_unavailable": "The running kernel lacks transparent split DNS support; use Local resolver.",
+  "web_tools_route_table": "Policy routing table",
+  "web_tools_watchdog_interval": "Watchdog interval (seconds)",
+  "web_tools_stats_interval": "Traffic sampling interval (seconds)",
+  "web_tools_log_limit": "Log size limit (KB)",
+  "web_tools_mark": "Traffic mark",
+  "web_tools_mark_mask": "Traffic mark mask",
+  "web_tools_mode_link": "Open tunnel tools",
+  "web_tools_range": "Allowed range",
+  "web_tools_backup_latest": "Last successful backup",
+  "web_tools_copy_path": "Copy path",
+  "web_tools_restore_result": "Last successful restore",
+  "web_tools_restore_previous": "Previous configuration backup",
+  "web_tools_advanced_login": "Other sign-in methods",
+  "web_tools_server_invalid": "Enter a valid http:// or https:// server URL.",
+  "web_tools_refresh": "Refresh",
+  "web_tools_tunnel_overview": "Connection path",
+  "web_tools_dns_unchecked": "DNS has not been checked yet",
+  "web_tools_dns_settings": "Configure MagicDNS",
+  "web_tools_dns_check_again": "Check again",
+  "web_tools_dns_native_yes": "Detected",
+  "web_tools_dns_native_no": "Not detected",
+  "web_tools_dns_local_ready": "Local resolver ready",
+  "web_tools_dns_local_only": "Local resolver only",
+  "web_tools_dns_transparent_ready": "Transparent split DNS active",
+  "web_tools_dns_transparent_ipv4": "Transparent split DNS (IPv4)",
+  "web_tools_dns_transparent_inactive": "Transparent split DNS inactive",
+  "web_tools_dns_listener_unready": "Local resolver not ready",
+  "web_tools_dns_endpoint": "Local DNS upstream",
+  "web_tools_dns_endpoint_copy": "Copy address",
+  "web_tools_dns_transparent_unavailable": "Kernel interception is unavailable. You can forward queries to the local DNS upstream.",
+  "web_tools_dns_native_policy_unavailable": "Could not coordinate native DNS policy",
+  "web_tools_dns_native_policy_changed": "Native DNS policy changed",
+  "web_tools_dns_restore_pending": "Native DNS policy restoration pending",
+  "web_tools_dns_invalid_config": "Invalid DNS configuration",
+  "web_tools_dns_helper_missing": "FoxyTail DNS helper not found",
+  "web_tools_dns_listener_failed": "Listener failed. Check whether the port is in use.",
+  "web_tools_dns_interception_failed": "Could not enable transparent split DNS",
+  "web_tools_dns_context_changed": "Network context changed; reconciliation pending",
+  "web_tools_dns_interception_lost": "Transparent split DNS interrupted",
+  "web_tools_dns_guard_failed": "Transparent DNS guard is not ready",
+  "web_tools_dns_mark_conflict": "Transparent DNS mark conflicts with other rules",
+  "web_tools_dns_interception_conflict": "Another tool handles DNS; configure local split DNS",
+  "web_tools_dns_ipv6_unavailable": "Transparent IPv6 DNS forwarding unavailable.",
+  "web_tools_dns_ipv6_path": "IPv6 DNS path",
+  "web_tools_dns_ipv6_native": "Native",
+  "web_tools_dns_ipv6_module": "Kernel module",
+  "web_tools_dns_ipv6_fallback": "Compatibility",
+  "web_tools_dns_ipv6_disabled": "Disabled",
+  "web_tools_dns_ipv6_module_missing": "No module available",
+  "web_tools_dns_ipv6_module_failed": "Module load failed",
+  "web_tools_dns_ipv6_loader_missing": "Module loader unavailable",
+  "web_tools_dns_ipv6_module_unchecked": "Module not checked",
+  "web_coexist_title": "Proxy coexistence wizard",
+  "web_coexist_detect": "Detect environment",
+  "web_coexist_refresh": "Detect again",
+  "web_coexist_unchecked": "Not detected yet. Reads and probes are on demand; no automatic DNS or connectivity checks.",
+  "web_coexist_environment": "1. Environment and prerequisites",
+  "web_coexist_inventory_empty": "No known proxy modules or apps found. Other proxies may still exist.",
+  "web_coexist_applied_mode": "Currently applied mode",
+  "web_coexist_filter_step": "2. Confirm the existing DNS mode",
+  "web_coexist_filter_label": "Mode currently used by the destination",
+  "web_coexist_filter_choose": "Choose the existing mode",
+  "web_coexist_filter_whitelist": "fake-ip · whitelist (automatic generation unavailable)",
+  "web_coexist_whitelist_hint": "Whitelist exclusions have different semantics. A safe fragment requires reviewing the existing list. Manually review and adjust the destination policy first, then select its actual mode. No automatic conversion to blacklist.",
+  "web_coexist_invalid_snapshot": "The current suffix, listener state, ports or node addresses are invalid. A safe fragment cannot be generated. Detect again.",
+  "web_coexist_snippet_step": "3. Copy and merge manually",
+  "web_coexist_yaml": "YAML merge fragment (read-only)",
+  "web_coexist_check_step": "4. Verify one target independently",
+  "web_coexist_no_peers": "No current peer is available to verify. You can still generate a fragment containing self addresses.",
+  "web_coexist_peer": "Current peer FQDN",
+  "web_coexist_peer_choose": "Choose a peer",
+  "web_coexist_address": "Current peer address",
+  "web_coexist_address_choose": "Choose an address",
+  "web_coexist_port": "Target TCP port (required)",
+  "web_coexist_resolver_port": "Proxy DNS port (optional)",
+  "web_coexist_invalid_port": "Ports must be 1–65535. The optional proxy DNS port must differ from the FoxyTail DNS port.",
+  "web_coexist_check": "Verify selected target",
+  "web_coexist_context_changed": "The current state changed or the result identity did not match. Detect again.",
+  "web_coexist_target": "TCP target",
+  "web_coexist_target_path": "Target connection path",
+  "web_coexist_path_socks": "root → local SOCKS5 → current peer",
+  "web_coexist_path_system": "root / system routing → current peer (proxy interface binding not verified)",
+  "web_coexist_dns_udp": "FoxyTail DNS · UDP",
+  "web_coexist_dns_tcp": "FoxyTail DNS · TCP",
+  "web_coexist_resolver_udp": "Optional proxy DNS · UDP",
+  "web_coexist_resolver_tcp": "Optional proxy DNS · TCP",
+  "web_coexist_tcp": "TCP connection to the specified port",
+  "web_coexist_pass": "This check passed",
+  "web_coexist_fail": "This check failed",
+  "web_coexist_skipped": "Skipped (no port supplied)",
+  "web_coexist_not_checked": "No check result returned",
+  "web_coexist_observed": "Observed addresses",
+  "web_tools_route_policy": "Traffic scope",
+  "web_tools_route_targets": "Custom networks",
+  "web_tools_selected": "Selected",
+  "web_tools_items": "items",
+  "web_tools_route_pending": "Unsaved changes",
+  "web_tools_route_saved": "Rules saved",
+  "web_tools_route_empty_subnets": "No destination networks are configured. This rule will not match any destinations.",
+  "web_tools_route_empty_selection": "No apps selected. The selected-app scope will not match any traffic.",
+  "web_tools_route_duplicate": "This network is already listed.",
+  "web_tools_route_show_all": "Show more apps",
+  "web_tools_route_probe": "Checking app-scope support…",
+  "web_tools_route_load_error": "Could not read current routing rules. Reload before editing.",
+  "web_tools_subnet_accept": "Accept subnet routes",
+  "web_tools_subnet_refresh": "Refresh subnet routes",
+  "web_tools_subnet_title": "Peer routes",
+  "web_tools_subnet_empty": "No peer subnet routes available",
+  "web_tools_subnet_unknown": "Route acceptance is unknown. Refresh to retry.",
+  "web_tools_subnet_mismatch": "Route acceptance differs from the request. You can retry.",
+  "web_tools_subnet_enable_confirm": "Accept subnet routes advertised by other peers?",
+  "web_tools_subnet_disable_confirm": "Stop accepting subnet routes advertised by other peers?",
+  "web_tools_subnet_add_network": "Add network",
+  "web_tools_subnet_primary": "Primary",
+  "web_tools_subnet_online": "Online",
+  "web_tools_subnet_ipv6_disabled": "IPv6 is disabled",
+  "web_tools_subnet_ipv6_unknown": "IPv6 status is unknown",
+  "web_tools_subnet_ipv6_saved": "IPv6 networks saved. Enable IPv6 to apply them.",
+  "web_tools_apply_rules": "Save & apply rules",
+  "web_tools_search_apps": "Search app, package or UID",
+  "web_tools_serve_private": "Tailnet access only",
+  "web_tools_serve_public": "Public internet access",
+  "web_tools_serve_listener_protocol": "Listener protocol",
+  "web_tools_serve_listener_port": "Listener port",
+  "web_tools_serve_local_target": "Local service address",
+  "web_tools_funnel_port_invalid": "Funnel listener ports must be 443, 8443 or 10000.",
+  "web_tools_port_invalid": "Port must be an integer from 1 to 65535.",
+  "web_tools_serve_public_hint": "Funnel exposes this service to the internet. Use HTTPS to proxy a local HTTP service.",
+  "web_tools_serve_add_done": "Service mapping added.",
+  "web_tools_mapping_count": "mappings",
+  "web_tools_no_peers": "No receiving devices available. Connect to your Tailnet and reload.",
+  "web_tools_file_count": "files",
+  "web_tools_file_search": "Find an inbox file",
+  "web_tools_total_size": "Inbox size",
+  "web_tools_logs_find": "Find in current log",
+  "web_tools_logs_rows": "Lines to read",
+  "web_tools_logs_live": "Auto-refresh",
+  "web_tools_logs_paused": "Auto-refresh paused",
+  "web_tools_logs_count": "Matched / loaded",
+  "web_tools_logs_copy": "Copy current results",
+  "web_tools_logs_no_match": "No lines match your search in the current log.",
+  "web_tools_logs_match_case": "Case sensitive",
+  "web_tools_logs_wrap": "Wrap lines",
+  "web_tools_logs_updated": "Last updated",
+  "web_tools_diag_collect": "Collect a diagnostic bundle",
+  "web_tools_diag_ready": "Diagnostic bundle ready",
+  "web_tools_diag_waiting": "No diagnostic bundle yet. Start collection when you are ready.",
+  "web_shell_workspace": "Network console",
+  "web_shell_network": "Network",
+  "web_shell_services": "Connections & services",
+  "web_shell_manage": "Management",
+  "web_shell_back_tools": "Back to tools",
+  "web_shell_connected": "Connected",
+  "web_shell_starting": "Connecting",
+  "web_shell_login": "Login required",
+  "web_shell_stopped": "Disconnected",
+  "web_shell_unknown": "Status unknown",
+  "web_shell_tasks": "Background tasks",
+  "web_shell_task_running": "Running",
+  "web_shell_task_done": "Completed",
+  "web_shell_task_error": "Failed",
+  "web_shell_task_cancelled": "Cancelled",
+  "web_shell_no_tasks": "No background tasks",
+  "web_task_cancel_pending": "Waiting for the backend to acknowledge cancellation.",
+  "web_task_cancel_failed": "Cancellation is unconfirmed; the task may still be running. You can retry cancellation.",
+  "web_context_refresh": "Refresh execution status",
+  "web_context_visual": "Visual editor",
+  "web_context_text": "Advanced text",
+  "web_context_current": "Current network",
+  "web_context_running": "Watching",
+  "web_context_stopped": "Watcher stopped",
+  "web_context_last": "Last execution",
+  "web_context_unconfirmed": "No confirmed execution result yet",
+  "web_context_success": "All actions succeeded",
+  "web_context_failed": "Failed or partially failed",
+  "web_context_empty": "No network rules configured",
+  "web_context_unsupported": "Unrecognized line. The original text is preserved; correct it in the advanced editor.",
+  "web_context_invalid": "Invalid rule: SSID cannot contain colons, #, quotes or control characters. An exit node needs a name or IP.",
+  "web_context_network": "Network condition",
+  "web_context_wifi": "Wi-Fi",
+  "web_context_cellular": "Cellular",
+  "web_context_action": "Action",
+  "web_context_up": "Start tunnel",
+  "web_context_down": "Stop tunnel",
+  "web_context_exit": "Use exit node",
+  "web_context_no_exit": "Clear exit node",
+  "web_context_target": "Exit node name or IP",
+  "web_context_add": "Add rule",
+  "web_context_edit": "Edit",
+  "web_context_move_up": "Move rule up",
+  "web_context_move_down": "Move rule down",
+  "web_context_apply_rule": "Update draft",
+  "web_net_controls_service": "Service",
+  "web_net_controls_verifying": "Checking device status…",
+  "web_net_controls_unknown": "Device status is unconfirmed. Changes are temporarily disabled.",
+  "web_net_connected": "Connected to Tailnet",
+  "web_net_connecting": "Connecting to your network",
+  "web_net_connecting_hint": "The service is running and waiting for connectivity or device approval.",
+  "web_net_unknown_hint": "Device status is unavailable. Refresh to try again.",
+  "web_net_status_stale": "Connection needs verification",
+  "web_net_service_runtime": "Service uptime",
+  "web_net_peer_total": "devices",
+  "web_net_offline_count": "offline",
+  "web_net_mode_tun": "Native TUN",
+  "web_net_mode_bridge": "Bridge tunnel",
+  "web_net_mode_proxy": "SOCKS5 proxy",
+  "web_net_working": "Working…",
+  "web_net_device_address": "Tailscale addresses",
+  "web_net_address_pending": "Device addresses appear once connected",
+  "web_net_copy_address": "Copy address",
+  "web_net_quick_access": "Quick access",
+  "web_net_quick_peers": "Find devices and copy addresses",
+  "web_net_quick_routing": "Manage apps and subnet scope",
+  "web_net_quick_dns": "Check the tunnel and DNS",
+  "web_net_quick_logs": "Inspect activity and errors",
+  "web_net_exit_scope": "App scope (root and Tailscale-marked traffic always exempt)",
+  "web_net_exit_proxy": "Only apps explicitly using the SOCKS5 proxy use this exit; ordinary app traffic is not captured.",
+  "web_net_exit_daemon": "Native TUN routes are managed by tailscaled; kernel exit coverage is not verified here.",
+  "web_net_exit_failed": "Routing does not match the selected exit preference, or the exit is unavailable. Internet traffic is not confirmed protected. Retry Apply.",
+  "web_net_exit_bridge_dual": "IPv4/IPv6 bridge policy verified for the selected app scope; exit reachability is not tested.",
+  "web_net_exit_bridge_v4": "IPv4 bridge exit policy applied. IPv6 is not covered and may still use the local network.",
+  "web_net_manage_exit": "Manage exit node",
+  "web_net_enabled": "Enabled",
+  "web_net_disabled": "Disabled",
+  "web_net_unknown": "Unknown",
+  "web_net_peers_search": "Search name, IP, or operating system",
+  "web_net_filter_all": "All",
+  "web_net_filter_online": "Online",
+  "web_net_filter_offline": "Offline",
+  "web_net_no_results": "No matching devices",
+  "web_net_reset_filter": "Clear filters",
+  "web_net_os": "Operating system",
+  "web_net_relay_region": "Relay region",
+  "web_net_peer_details": "View device details",
+  "web_net_peer_probe": "Test connection",
+  "web_net_peer_probe_invalid": "The test returned no valid result. Try again.",
+  "web_net_peer_direct": "Direct",
+  "web_net_peer_relay": "Peer relay",
+  "web_net_refresh": "Refresh",
+  "web_net_result_count": "results",
+  "web_net_exit_selection": "Selected exit preference",
+  "web_net_exit_unknown": "Current gateway is unconfirmed",
+  "web_net_exit_unknown_hint": "Waiting for a valid connection status. Check that the service is running, then retry.",
+  "web_net_exit_confirming": "Change sent; waiting for gateway confirmation",
+  "web_net_exit_local": "Device network",
+  "web_net_exit_local_hint": "Use this device’s internet connection directly",
+  "web_net_exit_choose": "Choose an exit node",
+  "web_net_exit_apply": "Apply selected exit",
+  "web_net_exit_unreachable": "No response",
+  "web_net_exit_unavailable": "The current exit node is offline. Choose another to restore connectivity.",
+  "web_net_traffic_period": "Reporting period",
+  "web_net_traffic_total": "Total transferred",
+  "web_net_traffic_chart": "Traffic history",
+  "web_net_traffic_no_samples": "Waiting for traffic samples",
+  "web_net_traffic_no_peer": "No peer traffic recorded yet",
+  "web_net_traffic_no_app": "No app upload traffic recorded yet",
+  "web_net_traffic_table": "View chart data",
+  "web_net_traffic_time": "Time",
+  "web_net_traffic_unrecorded": "Not recorded",
+  "web_net_topo_direct": "Direct",
+  "web_net_topo_relay": "Relay",
+  "web_net_topo_exit": "Exit",
+  "web_net_topology_hint": "Solid: established direct connection. Dashed: relayed via the named DERP region. Dotted: offline member.",
+  "web_net_topology_list": "Accessible device list",
+  "web_net_login_secure": "Device authorization",
+  "web_nav_dashboard": "Dashboard",
+  "web_nav_peers": "Peers",
+  "web_nav_exitnodes": "Exit",
+  "web_nav_traffic": "Traffic",
+  "web_nav_more": "More",
+  "web_loading": "Loading…",
+  "web_empty": "No data",
+  "web_error": "Something went wrong",
+  "web_save": "Save",
+  "web_cancel": "Cancel",
+  "web_delete": "Delete",
+  "web_add": "Add",
+  "web_copy": "Copy",
+  "web_open_browser": "Open in browser",
+  "web_offline": "Offline",
+  "web_close": "Close",
+  "web_retry": "Retry",
+  "web_op_failed": "Operation failed",
+  "web_misc_missing": "(missing)",
+  "web_misc_empty": "(empty)",
+  "web_misc_unavailable": "(unavailable)",
+  "web_dash_mode": "Mode",
+  "web_dash_stopped": "Stopped",
+  "web_dash_restart": "Restart",
+  "web_dash_self": "Self",
+  "web_dash_magicdns": "Tailnet MagicDNS",
+  "web_dash_exitnode": "Exit node",
+  "web_dash_traffic": "Traffic",
+  "web_dash_peers_online": "Online peers",
+  "web_dash_key_expiring": "Node key expires soon: ",
+  "web_dash_compat_warning": "Coexistence warnings",
+  "web_dash_status_stale": "Data may be out of date",
+  "web_hero_login_title": "Log in to Tailscale",
+  "web_hero_get_link": "Get login link",
+  "web_hero_minimize": "Minimize",
+  "web_hero_expand": "Log in / start",
+  "web_peers_title": "Peers",
+  "web_peers_list": "List",
+  "web_peers_topology": "Topology",
+  "web_peers_empty": "No peers found",
+  "web_peers_detail": "Peer details",
+  "web_peers_rx": "RX",
+  "web_peers_tx": "TX",
+  "web_exit_title": "Exit Nodes",
+  "web_exit_test": "Speed test",
+  "web_exit_current": "Current",
+  "web_exit_empty": "No exit nodes available",
+  "web_exit_set_done": "Exit node switched",
+  "web_exit_cleared": "Exit node cleared",
+  "web_net_exit_clear": "Clear exit node",
+  "web_acc_title": "Account",
+  "web_acc_login": "Log in",
+  "web_acc_login_url_hint": "Copy the link below and finish authorization in a browser:",
+  "web_acc_already": "Already logged in",
+  "web_acc_waiting": "Fetching login URL…",
+  "web_acc_authkey": "Auth key login",
+  "web_acc_authkey_hint": "Paste a tskey-auth- key",
+  "web_acc_login_authkey": "Log in with auth key",
+  "web_acc_headscale": "Headscale / custom control server",
+  "web_acc_headscale_hint": "https://headscale.example.com",
+  "web_acc_login_server": "Log in to this server",
+  "web_acc_accounts": "Accounts",
+  "web_acc_current_badge": "Current",
+  "web_acc_switch": "Switch",
+  "web_acc_logout": "Log out",
+  "web_acc_logout_confirm": "Log out? You will need to authorize again.",
+  "web_acc_switched": "Account switched",
+  "web_acc_logged_out": "Logged out",
+  "web_acc_logged_in": "Logged in",
+  "web_acc_not_logged_in": "Not logged in",
+  "web_tun_title": "Tunnel",
+  "web_tun_iface": "tailscale0 interface",
+  "web_tun_up": "Up",
+  "web_tun_down": "Down",
+  "web_tun_gateway": "Gateway",
+  "web_tun_hev": "hev-socks5-tunnel",
+  "web_tun_not_running": "not running",
+  "web_tun_socks_check": "SOCKS5 self-check",
+  "web_tun_socks_checking": "Checking…",
+  "web_tun_socks_ok": "proxy works",
+  "web_tun_socks_fail": "proxy failed",
+  "web_tun_derp": "DERP relay speed test",
+  "web_tun_derp_testing": "Testing…",
+  "web_tun_preferred": "Preferred",
+  "web_dns_title": "MagicDNS status",
+  "web_dns_check": "Check DNS status",
+  "web_dns_native": "Native DNS rules installed",
+  "web_dns_suffix": "Domain suffix",
+  "web_dns_running": "Running",
+  "web_dns_disabled": "Disabled (Tailnet MagicDNS may still be enabled)",
+  "web_dns_apply_pending": "Saved; waiting to apply",
+  "web_dns_disable_pending": "Waiting to disable",
+  "web_dns_tailnet_unavailable": "Tailnet unavailable; check login status",
+  "web_dns_missing_binary": "dnsmasq not found",
+  "web_dns_conflict": "Another DNS proxy conflicts",
+  "web_dns_redirect_failed": "DNS redirect rules failed",
+  "web_dns_cleanup_failed": "Previous DNS rules could not be removed",
+  "web_dns_process_failed": "DNS process failed to start",
+  "web_dns_reconcile_needed": "Node or configuration changed; update pending",
+  "web_dns_private_dns": "Strict Android Private DNS may bypass local resolution",
+  "web_dns_stopped": "Stopped",
+  "web_dns_degraded": "Degraded; check the service logs",
+  "web_route_title": "Routing",
+  "web_route_scope_all": "All",
+  "web_route_scope_selected": "Selected apps",
+  "web_route_scope_bypass": "Bypass selected",
+  "web_route_scope_all_hint": "All traffic goes through the tunnel (bounded by the subnet list)",
+  "web_route_scope_selected_hint": "Only checked apps go through the tunnel",
+  "web_route_scope_bypass_hint": "Checked apps bypass the tunnel; everything else uses it",
+  "web_route_no_owner": "Kernel lacks xt_owner; per-app routing is unavailable. Select All.",
+  "web_route_native_scope": "Native TUN routing is managed by Tailscale and supports All only. Switch to bridge for per-app routing.",
+  "web_route_apps": "Apps",
+  "web_route_subnets": "Routed subnets",
+  "web_route_subnets_add_hint": "CIDR, e.g. 100.64.0.0/10",
+  "web_route_subnets_invalid": "Invalid CIDR",
+  "web_route_apply_done": "Routing configuration applied",
+  "web_traffic_title": "Traffic",
+  "web_traffic_hourly": "Hourly (today)",
+  "web_traffic_daily": "Daily (7 days)",
+  "web_traffic_app_tx_hint": "Application bytes sent to configured subnets (IPv4 + IPv6); received bytes are not measured.",
+  "web_traffic_topn": "Top peers",
+  "web_traffic_by_app": "By app",
+  "web_traffic_rx": "RX",
+  "web_traffic_tx": "TX",
+  "web_traffic_touch_hint": "Touch the chart for values",
+  "web_traffic_uid": "UID ",
+  "web_serve_title": "Serve / Funnel",
+  "web_serve_serve": "Serve (tailnet)",
+  "web_serve_funnel": "Funnel (public)",
+  "web_serve_kind": "Kind",
+  "web_serve_add": "Add mapping",
+  "web_serve_empty": "No mappings",
+  "web_serve_del_confirm": "Delete this mapping?",
+  "web_files_title": "Files",
+  "web_files_inbox": "Inbox",
+  "web_files_empty": "Inbox is empty",
+  "web_files_send": "Send files",
+  "web_files_peer": "Target peer",
+  "web_files_send_btn": "Send",
+  "web_files_receive": "Import received files",
+  "web_files_choose": "Choose shared-storage files",
+  "web_files_close_browser": "Close file browser",
+  "web_files_location": "Current location",
+  "web_files_parent": "Parent folder",
+  "web_files_directory": "Folder",
+  "web_files_open_directory": "Open folder",
+  "web_files_directory_empty": "No browsable files or folders in this directory.",
+  "web_files_select": "Select",
+  "web_files_selected": "Selected",
+  "web_files_remove_selection": "Remove selected file",
+  "web_files_truncated": "Only the first 1000 entries are shown, not the complete directory. Open a more specific folder.",
+  "web_files_refresh_targets": "Refresh receiving devices",
+  "web_files_history": "Send history",
+  "web_files_history_empty": "No transfers yet.",
+  "web_files_invalid_response": "Invalid Taildrop response. Refresh and try again.",
+  "web_files_queued": "Queued, not sent yet",
+  "web_files_sending": "Sending",
+  "web_files_failed": "Send failed",
+  "web_files_cancelled": "Cancelled",
+  "web_files_interrupted": "Transfer interrupted",
+  "web_files_cancel_send": "Cancel send",
+  "web_files_cancel_requested": "Cancellation requested; waiting for the background job to acknowledge.",
+  "web_files_retry_unsuccessful": "Retry failed or cancelled files only",
+  "web_files_retry_target_missing": "The original target cannot receive right now. Refresh receiving devices before retrying.",
+  "web_files_download": "Download",
+  "web_files_export": "Export to Downloads",
+  "web_files_delete": "Delete",
+  "web_files_clear": "Clear inbox",
+  "web_files_deleted": "Deleted",
+  "web_files_cleared": "Cleared",
+  "web_files_exported_to": "Exported to",
+  "web_logs_title": "Logs",
+  "web_logs_daemon": "Daemon",
+  "web_logs_service": "Service",
+  "web_logs_follow": "Follow",
+  "web_logs_empty": "Log is empty",
+  "web_set_ipv6_hint": "Add an IPv6 CIDR under routed subnets first, e.g. fd7a:115c:a1e0::/48, or this setting cannot be applied.",
+  "web_set_title": "Settings",
+  "web_set_context": "Network context rules",
+  "web_set_context_hint": "One rule per line: <trigger>:<value>:<action>[:<arg>], e.g. ssid:HomeWifi:down, cellular:-:no-exit-node",
+  "web_set_hooks": "tun hooks (read-only)",
+  "web_set_hook_up": "tun.up",
+  "web_set_hook_down": "tun.down",
+  "web_set_backup": "Backup config",
+  "web_set_restore": "Restore config",
+  "web_set_restore_confirm": "Restore will overwrite current config. Continue?",
+  "web_set_theme": "Theme",
+  "web_set_theme_dark": "Dark",
+  "web_set_theme_light": "Light",
+  "web_set_theme_auto": "Auto",
+  "web_set_language": "Language",
+  "web_diag_title": "Diagnostics",
+  "web_diag_run": "Generate diagnostics bundle",
+  "web_diag_running": "Collecting (may take ~30s)…",
+  "web_diag_done": "Bundle written: ",
+  "web_diag_check": "Check local status",
+  "web_diag_item_config": "Runtime configuration",
+  "web_diag_item_service": "Service connection",
+  "web_diag_item_tunnel": "Tunnel interface",
+  "web_diag_item_routes": "Policy routes",
+  "web_diag_level_pass": "Healthy",
+  "web_diag_level_warn": "Attention",
+  "web_diag_level_fail": "Problem",
+  "web_diag_level_skip": "Not checked",
+  "web_diag_invalid_config": "Runtime configuration is unreadable. Inspect logs, then repair settings or restore a backup.",
+  "web_diag_pending": "Saved settings are pending. These checks use the currently applied configuration.",
+  "web_diag_applied": "Runtime configuration is readable with no pending marker.",
+  "web_diag_stopped": "The service is stopped. Start it from the dashboard when needed.",
+  "web_diag_connected": "The Tailscale backend is running.",
+  "web_diag_login": "Login or administrator approval is required. Open the account page.",
+  "web_diag_unreachable": "Backend connection state is unknown. Inspect the service log.",
+  "web_diag_needs_connection": "The service is not connected, so tunnel and route health were not assessed.",
+  "web_diag_proxy": "Proxy mode creates no tunnel interface. Run the SOCKS5 check in tunnel tools.",
+  "web_diag_interface_ready": "The interface and required bridge process exist; this does not prove peer reachability.",
+  "web_diag_interface_missing": "The interface or bridge process is missing. Inspect tunnel status and logs.",
+  "web_diag_managed_routes": "This mode does not use the module bridge policy routes.",
+  "web_diag_routes_ready": "Module routes and firewall rules match the applied configuration.",
+  "web_diag_routes_incomplete": "Complete route rules could not be verified; another module may have changed them. Inspect routing and service logs.",
+  "web_diag_dns_disabled": "Local MagicDNS is disabled; the resolver was not checked.",
+  "web_diag_dns_conflict": "DNS policies or rules conflict. Open tunnel tools for the specific reason.",
+  "web_diag_dns_limited": "Some DNS capabilities are unavailable. Check the actual listener and IPv6 path.",
+  "web_diag_dns_ready": "The DNS controller reports a healthy state; no external domains were queried.",
+  "web_diag_dns_unavailable": "DNS is not ready or its status is unreadable. Check the port, kernel capabilities and logs.",
+  "web_diag_unknown": "Unrecognized check result. Inspect the logs.",
+  "web_diag_view_details": "View details",
+  "web_diag_bundle_mode": "Bundle contents",
+  "web_diag_share": "Anonymized sharing bundle",
+  "web_diag_local": "Detailed local bundle",
+  "web_diag_share_hint": "Consistent aliases replace accounts, device names, SSIDs and addresses across files. Review contents before sharing.",
+  "web_diag_local_hint": "Includes network addresses, accounts and device information. Keep this bundle private.",
+  "web_more_title": "More",
+  "web_more_tunnel": "Tunnel",
+  "web_more_routing": "Routing",
+  "web_more_account": "Account",
+  "web_more_serve": "Serve/Funnel",
+  "web_more_logs": "Logs",
+  "web_more_settings": "Settings",
+  "web_more_diag": "Diagnostics",
+  "web_tools_subnet_unconfirmed": "The operation result is unconfirmed.",
+  "web_trial_description": "Try saved DNS, routing and mode settings. Confirm to keep them; otherwise the backend restores the previously applied settings even after this page closes. Later saves are preserved.",
+  "web_trial_health_hint": "Startup checks local Tailscale, DNS and tunnel state. Verify the remote connections you need. Saving remains available; confirm or revert before applying other settings.",
+  "web_backup_picker_hint": "Lists FoxyTail configuration backups in Download. Preview changes before restoring. Account identity is never displayed or restored.",
+  "web_tools_tunnel_desc": "Inspect the tunnel, DNS and proxy connectivity",
+  "web_tools_routing_desc": "Choose applications and destination networks",
+  "web_tools_serve_desc": "Expose local services privately or publicly",
+  "web_tools_account_desc": "Sign in, switch accounts or connect to Headscale",
+  "web_tools_logs_desc": "View, filter and copy runtime logs",
+  "web_tools_settings_desc": "Appearance, network settings and backups",
+  "web_tools_diag_desc": "Collect troubleshooting data and locate the bundle",
+  "web_tools_refresh_disabled": "Auto-refresh is disabled in Settings. Manual refresh remains available.",
+  "web_tools_saved_pending_desc": "Restart the service to apply network and background settings. Your connection will briefly pause.",
+  "web_tools_dns_port_hint": "Choose another port if an app already uses it.",
+  "web_tools_invalid_number": "Enter an integer within the allowed range.",
+  "web_tools_backup_desc": "Save configuration and hooks for migration or recovery.",
+  "web_tools_backup_file_hint": "The file is saved on your phone. Find it at this path in your file manager.",
+  "web_tools_context_load_error": "Could not read context rules. Retry before editing.",
+  "web_tools_account_list_desc": "Switching accounts reconnects the network.",
+  "web_tools_logout_desc": "Signing out disconnects this device from the Tailnet.",
+  "web_tools_bridge_desc": "A local SOCKS5 proxy and bridge tunnel carry the selected traffic.",
+  "web_tools_tun_desc": "Tailscale manages the native tunnel directly. All-app scope is currently supported.",
+  "web_tools_proxy_desc": "Apps must use the local SOCKS5 proxy explicitly. No tunnel interface is created.",
+  "web_tools_dns_endpoint_hint": "Resolves Tailnet domains and device short names only.",
+  "web_tools_dns_transparent_limit": "Queries with an unconfirmed network path stay with the original resolver. DoH / DoT are not intercepted.",
+  "web_tools_dns_packet_policy_conflict": "Existing firewall policy is preserved; local DNS only",
+  "web_tools_dns_ipv6_fallback_hint": "Compatibility mode does not intercept IPv6 DNS.",
+  "web_coexist_intro": "Generate a mihomo / Clash.Meta merge fragment from the applied configuration. Read-only: no proxy configuration or device networking changes.",
+  "web_coexist_inventory_hint": "Installed modules and apps are informational, not proof of a running proxy, core type or fake-IP mode.",
+  "web_coexist_prerequisite": "A ready local or transparent MagicDNS listener for the current Tailnet with FoxyTail-owned policy is required. Configure and apply it in Settings, then detect again. Legacy DNS is not supported by this wizard.",
+  "web_coexist_core_hint": "For mihomo / Clash.Meta cores supporting these fields only. Inspect the destination configuration and choose explicitly; the wizard never infers or switches its mode.",
+  "web_coexist_merge_hint": "Not a complete configuration! Merge into the existing dns and nameserver-policy maps and proxies / rules / fake-ip-filter lists, preserving other entries. Prepend routing rules and rule-mode filter rules before catchalls. Do not replace the whole configuration or use this local listener as a global DNS upstream.",
+  "web_coexist_scope_hint": "Only the current full Tailnet suffix and exact self/peer /32 and /128 addresses. No short names, company DNS, subnet or exit routes are imported. Regenerate for new IP-literal targets.",
+  "web_coexist_name_hint": "FoxyTail-Tailnet must be unique in the destination. If renamed, update all rule references too. Copying does not mean the destination configuration is applied.",
+  "web_coexist_tun_hint": "tun uses a direct outbound bound to tailscale0. The destination core needs interface-name support and interface permission. Another VPN app may not be able to use this binding.",
+  "web_coexist_socks_hint": "bridge / proxy uses the actual applied local SOCKS5 port. The destination proxy must be able to reach that listener.",
+  "web_coexist_ipv6_hint": "Global IPv6 settings are unchanged. For AAAA, separately confirm that FoxyTail IPv6 and the destination mihomo AAAA support are enabled.",
+  "web_coexist_check_hint": "Runs only on request. DNS uses root loopback access. TCP connects to the selected numeric address and port without sending application data. Generating a fragment is not required, and results do not prove it was applied.",
+  "web_coexist_ports_hint": "Supply an actual service port (1–65535); ports are not discovered. Optional DNS is fixed to 127.0.0.1 and must differ from the FoxyTail DNS port. Leave blank to explicitly skip.",
+  "web_coexist_checking": "Checking DNS and target TCP independently…",
+  "web_coexist_result_boundary": "Only the listed root probes at this moment are established. DNS, proxy DNS and TCP are independent, not substitutes for one another. They do not prove a third-party app path, proxy rules or configuration are active, nor verify UDP traffic, ACLs or application health.",
+  "web_tools_route_apps_desc": "Apps sharing a UID share the selection.",
+  "web_tools_route_subnets_desc": "Send these destination networks through the tunnel for the selected app scope.",
+  "web_tools_subnet_native_hint": "Tailscale manages accepted routes. Custom networks do not limit route acceptance.",
+  "web_tools_subnet_bridge_hint": "Add peer networks below to route them for the selected apps.",
+  "web_tools_subnet_proxy_hint": "Peer routes apply to proxy connections. Custom networks do not capture system traffic.",
+  "web_tools_subnet_added": "Added",
+  "web_tools_logs_scope": "Searches loaded log lines only.",
+  "web_tools_diag_contents": "Includes service logs, network state, compatibility checks and runtime configuration for troubleshooting.",
+  "web_context_description": "Run rules when the network changes. Actions for the same network run in order. Saving does not confirm successful execution.",
+  "web_net_stopped_hint": "Start the service to bring this device back onto your private network.",
+  "web_net_login_hint": "Authorize this device to join your private network.",
+  "web_net_no_exit_hint": "No exit node selected; saved subnet routes still apply.",
+  "web_net_exit_hint": "Selection and effective routing are separate; this is not an end-to-end connectivity test.",
+  "web_net_no_results_hint": "Try another keyword or clear the filters.",
+  "web_net_peer_probe_hint": "Test the Tailscale path to the selected address. The reply identifies its path, but does not verify services on the device.",
+  "web_net_exit_pending": "Not applied",
+  "web_net_exit_untested": "Not tested",
+  "web_net_traffic_chart_hint": "Total bytes for each interval, rather than current transfer speed.",
+  "web_net_traffic_top_hint": "Ranked by total traffic in retained records, independently of the period selected above.",
+  "web_hero_login_desc": "This device is not connected to the tailnet yet; log in to unlock everything",
+  "web_hero_banner_login": "Not logged in to the tailnet",
+  "web_files_selection_empty": "Browse shared storage and select up to 32 files.",
+  "web_files_storage_hint": "Unlock Android shared storage and check root permission. Symbolic links and non-regular files are not listed.",
+  "web_files_send_hint": "Only Taildrop-capable receiving devices are listed. Choose files and a target, then Send. Transfers continue in the background; return here for progress.",
+  "web_files_completed": "Accepted by receiving device",
+  "web_files_completed_count": "Files accepted",
+  "web_files_accepted_hint": "Job submission is not delivery. A file is completed only after the receiving device accepts it.",
+  "web_files_progress_unknown": "Waiting for daemon progress; sent bytes are unknown.",
+  "web_files_receive_hint": "Import completed files from /sdcard/Download/Taildrop; originals are retained. If direct receive mode is unknown, unlock shared storage and restart FoxyTail.",
+  "web_set_restart_required": "Configuration saved; restart the service to apply",
+  "web_set_applied": "Configuration applied",
+  "web_set_hooks_hint": "Edit in a terminal: /data/adb/foxytail/scripts/foxytail.tun.up / .down",
+  "web_diag_check_hint": "Check the service, tunnel, routes and DNS on demand. Test actual peer connectivity in device details.",
+  "tools_failed": "Operation failed",
+  "tools_detect_first": "Detect the environment first.",
+  "tools_invalid_response": "The backend returned an incomplete or unsupported result.",
+  "tools_save": "Save with file picker",
+  "tools_share": "Share archive",
+  "tools_import": "Import archive with file picker",
+  "tools_imported_archive": "Imported private archive",
+  "tools_backup_sensitive": "Backups may contain private configuration and hook contents. Share only with a trusted recipient.",
+  "tools_select": "Select",
+  "tools_select_archive": "Select an archive first.",
+  "tools_baseline": "Saved configuration baseline SHA-256",
+  "tools_preview_expired": "The preview expired.",
+  "app_name": "FoxyTail",
+  "send": "Send",
+  "pick_files": "Choose files",
+  "targets_failed": "Devices could not be loaded.",
+  "send_confirm": "Send {arg1} file(s) to {arg2}?",
+  "@send_confirm": {
+    "placeholders": {
+      "arg1": {
+        "type": "int"
+      },
+      "arg2": {
+        "type": "String"
+      }
+    }
+  },
+  "retry_confirm": "Retry only unsuccessful files to {arg1}? Already completed files will not be sent again.",
+  "@retry_confirm": {
+    "placeholders": {
+      "arg1": {
+        "type": "String"
+      }
+    }
+  },
+  "retry": "Retry unsuccessful files",
+  "cancel": "Cancel",
+  "close": "Close",
+  "open": "Open",
+  "share": "Share",
+  "working": "Preparing transfer…",
+  "staging": "Preparing a local copy: {arg1} · {arg2}",
+  "@staging": {
+    "placeholders": {
+      "arg1": {
+        "type": "String"
+      },
+      "arg2": {
+        "type": "String"
+      }
+    }
+  },
+  "waiting": "Waiting for progress",
+  "progress_unavailable": "No final byte-progress report.",
+  "known_progress": "{arg1} / {arg2} · {arg3}/s",
+  "@known_progress": {
+    "placeholders": {
+      "arg1": {
+        "type": "String"
+      },
+      "arg2": {
+        "type": "String"
+      },
+      "arg3": {
+        "type": "String"
+      }
+    }
+  },
+  "cancel_requested": "Cancellation requested; waiting for the worker to acknowledge.",
+  "cancelled_local": "Cancelled; no transfer was submitted.",
+  "busy": "A transfer is already active.",
+  "imported": "Imported {arg1} completed file(s).",
+  "@imported": {
+    "placeholders": {
+      "arg1": {
+        "type": "int"
+      }
+    }
+  },
+  "saved": "Copy saved.",
+  "error_title": "FoxyTail could not complete this operation",
+  "root_unavailable": "Could not start su. Allow superuser access for FoxyTail in Magisk/KernelSU, then reopen the app.",
+  "root_denied": "The root command did not receive UID 0. Check superuser authorization in Magisk/KernelSU.",
+  "root_failed": "su exited before starting the module command. Check superuser authorization.",
+  "backend_failed": "The FoxyTail module command failed after root access succeeded.",
+  "module_missing": "The module script is missing or unreadable. Check that the module is installed and enabled.",
+  "timeout": "The operation timed out. Check root authorization and module status.",
+  "invalid_response": "The module returned an invalid response; update the module and app.",
+  "invalid_uri": "Only readable content URIs are accepted. Share the file again or use Choose files.",
+  "file_limit": "Choose at most 32 files, no larger than 2 GiB each.",
+  "choose_first": "Choose files and a device first.",
+  "export_failed": "Could not read/save the file. Check free space and try again.",
+  "no_viewer": "No app can open this file. Use Share or Save a copy instead.",
+  "service_channel": "Taildrop transfers",
+  "service_timeout": "Foreground monitoring stopped; reopen History for the task state.",
+  "poll_failed": "Cannot read transfer status; the result is unknown. Reopen the history. {arg1}",
+  "@poll_failed": {
+    "placeholders": {
+      "arg1": {
+        "type": "String"
+      }
+    }
+  },
+  "interrupted_stage": "Previous local preparation was interrupted. Select those files again; unsubmitted private copies are cleaned up.",
+  "queued": "Queued",
+  "sending": "Sending",
+  "completed": "Completed",
+  "failed": "Failed",
+  "cancelled": "Cancelled",
+  "interrupted": "Interrupted",
+  "selection_errors": "Some files could not be selected:\n{arg1}",
+  "@selection_errors": {
+    "placeholders": {
+      "arg1": {
+        "type": "String"
+      }
+    }
+  },
+  "staging_failed": "Local preparation failed; no send was submitted. {arg1}",
+  "@staging_failed": {
+    "placeholders": {
+      "arg1": {
+        "type": "String"
+      }
+    }
+  },
+  "submission_unknown": "Submission is unconfirmed; check the transfer history. {arg1}",
+  "@submission_unknown": {
+    "placeholders": {
+      "arg1": {
+        "type": "String"
+      }
+    }
+  },
+  "notifications_hint": "Notifications are disabled; transfers still run.",
+  "files_clear_confirm": "Permanently delete all files from the private inbox, including files hidden by search? Saved and shared copies are not deleted.",
+  "files_export_confirm": "Copy {arg1} to shared Download storage? Other apps with storage access may read this copy.",
+  "@files_export_confirm": {
+    "placeholders": {
+      "arg1": {
+        "type": "String"
+      }
+    }
+  },
+  "files_copied": "Path copied.",
+  "repair_files_saving": "Preparing {arg1} · {arg2} copied",
+  "@repair_files_saving": {
+    "placeholders": {
+      "arg1": {
+        "type": "String"
+      },
+      "arg2": {
+        "type": "String"
+      }
+    }
+  },
+  "repair_files_save_committing": "Saving {arg1} · {arg2} written. Do not close the app.",
+  "@repair_files_save_committing": {
+    "placeholders": {
+      "arg1": {
+        "type": "String"
+      },
+      "arg2": {
+        "type": "String"
+      }
+    }
+  },
+  "repair_files_save_partial": "Save failed. The destination may contain incomplete data.",
+  "files_operation_busy": "A control operation is in progress; try again shortly.",
+  "repair_shell_stop": "Stop service",
+  "repair_traffic_previous": "Previous interval",
+  "repair_traffic_next": "Next interval",
+  "repair_traffic_select": "Select interval",
+  "repair_files_ignored_inbox": "{arg1} incompatible entries are hidden.",
+  "@repair_files_ignored_inbox": {
+    "placeholders": {
+      "arg1": {
+        "type": "int"
+      }
+    }
+  },
+  "repair_files_ignored_import": "{arg1} files have unsupported names and were not imported.",
+  "@repair_files_ignored_import": {
+    "placeholders": {
+      "arg1": {
+        "type": "int"
+      }
+    }
+  },
+  "repair_files_ignored_clear": "{arg1} incompatible entries were preserved.",
+  "@repair_files_ignored_clear": {
+    "placeholders": {
+      "arg1": {
+        "type": "int"
+      }
+    }
+  },
+  "taildrop_sort": "Sort inbox",
+  "taildrop_sort_orders_0": "Newest first",
+  "taildrop_sort_orders_1": "Oldest first",
+  "taildrop_sort_orders_2": "Name A–Z",
+  "taildrop_sort_orders_3": "Largest first",
+  "taildrop_selected_count": "{arg1} selected · {arg2} matches",
+  "@taildrop_selected_count": {
+    "placeholders": {
+      "arg1": {
+        "type": "int"
+      },
+      "arg2": {
+        "type": "int"
+      }
+    }
+  },
+  "taildrop_select_matches": "Select matches",
+  "taildrop_deselect": "Deselect all",
+  "taildrop_share_selected": "Share selected",
+  "taildrop_export_selected": "Export selected",
+  "taildrop_delete_selected": "Delete selected",
+  "taildrop_delete_confirm": "Delete these {arg1} files from the private inbox? Saved and shared copies stay unchanged.",
+  "@taildrop_delete_confirm": {
+    "placeholders": {
+      "arg1": {
+        "type": "int"
+      }
+    }
+  },
+  "taildrop_export_confirm": "Copy these {arg1} files to Download? Other apps with storage access can read the copies.",
+  "@taildrop_export_confirm": {
+    "placeholders": {
+      "arg1": {
+        "type": "int"
+      }
+    }
+  },
+  "taildrop_batch_result": "{arg1} succeeded · {arg2} failed",
+  "@taildrop_batch_result": {
+    "placeholders": {
+      "arg1": {
+        "type": "int"
+      },
+      "arg2": {
+        "type": "int"
+      }
+    }
+  },
+  "taildrop_share_progress": "Preparing {arg1}/{arg2} · {arg3} · {arg4} copied",
+  "@taildrop_share_progress": {
+    "placeholders": {
+      "arg1": {
+        "type": "int"
+      },
+      "arg2": {
+        "type": "int"
+      },
+      "arg3": {
+        "type": "String"
+      },
+      "arg4": {
+        "type": "String"
+      }
+    }
+  },
+  "taildrop_clear_selection": "Clear selected files",
+  "taildrop_delete_history": "Delete record",
+  "taildrop_clear_history": "Clear finished history",
+  "taildrop_delete_history_confirm": "Delete this send record? Original files and received copies stay unchanged. This record will no longer be available for retry.",
+  "taildrop_clear_history_confirm": "Delete all finished send records? Active transfers and original files stay unchanged. Deleted records will no longer be available for retry.",
+  "taildrop_history_removed": "{arg1} records removed · {arg2} active records kept",
+  "@taildrop_history_removed": {
+    "placeholders": {
+      "arg1": {
+        "type": "int"
+      },
+      "arg2": {
+        "type": "int"
+      }
+    }
+  },
+  "taildrop_selection_limit": "Limit is 32 files.",
+  "repair_tools_diag_unconfirmed": "The latest check has no confirmed result yet.",
+  "control_reconnect": "Check operation",
+  "control_acknowledge": "Acknowledge unknown",
+  "control_unknown_title": "The result is not confirmed",
+  "control_unknown_warning": "Verify the actual service, account and configuration state before another change.",
+  "control_unknown_acknowledged": "Observation cleared; verify the actual state.",
+  "control_reconnecting": "Reconnecting to: {arg1}",
+  "@control_reconnecting": {
+    "placeholders": {
+      "arg1": {
+        "type": "String"
+      }
+    }
+  },
+  "control_incompatible": "App and module control protocols are incompatible; install the matching signed module and app.",
+  "control_upgrading": "Module {arg1} is upgrading. Changes are disabled.",
+  "@control_upgrading": {
+    "placeholders": {
+      "arg1": {
+        "type": "String"
+      }
+    }
+  },
+  "control_disabled": "Module {arg1} is disabled in the root manager.",
+  "@control_disabled": {
+    "placeholders": {
+      "arg1": {
+        "type": "String"
+      }
+    }
+  },
+  "control_ready": "Module {arg1} · root control ready",
+  "@control_ready": {
+    "placeholders": {
+      "arg1": {
+        "type": "String"
+      }
+    }
+  },
+  "control_unavailable": "Root control is not ready. Check module compatibility and app authorization.",
+  "control_busy": "Operation in progress: {arg1}.",
+  "@control_busy": {
+    "placeholders": {
+      "arg1": {
+        "type": "String"
+      }
+    }
+  },
+  "control_record_failed": "Cannot retain operation ownership. No command was submitted.",
+  "control_running": "Running: {arg1}",
+  "@control_running": {
+    "placeholders": {
+      "arg1": {
+        "type": "String"
+      }
+    }
+  },
+  "control_finished": "Completed: {arg1}.",
+  "@control_finished": {
+    "placeholders": {
+      "arg1": {
+        "type": "String"
+      }
+    }
+  },
+  "control_unknown": "The operation result is unknown; do not repeat the change. {arg1}",
+  "@control_unknown": {
+    "placeholders": {
+      "arg1": {
+        "type": "String"
+      }
+    }
+  },
+  "control_copied": "Copied",
+  "control_invalid_url": "Only valid HTTP or HTTPS links can be opened.",
+  "control_archive_limit": "Configuration archives must not exceed 1 MiB.",
+  "control_importing": "Importing the selected archive. Rotation does not restart the upload.",
+  "control_import_interrupted": "Archive import was interrupted; no restore was submitted.",
+  "files_export_directory": "Save selected to folder",
+  "files_export_directory_confirm": "Save copies of these {arg1} files to a folder you choose? Existing files will not be overwritten.",
+  "@files_export_directory_confirm": {
+    "placeholders": {
+      "arg1": {
+        "type": "int"
+      }
+    }
+  }
+}
