@@ -15,16 +15,18 @@ final class MorePage extends ControlPage {
         group(R.string.web_tools_network,
                 new String[]{"tunnel", "routing", "serve"},
                 new int[]{R.drawable.ic_router, R.drawable.ic_alt_route, R.drawable.ic_dns},
-                new int[]{R.string.web_more_tunnel, R.string.web_more_routing, R.string.web_more_serve});
+                new int[]{R.string.web_more_tunnel, R.string.web_more_routing, R.string.web_more_serve},
+                new int[]{R.string.web_tools_tunnel_desc, R.string.web_tools_routing_desc, R.string.web_tools_serve_desc});
         group(R.string.web_tools_device,
-                new String[]{"account", "files"}, new int[]{R.drawable.ic_person, R.drawable.ic_folder},
-                new int[]{R.string.web_more_account, R.string.web_more_files});
+                new String[]{"account"}, new int[]{R.drawable.ic_person},
+                new int[]{R.string.web_more_account}, new int[]{R.string.web_tools_account_desc});
         group(R.string.web_tools_maintenance,
                 new String[]{"logs", "diagnostics", "settings"},
                 new int[]{R.drawable.ic_article, R.drawable.ic_bug_report, R.drawable.ic_settings},
-                new int[]{R.string.web_more_logs, R.string.web_more_diag, R.string.web_more_settings});
+                new int[]{R.string.web_more_logs, R.string.web_more_diag, R.string.web_more_settings},
+                new int[]{R.string.web_tools_logs_desc, R.string.web_tools_diag_desc, R.string.web_tools_settings_desc});
     }
-    private void group(int title, String[] destinations, int[] icons, int[] labels) {
+    private void group(int title, String[] destinations, int[] icons, int[] labels, int[] descriptions) {
         LinearLayout group = new LinearLayout(activity); group.setOrientation(LinearLayout.VERTICAL);
         LinearLayout.LayoutParams groupParams = new LinearLayout.LayoutParams(-1, -2); groupParams.bottomMargin = dp(20);
         content.addView(group, groupParams);
@@ -40,12 +42,13 @@ final class MorePage extends ControlPage {
             GradientDrawable background = new GradientDrawable(); background.setCornerRadius(dp(16));
             background.setColor(MaterialColors.getColor(card, com.google.android.material.R.attr.colorSurfaceContainerLow));
             background.setStroke(dp(1), MaterialColors.getColor(card, com.google.android.material.R.attr.colorOutlineVariant)); card.setBackground(background);
-            LinearLayout.LayoutParams cardParams = new LinearLayout.LayoutParams(0, -1, 1); if (columns && i % 2 == 1) cardParams.setMarginStart(dp(10)); row.addView(card, cardParams);
+            LinearLayout.LayoutParams cardParams = new LinearLayout.LayoutParams(0, -2, 1); if (columns && i % 2 == 1) cardParams.setMarginStart(dp(10)); row.addView(card, cardParams);
             ImageView icon = new ImageView(activity); icon.setImageResource(icons[i]); icon.setColorFilter(MaterialColors.getColor(icon, androidx.appcompat.R.attr.colorPrimary)); icon.setPadding(dp(11), dp(11), dp(11), dp(11));
             GradientDrawable tile = new GradientDrawable(); tile.setCornerRadius(dp(13)); tile.setColor(MaterialColors.getColor(icon, com.google.android.material.R.attr.colorPrimaryContainer)); icon.setBackground(tile); card.addView(icon, new LinearLayout.LayoutParams(dp(44), dp(44)));
             LinearLayout copy = new LinearLayout(activity); copy.setOrientation(LinearLayout.VERTICAL);
             LinearLayout.LayoutParams copyParams = new LinearLayout.LayoutParams(0, -2, 1); copyParams.setMargins(dp(14), 0, dp(14), 0); card.addView(copy, copyParams);
             TextView name = ControlUi.text(activity, s(labels[i]), 15); name.setTypeface(null, Typeface.BOLD); copy.addView(name);
+            TextView description = hint(copy, s(descriptions[i])); ((LinearLayout.LayoutParams) description.getLayoutParams()).topMargin = dp(5);
             ImageView arrow = new ImageView(activity); arrow.setImageResource(R.drawable.ic_chevron_right); arrow.setColorFilter(MaterialColors.getColor(arrow, com.google.android.material.R.attr.colorOnSurfaceVariant)); card.addView(arrow, new LinearLayout.LayoutParams(dp(19), dp(19)));
             String destination = destinations[i]; card.setFocusable(true); card.setOnClickListener(v -> activity.navigate(destination));
             if (columns && i == destinations.length - 1 && i % 2 == 0) { android.view.View space = new android.view.View(activity); LinearLayout.LayoutParams p = new LinearLayout.LayoutParams(0, 1, 1); p.setMarginStart(dp(10)); row.addView(space, p); }

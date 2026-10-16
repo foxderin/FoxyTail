@@ -29,7 +29,7 @@ import java.util.function.Consumer;
 public class ControlActivity extends AppCompatActivity {
     private static final int PICK_BACKUP = 50, SAVE_ARTIFACT = 51;
     private static final ExecutorService FILES = Executors.newFixedThreadPool(2);
-    static final String[] PAGES = {"overview", "peers", "account", "tunnel", "routing", "settings", "context", "trial", "serve", "coexist", "traffic", "logs", "diagnostics", "backup"};
+    static final String[] PAGES = {"overview", "peers", "files", "account", "tunnel", "routing", "settings", "context", "trial", "serve", "coexist", "traffic", "logs", "diagnostics", "backup"};
     static final String DESTINATION = "destination";
     private static final String[] NAV = {"overview", "peers", "files", "traffic", "tunnel", "routing", "serve", "account", "logs", "settings", "diagnostics", "more"};
     private static final int[] NAV_LABELS = {R.string.web_nav_dashboard, R.string.web_nav_peers, R.string.web_files_title, R.string.web_nav_traffic, R.string.web_tun_title, R.string.web_route_title, R.string.web_serve_title, R.string.web_acc_title, R.string.web_logs_title, R.string.web_set_title, R.string.web_diag_title, R.string.web_nav_more};
@@ -37,6 +37,8 @@ public class ControlActivity extends AppCompatActivity {
     Bundle drafts;
     ControlClient client;
     private ControlPage page;
+    private FilesPage filesPage;
+    private Bundle filesState;
     private String destination = "overview", saveId, saveName;
     private String createdLanguage, createdTheme;
     private final ArrayDeque<String> back = new ArrayDeque<>();
@@ -72,8 +74,6 @@ public class ControlActivity extends AppCompatActivity {
     }
 
     @Override protected void attachBaseContext(Context base) { super.attachBaseContext(ControlUi.localized(base)); }
-    protected String initialDestination() { return "overview"; }
-    protected ControlPage createFilesPage() { throw new IllegalStateException("Files require MainActivity"); }
     static String controlDestination(String name) {
         return "more".equals(name) || java.util.Arrays.asList(PAGES).contains(name) ? name : "overview";
     }
@@ -83,9 +83,10 @@ public class ControlActivity extends AppCompatActivity {
         android.content.SharedPreferences appearance = getSharedPreferences("interface", MODE_PRIVATE);
         createdLanguage = appearance.getString("language", "auto"); createdTheme = appearance.getString("theme", "auto");
         drafts = saved == null || saved.getBundle("drafts") == null ? new Bundle() : saved.getBundle("drafts");
-        destination = "files".equals(initialDestination()) ? "files" : controlDestination(getIntent().getStringExtra(DESTINATION));
+        destination = filesIntent(getIntent()) ? "files" : controlDestination(getIntent().getStringExtra(DESTINATION));
         if (saved != null) {
-            if (!"files".equals(destination)) destination = controlDestination(saved.getString("page", destination));
+            destination = controlDestination(saved.getString("page", destination));
+            filesState = saved.getBundle("files");
             saveId = saved.getString("saveId"); saveName = saved.getString("saveName");
             String[] history = saved.getStringArray("back"); if (history != null) for (String item : history) back.addLast(controlDestination(item));
         }
@@ -95,6 +96,7 @@ public class ControlActivity extends AppCompatActivity {
         WindowCompat.setDecorFitsSystemWindows(getWindow(), false);
         buildShell();
         setContentView(root); ViewCompat.requestApplyInsets(root); showPage(destination); showOperation();
+        if (saved == null && filesIntent(getIntent())) filesPage.acceptIntent(getIntent());
         getOnBackPressedDispatcher().addCallback(this, new OnBackPressedCallback(true) {
             @Override public void handleOnBackPressed() { goBack(); }
         });
@@ -219,6 +221,7 @@ public class ControlActivity extends AppCompatActivity {
     private String taskDestination(String command) {
         switch (command) {
             case "control": case "mode-set": return "overview";
+            case "speedtest-exitnodes": case "exitnode": return "peers";
 
             case "derp-speedtest": return "tunnel";
             case "diag": case "diag-check": return "diagnostics";
@@ -266,9 +269,17 @@ public class ControlActivity extends AppCompatActivity {
             TextView dot = text("●", 11, false); dot.setTextColor("done".equals(task.state) ? androidx.core.content.ContextCompat.getColor(this, R.color.foxy_ok) : color("running".equals(task.state) ? com.google.android.material.R.attr.colorTertiary : com.google.android.material.R.attr.colorOutline)); item.addView(dot); taskItems.addView(item);
         }
     }
+    private static boolean filesIntent(Intent intent) {
+        return Intent.ACTION_SEND.equals(intent.getAction()) || Intent.ACTION_SEND_MULTIPLE.equals(intent.getAction()) || intent.getBooleanExtra("history", false);
+    }
+    private FilesPage filesPage() {
+        if (filesPage == null) { filesPage = new FilesPage(this, filesState); filesState = null; }
+        return filesPage;
+    }
     @Override protected void onNewIntent(Intent intent) {
         super.onNewIntent(intent); setIntent(intent);
-        if (!"files".equals(initialDestination()) && intent.hasExtra(DESTINATION)) navigate(controlDestination(intent.getStringExtra(DESTINATION)));
+        if (filesIntent(intent)) { navigate("files"); filesPage.acceptIntent(intent); }
+        else if (intent.hasExtra(DESTINATION)) navigate(controlDestination(intent.getStringExtra(DESTINATION)));
     }
     @Override protected void onResume() {
         super.onResume();
@@ -290,27 +301,35 @@ public class ControlActivity extends AppCompatActivity {
             stripPoller.postDelayed(this, powerSave ? 30000 : 15000);
         }
     };
-    @Override protected void onDestroy() { cancelShellReads(); if (taskPopup != null) taskPopup.dismiss(); if (page != null) page.close(); importCallback = null; super.onDestroy(); }
+    @Override protected void onDestroy() {
+        cancelShellReads(); if (taskPopup != null) taskPopup.dismiss();
+        if (page != null && page != filesPage) page.close();
+        if (filesPage != null) filesPage.close();
+        importCallback = null; super.onDestroy();
+    }
     @Override protected void onSaveInstanceState(Bundle state) {
         state.putString("page", destination); state.putBundle("drafts", drafts); state.putString("saveId", saveId); state.putString("saveName", saveName);
         state.putLong("accountRevision", observedAccountRevision);
+        if (filesPage != null) { Bundle files = new Bundle(); filesPage.saveState(files); state.putBundle("files", files); }
+        else if (filesState != null) state.putBundle("files", filesState);
         state.putStringArray("back", back.toArray(new String[0])); super.onSaveInstanceState(state);
     }
     private void goBack() {
-        if ("files".equals(destination)) finish();
-        else if (!back.isEmpty()) showPage(back.removeLast());
-        else if (!"overview".equals(destination)) showPage("overview");
+        if (!back.isEmpty()) showPage(back.removeLast());
+        else if (!"overview".equals(destination) && !"files".equals(destination)) showPage("overview");
         else finish();
     }
     void navigate(String name) {
-        if ("files".equals(name)) { openFiles(); return; }
         name = controlDestination(name);
         if (destination.equals(name)) return;
         back.addLast(destination);
         showPage(name);
     }
     private void showPage(String name) {
-        if (page != null) page.close();
+        if (page != null) {
+            page.content.animate().cancel(); page.content.setAlpha(1f); page.content.setTranslationY(0);
+            if (page == filesPage) page.pause(); else page.close();
+        }
         statusListeners.clear();
         destination = name;
         switch (name) {
@@ -328,12 +347,13 @@ public class ControlActivity extends AppCompatActivity {
             case "logs": page = new LogsPage(this); break;
             case "diagnostics": page = new DiagnosticsPage(this); break;
             case "backup": page = new BackupPage(this); break;
-            case "files": page = createFilesPage(); break;
+            case "files": page = filesPage(); break;
             case "more": page = new MorePage(this); break;
             default: destination = "overview"; page = new OverviewPage(this);
         }
         pageHost.removeAllViews(); pageHost.addView(page.content); scroll.scrollTo(0, 0); heading.setText(page.title()); showMessage("");
         footerHost.removeAllViews(); footerHost.addView(page.stickyActions, new LinearLayout.LayoutParams(-1, -2));
+        page.content.animate().cancel(); page.content.setAlpha(1f); page.content.setTranslationY(0);
         /* WebUI ft-page-in: 160ms fade + 5px rise; honor reduced motion. */
         float animatorScale = android.provider.Settings.Global.getFloat(getContentResolver(), android.provider.Settings.Global.ANIMATOR_DURATION_SCALE, 1f);
         if (animatorScale > 0) {
@@ -353,10 +373,9 @@ public class ControlActivity extends AppCompatActivity {
         renderStrip();
         if (resumed) page.start();
     }
-    void openFiles() { startActivity(new Intent(this, MainActivity.class).addFlags(Intent.FLAG_ACTIVITY_REORDER_TO_FRONT | Intent.FLAG_ACTIVITY_SINGLE_TOP)); }
     protected void scrollToSection(View section) {
         scroll.post(() -> {
-            if (isDestroyed() || section.getParent() == null) return;
+            if (isDestroyed() || !section.isAttachedToWindow()) return;
             android.graphics.Rect bounds = new android.graphics.Rect(); section.getDrawingRect(bounds);
             scroll.offsetDescendantRectToMyCoords(section, bounds); scroll.smoothScrollTo(0, bounds.top);
         });
@@ -688,6 +707,7 @@ public class ControlActivity extends AppCompatActivity {
     }
     @Override protected void onActivityResult(int request, int result, Intent data) {
         super.onActivityResult(request, result, data);
+        if (request == FilesPage.PICK || request == FilesPage.SAVE) { filesPage().onActivityResult(request, result, data); return; }
         if (result != RESULT_OK || data == null || data.getData() == null) return;
         Uri uri = data.getData(); Context context = getApplicationContext(); WeakReference<ControlActivity> owner = new WeakReference<>(this);
         if (request == PICK_BACKUP) {
@@ -702,5 +722,9 @@ public class ControlActivity extends AppCompatActivity {
                 } catch (Exception e) { postFailure(owner, e); }
             });
         }
+    }
+    @Override public void onRequestPermissionsResult(int request, String[] permissions, int[] results) {
+        super.onRequestPermissionsResult(request, permissions, results);
+        if (request == FilesPage.NOTIFY) filesPage().onRequestPermissionsResult(request, permissions, results);
     }
 }

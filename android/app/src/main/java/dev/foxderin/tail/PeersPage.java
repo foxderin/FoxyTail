@@ -17,6 +17,7 @@ import org.json.JSONArray;
 import org.json.JSONObject;
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.LinkedHashMap;
@@ -37,6 +38,8 @@ final class PeersPage extends ControlPage {
     private String inventoryState;
     private boolean failed;
     private JSONObject source;
+    private View measureExits;
+    private final Map<String, Double> exitLatencies = new HashMap<>();
 
     private static final class PeerRow {
         JSONObject peer;
@@ -54,6 +57,7 @@ final class PeersPage extends ControlPage {
         TextView totalLabel = ControlUi.muted(activity, s(R.string.web_net_peer_total), R.dimen.ft_caption); LinearLayout.LayoutParams totalParams = new LinearLayout.LayoutParams(-2, -2); totalParams.setMarginStart(dp(compact ? 6 : 9)); totalParams.gravity = Gravity.BOTTOM; totalParams.bottomMargin = dp(5); summary.addView(totalLabel, totalParams);
         onlineCount = ControlUi.muted(activity, "", R.dimen.ft_caption); onlineCount.setTextSize(compact ? 10 : 12); LinearLayout.LayoutParams onlineParams = new LinearLayout.LayoutParams(0, -2, 1); onlineParams.setMarginStart(dp(compact ? 13 : 24)); summary.addView(onlineCount, onlineParams);
         summary.addView(ControlUi.button(activity, s(R.string.web_net_refresh), R.drawable.ic_refresh, () -> { if (isCurrent()) refresh(); }));
+        measureExits = ControlUi.iconButton(activity, R.drawable.ic_speed, s(R.string.web_exit_test), this::measureExits); summary.addView(measureExits);
         LinearLayout toolbar = section(); ((LinearLayout) toolbar.getParent()).setPadding(dp(compact ? 16 : 20), dp(compact ? 16 : 20), dp(compact ? 16 : 20), dp(compact ? 16 : 20));
         LinearLayout top = row(toolbar); top.setOrientation(compact ? LinearLayout.VERTICAL : LinearLayout.HORIZONTAL); top.setGravity(Gravity.CENTER_VERTICAL); ((LinearLayout.LayoutParams) top.getLayoutParams()).bottomMargin = dp(15);
         search = ControlUi.compactInput(top, s(R.string.web_net_peers_search), activity.drafts.getString("network.peerSearch", ""), InputType.TYPE_CLASS_TEXT);
@@ -100,7 +104,7 @@ final class PeersPage extends ControlPage {
         if (source == status && fresh == current) return;
         String observedIdentity = ExitNodesPage.identityOf(status);
         if (!java.util.Objects.equals(identity, observedIdentity)) {
-            peers = null; retainedRows.clear(); peerRows.removeAllViews();
+            peers = null; retainedRows.clear(); peerRows.removeAllViews(); exitLatencies.clear();
             if (detail != null) detail.dismiss();
         }
         identity = observedIdentity;
@@ -119,6 +123,26 @@ final class PeersPage extends ControlPage {
             source = status; fresh = false; failed = true; peers = null;
             state.setText("—"); onlineCount.setText(s(R.string.web_net_status_stale)); render();
         }
+    }
+    private void measureExits() {
+        if (!isCurrent() || !fresh || activity.client.busy()) return;
+        measureExits.setEnabled(false);
+        final String probeIdentity = identity;
+        probe(s(R.string.web_exit_test), result -> {
+            measureExits.setEnabled(true);
+            if (!java.util.Objects.equals(probeIdentity, identity)) return;
+            exitLatencies.clear();
+            JSONArray results = result.optJSONArray("results");
+            if (!result.optBoolean("ok") || results == null) { error(new IllegalStateException(result.optString("error", s(R.string.network_invalid_result)))); return; }
+            for (int i = 0; i < results.length(); i++) {
+                JSONObject node = results.optJSONObject(i);
+                if (node == null) continue;
+                Object latency = node.opt("latencyMs");
+                if (Boolean.TRUE.equals(node.opt("ok")) && latency instanceof Number && Double.isFinite(((Number) latency).doubleValue()) && ((Number) latency).doubleValue() >= 0)
+                    exitLatencies.put(node.optString("id"), ((Number) latency).doubleValue());
+                else exitLatencies.put(node.optString("id"), null);
+            }
+        }, "speedtest-exitnodes");
     }
     private void fail(Exception failure) {
         fresh = false; failed = true; state.setText("—"); onlineCount.setText(s(R.string.web_net_status_stale));
@@ -187,6 +211,7 @@ final class PeersPage extends ControlPage {
         if (peers.isEmpty()) hint(inventoryMessage, s(R.string.web_peers_empty));
         else if (visible.isEmpty()) {
             label(inventoryMessage, s(R.string.web_net_no_results));
+            hint(inventoryMessage, s(R.string.web_net_no_results_hint));
             iconButton(inventoryMessage, R.drawable.ic_deselect, s(R.string.web_net_reset_filter), () -> { filter = 0; activity.drafts.putInt("network.peerFilter", 0); renderFilters(); search.setText(""); render(); });
         } else if (tab == 1) {
             hint(inventoryMessage, s(R.string.web_net_topology_hint));
@@ -275,6 +300,7 @@ final class PeersPage extends ControlPage {
             });
             ping.setEnabled(fresh); pingButtons.add(ping);
         }
+        hint(body, s(R.string.web_net_peer_probe_hint));
         ControlUi.infoRow(body, s(R.string.web_net_os), OverviewPage.textOrDash(peer, "os"), false);
         ControlUi.infoRow(body, s(R.string.web_net_relay_region), OverviewPage.textOrDash(peer, "relay"), false);
         ControlUi.infoRow(body, s(R.string.web_peers_rx), byteLabel(peer, "rxBytes"), false);
@@ -282,8 +308,18 @@ final class PeersPage extends ControlPage {
         if (peer.optBoolean("exitNodeOption")) {
             JSONObject routing = activity.exitRoutingSnapshot();
             boolean current = routing != null && ExitNodesPage.selectedId(routing) != null && ExitNodesPage.selectedId(routing).equals(peer.optString("id"));
+            hint(body, s(ExitNodesPage.effectiveLabel(fresh ? routing : null)));
+            if (routing != null && routing.optJSONObject("selected") != null && source != null && "bridge".equals(source.optString("mode")))
+                hint(body, s(R.string.web_net_exit_scope) + ": " + routing.optString("scope", "") + " " + ExitNodesPage.scopeUids(routing));
+            if (current && !peer.optBoolean("online")) ControlUi.banner(body, R.drawable.ic_warning, s(R.string.web_net_exit_unavailable), ControlUi.TONE_WARN);
             LinearLayout exitRow = row(body);
-            ControlUi.infoRow(exitRow, s(R.string.web_exit_title), s(current ? R.string.web_exit_current : peer.optBoolean("exitNodeOption") ? R.string.web_net_enabled : R.string.web_net_disabled), current);
+            String exitState = s(current ? R.string.web_exit_current : peer.optBoolean("exitNodeOption") ? R.string.web_net_enabled : R.string.web_net_disabled);
+            if (exitLatencies.containsKey(peer.optString("id"))) {
+                Double ms = exitLatencies.get(peer.optString("id"));
+                exitState += " · " + (ms == null ? s(R.string.web_net_exit_unreachable) : (ms == Math.rint(ms) ? Long.toString((long) (double) ms) : Double.toString(ms)) + " ms");
+            }
+            else exitState += " · " + s(R.string.web_net_exit_untested);
+            ControlUi.infoRow(exitRow, s(R.string.web_exit_title), exitState, current);
             if (!current) {
                 View select = iconButton(exitRow, R.drawable.ic_check_circle, s(R.string.web_net_exit_apply) + ": " + peer.optString("hostname"), () -> {
                     if (!isCurrent() || !fresh) return;
@@ -296,6 +332,7 @@ final class PeersPage extends ControlPage {
                 });
                 select.setEnabled(fresh && !activity.client.busy());
             } else {
+                hint(body, s(R.string.web_net_exit_local_hint));
                 View clear = iconButton(exitRow, R.drawable.ic_close, s(R.string.web_net_exit_clear), () -> {
                     if (!isCurrent() || !fresh) return;
                     confirm(s(R.string.web_net_exit_clear), s(R.string.network_interrupt), () -> {

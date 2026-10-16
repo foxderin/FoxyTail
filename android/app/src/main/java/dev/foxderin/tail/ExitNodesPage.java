@@ -11,7 +11,7 @@ import java.util.HashMap;
 import java.util.Map;
 
 final class ExitNodesPage extends ControlPage {
-    private final TextView feedback;
+    private final TextView feedback, selectionState;
     private final LinearLayout routeBox, options, measurements, currentBox;
     private final Button apply, test; private final View retryPending;
     private JSONObject snapshot, routing;
@@ -44,6 +44,7 @@ final class ExitNodesPage extends ControlPage {
         options = row(choices); options.setOrientation(LinearLayout.VERTICAL);
         optionsMessage = hint(options, s(R.string.web_loading));
         ControlUi.divider(choices);
+        selectionState = hint(choices, "");
         apply = primary(choices, s(R.string.web_net_exit_apply), R.drawable.ic_check_circle, this::applySelection);
         if (activity.getResources().getConfiguration().screenWidthDp <= 700) apply.setLayoutParams(new LinearLayout.LayoutParams(-1, -2));
         retryPending = iconButton(choices, R.drawable.ic_refresh, s(R.string.web_retry), this::refresh); retryPending.setVisibility(android.view.View.GONE);
@@ -145,7 +146,7 @@ final class ExitNodesPage extends ControlPage {
             for (JSONObject peer : sorted) {
                 String id = peer.optString("id"); boolean up = peer.optBoolean("online"); present.add(id);
                 String relay = peer.optString("relay", ""), address = OverviewPage.textOrDash(peer, "ip") + (relay.isEmpty() || "-".equals(relay) ? "" : " · " + relay.toUpperCase(java.util.Locale.ROOT));
-                String latency = !latencies.containsKey(id) ? "" : latencies.get(id) == null ? s(R.string.web_net_exit_unreachable) : number(latencies.get(id)) + " ms";
+                String latency = !latencies.containsKey(id) ? s(R.string.web_net_exit_untested) : latencies.get(id) == null ? s(R.string.web_net_exit_unreachable) : number(latencies.get(id)) + " ms";
                 option(id, peer.optString("hostname"), address, s(up ? R.string.web_net_filter_online : R.string.web_net_filter_offline), PeersPage.osIcon(peer.optString("os")), chosen, current, selectable && up, latency, position++);
             }
         }
@@ -157,10 +158,13 @@ final class ExitNodesPage extends ControlPage {
         boolean known = freshStatus && freshPeers && current != null;
         boolean changed = chosen != null && current != null && !chosen.equals(current);
         boolean eligible = "".equals(chosen), online = false;
+        String selectedName = s(R.string.web_net_exit_local);
         if (peers != null) for (JSONObject peer : peers) {
             boolean up = peer.optBoolean("online"); online |= up;
-            if (peer.optString("id").equals(chosen)) eligible = up;
+            if (peer.optString("id").equals(chosen)) { eligible = up; selectedName = peer.optString("hostname", s(R.string.web_net_exit_local)); }
         }
+        selectionState.setText(pending != null ? s(R.string.web_net_exit_confirming) : !known ? s(R.string.web_net_exit_unknown)
+                : changed ? s(R.string.web_net_exit_pending) + " · " + selectedName : s(effectiveLabel(routing)));
         retryPending.setVisibility(pending == null ? android.view.View.GONE : android.view.View.VISIBLE);
         apply.setEnabled(known && !activity.client.ownsMutation() && pending == null && eligible && chosen != null && (changed || "not-effective".equals(routing.optString("effective"))));
         test.setEnabled(freshPeers && online);
@@ -278,7 +282,7 @@ final class ExitNodesPage extends ControlPage {
     static int effectiveLabel(JSONObject route) {
         if (route == null || !Boolean.TRUE.equals(route.opt("known"))) return R.string.web_net_exit_unknown_hint;
         if ("not-effective".equals(route.optString("effective"))) return R.string.web_net_exit_failed;
-        if (route.isNull("selected")) return 0;
+        if (route.isNull("selected")) return R.string.web_net_no_exit_hint;
         switch (route.optString("effective")) {
             case "explicit-proxy": return R.string.web_net_exit_proxy;
             case "daemon-owned": return R.string.web_net_exit_daemon;

@@ -134,6 +134,7 @@ final class FilesBrowser {
                     if (activity.isDestroyed() || closed || token != revision) return;
                     browsing = false; header();
                     ControlUi.banner(rows, R.drawable.ic_error, RootApi.message(error), ControlUi.TONE_ERROR);
+                    text(activity.getString(R.string.web_files_storage_hint));
                 });
             } finally { call.finished = true; }
         });

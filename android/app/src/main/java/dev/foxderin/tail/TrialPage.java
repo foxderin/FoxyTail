@@ -31,7 +31,7 @@ final class TrialPage extends ControlPage {
         super(activity);
         this.onUpdate = onUpdate;
         this.onState = onState;
-        LinearLayout box = section(s(R.string.web_trial_title), R.drawable.ic_sync, null);
+        LinearLayout box = section(s(R.string.web_trial_title), R.drawable.ic_sync, s(R.string.web_trial_description));
         retry = iconButton(box, R.drawable.ic_refresh, s(R.string.web_retry), this::load); retry.setVisibility(View.GONE);
         String selected = activity.drafts.getString("trial.mode", "saved");
         candidate = formChoice(box, R.string.web_trial_candidate, new String[]{s(R.string.web_trial_saved), "bridge", "tun", "proxy"},
@@ -47,6 +47,7 @@ final class TrialPage extends ControlPage {
         startTrial = primary(actions, s(R.string.web_trial_start), this::startTrial);
         confirmTrial = primary(actions, s(R.string.web_trial_confirm), () -> finishTrial(true));
         revertTrial = button(actions, s(R.string.web_trial_revert), () -> finishTrial(false));
+        hint(box, s(R.string.web_trial_health_hint));
         controls();
         repeatAlways(() -> { if (!known || trial != null && SettingsRules.trialActive(trial.optString("status"))) load(); }, 2000);
         repeat(() -> { if (known && (trial == null || !SettingsRules.trialActive(trial.optString("status")))) load(); }, 10000);

@@ -35,6 +35,7 @@ final class SettingsPage extends ControlPage {
         super(activity);
         pending = section();
         label(pending, s(R.string.web_tools_saved_pending));
+        hint(pending, s(R.string.web_tools_saved_pending_desc));
         restart = primary(pending, s(R.string.web_tools_restart), R.drawable.ic_refresh, this::restart);
         ControlUi.setCardVisible(pending, false);
         LinearLayout appearance = section(s(R.string.web_tools_appearance), R.drawable.ic_dark_mode, null);
@@ -59,7 +60,7 @@ final class SettingsPage extends ControlPage {
         finish(network, dnsField);
         bool(network, "IPV6", R.string.web_tools_ipv6, R.string.web_set_ipv6_hint);
         number(network, "SOCKS_PORT", R.string.web_tools_socks_port, 0, 1024, 65535);
-        number(network, "DNS_PORT", R.string.web_tools_dns_port, 0, 1024, 65535);
+        number(network, "DNS_PORT", R.string.web_tools_dns_port, R.string.web_tools_dns_port_hint, 1024, 65535);
         LinearLayout networkStatus = row(network);
         savedState = badge(networkStatus, s(R.string.cs_unknown), ControlUi.TONE_NEUTRAL);
         iconButton(networkStatus, R.drawable.ic_router, s(R.string.web_tools_mode_link), () -> activity.navigate("tunnel"));
@@ -134,7 +135,7 @@ final class SettingsPage extends ControlPage {
         mask = readOnly(advancedBody, R.string.web_tools_mark_mask);
         hint(advancedBody, s(R.string.cs_readonly));
         context = new ContextPage(activity, true); embed(context, advancedBody);
-        hooks = ControlUi.card(advancedBody, s(R.string.web_set_hooks), R.drawable.ic_article, null);
+        hooks = ControlUi.card(advancedBody, s(R.string.web_set_hooks), R.drawable.ic_article, s(R.string.web_set_hooks_hint));
         hint(hooks, s(R.string.web_loading));
         iconButton(advancedBody, R.drawable.ic_monitoring, s(R.string.web_diag_title), this::toggleDiagnostics);
         diagnostics = new LinearLayout(activity); diagnostics.setOrientation(LinearLayout.VERTICAL); advancedBody.addView(diagnostics); diagnostics.setVisibility(View.GONE);
@@ -298,7 +299,7 @@ final class SettingsPage extends ControlPage {
         String value = original.trim();
         if (field.min > 0) {
             try { if (!value.matches("[0-9]+") || Long.parseLong(value) < field.min || Long.parseLong(value) > field.max) throw new NumberFormatException(); }
-            catch (NumberFormatException e) { notice(s(R.string.cs_number_range, field.min, field.max)); return; }
+            catch (NumberFormatException e) { notice(s(R.string.web_tools_invalid_number) + " " + field.min + "–" + field.max); return; }
         }
         if (field.key.equals("DNS_MODE") && value.equals("transparent") && Boolean.FALSE.equals(transparent)) { notice(s(R.string.cs_dns_unavailable)); return; }
         Runnable write = () -> mutate(s(R.string.cs_save) + " " + field.key, result -> {
@@ -306,7 +307,7 @@ final class SettingsPage extends ControlPage {
                 activity.drafts.putString("settings.baseline." + field.key, value);
                 if (field.value().equals(original)) bindField(field, value);
             }
-            notice(result.optBoolean("ok") ? s(result.optBoolean("applied") ? R.string.cs_applied : R.string.cs_pending) : s(R.string.cs_failed, result.optString("error", result.toString())));
+            notice(result.optBoolean("ok") ? s(result.optBoolean("applied") ? R.string.web_tools_all_applied : R.string.web_tools_saved_pending) : s(R.string.cs_failed, result.optString("error", result.toString())));
             load();
         }, "settings-set", field.key, value);
         if (conflict(field) || field.key.equals("MAGIC_DNS") || field.key.equals("DNS_MODE") || field.key.equals("IPV6") || field.key.endsWith("_PORT")) confirm(s(R.string.cs_save), (conflict(field) ? s(R.string.cs_draft_conflict) + "\n\n" : "") + s(R.string.cs_network_warning), write);
@@ -318,8 +319,8 @@ final class SettingsPage extends ControlPage {
             mutate(s(R.string.cs_restart), terminal -> {
                 if (!terminal.optBoolean("ok")) { notice(s(R.string.cs_failed, terminal.optString("error", terminal.toString()))); load(); return; }
                 read(verified -> {
-                    if (Boolean.FALSE.equals(verified.opt("restartRequired"))) notice(s(R.string.cs_restart_verified));
-                    else notice(s(R.string.cs_pending));
+                    if (Boolean.FALSE.equals(verified.opt("restartRequired"))) notice(s(R.string.web_set_applied));
+                    else notice(s(R.string.web_set_restart_required));
                     load();
                 }, "settings-get");
             }, "control", "restart");

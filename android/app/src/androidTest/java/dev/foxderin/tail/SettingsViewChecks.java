@@ -117,6 +117,7 @@ final class SettingsViewChecks {
     }
     private static View action(View view, String label) {
         if (view.getVisibility() != View.VISIBLE) return null;
+        if (view.isClickable() && label.contentEquals(view.getContentDescription() == null ? "" : view.getContentDescription())) return view;
         if (view instanceof TextView && label.contentEquals(((TextView) view).getText())) {
             for (View node = view; node != null; node = node.getParent() instanceof View ? (View) node.getParent() : null) if (node.isClickable()) return node;
         }

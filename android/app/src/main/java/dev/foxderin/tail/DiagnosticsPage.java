@@ -18,10 +18,10 @@ final class DiagnosticsPage extends ControlPage {
     private static final int[] REASON_TEXT = {R.string.web_diag_invalid_config, R.string.web_diag_pending, R.string.web_diag_applied, R.string.web_diag_stopped, R.string.web_diag_connected, R.string.web_diag_login, R.string.web_diag_unreachable, R.string.web_diag_needs_connection, R.string.web_diag_proxy, R.string.web_diag_interface_ready, R.string.web_diag_interface_missing, R.string.web_diag_managed_routes, R.string.web_diag_routes_ready, R.string.web_diag_routes_incomplete, R.string.web_diag_dns_disabled, R.string.web_diag_dns_conflict, R.string.web_diag_dns_limited, R.string.web_diag_dns_ready, R.string.web_diag_dns_unavailable};
     DiagnosticsPage(ControlActivity activity) {
         super(activity);
-        LinearLayout checks = section(s(R.string.web_diag_check), R.drawable.ic_network_check, null);
+        LinearLayout checks = section(s(R.string.web_diag_check), R.drawable.ic_network_check, s(R.string.web_diag_check_hint));
         checkButton = primary(checks, s(R.string.web_diag_check), this::runChecks); checkButton.setLayoutParams(new LinearLayout.LayoutParams(-2, -2));
         results = new LinearLayout(activity); results.setOrientation(LinearLayout.VERTICAL); results.setAccessibilityLiveRegion(View.ACCESSIBILITY_LIVE_REGION_POLITE); checks.addView(results, new LinearLayout.LayoutParams(-1, -2));
-        LinearLayout collect = section(s(R.string.web_tools_diag_collect), R.drawable.ic_bug_report, null);
+        LinearLayout collect = section(s(R.string.web_tools_diag_collect), R.drawable.ic_bug_report, s(R.string.web_tools_diag_contents));
         collectionState = new LinearLayout(activity); collectionState.setOrientation(LinearLayout.VERTICAL); collectionState.setAccessibilityLiveRegion(View.ACCESSIBILITY_LIVE_REGION_POLITE); collect.addView(collectionState, new LinearLayout.LayoutParams(-1, -2));
         mode = activity.drafts.getString("diagnostics.mode", "share");
         bundleMode = choice(collect, new String[]{s(R.string.web_diag_share), s(R.string.web_diag_local)}, mode.equals("local") ? 1 : 0, index -> { mode = index == 0 ? "share" : "local"; activity.drafts.putString("diagnostics.mode", mode); showWarning(); }); bundleMode.setHint(s(R.string.web_diag_bundle_mode));

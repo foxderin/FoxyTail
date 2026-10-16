@@ -37,7 +37,7 @@ final class TrafficPage extends ControlPage {
         LinearLayout directions = narrow ? row(content) : metrics;
         downloadMetric = trafficMetric(directions, s(R.string.web_traffic_rx), "↓", false);
         uploadMetric = trafficMetric(directions, s(R.string.web_traffic_tx), "↑", false);
-        chartRows = section(s(R.string.web_net_traffic_chart), R.drawable.ic_monitoring, null);
+        chartRows = section(s(R.string.web_net_traffic_chart), R.drawable.ic_monitoring, s(R.string.web_net_traffic_chart_hint));
         LinearLayout breakdown = new LinearLayout(activity);
         boolean wide = activity.getResources().getConfiguration().screenWidthDp > 700;
         breakdown.setOrientation(wide ? LinearLayout.HORIZONTAL : LinearLayout.VERTICAL);
@@ -47,9 +47,8 @@ final class TrafficPage extends ControlPage {
         breakdown.addView(peers, new LinearLayout.LayoutParams(wide ? 0 : -1, -2, wide ? 1 : 0));
         LinearLayout.LayoutParams appParams = new LinearLayout.LayoutParams(wide ? 0 : -1, -2, wide ? 1 : 0);
         if (wide) appParams.setMarginStart(dp(16)); breakdown.addView(apps, appParams);
-        peerRows = ControlUi.card(peers, s(R.string.web_traffic_topn), R.drawable.ic_group, null);
-        uidRows = ControlUi.card(apps, s(R.string.web_traffic_by_app), R.drawable.ic_router, null);
-        hint(uidRows, s(R.string.web_traffic_app_tx_hint));
+        peerRows = ControlUi.card(peers, s(R.string.web_traffic_topn), R.drawable.ic_group, s(R.string.web_net_traffic_top_hint));
+        uidRows = ControlUi.card(apps, s(R.string.web_traffic_by_app), R.drawable.ic_router, s(R.string.web_traffic_app_tx_hint));
     }
     String title() { return s(R.string.web_traffic_title); }
     void load() {
@@ -118,7 +117,7 @@ final class TrafficPage extends ControlPage {
             }); chartRows.addView(tableToggle); tableToggle.setSelected(tableExpanded);
             chartRows.addView(tableScroll, new LinearLayout.LayoutParams(-1, -2)); tableScroll.setVisibility(tableExpanded ? View.VISIBLE : View.GONE);
             tableRow(table, s(R.string.web_net_traffic_time), s(R.string.web_traffic_rx), s(R.string.web_traffic_tx), true);
-            for (ToolsData.Sample sample : samples) tableRow(table, sample.label, sample.rx == null ? "—" : bytes(sample.rx), sample.tx == null ? "—" : bytes(sample.tx), false);
+            for (ToolsData.Sample sample : samples) tableRow(table, sample.label, sample.rx == null ? s(R.string.web_net_traffic_unrecorded) : bytes(sample.rx), sample.tx == null ? s(R.string.web_net_traffic_unrecorded) : bytes(sample.tx), false);
         } catch (Exception failure) { hint(chartRows, s(R.string.tools_invalid_response)); error(failure); }
     }
     private TextView trafficMetric(LinearLayout parent, String caption, String direction, boolean compact) {
@@ -142,7 +141,6 @@ final class TrafficPage extends ControlPage {
     private void renderRanks() {
         if (summary == null) return;
         peerRows.removeAllViews(); uidRows.removeAllViews();
-        hint(uidRows, s(R.string.web_traffic_app_tx_hint));
         List<JSONObject> peers = new ArrayList<>(); JSONArray source = ToolsData.array(summary, "topn");
         for (int i = 0; i < source.length(); i++) { JSONObject entry = source.optJSONObject(i); if (entry != null && total(entry, true) > 0) peers.add(entry); }
         peers.sort((a, b) -> Double.compare(total(b, true), total(a, true)));

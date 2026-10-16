@@ -35,7 +35,7 @@ final class ContextPage extends ControlPage {
     ContextPage(ControlActivity activity, boolean embedded) {
         super(activity);
         if (embedded) { content.setPadding(0, 0, 0, 0); content.setTag("web-disclosure-body"); }
-        LinearLayout top = section(s(R.string.web_set_context), R.drawable.ic_sync, null);
+        LinearLayout top = section(s(R.string.web_set_context), R.drawable.ic_sync, s(R.string.web_context_description));
         LinearLayout actions = row(top);
         iconButton(actions, R.drawable.ic_refresh, s(R.string.web_context_refresh), this::load);
         textMode = activity.drafts.getBoolean("context.textMode", false);
@@ -74,7 +74,7 @@ final class ContextPage extends ControlPage {
         read(value -> renderStatus(value.optJSONObject("status")), this::statusFailed, "context-status");
     }
     private void rulesLoaded(JSONObject value) {
-        if (!(value.opt("rules") instanceof String)) { failed(new IllegalStateException(s(R.string.cs_invalid_response))); return; }
+        if (!(value.opt("rules") instanceof String)) { failed(new IllegalStateException(s(R.string.web_tools_context_load_error))); return; }
         savedRaw = value.optString("rules");
         boolean firstLoad = !loaded;
         if (discardRequested) {
@@ -105,7 +105,7 @@ final class ContextPage extends ControlPage {
         label(status, detail);
     }
     private void failed(Exception e) {
-        discardRequested = false; result.setText(e.getMessage()); result.setVisibility(View.VISIBLE); updateControls(); error(e);
+        discardRequested = false; String message = e.getMessage(); result.setText(message == null || message.isEmpty() ? s(R.string.web_tools_context_load_error) : message); result.setVisibility(View.VISIBLE); updateControls(); error(e);
     }
     private void statusFailed(Exception e) { renderStatus(null); hint(status, e.getMessage()); error(e); }
     private void showMode() {

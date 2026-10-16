@@ -103,6 +103,7 @@ Plus the stock `tailscale` CLI (`tailscale` is a symlink to `tailscaled`; for ra
 Open **FoxyTail** from the launcher and grant root to the app in Magisk/KernelSU. Manager WebUI support is not required.
 
 - The native interface follows the former WebUI's fields, English/Chinese copy, section order and binary-unit/time formats. Settings embed configuration trials, collapsed advanced network rules/hooks and backup/restore; Tunnel embeds the progressive coexistence wizard.
+- Applicable hints and warnings retain the complete `bb7af04` English/Chinese text and display conditions. Native explicit-save, SAF and unconfirmed-operation feedback remain authoritative; obsolete manager/Web-only instructions are not shown.
 - Java/View with Material Components 1.14.0, the shared service/task header, five fully labeled phone destinations and a sidebar from 960dp; light/dark/system appearance and system font scaling. Files use the same shell, with Inbox → Send → History stacked on one page and an inline storage browser. No WebView, root HTTP endpoint or app-hosted VPN. Closing the app does not stop networking or accepted module jobs.
 - Control writes use durable module receipts. Saved is not applied; failure responses retain verified actual-state fields. Lost responses remain unknown and are never automatically replayed. Commit rejects cancellation; acknowledging an unknown result only clears app observation, not the underlying operation.
 - Before account changes, cancel active sends in file History and await their terminal result. Device, exit and coexistence state is re-read after account transitions.
@@ -148,6 +149,8 @@ Instrumentation: run `./gradlew :app:assembleDebugAndroidTest` to produce the te
 ## Control protocol and development
 
 `android/` is the only graphical control surface. `ControlActivity` and domain pages handle interaction; `ControlClient` retains operation ownership and reconnects to outcomes; `RootApi` owns trusted su and JSON/binary pipes. `TransferService` prepares/observes files, not the network daemon.
+
+All tabs, including Files, switch inside one `ControlActivity` with the same page transition. `FilesPage` retains pending reads, file selections and its browser while another tab is visible; system shares, file-picker results and transfer notifications return through that same activity.
 
 The module entry remains `/data/adb/foxytail/scripts/foxytail.webapi.sh`. `backend-info` reports protocol/capabilities; `operation-start <id> <command> [arguments]` accepts allowlisted detached work; `operation-status <id>` returns authoritative outcomes; `cancel <id>` requests acknowledged cancellation. Arguments are not journaled; browser authentication URLs never enter durable jobs. Private receipts retain at most 128 operations/24 hours and 1 MiB per result. Interrupted/expired outcomes never imply success.
 

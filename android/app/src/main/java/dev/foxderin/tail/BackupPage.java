@@ -7,6 +7,7 @@ import org.json.*;
 final class BackupPage extends ControlPage {
     private final LinearLayout archives, previewRows, latest, restored;
     private final Button previewButton;
+    private final TextView pickerHint;
     private MaterialChoice archiveChoice;
     private String[] archivePaths = {""};
     private String selected = "";
@@ -16,7 +17,7 @@ final class BackupPage extends ControlPage {
     private final Runnable operationChanged = () -> { if (activity.client.busy()) invalidatePreview(); };
     BackupPage(ControlActivity activity) {
         super(activity);
-        LinearLayout backup = section(s(R.string.web_set_backup), R.drawable.ic_backup, null);
+        LinearLayout backup = section(s(R.string.web_set_backup), R.drawable.ic_backup, s(R.string.web_tools_backup_desc));
         tonal(backup, s(R.string.web_set_backup), () -> {
             invalidatePreview(); mutate(s(R.string.web_set_backup), result -> {
                 if (ToolsUi.success(this, result)) { activity.drafts.putString("backup.latest", result.toString()); renderArtifact(result); refreshList(); }
@@ -24,6 +25,7 @@ final class BackupPage extends ControlPage {
         });
         latest = ControlUi.result(backup); latest.setVisibility(View.GONE);
         LinearLayout restore = section(s(R.string.web_set_restore), R.drawable.ic_refresh, null);
+        pickerHint = hint(restore, s(R.string.web_backup_picker_hint));
         archives = new LinearLayout(activity); archives.setOrientation(LinearLayout.VERTICAL); restore.addView(archives);
         LinearLayout actions = row(restore);
         ControlUi.iconGroup(actions, iconButton(actions, R.drawable.ic_refresh, s(R.string.web_backup_refresh), this::refreshList));
@@ -60,6 +62,7 @@ final class BackupPage extends ControlPage {
     private void invalidatePreview() { generation++; preview = null; if (previewRows != null) { previewRows.removeAllViews(); previewRows.setVisibility(View.GONE); } }
     private void select(String path) {
         invalidatePreview(); selected = path; previewButton.setEnabled(!path.isEmpty()); activity.drafts.putString("backup.selected", path);
+        pickerHint.setVisibility(path.matches("art-[a-f0-9]{32}") ? View.GONE : View.VISIBLE);
         if (path.matches("art-[a-f0-9]{32}")) {
             latest.removeAllViews(); latest.setVisibility(View.VISIBLE); hint(latest, s(R.string.tools_imported_archive));
             LinearLayout actions = row(latest);
@@ -127,6 +130,7 @@ final class BackupPage extends ControlPage {
         latest.removeAllViews(); latest.setVisibility(View.VISIBLE); String id = result.optString("artifactId"), path = result.optString("path");
         if (!id.matches("art-[a-f0-9]{32}")) { label(latest, s(R.string.web_backup_invalid_response)); return; }
         label(latest, s(R.string.web_tools_backup_latest)).setTypeface(null, android.graphics.Typeface.BOLD); mono(latest, path);
+        hint(latest, s(R.string.web_tools_backup_file_hint));
         ControlUi.iconGroup(latest, iconButton(latest, R.drawable.ic_content_copy, s(R.string.web_tools_copy_path), () -> copy(s(R.string.web_set_backup), path)));
         LinearLayout actions = row(latest);
         ControlUi.iconGroup(actions,

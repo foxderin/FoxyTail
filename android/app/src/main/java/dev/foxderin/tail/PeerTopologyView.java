@@ -85,9 +85,10 @@ final class PeerTopologyView extends LinearLayout {
                 Button target = new androidx.appcompat.widget.AppCompatButton(context);
                 target.setBackgroundColor(android.graphics.Color.TRANSPARENT); target.setText("");
                 target.setContentDescription(context.getString(R.string.web_net_peer_details) + ": " + peer.optString("hostname") + " · " +
-                        String.join(" · ", PeersPage.addresses(peer)) + " · " + pathLabel(peer) +
+                        String.join(" · ", PeersPage.addresses(peer)) + " · " + context.getString(peer.optBoolean("online") ? R.string.web_net_filter_online : R.string.web_net_filter_offline) + " · " + pathLabel(peer) +
                         (pathRank(peer) == 0 ? " · " + peer.optString("curAddr") : "") +
                         (exitId.equals(peer.optString("id")) ? " · " + context.getString(R.string.web_net_topo_exit) : ""));
+                androidx.appcompat.widget.TooltipCompat.setTooltipText(target, target.getContentDescription());
                 target.setOnClickListener(view -> selected.accept(peer));
                 target.setOnFocusChangeListener((view, focus) -> invalidate());
                 addView(target, new FrameLayout.LayoutParams(0, 0));

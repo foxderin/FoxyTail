@@ -58,7 +58,10 @@ final class ControlUi {
     }
     static ImageButton iconButton(Context context, int icon, String description, Runnable action) { return iconButton(context, icon, description, action, 44); }
     static ImageButton iconButton(Context context, int icon, String description, Runnable action, int size) {
-        ImageButton button = new ImageButton(context); button.setImageResource(icon); button.setContentDescription(description); button.setTooltipText(description);
+        ImageButton button = new ImageButton(context) {
+            @Override public void setEnabled(boolean enabled) { super.setEnabled(enabled); setAlpha(enabled ? 1f : 0.38f); }
+        };
+        button.setImageResource(icon); button.setContentDescription(description); button.setTooltipText(description);
         button.setColorFilter(MaterialColors.getColor(button, com.google.android.material.R.attr.colorOnSurfaceVariant));
         android.util.TypedValue ripple = new android.util.TypedValue(); context.getTheme().resolveAttribute(android.R.attr.selectableItemBackgroundBorderless, ripple, true);
         button.setBackgroundResource(ripple.resourceId); button.setPadding(dp(context, 12), dp(context, 12), dp(context, 12), dp(context, 12));
@@ -358,7 +361,7 @@ final class ControlUi {
         tile.sub = muted(context, "", R.dimen.ft_caption); tile.sub.setTextSize(compact ? 10 : 11); tile.sub.setLineHeight(Math.round(tile.sub.getTextSize() * (compact ? 1.6f : 1.5f))); tile.sub.setPadding(0, dp(context, 7), 0, 0); tile.sub.setVisibility(View.GONE);
         box.addView(tile.sub, new LinearLayout.LayoutParams(-1, -2));
         card.addView(box, new android.widget.FrameLayout.LayoutParams(-1, -2));
-        LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(0, -1, 1);
+        LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(0, -1, 1); params.gravity = android.view.Gravity.TOP;
         if (row.getChildCount() > 0) params.setMarginStart(dp(context, compact ? 9 : width >= 640 ? 16 : 12)); params.bottomMargin = dp(context, 20);
         row.addView(card, params);
         return tile;
@@ -486,7 +489,7 @@ final class ControlUi {
         TextView[] buttons = new TextView[labels.length];
         for (int i = 0; i < labels.length; i++) {
             final int index = i; TextView button = text(context, labels[i], 12); button.setTypeface(Typeface.create("sans-serif-medium", Typeface.NORMAL)); button.setMinHeight(dp(context, 44)); button.setGravity(android.view.Gravity.CENTER); button.setPadding(dp(context, 12), dp(context, 8), dp(context, 12), dp(context, 8)); button.setFocusable(true);
-            buttons[i] = button; LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(0, -2, 1); group.addView(button, params);
+            buttons[i] = button; LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(0, -2, 1); if (i > 0) params.setMarginStart(dp(context, 4)); group.addView(button, params);
             button.setOnClickListener(v -> { selectTabs(buttons, index); change.accept(index); });
         }
         selectTabs(buttons, selected); LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(-1, -2); params.bottomMargin = dp(context, 20); parent.addView(group, params); return group;

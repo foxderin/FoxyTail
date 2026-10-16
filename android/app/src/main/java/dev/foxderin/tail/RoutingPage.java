@@ -29,7 +29,7 @@ import java.util.Set;
 final class RoutingPage extends ControlPage {
     private final Button save, addSubnet; private final View discard, selectedFilter, moreApps, retryApps, ipv6Settings, retryRoutes, pendingSettings;
     private final CompoundButton acceptanceSwitch;
-    private final TextView acceptance, capability, result, appsState, selectedCount, emptySelection, ipv6State, draftState, subnetError, ipv6Pending;
+    private final TextView acceptance, subnetModeHint, capability, result, appsState, selectedCount, emptySelection, ipv6State, draftState, subnetError, ipv6Pending;
     private final View refreshAcceptance;
     private final LinearLayout advertised, subnetRows, appRows, appBox;
     private final EditText subnetInput, search;
@@ -74,10 +74,11 @@ final class RoutingPage extends ControlPage {
         acceptRow.addView(acceptanceSwitch);
         refreshAcceptance = ControlUi.iconButton(activity, R.drawable.ic_refresh, s(R.string.web_tools_subnet_refresh), () -> { if (isCurrent()) refreshAdvertised(null); });
         acceptRow.addView(refreshAcceptance);
+        subnetModeHint = hint(acceptBox, s(R.string.web_tools_subnet_native_hint));
         acceptance = hint(acceptBox, s(R.string.web_tools_subnet_unknown));
         advertised = section(s(R.string.web_tools_subnet_title), R.drawable.ic_router, null);
         hint(advertised, s(R.string.web_loading));
-        LinearLayout local = section(s(R.string.web_tools_route_targets), R.drawable.ic_router, null);
+        LinearLayout local = section(s(R.string.web_tools_route_targets), R.drawable.ic_router, s(R.string.web_tools_route_subnets_desc));
         LinearLayout addRow = row(local); addRow.setGravity(Gravity.CENTER_VERTICAL);
         LinearLayout inputHost = new LinearLayout(activity); inputHost.setOrientation(LinearLayout.VERTICAL);
         addRow.addView(inputHost, new LinearLayout.LayoutParams(0, -2, 1));
@@ -109,7 +110,7 @@ final class RoutingPage extends ControlPage {
             hint(copy, s(hints[i]));
             policyRow.setOnClickListener(v -> selectScope(position)); radio.setOnClickListener(v -> selectScope(position));
         }
-        appBox = section(s(R.string.web_route_apps), R.drawable.ic_group, null);
+        appBox = section(s(R.string.web_route_apps), R.drawable.ic_group, s(R.string.web_tools_route_apps_desc));
         search = input(appBox, s(R.string.web_tools_search_apps), activity.drafts.getString("routing.search", ""), InputType.TYPE_CLASS_TEXT);
         watch(search, () -> { if (!isCurrent()) return; activity.drafts.putString("routing.search", search.getText().toString()); limit = 100; renderApps(); });
         selectedOnly = activity.drafts.getBoolean("routing.selectedOnly", false);
@@ -225,6 +226,7 @@ final class RoutingPage extends ControlPage {
     private void routesFailed(Exception e) { discardRequested = false; routesKnown = false; result.setText(e.getMessage()); result.setVisibility(View.VISIBLE); retryRoutes.setVisibility(View.VISIBLE); showCapability(); renderSubnets(); error(e); }
     private void showCapability() {
         if (capability == null) return;
+        subnetModeHint.setText(s("bridge".equals(mode) ? R.string.web_tools_subnet_bridge_hint : "proxy".equals(mode) ? R.string.web_tools_subnet_proxy_hint : R.string.web_tools_subnet_native_hint));
         List<String> messages = new ArrayList<>();
         if ("tun".equals(mode)) messages.add(s(R.string.web_route_native_scope));
         if (!ownerKnown) messages.add(s(R.string.web_tools_route_probe)); else if (!ownerAvailable) messages.add(s(R.string.web_route_no_owner));
@@ -287,12 +289,13 @@ final class RoutingPage extends ControlPage {
                 LinearLayout copy = new LinearLayout(activity); copy.setOrientation(LinearLayout.VERTICAL); line.addView(copy, new LinearLayout.LayoutParams(0, -2, 1)); mono(copy, cidr);
                 if (route.getValue()) { TextView primary = hint(copy, s(R.string.web_tools_subnet_primary)); primary.setTextSize(10); }
                 boolean added = destinations.contains(cidr);
-                View add = ControlUi.iconButton(activity, added ? R.drawable.ic_check_circle : R.drawable.ic_add, s(R.string.web_tools_subnet_add_network) + " " + cidr, () -> { if (isCurrent()) importCidr(cidr); });
+                View add = ControlUi.iconButton(activity, added ? R.drawable.ic_check_circle : R.drawable.ic_add, s(added ? R.string.web_tools_subnet_added : R.string.web_tools_subnet_add_network) + " " + cidr, () -> { if (isCurrent()) importCidr(cidr); });
+                if (cidr.contains(":") && (!acceptanceKnown || !ipv6Enabled)) add.setTooltipText(s(acceptanceKnown ? R.string.web_tools_subnet_ipv6_disabled : R.string.web_tools_subnet_ipv6_unknown));
                 add.setEnabled(editable() && acceptanceKnown && !added && (ipv6Enabled || !cidr.contains(":"))); line.addView(add, new LinearLayout.LayoutParams(-2, -2));
             }
         }
         if (count == 0) hint(advertised, s(R.string.web_tools_subnet_empty));
-        if (ipv6 && !ipv6Enabled) { hint(advertised, s(R.string.web_tools_subnet_ipv6_disabled)); iconButton(advertised, R.drawable.ic_settings, s(R.string.web_set_title), () -> activity.navigate("settings")); }
+        if (ipv6 && (!acceptanceKnown || !ipv6Enabled)) { hint(advertised, s(acceptanceKnown ? R.string.web_tools_subnet_ipv6_disabled : R.string.web_tools_subnet_ipv6_unknown)); iconButton(advertised, R.drawable.ic_settings, s(R.string.web_set_title), () -> activity.navigate("settings")); }
     }
     private void acceptanceFailed(int revision, Exception e) {
         if (revision != acceptanceRevision) return;

@@ -46,7 +46,7 @@ final class NetworkListChecks {
             PeerTopologyView topology = topology(peers.content);
             require(topology != null && descriptions(topology) >= 12, "Topology exposes accessible diagram targets");
             invoke(peers, "render"); require(topology(peers.content) == topology, "Unchanged topology preserves focus targets");
-            TextView expand = text(topology, activity.getString(R.string.web_net_topology_list) + " · 100");
+            View expand = action(topology, activity.getString(R.string.web_net_topology_list) + " · 100");
             require(expand != null, "Topology retains full inventory toggle"); expand.performClick();
             require(text(topology, "● Peer 99") != null, "Topology expanded list includes peers beyond diagram");
             set(peers, "tab", 0); invoke(peers, "render");
@@ -54,7 +54,7 @@ final class NetworkListChecks {
             set(peers, "peers", inventory); invoke(peers, "render");
             require(text(peers.content, "Renamed peer") != null && text(peers.content, "Peer 42") == null, "Changed identity fields replace stale peer labels");
             set(peers, "peers", null); set(peers, "failed", true); invoke(peers, "render");
-            require(text(peers.content, activity.getString(R.string.web_retry)) != null && text(peers.content, "Peer 99") == null, "Failed inventory offers retry without displaying invalid identity");
+            require(action(peers.content, activity.getString(R.string.web_retry)) != null && text(peers.content, "Peer 99") == null, "Failed inventory offers retry without displaying invalid identity");
             set(peers, "failed", false); invoke(peers, "render");
             require(text(peers.content, activity.getString(R.string.web_loading)) != null, "Retry returns inventory to explicit loading");
             set(peers, "peers", inventory); invoke(peers, "render");
@@ -119,6 +119,14 @@ final class NetworkListChecks {
         if (root instanceof TextView && expected.contentEquals(((TextView) root).getText())) return (TextView) root;
         if (root instanceof ViewGroup) for (int i = 0; i < ((ViewGroup) root).getChildCount(); i++) {
             TextView found = text(((ViewGroup) root).getChildAt(i), expected); if (found != null) return found;
+        }
+        return null;
+    }
+    private static View action(View root, String description) {
+        if (root.getVisibility() != View.VISIBLE) return null;
+        if (root.isClickable() && description.contentEquals(root.getContentDescription() == null ? "" : root.getContentDescription())) return root;
+        if (root instanceof ViewGroup) for (int i = 0; i < ((ViewGroup) root).getChildCount(); i++) {
+            View found = action(((ViewGroup) root).getChildAt(i), description); if (found != null) return found;
         }
         return null;
     }

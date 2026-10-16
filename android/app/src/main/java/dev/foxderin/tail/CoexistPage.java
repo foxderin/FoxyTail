@@ -9,7 +9,7 @@ final class CoexistPage extends ControlPage {
     private JSONObject info, peer;
     private String address = "", snippet = "";
     private final LinearLayout inventory, filterGroup, fragment, targets, addressRows, checkControls, results;
-    private final TextView yaml, checkHint, filterHint;
+    private final TextView yaml, checkHint, filterHint, pathHint, checking;
     private final Button copyButton, checkButton, detectButton;
     private final MaterialChoice filter;
     private final EditText targetPort, resolverPort;
@@ -17,15 +17,21 @@ final class CoexistPage extends ControlPage {
     private static final String[] FILTERS = {"", "blacklist", "rule", "redir-host", "whitelist"};
     CoexistPage(ControlActivity activity) {
         super(activity);
-        LinearLayout wizard = section(s(R.string.web_coexist_title), R.drawable.ic_alt_route, null);
+        LinearLayout wizard = section(s(R.string.web_coexist_title), R.drawable.ic_alt_route, s(R.string.web_coexist_intro));
         detectButton = tonal(wizard, s(R.string.web_coexist_detect), this::detect);
         inventory = group(wizard);
         filterGroup = group(wizard);
         label(filterGroup, s(R.string.web_coexist_filter_step));
+        hint(filterGroup, s(R.string.web_coexist_core_hint));
         filter = choice(filterGroup, new String[]{s(R.string.web_coexist_filter_choose), "fake-ip · blacklist", "fake-ip · rule", "redir-host", s(R.string.web_coexist_filter_whitelist)}, activity.drafts.getInt("coexist.filter", 0), index -> { activity.drafts.putInt("coexist.filter", index); invalidate(); renderSnippet(); });
         filter.setHint(s(R.string.web_coexist_filter_label));
         filterHint = hint(filterGroup, ""); filterHint.setVisibility(View.GONE);
         fragment = group(wizard); label(fragment, s(R.string.web_coexist_snippet_step));
+        hint(fragment, s(R.string.web_coexist_merge_hint));
+        hint(fragment, s(R.string.web_coexist_scope_hint));
+        hint(fragment, s(R.string.web_coexist_name_hint));
+        pathHint = hint(fragment, "");
+        hint(fragment, s(R.string.web_coexist_ipv6_hint));
         label(fragment, s(R.string.web_coexist_yaml)); yaml = mono(fragment, "");
         copyButton = button(fragment, s(R.string.web_copy), this::copySnippet); copyButton.setEnabled(false);
         targets = group(wizard); label(targets, s(R.string.web_coexist_check_step));
@@ -40,8 +46,10 @@ final class CoexistPage extends ControlPage {
         }
         targetPort = input(targetField, s(R.string.web_coexist_port), activity.drafts.getString("coexist.targetPort", ""), InputType.TYPE_CLASS_NUMBER);
         resolverPort = input(resolverField, s(R.string.web_coexist_resolver_port), activity.drafts.getString("coexist.resolverPort", ""), InputType.TYPE_CLASS_NUMBER);
+        hint(checkControls, s(R.string.web_coexist_ports_hint));
         checkHint = hint(checkControls, s(R.string.web_coexist_invalid_port));
         checkButton = primary(checkControls, s(R.string.web_coexist_check), this::check); checkButton.setEnabled(false);
+        checking = hint(checkControls, s(R.string.web_coexist_checking)); checking.setVisibility(View.GONE);
         ToolsUi.draft(this, targetPort, "coexist.targetPort"); ToolsUi.draft(this, resolverPort, "coexist.resolverPort");
         ToolsUi.watch(targetPort, this::invalidate); ToolsUi.watch(resolverPort, this::invalidate);
         results = group(wizard);
@@ -103,6 +111,7 @@ final class CoexistPage extends ControlPage {
             if (!response.optString("snapshot").matches("[a-f0-9]{64}") || response.optJSONArray("peers") == null || response.optJSONObject("dns") == null || response.optJSONObject("environment") == null) { notice(s(R.string.tools_invalid_response)); return; }
             info = response; inventory.removeAllViews(); detectButton.setText(s(R.string.web_coexist_refresh));
             label(inventory, s(R.string.web_coexist_environment));
+            hint(inventory, s(R.string.web_coexist_inventory_hint));
             JSONObject environment = ToolsData.object(response, "environment");
             if (ToolsData.array(environment, "modules").length() + ToolsData.array(environment, "apps").length() == 0) hint(inventory, s(R.string.web_coexist_inventory_empty));
             for (String category : new String[]{"modules", "apps"}) {
@@ -115,7 +124,7 @@ final class CoexistPage extends ControlPage {
             label(inventory, s(R.string.web_dns_suffix) + ": " + response.optString("suffix"));
             JSONObject dns = ToolsData.object(response, "dns");
             label(inventory, s(R.string.web_dns_title)); badge(inventory, s(TunnelPage.dnsLabel(dns)), response.optBoolean("dnsReady") ? ControlUi.TONE_OK : ControlUi.TONE_NEUTRAL);
-            if (!response.optBoolean("dnsReady")) { iconButton(inventory, R.drawable.ic_settings, s(R.string.web_tools_dns_settings), () -> activity.navigate("settings")); }
+            if (!response.optBoolean("dnsReady")) { hint(inventory, s(R.string.web_coexist_prerequisite)); iconButton(inventory, R.drawable.ic_settings, s(R.string.web_tools_dns_settings), () -> activity.navigate("settings")); }
             else {
                 label(inventory, s(R.string.web_tools_dns_endpoint) + ": 127.0.0.1:" + dns.optString("port"));
                 label(inventory, s(R.string.web_coexist_target_path) + ": " + (response.optString("mode").equals("tun") ? "tailscale0" : "SOCKS5 127.0.0.1:" + response.optString("socksPort")));
@@ -123,6 +132,7 @@ final class CoexistPage extends ControlPage {
             JSONArray peers = ToolsData.array(response, "peers");
             if (response.optBoolean("dnsReady")) {
                 label(targets, s(R.string.web_coexist_check_step));
+                hint(targets, s(R.string.web_coexist_check_hint));
                 if (peers.length() == 0) label(targets, s(R.string.web_coexist_no_peers));
                 else {
                     String[] names = new String[peers.length() + 1]; names[0] = s(R.string.web_coexist_peer_choose);
@@ -143,6 +153,7 @@ final class CoexistPage extends ControlPage {
         snippet = ""; String mode = FILTERS[filter.getSelectedItemPosition()];
         filterHint.setVisibility(View.GONE);
         if (info != null && info.optBoolean("dnsReady")) {
+            pathHint.setText(s(info.optString("mode").equals("tun") ? R.string.web_coexist_tun_hint : R.string.web_coexist_socks_hint));
             if (mode.equals("whitelist")) { filterHint.setText(s(R.string.web_coexist_whitelist_hint)); filterHint.setVisibility(View.VISIBLE); }
             else if (!mode.isEmpty()) try { snippet = ToolsData.snippet(info, mode); yaml.setText(snippet); } catch (Exception error) { filterHint.setText(s(R.string.web_coexist_invalid_snapshot)); filterHint.setVisibility(View.VISIBLE); }
         }
@@ -159,9 +170,11 @@ final class CoexistPage extends ControlPage {
         String port = targetPort.getText().toString().trim(), resolver = resolverPort.getText().toString().trim();
         if (!activity.client.canWrite() || activity.client.busy() || !canCheck(info, peer, address, port, resolver)) { notice(s(R.string.web_coexist_invalid_port)); return; }
         invalidate(); int ticket = generation; String snapshot = info.optString("snapshot"), name = peer.optString("dnsName"), ip = address, path = info.optString("mode").equals("tun") ? "system" : "socks5", id = peer.optString("id");
+        checking.setVisibility(View.VISIBLE);
         probe(s(R.string.web_coexist_check), response -> {
+            checking.setVisibility(View.GONE);
             if (ticket != generation) return;
-            if (!ToolsUi.success(this, response) || !snapshot.equals(response.optString("snapshot")) || !name.equals(response.optString("name")) || !ip.equals(response.optString("address")) || response.optInt("targetPort") != Integer.parseInt(port) || !path.equals(response.optString("path"))) { load(); label(inventory, s(R.string.web_coexist_context_changed)); return; }
+            if (!ToolsUi.success(this, response) || !snapshot.equals(response.optString("snapshot")) || !name.equals(response.optString("name")) || !ip.equals(response.optString("address")) || response.optInt("targetPort") != Integer.parseInt(port) || !path.equals(response.optString("path"))) { load(); label(inventory, response.optString("error", s(R.string.web_coexist_context_changed))); return; }
             results.setVisibility(View.VISIBLE);
             label(results, s(R.string.web_coexist_peer) + ": " + name);
             label(results, s(R.string.web_coexist_target) + ": " + (ip.contains(":") ? "[" + ip + "]" : ip) + ":" + port);
@@ -174,6 +187,7 @@ final class CoexistPage extends ControlPage {
                 label(results, s(labels[j])); badge(results, state, found == null ? ControlUi.TONE_NEUTRAL : found.optBoolean("ok") ? ControlUi.TONE_OK : ControlUi.TONE_ERROR);
                 if (found != null) { hint(results, found.optLong("elapsedMs") + " ms"); if (found.has("error")) hint(results, found.optString("error")); JSONArray observed = ToolsData.array(found, "addresses"); if (observed.length() > 0) { java.util.ArrayList<String> values = new java.util.ArrayList<>(); for (int i = 0; i < observed.length(); i++) values.add(observed.optString(i)); hint(results, s(R.string.web_coexist_observed) + ": " + String.join(", ", values)); } }
             }
+            hint(results, s(R.string.web_coexist_result_boundary));
         }, "coexist-check", snapshot, id, ip, port, resolver.isEmpty() ? "-" : resolver);
     }
 }

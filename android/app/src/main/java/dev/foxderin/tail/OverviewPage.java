@@ -42,6 +42,7 @@ final class OverviewPage extends ControlPage {
         });
         authFields = row(loginHero); authFields.setOrientation(LinearLayout.VERTICAL); authFields.setVisibility(View.GONE);
         authKey = input(authFields, s(R.string.web_acc_authkey), "", android.text.InputType.TYPE_CLASS_TEXT | android.text.InputType.TYPE_TEXT_VARIATION_PASSWORD);
+        authKey.setHint(s(R.string.web_acc_authkey_hint));
         authKey.setSaveEnabled(false); authKey.setImportantForAutofill(View.IMPORTANT_FOR_AUTOFILL_NO);
         button(authFields, s(R.string.web_acc_login_authkey), () -> {
             if (authKey.getText().toString().trim().isEmpty()) return;
@@ -137,7 +138,8 @@ final class OverviewPage extends ControlPage {
         health.title.setText(s(label == R.string.network_connected ? R.string.web_net_connected : label == R.string.network_stopped ? R.string.web_dash_stopped :
                 label == R.string.network_login_needed ? R.string.web_hero_login_title : label == R.string.network_unknown ? R.string.web_net_status_stale : R.string.web_net_connecting));
         String hint = error != null || label == R.string.network_unknown ? s(R.string.web_net_unknown_hint)
-                : connected || label == R.string.network_stopped || label == R.string.network_login_needed ? "" : s(R.string.web_net_connecting_hint);
+                : connected ? "" : label == R.string.network_stopped ? s(R.string.web_net_stopped_hint)
+                : label == R.string.network_login_needed ? s(R.string.web_net_login_hint) : s(R.string.web_net_connecting_hint);
         health.hint.setText(hint); health.hint.setVisibility(hint.isEmpty() ? View.GONE : View.VISIBLE);
         health.actions.setVisibility(label == R.string.network_unknown ? View.VISIBLE : View.GONE);
         retryButton.setVisibility(label == R.string.network_unknown ? View.VISIBLE : View.GONE);
@@ -195,6 +197,7 @@ final class OverviewPage extends ControlPage {
         if (routing != null && routing.optJSONObject("selected") != null && "bridge".equals(snapshot.optString("mode")))
             hint(exitBox, s(R.string.web_net_exit_scope) + ": " + routing.optString("scope", "") + " " + ExitNodesPage.scopeUids(routing));
         if (node != null) {
+            hint(exitBox, s(R.string.web_net_exit_hint));
             ControlUi.infoRow(exitBox, s(R.string.web_dash_traffic), "↓ " + byteValue(node, "rx") + "   ↑ " + byteValue(node, "tx"), false);
             if (Boolean.FALSE.equals(node.opt("online"))) ControlUi.banner(exitBox, R.drawable.ic_warning, s(R.string.web_net_exit_unavailable), ControlUi.TONE_WARN);
         }
@@ -244,11 +247,13 @@ final class OverviewPage extends ControlPage {
         if (!needed) { heroDismissed = false; loginUrl = null; authKey.setText(""); loginResult.setVisibility(View.GONE); authFields.setVisibility(View.GONE); return; }
         loginBody.removeAllViews();
         if (heroDismissed) {
+            hint(loginBody, s(R.string.web_hero_banner_login));
             iconButton(loginBody, R.drawable.ic_expand_more, s(R.string.web_hero_expand), () -> { heroDismissed = false; renderLoginHero(true); });
             loginResult.setVisibility(View.GONE); authFields.setVisibility(View.GONE); return;
         }
         iconButton(loginBody, R.drawable.ic_expand_less, s(R.string.web_hero_minimize), () -> { heroDismissed = true; renderLoginHero(true); });
         hint(loginBody, s(R.string.web_net_login_secure)); label(loginBody, s(R.string.web_hero_login_title));
+        hint(loginBody, s(R.string.web_hero_login_desc));
         LinearLayout actions = row(loginBody);
         primary(actions, s(R.string.web_hero_get_link), R.drawable.ic_login, () -> guardedLogin(this::getLoginLink));
         iconButton(actions, R.drawable.ic_vpn_key, s(R.string.web_acc_authkey), () -> authFields.setVisibility(authFields.getVisibility() == View.VISIBLE ? View.GONE : View.VISIBLE));

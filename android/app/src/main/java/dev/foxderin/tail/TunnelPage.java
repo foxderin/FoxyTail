@@ -52,6 +52,7 @@ final class TunnelPage extends ControlPage {
     private void renderTun(JSONObject result, boolean fresh) {
             tun = result; tunState.setVisibility(fresh ? View.GONE : View.VISIBLE); tunState.setText(s(R.string.web_net_status_stale)); tunBox.removeAllViews();
             String mode = result.optString("mode", "");
+            if (!"bridge".equals(mode)) hint(tunBox, s("tun".equals(mode) ? R.string.web_tools_tun_desc : "proxy".equals(mode) ? R.string.web_tools_proxy_desc : R.string.web_tools_bridge_desc));
             LinearLayout metrics = row(tunBox);
             ControlUi.MetricTile iface = metric(metrics, R.drawable.ic_router, s(R.string.web_tun_iface));
             Object up = result.opt("ifaceUp"); iface.value.setText(up instanceof Boolean ? s(Boolean.TRUE.equals(up) ? R.string.web_tun_up : R.string.web_tun_down) : "—");
@@ -88,16 +89,18 @@ final class TunnelPage extends ControlPage {
                     if (path != null) {
                         ControlUi.infoRow(resultBox, s(R.string.web_tools_dns_ipv6_path), path, false);
                     }
+                    if ("fallback".equals(result.optString("ipv6DnsInterception"))) hint(resultBox, s(R.string.web_tools_dns_ipv6_fallback_hint));
                     Object nativeDns = result.opt("upstreamNative");
                     ControlUi.infoRow(resultBox, s(R.string.web_dns_native), nativeDns instanceof Boolean ? s(Boolean.TRUE.equals(nativeDns) ? R.string.web_tools_dns_native_yes : R.string.web_tools_dns_native_no) : "—", false);
                 }
                 String endpoint = dnsEndpoint(result);
                 if (endpoint != null) {
                     ControlUi.infoRow(resultBox, s(R.string.web_tools_dns_endpoint), endpoint, false);
+                    hint(resultBox, s(R.string.web_tools_dns_endpoint_hint));
                     iconButton(resultBox, R.drawable.ic_content_copy, s(R.string.web_tools_dns_endpoint_copy), () -> copy(s(R.string.web_tools_dns_endpoint), endpoint));
                 }
-                if ("transparent".equals(result.optString("mode")) && Boolean.TRUE.equals(result.opt("listenerReady")) && "transparent-unavailable".equals(result.optString("reason")))
-                    hint(resultBox, s(R.string.web_tools_dns_transparent_unavailable));
+                if ("transparent".equals(result.optString("mode")) && Boolean.TRUE.equals(result.opt("listenerReady")))
+                    hint(resultBox, s("transparent-unavailable".equals(result.optString("reason")) ? R.string.web_tools_dns_transparent_unavailable : R.string.web_tools_dns_transparent_limit));
                 if (result.opt("suffix") instanceof String && !result.optString("suffix").isEmpty()) ControlUi.infoRow(resultBox, s(R.string.web_dns_suffix), result.optString("suffix"), false);
             }
             if (dnsAgain) { dnsAgain = false; checkDns(); }
@@ -226,6 +229,7 @@ final class TunnelPage extends ControlPage {
             case "interception-lost": case "queue-failed": return R.string.web_tools_dns_interception_lost;
             case "guard-failed": return R.string.web_tools_dns_guard_failed;
             case "capture-mark-conflict": return R.string.web_tools_dns_mark_conflict;
+            case "packet-policy-conflict": return R.string.web_tools_dns_packet_policy_conflict;
             case "dns-interception-conflict": return R.string.web_tools_dns_interception_conflict;
             case "stopped": return R.string.web_dns_stopped;
             case "degraded": return R.string.web_dns_degraded;

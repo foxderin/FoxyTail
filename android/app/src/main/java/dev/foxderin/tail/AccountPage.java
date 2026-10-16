@@ -22,7 +22,7 @@ final class AccountPage extends ControlPage {
 
     AccountPage(ControlActivity activity) {
         super(activity);
-        LinearLayout accountCard = section(s(R.string.web_acc_accounts), R.drawable.ic_person, null);
+        LinearLayout accountCard = section(s(R.string.web_acc_accounts), R.drawable.ic_person, s(R.string.web_tools_account_list_desc));
         ControlUi.cardAction(accountCard, iconButton(accountCard, R.drawable.ic_refresh, s(R.string.web_tools_refresh), this::load));
         accountState = label(accountCard, ""); accountState.setVisibility(View.GONE);
         accounts = new LinearLayout(activity); accounts.setOrientation(LinearLayout.VERTICAL); accountCard.addView(accounts);
@@ -63,6 +63,7 @@ final class AccountPage extends ControlPage {
             guarded(() -> browserLogin(url));
         });
         logout = ControlUi.dangerCard(content, s(R.string.web_acc_logout), R.drawable.ic_logout);
+        hint(logout, s(R.string.web_tools_logout_desc));
         button(logout, s(R.string.web_acc_logout), () -> confirm(s(R.string.web_acc_logout), s(R.string.web_acc_logout_confirm), () -> guarded(() -> accountMutation("logout"))));
         ControlUi.setCardVisible(logout, false);
     }
