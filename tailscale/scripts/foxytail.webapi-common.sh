@@ -226,6 +226,24 @@ _op_exec() {
   "$@" &
   _oe_pid=$!
   _oe_start=$(_op_starttime "${_oe_pid}")
+  # A fast child can exit before its identity is read, letting a recycled PID
+  # loan the usurper's start time to our record. Re-read the stat once and
+  # keep only a start time captured while the process was still our child.
+  # $$ can name the parent inside a command substitution, so take our own
+  # PID from /proc/self just like _lock_identity does.
+  if [ -r /proc/self/stat ] && IFS= read -r _oe_self </proc/self/stat; then
+    _oe_self=${_oe_self%% *}
+    if IFS= read -r _oe_stat <"/proc/${_oe_pid}/stat" 2>/dev/null; then
+      _oe_fields=${_oe_stat##*) }
+      # shellcheck disable=SC2086 # proc fields after comm contain no glob chars
+      set -- ${_oe_fields}
+      _oe_ppid=$2
+      shift 19
+      [ "${_oe_ppid}" = "${_oe_self}" ] && _oe_start=$1 || _oe_start=
+    else
+      _oe_start=
+    fi
+  fi
   _oe_record="${TS_RUN_DIR}/.cli-${_oe_pid}"
   [ -z "${_OP_DIR:-}" ] || _oe_record="${_OP_DIR}/child.${_oe_pid}"
   printf '%s %s %s\n' "${_oe_pid}" "${_oe_start}" "$(boot_identity)" >"${_oe_record}.next" && mv -f "${_oe_record}.next" "${_oe_record}"

@@ -124,6 +124,23 @@ cmd_diag_check''')
         self.assertNotEqual(result.returncode, 0)
         self.assertFalse(list(cancelled.glob('*.tar.gz*')), 'cancelled final archive survived publication')
 
+    def test_local_bundle_never_defaults_to_shared_storage(self):
+        helper = self.scripts / 'foxytail.diag'
+        helper.write_text((ROOT / 'tailscale/scripts/foxytail.diag').read_text().replace(
+            '/data/adb/modules', str(self.base / 'modules')))
+        (self.base / 'modules').mkdir(exist_ok=True)
+        result = subprocess.run(['sh', str(helper), 'collect', '', 'local'],
+                                capture_output=True, text=True, timeout=15,
+                                env={**os.environ, 'COPYFILE_DISABLE': '1'})
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        path = Path(result.stdout.strip().splitlines()[-1])
+        self.assertEqual(path.parent, self.base / 'diag')
+        self.assertTrue(path.is_file())
+        with tarfile.open(path) as archive:
+            self.assertIn('diagnostic-mode.txt',
+                          [member.name.split('/', 1)[1] for member in archive.getmembers()
+                           if member.isfile()])
+
 
 if __name__ == '__main__':
     unittest.main()

@@ -285,11 +285,6 @@ pids_of_path() {
     ;;
   esac
 }
-_pids_alive() {
-  for _fixture_pid in $1; do
-    _fixture_daemon_alive "$_fixture_pid" && printf '%s ' "$_fixture_pid"
-  done
-}
 ''')
         self.daemon = self.binary / 'tailscaled'
         self.daemon.write_text('#!' + sys.executable + '\n' + '''

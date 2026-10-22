@@ -26,7 +26,7 @@ class TunLifecycleTests(unittest.TestCase):
         # Exercise the real exact-path filter, with every process lookup and
         # stop replaced. No /proc reads, host signals, or Android commands.
         settings = (ROOT / 'tailscale/settings.sh').read_text()
-        ownership = settings[settings.index('pids_of_path() {'):settings.index('_pids_alive() {')]
+        ownership = settings[settings.index('pids_of_path() {'):settings.index('stop_by_pids() {')]
         (self.base / 'settings.sh').write_text(r'''
 TS_BIN_DIR="$TEST_DIR/bin"
 TS_SCRIPTS_DIR="$TEST_DIR/scripts"

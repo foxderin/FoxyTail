@@ -266,6 +266,41 @@ test ! -e "$TS_PID_DIR/foxytail.context.pid"
             foreign.terminate()
             foreign.wait(timeout=3)
 
+    def test_stop_by_pids_terminates_the_bound_process(self):
+        victim = subprocess.Popen(['sleep', '30'])
+        try:
+            self.shell('stop_by_pids fixture ' + str(victim.pid))
+            self.assertEqual(victim.wait(timeout=5), -15)
+        finally:
+            if victim.poll() is None:
+                victim.kill()
+                victim.wait(timeout=3)
+
+    def test_stop_by_pids_never_signals_a_recycled_identity(self):
+        # The recorded start time no longer matches after the first lookup, as
+        # happens when a dead target's PID was recycled by a foreign process.
+        victim = subprocess.Popen(['sleep', '30'])
+        try:
+            self.shell('''
+log() { :; }
+kill() {
+  case "$1" in
+    -0) command kill "$@" 2>/dev/null ;;
+    *) printf '%s\\n' "$*" >>"$TS_RUN_DIR/signals"; command kill "$@" 2>/dev/null ;;
+  esac
+}
+_proc_starttime() {
+  reads=$(cat "$TS_RUN_DIR/stamp-reads" 2>/dev/null || echo 0)
+  reads=$((reads + 1)); printf '%s' "$reads" >"$TS_RUN_DIR/stamp-reads"
+  [ "$reads" -le 1 ] && printf original || printf usurper
+}
+stop_by_pids foreign ''' + str(victim.pid) + '''
+test ! -e "$TS_RUN_DIR/signals"''')
+            self.assertIsNone(victim.poll())
+        finally:
+            victim.terminate()
+            victim.wait(timeout=3)
+
     def test_owner_lock_rejects_reused_and_previous_boot_records(self):
         self.shell('''
 _lock_identity || exit 1

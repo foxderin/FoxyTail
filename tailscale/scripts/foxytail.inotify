@@ -30,12 +30,14 @@ _ctl() {
   fi
 }
 
+# inotifyd passes one event code per callback; match it exactly so an
+# unexpected or combined code cannot masquerade as a flag toggle.
 case "$events" in
-  *n*)
+  n)
     log Info "module disabled via manager; stopping FoxyTail"
     _ctl stop
     ;;
-  *d*)
+  d)
     log Info "module enabled via manager; starting FoxyTail"
     _ctl start
     ;;

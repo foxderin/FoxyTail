@@ -103,14 +103,15 @@ rotate_log() (
   _rl_max_bytes=$((_rl_max_kb * 1024))
   _rl_size=${2:-$(wc -c <"${_rl_file}" 2>/dev/null || echo 0)}
   [ "${_rl_size}" -gt "${_rl_max_bytes}" ] || exit 0
-  _rl_locked=0
-  if [ "${_CONF_LOCK_HELD:-0}" != 1 ]; then
-    conf_lock_acquire || exit 1
-    _rl_locked=1
-  fi
-  _rl_tmp="${_rl_file}.bak.$$"
-  trap 'rm -f "${_rl_tmp}"; [ "${_rl_locked}" = 0 ] || conf_lock_release' 0
+  # A dedicated leaf lock serializes concurrent rotators. Logging is called
+  # from inside every other critical section, so it must not wait on the
+  # configuration lock; this path performs no logging itself, so its own
+  # lock can never recurse.
+  _lock_identity &&
+    _owner_lock_acquire "${TS_RUN_DIR}/.log-rotate-lock" "${_LOCK_TOKEN}" 100 0.1 || exit 1
+  trap '_owner_lock_release "${TS_RUN_DIR}/.log-rotate-lock" "${_LOCK_TOKEN}"; rm -f "${_rl_tmp}"' 0
   trap 'exit 1' HUP INT TERM
+  _rl_tmp="${_rl_file}.bak.$$"
   # Preserve writer file descriptors and bound the backup, even if the source
   # grew far beyond its target before the resident log monitor ran.
   if tail -c "${_rl_max_bytes}" "${_rl_file}" >"${_rl_tmp}" && mv "${_rl_tmp}" "${_rl_file}.bak"; then
@@ -213,49 +214,66 @@ pids_of_path() {
   done
 }
 
-# Echo the subset of the space-separated <pids> that are still alive.
-_pids_alive() {
-  _pa_alive=""
-  # shellcheck disable=SC2086 # intentional: one PID per word
-  for _pa_pid in $1; do
-    kill -0 "${_pa_pid}" 2>/dev/null && _pa_alive="${_pa_alive}${_pa_pid} "
+# Echo the subset of the space-separated "pid:starttime" targets whose
+# process is still alive with the same start time. A recycled PID carries a
+# different start time, so a dead target's slot can never match a foreign
+# replacement process.
+_pids_alive_verified() {
+  _pav_alive=""
+  for _pav_target in $1; do
+    _pav_pid=${_pav_target%%:*}
+    if kill -0 "${_pav_pid}" 2>/dev/null &&
+      [ "$(_proc_starttime "${_pav_pid}")" = "${_pav_target##*:}" ]; then
+      _pav_alive="${_pav_alive}${_pav_target} "
+    fi
   done
-  printf '%s' "${_pa_alive}"
+  printf '%s' "${_pav_alive}"
 }
 
 # TERM every PID in <pids> (space-separated), wait up to [wait] seconds for
-# them to exit, KILL the survivors, then verify 1s later. Logs throughout;
-# returns 1 when any of the original PIDs is still alive at the end.
+# them to exit, KILL the survivors, then verify 1s later. Each PID is bound
+# to its /proc start time once at entry; every liveness check and every
+# signal afterwards revalidates that pair, so a recycled PID is never
+# signalled or awaited. Returns 1 when any original target is still alive.
 stop_by_pids() {
   _sbp_name="$1"
   _sbp_pids="$2"
   _sbp_wait="${3:-3}"
   [ -n "${_sbp_pids}" ] || return 0
   log Info "Stopping ${_sbp_name} (pids: ${_sbp_pids})."
-  # shellcheck disable=SC2086 # intentional: one PID per word
+  _sbp_targets=""
   for _sbp_pid in ${_sbp_pids}; do
-    kill -TERM "${_sbp_pid}" 2>/dev/null
+    _sbp_stamp=$(_proc_starttime "${_sbp_pid}") || continue
+    _sbp_targets="${_sbp_targets}${_sbp_pid}:${_sbp_stamp} "
+  done
+  for _sbp_target in ${_sbp_targets}; do
+    _sbp_pid=${_sbp_target%%:*}
+    [ "$(_proc_starttime "${_sbp_pid}")" = "${_sbp_target##*:}" ] &&
+      kill -TERM "${_sbp_pid}" 2>/dev/null
   done
   _sbp_tries=$((_sbp_wait * 5))
   _sbp_i=0
-  _sbp_alive="${_sbp_pids} "
+  _sbp_alive=" "
   while [ "${_sbp_i}" -lt "${_sbp_tries}" ] && [ -n "${_sbp_alive}" ]; do
-    _sbp_alive=$(_pids_alive "${_sbp_pids}")
+    _sbp_alive=$(_pids_alive_verified "${_sbp_targets}")
     [ -z "${_sbp_alive}" ] && break
     sleep 0.2
     _sbp_i=$((_sbp_i + 1))
   done
   if [ -n "${_sbp_alive}" ]; then
     log Warning "${_sbp_name} still running after TERM; force killing."
-    # shellcheck disable=SC2086 # intentional: one PID per word
-    for _sbp_pid in ${_sbp_alive}; do
-      kill -KILL "${_sbp_pid}" 2>/dev/null
+    for _sbp_target in ${_sbp_alive}; do
+      _sbp_pid=${_sbp_target%%:*}
+      [ "$(_proc_starttime "${_sbp_pid}")" = "${_sbp_target##*:}" ] &&
+        kill -KILL "${_sbp_pid}" 2>/dev/null
     done
     sleep 1
-    _sbp_alive=$(_pids_alive "${_sbp_pids}")
+    _sbp_alive=$(_pids_alive_verified "${_sbp_targets}")
   fi
   if [ -n "${_sbp_alive}" ]; then
-    log Error "${_sbp_name} could not be stopped (still running:${_sbp_alive})."
+    _sbp_left=""
+    for _sbp_target in ${_sbp_alive}; do _sbp_left="${_sbp_left}${_sbp_target%%:*} "; done
+    log Error "${_sbp_name} could not be stopped (still running:${_sbp_left})."
     return 1
   fi
   return 0

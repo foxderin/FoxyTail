@@ -2,6 +2,8 @@
 # FoxyTail - one-shot diagnostics bundle.
 #
 # Usage: foxytail.diag collect [output-dir] [share|local] (default: share)
+# Default output is /sdcard/Download for share and $TS_DIR/diag for local:
+# local bundles keep raw identities and never default to shared storage.
 # Prints the tar.gz path as the LAST line of stdout (webapi parses it).
 
 DIR=$(dirname "$(realpath "$0")")
@@ -77,10 +79,15 @@ diag_cleanup() {
 }
 
 collect() {
-  _outdir="${1:-/sdcard/Download}"
+  _outdir=$1
   _mode=${2:-share}
   case "$_mode" in share|local) ;; *) echo 'expected share|local' >&2; return 1 ;; esac
   umask 077
+  # A local bundle skips anonymization entirely: without an explicit output
+  # directory it must not default onto shared storage.
+  if [ -z "${_outdir}" ]; then
+    if [ "$_mode" = local ]; then _outdir="${TS_DIR}/diag"; else _outdir=/sdcard/Download; fi
+  fi
 
   # Verify the output dir is writable; fall back to $TS_DIR otherwise.
   if { [ -d "$_outdir" ] || mkdir -p "$_outdir" 2>/dev/null; } \

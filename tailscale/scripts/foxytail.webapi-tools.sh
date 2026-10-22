@@ -190,7 +190,11 @@ cmd_diag() {
   _dg_mode=${1:-share}
   case "$_dg_mode" in share|local) ;; *) jerr 'diag: expected share|local' ;; esac
   [ -x "${TS_SCRIPTS_DIR}/foxytail.diag" ] || jerr "foxytail.diag not found"
-  _dg_out=$(_op_exec 120 "${TS_SCRIPTS_DIR}/foxytail.diag" collect /sdcard/Download "$_dg_mode" 2>/dev/null) || jerr 'diag collection failed or cancelled'
+  # Local bundles are not anonymized; leave their destination to the private
+  # default rather than publishing raw identities to shared storage.
+  _dg_outdir=/sdcard/Download
+  [ "$_dg_mode" = local ] && _dg_outdir=
+  _dg_out=$(_op_exec 120 "${TS_SCRIPTS_DIR}/foxytail.diag" collect "$_dg_outdir" "$_dg_mode" 2>/dev/null) || jerr 'diag collection failed or cancelled'
   _dg_path=$(printf '%s\n' "${_dg_out}" | tail -n 1 | tr -d ' ')
   if [ -n "${_dg_path}" ] && [ -f "${_dg_path}" ]; then
     _dg_artifact=$(_artifact_register diagnostic "${_dg_path}") || jerr 'diag: cannot retain private export artifact'
@@ -286,8 +290,11 @@ _file_export_to_download() {
     _fx_rc=$?
     case "${_fx_rc}" in
       0)
+        # The validated name may still contain characters like '#' or '?'
+        # that truncate a file:// URI; percent-encode it for the scanner.
+        _fx_uri=$(printf '%s' "${_fx_dst##*/}" | jqr -Rr '@uri' 2>/dev/null) || _fx_uri=
         am broadcast -a android.intent.action.MEDIA_SCANNER_SCAN_FILE \
-          -d "file://${_fx_dst}" >/dev/null 2>&1 || true
+          -d "file://${_fx_dst%/*}/${_fx_uri:-${_fx_dst##*/}}" >/dev/null 2>&1 || true
         return 0 ;;
       2) return 1 ;;
     esac
