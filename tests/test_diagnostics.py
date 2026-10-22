@@ -140,6 +140,19 @@ cmd_diag_check''')
             self.assertIn('diagnostic-mode.txt',
                           [member.name.split('/', 1)[1] for member in archive.getmembers()
                            if member.isfile()])
+        # The default directory is pruned to the newest two bundles; an
+        # explicit destination keeps every run.
+        for _ in range(2):
+            subprocess.run(['sh', str(helper), 'collect', '', 'local'],
+                           capture_output=True, text=True, timeout=15,
+                           env={**os.environ, 'COPYFILE_DISABLE': '1'})
+        self.assertEqual(len(list((self.base / 'diag').glob('foxytail-diag-*.tar.gz'))), 2)
+        explicit = self.base / 'explicit'
+        for _ in range(3):
+            subprocess.run(['sh', str(helper), 'collect', str(explicit), 'local'],
+                           capture_output=True, text=True, timeout=15,
+                           env={**os.environ, 'COPYFILE_DISABLE': '1'})
+        self.assertEqual(len(list(explicit.glob('foxytail-diag-*.tar.gz'))), 3)
 
 
 if __name__ == '__main__':

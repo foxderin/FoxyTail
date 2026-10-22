@@ -166,6 +166,13 @@ collect() {
   printf 'mode=%s\n' "$_mode" >"${_stage}/diagnostic-mode.txt"
 
   if tar -czf "$_partial" -C "$TS_RUN_DIR" "$(basename "$_stage")" 2>/dev/null && mv "$_partial" "$_out"; then
+    # The private default is invisible to the user, so keep it bounded: retain
+    # the newest two bundles instead of one more per run forever. Explicit
+    # output directories are the caller's to manage and are never pruned.
+    if [ "${_outdir}" = "${TS_DIR}/diag" ]; then
+      ls -1t "${_outdir}"/foxytail-diag-*.tar.gz 2>/dev/null | tail -n +3 |
+        while IFS= read -r _old; do rm -f "${_old}"; done
+    fi
     log Success "diag: bundle written to ${_out}"
   else
     log Error "diag: failed to write ${_out}"
