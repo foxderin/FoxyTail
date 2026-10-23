@@ -1,6 +1,0 @@
-<?xml version="1.0" encoding="utf-8"?>
-<resources>
-    <string name="repair_traffic_previous">上一个时段</string>
-    <string name="repair_traffic_next">下一个时段</string>
-    <string name="repair_traffic_select">选择时段</string>
-</resources>

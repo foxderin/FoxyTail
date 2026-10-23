@@ -39,8 +39,6 @@ public final class BridgeInstrumentation extends Instrumentation {
             check(RootApi.failureMessage("FOXYTAIL_ROOT_READY\nhelper failed") == R.string.backend_failed, "Backend failure is not root denial");
             check(RootApi.failureMessage("su: denied") == R.string.root_failed, "Missing handshake is not backend success");
             check(RootApi.failureMessage("prefix FOXYTAIL_ROOT_READY") == R.string.root_failed, "Handshake requires exact line");
-            check(FilesPage.targetPlaceholder(false, false) != FilesPage.targetPlaceholder(true, false), "Unknown targets are not empty targets");
-            check(FilesPage.targetPlaceholder(false, true) == R.string.targets_failed && FilesPage.targetPlaceholder(true, true) == R.string.targets_failed, "Target failure takes precedence over stale state");
             check(Models.sourcePath("/sdcard/Download/hello world.txt"), "Shared file accepted");
             check(!Models.sourcePath("/sdcard/../data/file"), "Parent traversal rejected");
             check(!Models.sourcePath("/data/user/0/private"), "Private root source rejected");
@@ -67,31 +65,8 @@ public final class BridgeInstrumentation extends Instrumentation {
             try { context.getContentResolver().openFileDescriptor(token, "w"); throw new AssertionError("Provider writable"); } catch (FileNotFoundException | SecurityException expected) { }
             ControlChecks.run(context);
             FilesIntegrationChecks.run(context);
-            NetworkChecks.run();
-            ToolsLogicTests.run();
-            ToolsPagesChecks.run();
-            AccountServeChecks.run();
-            ConfigPageChecks.run();
-            ShellStateChecks.run(this);
-            java.util.concurrent.atomic.AtomicReference<Throwable> uiFailure = new java.util.concurrent.atomic.AtomicReference<>();
-            runOnMainSync(() -> {
-                try { TrafficChecks.run(context); LogsChecks.run(context); } catch (Throwable error) { uiFailure.set(error); }
-            });
-            if (uiFailure.get() != null) throw new AssertionError("View interaction regression", uiFailure.get());
-            ControlActivity activity = (ControlActivity) startActivitySync(new android.content.Intent(context, ControlActivity.class).addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK | android.content.Intent.FLAG_ACTIVITY_CLEAR_TASK));
-            try {
-                runOnMainSync(() -> { try { NetworkListChecks.run(activity); ShellStateChecks.observations(activity); SettingsViewChecks.run(activity); } catch (Throwable error) { uiFailure.set(error); } });
-                if (uiFailure.get() != null) throw new AssertionError("Network list interaction regression", uiFailure.get());
-                runOnMainSync(() -> {
-                    try {
-                        activity.navigate("files");
-                        java.lang.reflect.Field field = ControlActivity.class.getDeclaredField("filesPage"); field.setAccessible(true);
-                        FilesViewChecks.run((FilesPage) field.get(activity));
-                    } catch (Throwable error) { uiFailure.set(error); }
-                });
-                if (uiFailure.get() != null) throw new AssertionError("Files view interaction regression", uiFailure.get());
-            } finally { runOnMainSync(activity::finish); }
-            result.putString("stream", "PASS: root control receipts and failures, network and tool contracts, Taildrop boundaries, binary streaming, cancellation and read-only exports\n");
+            WebViewChecks.run(this);
+            result.putString("stream", "PASS: root receipts and failures, Taildrop validation, binary cancellation, verified save and read-only exports, bundled WebView bridge and navigation\n");
             finish(-1, result);
         } catch (Throwable error) {
             java.io.StringWriter trace = new java.io.StringWriter(); error.printStackTrace(new java.io.PrintWriter(trace));

@@ -5,6 +5,33 @@ rootProject.file('../module.prop').withInputStream { moduleVersion.load(it) }
 def signingValues = ['FOXYTAIL_KEYSTORE_PATH', 'FOXYTAIL_KEYSTORE_PASSWORD', 'FOXYTAIL_KEY_ALIAS', 'FOXYTAIL_KEY_PASSWORD'].collectEntries { [(it): System.getenv(it)] }
 def hasReleaseSigning = signingValues.values().every { it != null && !it.isEmpty() }
 
+abstract class BuildWebUi extends Exec {
+    @OutputDirectory
+    abstract DirectoryProperty getOutputDirectory()
+}
+
+def webDir = rootProject.file('../webui')
+def webAssets = layout.buildDirectory.dir('generated/webAssets')
+def installWebUi = tasks.register('installWebUi', Exec) {
+    workingDir webDir
+    commandLine 'pnpm', 'install', '--frozen-lockfile'
+    inputs.files(new File(webDir, 'package.json'), new File(webDir, 'pnpm-lock.yaml'), new File(webDir, 'pnpm-workspace.yaml'))
+    outputs.file(new File(webDir, 'node_modules/.modules.yaml'))
+}
+def buildWebUi = tasks.register('buildWebUi', BuildWebUi) {
+    dependsOn installWebUi
+    workingDir webDir
+    commandLine 'pnpm', 'run', 'build'
+    inputs.dir(new File(webDir, 'src'))
+    inputs.files(new File(webDir, 'index.html'), new File(webDir, 'vite.config.ts'), new File(webDir, 'tsconfig.json'), new File(webDir, 'pnpm-lock.yaml'))
+    outputDirectory.set(webAssets)
+}
+androidComponents {
+    onVariants(selector().all()) { variant ->
+        variant.sources.assets.addGeneratedSourceDirectory(buildWebUi) { task -> task.outputDirectory }
+    }
+}
+
 android {
     namespace 'dev.foxderin.tail'
     compileSdk {
@@ -42,7 +69,8 @@ android {
 }
 
 dependencies {
-    implementation 'com.google.android.material:material:1.14.0'
+    implementation 'androidx.core:core:1.19.1'
+    implementation 'androidx.webkit:webkit:1.18.0'
 }
 
 gradle.taskGraph.whenReady { graph ->

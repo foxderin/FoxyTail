@@ -1,7 +1,4 @@
 <resources>
-    <string name="control_reconnect">核验操作</string>
-    <string name="control_acknowledge">确认未知状态</string>
-    <string name="control_unknown_title">尚未确认实际结果</string>
     <string name="control_unknown_warning">再次修改前请核验服务、账号与配置的实际状态。</string>
     <string name="control_unknown_acknowledged">已清除观察记录，请核验实际状态。</string>
     <string name="control_reconnecting">正在重新观察：%1$s</string>
@@ -15,9 +12,6 @@
     <string name="control_running">正在执行：%1$s</string>
     <string name="control_finished">已完成：%1$s。</string>
     <string name="control_unknown">操作结果未知，请勿重复修改。%1$s</string>
-    <string name="control_copied">已复制</string>
-    <string name="control_invalid_url">只能打开有效的 HTTP 或 HTTPS 链接。</string>
     <string name="control_archive_limit">配置归档不能超过 1 MiB。</string>
-    <string name="control_importing">正在导入所选归档；旋转屏幕不会重新上传。</string>
     <string name="control_import_interrupted">归档导入被中断，未提交恢复。</string>
 </resources>

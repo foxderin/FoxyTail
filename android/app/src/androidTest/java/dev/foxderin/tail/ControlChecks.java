@@ -14,6 +14,10 @@ import java.util.concurrent.atomic.AtomicInteger;
 
 final class ControlChecks {
     static void run(Context context) throws Exception {
+        for (String version : new String[]{null, "", "108.0.5359.128", "invalid", "-1.0"})
+            require(!ControlActivity.supportedWebViewVersion(version), "Unsupported WebView fails before mounting the bundle");
+        for (String version : new String[]{"109.0.5414.0", "130.0.6723.1"})
+            require(ControlActivity.supportedWebViewVersion(version), "Supported WebView can mount the ES2022 bundle");
         ByteArrayOutputStream bytes = new ByteArrayOutputStream();
         bytes.write("{\"ok\":false,\"error\":\"route failed\",\"exitRouting\":{\"effective\":\"not-effective\"}}".getBytes(StandardCharsets.UTF_8));
         try { RootApi.decode(context, bytes, 1); throw new AssertionError("Failure accepted"); }
@@ -30,6 +34,9 @@ final class ControlChecks {
         require(ControlClient.terminalResult(operation).getBoolean("ok"), "Confirmed completion");
         operation.put("state", "interrupted");
         require(!ControlClient.terminalResult(operation).getBoolean("ok"), "Interrupted cannot inherit successful output");
+        operation.put("state", "cancelled").put("result", new JSONObject().put("ok", false).put("error", "cancelled at backend")).put("exitCode", 130);
+        JSONObject cancelledResult = ControlClient.terminalResult(operation);
+        require(!cancelledResult.getBoolean("ok") && cancelledResult.getBoolean("cancelled") && "cancelled at backend".equals(cancelledResult.getString("error")), "Cancelled receipts preserve cancellation and backend detail for frontend task state");
         operation.put("state", "completed").put("result", JSONObject.NULL).put("exitCode", 0);
         require(!ControlClient.terminalResult(operation).getBoolean("ok"), "Missing result is not success");
         operation.put("state", "future-state");

@@ -24,6 +24,8 @@ public final class TransferService extends Service {
     private Handler main;
     private SharedPreferences prefs;
     private long lastProgress;
+    private String uncertaintyOwner;
+    @Override protected void attachBaseContext(Context base) { super.attachBaseContext(AppPreferences.localized(base)); }
     @Override public void onCreate() {
         super.onCreate(); main = new Handler(getMainLooper()); prefs = getSharedPreferences("transfer", MODE_PRIVATE);
         getSystemService(NotificationManager.class).createNotificationChannel(new NotificationChannel(CHANNEL, getString(R.string.service_channel), NotificationManager.IMPORTANCE_LOW));
@@ -49,45 +51,61 @@ public final class TransferService extends Service {
         }
         if (busy) return START_NOT_STICKY;
         busy = true; running = true; stopping = false; cancelRequested = false;
-        prefs.edit().remove("snapshot").putString("message", getString(R.string.working)).apply();
+        uncertaintyOwner = null;
+        SharedPreferences.Editor started = prefs.edit();
+        if (!prefs.getBoolean("unknown", false)) started.putString("message", getString(R.string.working));
+        if (intent != null && (START.equals(intent.getAction()) || IMPORT.equals(intent.getAction()))) started.remove("snapshot");
+        started.apply();
         startForeground(NOTIFICATION, notification(getString(R.string.working)));
         sendBroadcast(new Intent(UPDATE).setPackage(getPackageName()));
+        if (intent != null && (START.equals(intent.getAction()) || IMPORT.equals(intent.getAction()))) {
+            ControlClient client = ControlClient.get(this);
+            if (!client.canWrite() || client.busy() || prefs.getBoolean("unknown", false) || (intent.hasExtra("accountRevision") && intent.getLongExtra("accountRevision", -1) != client.accountRevision())) {
+                publish(getString(R.string.busy), null); finish(); return START_NOT_STICKY;
+            }
+        }
         final Intent task = intent;
         worker.execute(() -> runTask(task));
         return START_NOT_STICKY;
     }
     private void runTask(Intent intent) {
         List<String> staged = new ArrayList<>();
-        boolean submissionAttempted = false;
+        boolean submissionAttempted = false, importAttempted = false;
         try {
             if (intent == null) return;
             String action = intent.getAction();
-            cleanupInterrupted();
+            if (!ADOPT.equals(action)) cleanupInterrupted();
             if (RECOVER.equals(action)) {
                 publish(getString(R.string.interrupted_stage), null);
                 return;
             }
             if (IMPORT.equals(action)) {
                 requestId = RootApi.requestId(); currentCall = new RootApi.Call();
-                prefs.edit().putString("request", requestId).apply();
+                uncertaintyOwner = "import:" + requestId;
+                if (!prefs.edit().putString("request", requestId).putBoolean("unknown", true).putString("unknownOwner", uncertaintyOwner).commit()) throw new IOException(getString(R.string.control_record_failed));
+                importAttempted = true;
                 JSONObject result = RootApi.json(this, requestId, null, null, 150, currentCall, "file-receive");
                 long received = Models.number(result, "received");
                 long ignored = result.has("ignored") ? Models.number(result, "ignored") : 0;
                 String message = getString(R.string.imported, received);
                 if (ignored > 0) message += "\n" + getString(R.string.repair_files_ignored_import, ignored);
+                prefs.edit().remove("unknown").remove("unknownOwner").commit();
                 publish(message, null);
                 return;
             }
             if (ADOPT.equals(action)) {
                 jobId = intent.getStringExtra("job");
                 if (jobId == null || !jobId.matches("[a-fA-F0-9]{16,128}")) throw new IOException(getString(R.string.invalid_response));
+                uncertaintyOwner = "job:" + jobId;
             } else if (START.equals(action)) {
                 String peerId = intent.getStringExtra("peer"), peerIp = intent.getStringExtra("ip");
+                String self = Models.required(RootApi.json(this, "status").getJSONObject("self"), "id");
+                long account = ControlClient.get(this).accountRevision();
                 JSONArray paths = new JSONArray();
                 String retry = intent.getStringExtra("retry");
                 if (retry != null) {
                     Models.Transfer prior = new Models.Transfer(RootApi.json(this, "file-send-status", retry).getJSONObject("transfer"));
-                    if (!prior.peerId.equals(peerId)) throw new IOException(getString(R.string.invalid_response));
+                    if (!prior.peerId.equals(peerId) || !self.equals(prior.json.getString("selfId"))) throw new IOException(getString(R.string.invalid_response));
                     paths = prior.retryPaths();
                 } else {
                     paths = sharedSources(intent);
@@ -117,16 +135,22 @@ public final class TransferService extends Service {
                 }
                 if (cancelRequested || stopping) throw new InterruptedIOException(getString(R.string.cancelled_local));
                 if (paths.length() == 0 || paths.length() > 32 || peerId == null || peerIp == null) throw new IOException(getString(R.string.choose_first));
+                if (account != ControlClient.get(this).accountRevision() || !self.equals(Models.required(RootApi.json(this, "status").getJSONObject("self"), "id"))) throw new IOException(getString(R.string.invalid_response));
                 submissionAttempted = true;
                 // Publish the ownership boundary before root submission; uncertain jobs retain sources for 24h.
-                prefs.edit().remove("staged").remove("preparing").commit();
+                uncertaintyOwner = "send:" + RootApi.requestId();
+                if (!prefs.edit().remove("staged").remove("preparing").putBoolean("unknown", true).putString("unknownOwner", uncertaintyOwner).commit()) throw new IOException(getString(R.string.control_record_failed));
                 Models.Transfer transfer = new Models.Transfer(RootApi.json(this, "file-send-start", peerId, peerIp, paths.toString()).getJSONObject("transfer"));
                 jobId = transfer.id;
-                prefs.edit().remove("staged").remove("preparing").putString("job", jobId).commit();
+                uncertaintyOwner = "job:" + jobId;
+                prefs.edit().remove("staged").remove("preparing").remove("unknown").remove("unknownOwner").putString("job", jobId).commit();
                 publish(Models.state(this, transfer.status), transfer);
             } else return;
             prefs.edit().putString("job", jobId).apply();
-            if (cancelRequested) RootApi.json(this, "file-send-cancel", jobId);
+            if (cancelRequested || intent.getBooleanExtra("cancel", false)) {
+                try { RootApi.json(this, "file-send-cancel", jobId); }
+                catch (Exception error) { publish(RootApi.message(error), null); }
+            }
             int failures = 0;
             while (!stopping) {
                 try {
@@ -135,18 +159,22 @@ public final class TransferService extends Service {
                     publish(Models.state(this, transfer.status), transfer);
                     if (!Models.active(transfer.status)) { prefs.edit().remove("job").apply(); break; }
                 } catch (Exception e) {
+                    if (!prefs.getBoolean("unknown", false) || uncertaintyOwner.equals(prefs.getString("unknownOwner", null)))
+                        prefs.edit().putBoolean("unknown", true).putString("unknownOwner", uncertaintyOwner).commit();
                     publish(getString(R.string.poll_failed, RootApi.message(e)), null);
                     if (++failures >= 3) break;
                 }
                 Thread.sleep(1000);
             }
         } catch (Exception e) {
-            publish(failureMessage(this, e, cancelRequested, submissionAttempted, jobId, !staged.isEmpty()), null);
+            if (e instanceof RootApi.Failure && jobId == null && (submissionAttempted || importAttempted)) prefs.edit().remove("unknown").remove("unknownOwner").commit();
+            publish(importAttempted && prefs.getBoolean("unknown", false) ? getString(R.string.submission_unknown, RootApi.message(e))
+                    : failureMessage(this, e, cancelRequested, submissionAttempted, jobId, !staged.isEmpty()), null);
         } finally {
             if (requestId != null) {
                 try { RootApi.json(this, "cancel", requestId); } catch (Exception ignored) { }
             }
-            if (!submissionAttempted) {
+            if (!submissionAttempted && (intent == null || !ADOPT.equals(intent.getAction()))) {
                 List<String> remaining = new ArrayList<>();
                 for (String path : staged) {
                     try { RootApi.json(this, "file-stage-delete", path); }
@@ -157,7 +185,7 @@ public final class TransferService extends Service {
                     if (remaining.isEmpty()) edit.remove("staged"); else edit.putString("staged", new JSONArray(remaining).toString());
                 }
                 edit.commit();
-            } else {
+            } else if (submissionAttempted) {
                 // Even a failed start response can follow a saved job. Retain sources for backend retry/expiry.
                 prefs.edit().remove("staged").remove("request").remove("preparing").commit();
             }
@@ -175,7 +203,7 @@ public final class TransferService extends Service {
         return hasStaged ? context.getString(R.string.staging_failed, message) : message;
     }
     static JSONArray sharedSources(Intent intent) throws IOException {
-        // Only the unexported service accepts these extras; FilesPage never forwards external paths.
+        // Only the unexported service accepts native-owned sources from FileActions.
         ArrayList<String> sources = intent.getStringArrayListExtra("paths");
         JSONArray paths = new JSONArray();
         if (sources == null) return paths;
@@ -212,11 +240,17 @@ public final class TransferService extends Service {
                 .setContentText(text).setStyle(new Notification.BigTextStyle().bigText(text)).setContentIntent(open).setOngoing(true).setOnlyAlertOnce(true)
                 .addAction(new Notification.Action.Builder(null, getString(R.string.cancel), cancel).build()).build();
     }
-    private void publish(String message, Models.Transfer transfer) {
-        SharedPreferences.Editor edit = prefs.edit().putString("message", message).putBoolean("busy", true);
-        if (transfer != null) edit.putString("snapshot", transfer.json.toString());
+    static void recordTransfer(SharedPreferences state, Models.Transfer transfer) {
+        SharedPreferences.Editor edit = state.edit().putString("snapshot", transfer.json.toString());
+        if (("job:" + transfer.id).equals(state.getString("unknownOwner", null))) edit.remove("unknown").remove("unknownOwner");
         edit.apply();
-        main.post(() -> { if (!stopping) getSystemService(NotificationManager.class).notify(NOTIFICATION, notification(message)); });
+    }
+    private void publish(String message, Models.Transfer transfer) {
+        if (transfer != null) recordTransfer(prefs, transfer);
+        boolean unrelatedUnknown = prefs.getBoolean("unknown", false) && (uncertaintyOwner == null || !uncertaintyOwner.equals(prefs.getString("unknownOwner", null)));
+        String notice = unrelatedUnknown ? prefs.getString("message", message) : message;
+        prefs.edit().putString("message", notice).putBoolean("busy", true).apply();
+        main.post(() -> { if (!stopping) getSystemService(NotificationManager.class).notify(NOTIFICATION, notification(notice)); });
         sendBroadcast(new Intent(UPDATE).setPackage(getPackageName()));
     }
     private void finish() {

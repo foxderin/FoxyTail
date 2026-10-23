@@ -29,7 +29,7 @@ final class BackupImport {
     private boolean busy;
     private String error;
     private BackupImport(Context context) {
-        this.context = context; preferences = context.getSharedPreferences("backup-import", Context.MODE_PRIVATE);
+        this.context = AppPreferences.localized(context); preferences = context.getSharedPreferences("backup-import", Context.MODE_PRIVATE);
         if (preferences.getBoolean("pending", false)) {
             error = context.getString(R.string.control_import_interrupted);
             preferences.edit().remove("pending").apply();
@@ -44,7 +44,7 @@ final class BackupImport {
     private void changed() { for (Runnable listener : new ArrayList<>(listeners)) listener.run(); }
     void start(Uri uri, int flags) {
         if (busy) return;
-        if (uri == null || !"content".equals(uri.getScheme()) || context.checkUriPermission(uri, android.os.Process.myPid(), android.os.Process.myUid(), Intent.FLAG_GRANT_READ_URI_PERMISSION) != android.content.pm.PackageManager.PERMISSION_GRANTED) {
+        if (!Models.readableUri(context, uri)) {
             error = context.getString(R.string.invalid_uri); changed(); return;
         }
         boolean persisted = false;

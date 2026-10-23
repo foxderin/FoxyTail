@@ -1,0 +1,276 @@
+/* Network workspace: token-based surfaces, small purposeful transitions. */
+.network-page {
+  --network-muted: var(--md-sys-color-on-surface-variant);
+  --network-border: var(--md-sys-color-outline-variant);
+}
+.network-page .card,
+.network-page > .panel {
+  min-width: 0;
+}
+.network-page .card > h2 {
+  margin-bottom: 18px;
+}
+.network-page .network-supporting {
+  margin: 0 0 20px;
+  color: var(--network-muted);
+  font-size: 13px;
+  line-height: 1.65;
+}
+.network-page strong {
+  font-weight: 650;
+}
+.network-page code {
+  font-family: var(--ft-font-mono, ui-monospace, SFMono-Regular, monospace);
+}
+.network-page .network-health {
+  display: flex;
+  align-items: center;
+  gap: 20px;
+  padding: 28px;
+  min-height: 112px;
+  border: 0;
+  border-radius: 24px;
+  color: var(--md-sys-color-on-surface-variant);
+  background: var(--md-sys-color-surface-container-highest);
+}
+.network-page .network-health.is-connected {
+  color: var(--md-sys-color-on-secondary-container);
+  background: var(--md-sys-color-secondary-container);
+}
+.network-page .network-health.needs-attention {
+  color: var(--md-sys-color-on-tertiary-container);
+  background: var(--md-sys-color-tertiary-container);
+}
+.network-health-icon {
+  display: grid;
+  place-items: center;
+  flex: 0 0 32px;
+  width: 32px;
+  height: 32px;
+}
+.network-health-copy {
+  min-width: 0;
+  flex: 1;
+}
+.network-health-copy h2 {
+  margin: 0;
+  font-size: 22px;
+  line-height: 1.4;
+  font-weight: 600;
+}
+.network-health-copy p {
+  margin: 6px 0 0;
+  font-size: 14px;
+  color: inherit;
+  opacity: 0.8;
+  line-height: 1.6;
+}
+.network-health-copy .btn {
+  margin-top: 14px;
+}
+.network-health-skeleton .skel-title {
+  width: 160px;
+  max-width: 100%;
+  margin: 0;
+}
+.network-health-skeleton .network-health-icon {
+  border-radius: 50%;
+}
+.network-metrics.network-dashboard-metrics {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+.network-metrics {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+.network-metrics .metric-label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.network-metrics .metric-value {
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -1px;
+  white-space: nowrap;
+}
+.network-metric-unit {
+  font-size: 15px;
+  letter-spacing: 0;
+  font-weight: 450;
+  color: var(--network-muted);
+}
+.network-detail-grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  align-items: stretch;
+}
+.network-detail-grid > .card {
+  margin-bottom: 0;
+}
+.network-device-avatar,
+.network-os-icon,
+.network-app-avatar {
+  display: grid;
+  flex: 0 0 44px;
+  width: 44px;
+  height: 44px;
+  place-items: center;
+  color: var(--md-sys-color-primary);
+  background: var(--md-sys-color-surface-container);
+  border: 1px solid var(--network-border, var(--md-sys-color-outline-variant));
+  border-radius: 13px;
+}
+.network-device-heading {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  margin: 0 0 18px;
+  min-width: 0;
+}
+.network-device-heading > div:last-child {
+  display: grid;
+  gap: 5px;
+  min-width: 0;
+}
+.network-device-heading strong {
+  font-size: 16px;
+  overflow-wrap: anywhere;
+}
+.network-device-heading > div > span {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--md-sys-color-on-surface-variant);
+}
+.network-addresses {
+  display: grid;
+  gap: 7px;
+  margin: 0 0 15px;
+}
+.network-address {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 5px 3px 12px;
+  border: 1px solid var(--network-border, var(--md-sys-color-outline-variant));
+  border-radius: 10px;
+  background: var(--md-sys-color-surface-container-low);
+}
+.network-address code {
+  flex: 1;
+  min-width: 0;
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+.network-status-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11px;
+  white-space: nowrap;
+  color: var(--md-sys-color-on-surface-variant);
+}
+.network-status-label.is-online {
+  color: var(--ft-ok, var(--md-sys-color-primary));
+}
+.network-exit-summary {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  margin-bottom: 15px;
+}
+.network-exit-summary > div:nth-child(2) {
+  flex: 1;
+  min-width: 0;
+}
+.network-exit-summary strong {
+  display: block;
+  font-size: 16px;
+  overflow-wrap: anywhere;
+}
+.network-exit-summary p {
+  color: var(--network-muted);
+  font-size: 12px;
+  line-height: 1.6;
+  margin: 5px 0 0;
+}
+.network-transfer {
+  display: inline-flex;
+  gap: 12px;
+  flex-wrap: wrap;
+  font-size: 12px;
+}
+.network-text-link {
+  display: inline-flex;
+  gap: 4px;
+  align-items: center;
+  min-height: 44px;
+  margin-top: 8px;
+  color: var(--md-sys-color-primary);
+  font-size: 13px;
+  font-weight: 600;
+  text-decoration: none;
+}
+.network-shortcuts {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+.network-shortcuts > a {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  padding: 16px;
+  border: 1px solid var(--network-border);
+  border-radius: 14px;
+  background: var(--md-sys-color-surface);
+  color: inherit;
+  text-decoration: none;
+  min-width: 0;
+}
+.network-shortcuts > a > .md-icon:first-child {
+  color: var(--md-sys-color-primary);
+}
+.network-shortcuts > a > .md-icon:last-child {
+  color: var(--network-muted);
+}
+.network-shortcuts > a > div {
+  display: grid;
+  gap: 5px;
+  flex: 1;
+  min-width: 0;
+}
+.network-shortcuts strong {
+  font-size: 13px;
+}
+.network-shortcuts span:not(.md-icon) {
+  color: var(--network-muted);
+  font-size: 11px;
+  line-height: 1.4;
+}
+.network-login-heading {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  margin-bottom: 16px;
+}
+.network-page .hero-wrap {
+  margin: 0;
+}
+.network-page .hero {
+  border: 1px solid var(--md-sys-color-primary);
+  border-radius: 18px;
+  padding: 24px;
+  background: var(--md-sys-color-primary-container);
+  box-shadow: none;
+}
+.network-page .hero h2 {
+  font-size: 22px;
+  margin: 0 0 8px;
+}
+.network-page .hero p {
+  max-width: 620px;
+  line-height: 1.7;
+}
+.network-page .hero .mono {
+  overflow-wrap: anywhere;
+}

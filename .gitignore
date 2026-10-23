@@ -15,3 +15,7 @@ android/local.properties
 *.keystore
 *.jks
 *.p12
+
+# Bundled WebView frontend
+webui/node_modules/
+webui/.smoke/

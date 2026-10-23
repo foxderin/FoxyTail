@@ -2,7 +2,7 @@
 # One local/CI gate; all runtime tests use mocks and temporary data directories.
 set -euo pipefail
 cd "$(dirname "$0")/../.."
-for cmd in shellcheck python3 jq go sha256sum; do
+for cmd in shellcheck python3 jq go sha256sum node pnpm; do
   command -v "$cmd" >/dev/null || { echo "missing verifier: $cmd" >&2; exit 1; }
 done
 scripts=(customize.sh service.sh install-recovery.sh uninstall.sh tailscale/settings.sh META-INF/com/google/android/update-binary)
@@ -28,6 +28,11 @@ export FOXYDNS_TEST_BINARY="$build_dir/foxydns"
 bash .github/tools/build-native.sh "$build_dir/native"
 python3 .github/tools/native-notices.py --check
 bash .github/tools/build-android.sh debug "$build_dir/FoxyTail-debug.apk"
+android/gradlew --no-daemon -p android :app:assembleDebugAndroidTest
+pnpm --dir webui run typecheck
+pnpm --dir webui run check:i18n
+pnpm --dir webui run check:theme
+pnpm --dir webui run smoke
 javac -d "$build_dir/settings-check" android/app/src/main/java/dev/foxderin/tail/SettingsRules.java android/app/src/test/java/dev/foxderin/tail/SettingsRulesTest.java
 java -cp "$build_dir/settings-check" dev.foxderin.tail.SettingsRulesTest
 python3 .github/tools/verify-backend.py

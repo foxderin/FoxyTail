@@ -1,0 +1,23 @@
+.files-page .title, .files-page .sub, .files-transfer h3 { overflow-wrap: anywhere; }
+.files-page .list-row .main { min-width: 0; flex: 1; }
+.files-toolbar, .files-row-actions, .files-operation { display: flex; align-items: center; flex-wrap: wrap; gap: 4px; }
+.files-toolbar > .text-field { flex: 1; min-width: 120px; }
+.files-toolbar > h3 { flex: 1; margin: 0; min-width: 100px; }
+.files-row-actions { justify-content: flex-end; }
+.files-list { max-height: 420px; overflow: auto; overscroll-behavior: contain; }
+.files-inbox-row, .files-transfer { border-bottom: 1px solid var(--md-sys-color-outline-variant); padding-block: 8px; }
+.files-transfer:last-child { border-bottom: 0; }
+.files-history { max-height: 640px; overflow: auto; overscroll-behavior: contain; }
+.files-notice { white-space: pre-wrap; overflow-wrap: anywhere; }
+.files-operation { padding: 12px; border-radius: 12px; background: var(--md-sys-color-surface-container); }
+.files-operation > span { flex: 1; }
+.files-page progress { width: 100%; accent-color: var(--md-sys-color-primary); }
+.files-back { transform: rotate(180deg); }
+.files-sort { position: relative; }
+.files-sort > summary { list-style: none; display: grid; place-items: center; width: 48px; min-height: 48px; cursor: pointer; border-radius: 50%; }
+.files-sort > summary::-webkit-details-marker { display: none; }
+.files-sort > div { position: absolute; right: 0; z-index: 5; min-width: 160px; padding: 4px; border-radius: 12px; background: var(--md-sys-color-surface-container-high); box-shadow: 0 2px 12px #0003; }
+.files-sort button { display: block; width: 100%; min-height: 48px; padding: 8px 12px; text-align: start; font: inherit; color: inherit; background: none; border: 0; cursor: pointer; border-radius: 8px; }
+.files-sort button[aria-pressed=true] { background: var(--md-sys-color-secondary-container); color: var(--md-sys-color-on-secondary-container); }
+.files-transfer > details > summary { min-height: 48px; display: flex; align-items: center; cursor: pointer; }
+.files-page section[id] { scroll-margin-top: 16px; }

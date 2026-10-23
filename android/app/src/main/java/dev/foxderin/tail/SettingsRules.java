@@ -1,64 +1,11 @@
 package dev.foxderin.tail;
 
-import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.LinkedHashSet;
-import java.util.List;
 import java.util.Set;
-import java.util.regex.Matcher;
-import java.util.regex.Pattern;
 
-/** Lossless context editing and numeric-only route input; never resolves hostnames. */
+/** Numeric-only route and trial input; never resolves hostnames. */
 final class SettingsRules {
     private SettingsRules() {}
-    private static final Pattern RULE = Pattern.compile("^(ssid|cellular):([^:]*):(up|down|exit-node|no-exit-node)(?::(.*))?$");
-    static final class Rule {
-        final String trigger, value, action, arg;
-        Rule(String trigger, String value, String action, String arg) {
-            this.trigger = trigger; this.value = value; this.action = action; this.arg = arg;
-        }
-        String line() { return trigger + ":" + (trigger.equals("cellular") ? "-" : value) + ":" + action + (action.equals("exit-node") ? ":" + arg : ""); }
-    }
-    static Rule parse(String line) {
-        String text = line.replaceFirst("\\r$", "").replaceFirst("^[ \\t]+", "").replaceFirst("[ \\t]+$", "");
-        if (Pattern.compile("[\\x00-\\x1f\\x7f#]").matcher(text).find()) return null;
-        Matcher match = RULE.matcher(text);
-        if (!match.matches()) return null;
-        String trigger = match.group(1), value = match.group(2), action = match.group(3), arg = match.group(4);
-        if (trigger.equals("cellular") ? !value.equals("-") : value.trim().isEmpty() || value.contains("\"") || Arrays.asList("unknown", "<unknown ssid>", "<none>").contains(value)) return null;
-        if (action.equals("exit-node") ? arg == null || !arg.matches("[A-Za-z0-9:][A-Za-z0-9_.:%-]*") : arg != null) return null;
-        return new Rule(trigger, value, action, arg == null ? "" : arg);
-    }
-    static List<Integer> visible(String raw) {
-        String[] lines = raw.split("\n", -1);
-        List<Integer> out = new ArrayList<>();
-        for (int i = 0; i < lines.length; i++) if (!lines[i].matches("[ \\t]*\\r?") && !lines[i].replaceFirst("\\r$", "").matches("[ \\t]*#.*")) out.add(i);
-        return out;
-    }
-    static String replace(String raw, int index, String line) {
-        if (parse(line) == null) throw new IllegalArgumentException("Invalid context rule");
-        if (index < 0) {
-            String newline = raw.contains("\r\n") ? "\r\n" : "\n";
-            return raw + (!raw.isEmpty() && !raw.endsWith("\n") ? newline : "") + line + newline;
-        }
-        String[] lines = raw.split("\n", -1);
-        lines[index] = line + (lines[index].endsWith("\r") ? "\r" : "");
-        return String.join("\n", lines);
-    }
-    static String remove(String raw, int index) {
-        Matcher matcher = Pattern.compile("[^\\n]*\\n|[^\\n]+$").matcher(raw);
-        StringBuilder out = new StringBuilder();
-        int i = 0;
-        while (matcher.find()) if (i++ != index) out.append(matcher.group());
-        return out.toString();
-    }
-    static String move(String raw, int from, int to) {
-        String[] lines = raw.split("\n", -1);
-        String a = lines[from].replaceFirst("\\r$", ""), b = lines[to].replaceFirst("\\r$", "");
-        lines[from] = b + (lines[from].endsWith("\r") ? "\r" : "");
-        lines[to] = a + (lines[to].endsWith("\r") ? "\r" : "");
-        return String.join("\n", lines);
-    }
     static Set<String> uids(String raw) {
         Set<String> result = new LinkedHashSet<>();
         for (String value : raw.trim().split("[,\\s]+")) {
@@ -139,26 +86,6 @@ final class SettingsRules {
         }
         return bytes;
     }
-    static final class Draft {
-        final String value, baseline;
-        final boolean conflict;
-        Draft(String value, String baseline, boolean conflict) {
-            this.value = value; this.baseline = baseline; this.conflict = conflict;
-        }
-    }
-    static Draft mergeDraft(String baseline, String draft, String saved, boolean editing) {
-        boolean dirty = editing || draft != null && !draft.equals(baseline);
-        if (!dirty || !editing && saved.equals(draft)) return new Draft(saved, saved, false);
-        return new Draft(draft == null ? saved : draft, baseline, !saved.equals(baseline));
-    }
-    static String booleanState(Object value, String yes, String no, String unknown) {
-        return value instanceof Boolean ? ((Boolean) value ? yes : no) : unknown;
-    }
-    static String textState(Object value, String unknown) {
-        return value instanceof String && !((String) value).isEmpty() ? (String) value : unknown;
-    }
-    static boolean trialActive(String state) { return Arrays.asList("preparing", "running", "rolling-back", "rollback-failed").contains(state); }
-    static boolean trialState(String state) { return trialActive(state) || Arrays.asList("confirmed", "rolled-back", "superseded").contains(state); }
     static int duration(String text) {
         if (!text.matches("[0-9]{2,3}")) throw new IllegalArgumentException("Duration must be 30–300 seconds");
         int value = Integer.parseInt(text);

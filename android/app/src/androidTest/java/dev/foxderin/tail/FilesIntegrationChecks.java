@@ -8,6 +8,8 @@ import java.util.*;
 
 final class FilesIntegrationChecks {
     static void run(Context context) throws Exception {
+        transferOwnership(context);
+        check(WebFormat.bytes(1023).equals("1023 B") && WebFormat.bytes(1024).equals("1.0 KiB") && WebFormat.bytes(1048576).equals("1.0 MiB") && WebFormat.bytes(1073741824).equals("1.00 GiB"), "Native progress preserves binary byte units");
         for (int character = 0; character <= 0x9f; character++) {
             if (character > 0x1f && character < 0x7f) continue;
             String name = "file" + (char) character + ".txt";
@@ -45,13 +47,15 @@ final class FilesIntegrationChecks {
         reject(() -> Models.Source.shared("/sdcard/large", RootApi.MAX_FILE + 1));
         Intent paths = new Intent().putStringArrayListExtra("paths", new ArrayList<>(Arrays.asList("/sdcard/one", "/sdcard/two")));
         check(TransferService.sharedSources(paths).length() == 2, "Restricted service shared sources");
-        check(FilesPage.sharedUris(new Intent(paths).setAction(Intent.ACTION_SEND).putExtra("peer", "external")).isEmpty(), "External root path extras never become sources");
+        check(FileActions.sharedUris(new Intent(paths).setAction(Intent.ACTION_SEND).putExtra("peer", "external")).isEmpty(), "External root path extras never become sources");
         Uri readable = Uri.parse("content://example.documents/document/one");
-        check(FilesPage.sharedUris(new Intent(Intent.ACTION_SEND).putExtra(Intent.EXTRA_STREAM, readable)).equals(Collections.singletonList(readable)), "System share URI remains supported");
+        reject(() -> Models.Source.resolve(context, readable));
+        reject(() -> Models.Source.resolve(context, Uri.parse("file:///sdcard/Download/private.bin")));
+        check(FileActions.sharedUris(new Intent(Intent.ACTION_SEND).putExtra(Intent.EXTRA_STREAM, readable)).equals(Collections.singletonList(readable)), "System share URI remains supported");
         Intent clipShare = new Intent(Intent.ACTION_SEND_MULTIPLE);
         clipShare.setClipData(ClipData.newRawUri("file", readable));
-        check(FilesPage.sharedUris(clipShare).equals(Collections.singletonList(readable)), "ClipData share fallback remains supported");
-        check(FilesPage.sharedUris(new Intent("start").putExtra(Intent.EXTRA_STREAM, readable)).isEmpty(), "Unknown external actions cannot submit transfers");
+        check(FileActions.sharedUris(clipShare).equals(Collections.singletonList(readable)), "ClipData share fallback remains supported");
+        check(FileActions.sharedUris(new Intent("start").putExtra(Intent.EXTRA_STREAM, readable)).isEmpty(), "Unknown external actions cannot submit transfers");
         reject(() -> TransferService.sharedSources(new Intent().putStringArrayListExtra("paths", new ArrayList<>(Arrays.asList("/sdcard/one", "/sdcard/one")))));
         ArrayList<String> tooMany = new ArrayList<>(); for (int i = 0; i < 33; i++) tooMany.add("/sdcard/file" + i);
         reject(() -> TransferService.sharedSources(new Intent().putStringArrayListExtra("paths", tooMany)));
@@ -100,7 +104,7 @@ final class FilesIntegrationChecks {
         try {
             exports.add(ExportProvider.cache(context, "one.txt", output -> output.write(new byte[]{1, 2})));
             exports.add(ExportProvider.cache(context, "two.png", output -> output.write(new byte[]{3, 4, 5})));
-            Intent share = FilesPage.shareIntent(Arrays.asList("one.txt", "two.png"), exports);
+            Intent share = FileActions.shareIntent(Arrays.asList("one.txt", "two.png"), exports);
             check(Intent.ACTION_SEND_MULTIPLE.equals(share.getAction()) && "*/*".equals(share.getType()), "Mixed types use multi-file sharing without falsely advertising one MIME type");
             check((share.getFlags() & Intent.FLAG_GRANT_READ_URI_PERMISSION) != 0 && (share.getFlags() & Intent.FLAG_GRANT_WRITE_URI_PERMISSION) == 0, "Shared exports grant only read access");
             ArrayList<Uri> streams = share.getParcelableArrayListExtra(Intent.EXTRA_STREAM);
@@ -109,9 +113,36 @@ final class FilesIntegrationChecks {
                 check(exports.get(i).equals(share.getClipData().getItemAt(i).getUri()), "Shared ClipData keeps file order");
                 try (InputStream input = context.getContentResolver().openInputStream(streams.get(i))) { check(Arrays.equals(input.readAllBytes(), i == 0 ? new byte[]{1, 2} : new byte[]{3, 4, 5}), "Shared stream resolves to the exact selected bytes"); }
             }
-            Intent single = FilesPage.shareIntent(Collections.singletonList("one.txt"), new ArrayList<>(Collections.singletonList(exports.get(0))));
+            Intent single = FileActions.shareIntent(Collections.singletonList("one.txt"), new ArrayList<>(Collections.singletonList(exports.get(0))));
             check(Intent.ACTION_SEND.equals(single.getAction()) && "text/plain".equals(single.getType()), "One selection retains ordinary file sharing");
         } finally { for (Uri uri : exports) ExportProvider.discard(context, uri); }
+    }
+    private static void transferOwnership(Context context) throws Exception {
+        String preferenceName = "instrumentation-transfer-" + UUID.randomUUID();
+        SharedPreferences state = context.getSharedPreferences(preferenceName, Context.MODE_PRIVATE);
+        String job = "0123456789abcdef0123456789abcdef";
+        JSONObject file = new JSONObject().put("id", "fedcba9876543210fedcba9876543210").put("name", "done.bin")
+                .put("path", "/sdcard/done.bin").put("status", "completed").put("size", 4)
+                .put("sentBytes", 4).put("bytesPerSecond", 0).put("progressKnown", true);
+        Models.Transfer completed = new Models.Transfer(new JSONObject().put("id", job).put("peerId", "n123")
+                .put("peerName", "test").put("peerIp", "100.64.0.1").put("selfId", "n456")
+                .put("status", "completed").put("startedAt", 1).put("updatedAt", 2).put("files", new JSONArray().put(file)));
+        try {
+            for (String owner : Arrays.asList("import:unconfirmed", "send:unconfirmed", "job:fedcba9876543210", "")) {
+                check(state.edit().clear().putBoolean("unknown", true).putString("unknownOwner", owner).putString("message", "Unconfirmed import").commit(), "Fixture state is durable");
+                TransferService.recordTransfer(state, completed);
+                check(state.getBoolean("unknown", false) && owner.equals(state.getString("unknownOwner", null)), "Observing an old job cannot acknowledge unrelated or legacy uncertainty");
+                check("Unconfirmed import".equals(state.getString("message", null)), "Unrelated receipt retains its warning");
+                check(job.equals(new JSONObject(state.getString("snapshot", "{}")).getString("id")), "Unrelated warning does not freeze transfer observation");
+            }
+            check(state.edit().putBoolean("unknown", true).putString("unknownOwner", "job:" + job).commit(), "Matching job uncertainty is durable");
+            TransferService.recordTransfer(state, completed);
+            check(!state.getBoolean("unknown", false) && !state.contains("unknownOwner"), "A confirmed matching job resolves only its own uncertainty");
+        } finally { context.deleteSharedPreferences(preferenceName); }
+        Intent cancel = FileActions.cancelIntent(context, job);
+        check(TransferService.ADOPT.equals(cancel.getAction()) && job.equals(cancel.getStringExtra("job")) && cancel.getBooleanExtra("cancel", false), "Detached cancellation starts native observation with the cancel request");
+        check(cancel.getComponent() != null && TransferService.class.getName().equals(cancel.getComponent().getClassName()), "Cancellation remains an explicit private service intent");
+        for (String invalid : Arrays.asList(null, "", "../job", "0123456789abcdef;id")) reject(() -> FileActions.cancelIntent(context, invalid));
     }
     private static Set<String> exportFiles(Context context) throws Exception {
         ExportProvider.prune(context); String[] files = ExportProvider.directory(context).list();

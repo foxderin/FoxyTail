@@ -1,7 +1,4 @@
 <resources>
-    <string name="control_reconnect">Check operation</string>
-    <string name="control_acknowledge">Acknowledge unknown</string>
-    <string name="control_unknown_title">The result is not confirmed</string>
     <string name="control_unknown_warning">Verify the actual service, account and configuration state before another change.</string>
     <string name="control_unknown_acknowledged">Observation cleared; verify the actual state.</string>
     <string name="control_reconnecting">Reconnecting to: %1$s</string>
@@ -15,9 +12,6 @@
     <string name="control_running">Running: %1$s</string>
     <string name="control_finished">Completed: %1$s.</string>
     <string name="control_unknown">The operation result is unknown; do not repeat the change. %1$s</string>
-    <string name="control_copied">Copied</string>
-    <string name="control_invalid_url">Only valid HTTP or HTTPS links can be opened.</string>
     <string name="control_archive_limit">Configuration archives must not exceed 1 MiB.</string>
-    <string name="control_importing">Importing the selected archive. Rotation does not restart the upload.</string>
     <string name="control_import_interrupted">Archive import was interrupted; no restore was submitted.</string>
 </resources>

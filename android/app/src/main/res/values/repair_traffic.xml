@@ -1,6 +1,0 @@
-<?xml version="1.0" encoding="utf-8"?>
-<resources>
-    <string name="repair_traffic_previous">Previous interval</string>
-    <string name="repair_traffic_next">Next interval</string>
-    <string name="repair_traffic_select">Select interval</string>
-</resources>

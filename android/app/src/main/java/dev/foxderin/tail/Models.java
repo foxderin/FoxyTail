@@ -38,6 +38,11 @@ final class Models {
     }
     static boolean sharedPath(String path) { return sourcePath(path) && path.startsWith("/sdcard/"); }
     static boolean relativePath(String path) { return path != null && (path.isEmpty() || sharedPath("/sdcard/" + path)); }
+    static boolean readableUri(Context context, Uri uri) {
+        // Our provider needs no temporary grant; external providers still do.
+        return uri != null && "content".equals(uri.getScheme()) && (ExportProvider.AUTHORITY.equals(uri.getAuthority())
+                || context.checkUriPermission(uri, android.os.Process.myPid(), android.os.Process.myUid(), android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION) == android.content.pm.PackageManager.PERMISSION_GRANTED);
+    }
     static String safeName(String name) {
         String value = name == null ? "file" : name.replaceAll("[\\x00-\\x1f\\x7f-\\x9f/\\\\]", "_").trim();
         while (value.getBytes(StandardCharsets.UTF_8).length > 120) value = value.substring(0, value.offsetByCodePoints(value.length(), -1));
@@ -55,7 +60,7 @@ final class Models {
         }
         String key() { return path == null ? uri.toString() : path; }
         static Source resolve(Context context, Uri uri) throws Exception {
-            if (uri == null || !"content".equals(uri.getScheme())) throw new IOException(context.getString(R.string.invalid_uri));
+            if (!readableUri(context, uri)) throw new IOException(context.getString(R.string.invalid_uri));
             String name = "file"; long size = -1;
             try (Cursor cursor = context.getContentResolver().query(uri, new String[]{OpenableColumns.DISPLAY_NAME, OpenableColumns.SIZE}, null, null, null)) {
                 if (cursor != null && cursor.moveToFirst()) {
