@@ -341,7 +341,8 @@ cmd_routes_set all - '192.168.1.7/24,fd12::55/64'
         modern_defaults = {'mode': 'legacy', 'configuredMode': None, 'pendingMode': None,
                            'listenerReady': False, 'interception4': False, 'interception6': False,
                            'repairNeeded': None, 'policyState': None, 'capabilityError': None,
-                           'transparentAvailable': None, 'transparentUnavailableReason': None}
+                           'transparentAvailable': None, 'transparentUnavailableReason': None,
+                           'hijackAvailable': None, 'hijackUnavailableReason': None}
         status = {'state': 'stopped', 'suffix': '', 'port': 1053, 'enabled': False,
                   'reason': 'Local DNS helper is disabled', 'binary': '/system/bin/dnsmasq',
                   'upstreamNative': True, 'ipv6DnsInterception': 'disabled',
