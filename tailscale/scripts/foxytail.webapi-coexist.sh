@@ -31,11 +31,11 @@ _coexist_snapshot() {
     if length!=2 or (.[1]|type)!="object" then error("invalid DNS status") else . end
     | .[0] as $base | .[1] as $dns
     | $base + {dns:($dns + {ok:true}),dnsReady:($base.magicDns and
-        ($dns.mode=="local" or $dns.mode=="transparent") and $dns.enabled==true and
+        ($dns.mode=="local" or $dns.mode=="transparent" or $dns.mode=="hijack") and $dns.enabled==true and
         $dns.listenerReady==true and $dns.repairNeeded==false and $dns.policyState=="owned" and
         $dns.suffix==$base.suffix and ($dns.port|type)=="number" and
         $dns.port>=1 and $dns.port<=65535 and ($dns.port|floor)==$dns.port and
-        (["local","running","ipv6-unavailable","transparent-unavailable","capture-mark-conflict",
+        (["local","running","ipv6-unavailable","transparent-unavailable","hijack-unavailable","capture-mark-conflict",
           "packet-policy-conflict","dns-interception-conflict"]|index($dns.reason))!=null)}' 2>/dev/null) || jerr 'DNS status is invalid'
   # Ignore transient peer activity, but bind previews to identity, addresses and applied endpoints.
   _cx_identity=$(printf '%s' "${_cx_info}" | jqr -c '{selfId,magicDns,suffix,mode,socksPort,ipv6Enabled,addresses,

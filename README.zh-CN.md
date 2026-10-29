@@ -190,7 +190,7 @@ CI 对独立 Python 测试模块最多四路并行，保留全部测试及失败
 | `TS_MODE` | `bridge` | `bridge`（userspace + socks5 + hev → tailscale0）· `tun`（原生 TUN，需 `/dev/net/tun`）· `proxy`（仅 socks5） |
 | `SOCKS_PORT` | `1099` | tailscaled 本地 socks5 端口 |
 | `DNS_PORT` | `1053` | 本地 DNS 端口；必须与其他解析器错开 |
-| `DNS_MODE` | `legacy` | `legacy` 旧模式 / `local` 本地端点 / `transparent` 透明共存 |
+| `DNS_MODE` | `legacy` | `legacy` 旧模式 / `local` 本地端点 / `hijack` 端口劫持 / `transparent` 透明共存 |
 | `MAGIC_DNS` | `off` | 启用所选模式的 Tailnet 域名解析 |
 | `IPV6` | `off` | tailscale0 双栈 + ip6tables 对称规则 |
 | `ROUTE_TABLE` | `1052` | 固定独立策略路由表，外部资源冲突时拒绝应用 |
@@ -287,7 +287,7 @@ FoxyTail 从不动其他模块的链，开机时自动探测邻居（`foxytail.c
 
 ### App 代理共存向导
 
-在 **导航 → 代理共存** 点击“检测环境”。读取已应用配置、当前 Tailnet 和实际 DNS 状态，不自动改动 FoxyTail 或其他模块配置。需要已就绪且归 FoxyTail 管理的 `local` / `transparent` 本地 DNS；MagicDNS 关闭、旧模式或状态待修复时，只显示前提和设置入口，不生成不可用片段。模块/应用清单不代表代理正在运行。
+在 **导航 → 代理共存** 点击“检测环境”。读取已应用配置、当前 Tailnet 和实际 DNS 状态，不自动改动 FoxyTail 或其他模块配置。需要已就绪且归 FoxyTail 管理的 `local` / `hijack` / `transparent` 本地 DNS；MagicDNS 关闭、旧模式或状态待修复时，只显示前提和设置入口，不生成不可用片段。模块/应用清单不代表代理正在运行。
 
 1. 确认目标为支持相关字段的 **mihomo / Clash.Meta**，选择现有 `fake-ip` 黑名单、规则模式或 `redir-host`。白名单语义不同，向导不会未经审阅自动转换。
 2. 预览、复制并**合并**片段到原有 `dns.nameserver-policy`、`proxies`、`rules` 和适用的 `fake-ip-filter` 中；保留其他条目，新路由及规则模式过滤项应置于兜底规则前。不要整段覆盖原配置，也不要将本地端点用作全局 DNS。
@@ -309,10 +309,13 @@ FoxyTail 从不动其他模块的链，开机时自动探测邻居（`foxytail.c
 | `legacy` | 保留 dnsmasq 分流及原有 DNS 冲突检测 | 沿用现有配置 |
 | `local` | 提供 `127.0.0.1:DNS_PORT` 的 UDP/TCP DNS；启用 IPv6 时同时监听 `[::1]:DNS_PORT` | 在支持分域 DNS 的任意解析器中，把当前 Tailnet 后缀交给此端点 |
 | `transparent` | 内核和原请求选路信息都可验证时，接管普通 UDP/TCP 53 查询；无法启用时保留本地端点 | root、NFQUEUE、conntrack、INET_DIAG、严格路由查询及 socket 上下文能力可用；需验证实际设备/VPN组合 |
+| `hijack` | UDP/53 按查询名裁决：仅 MagicDNS 完整名/短名（及内部 PTR）以原解析器地址注入应答，其余报文原样放行 | root、NFQUEUE 与伪造源注入路径可用（`probe --hijack` 实测）；不依赖 conntrack、mark 位或 NAT |
 
 本地端点只回答当前节点表中的完整名、已知短名、A/AAAA/PTR。未知 Tailnet 名返回 NXDOMAIN，公网名返回 REFUSED，不能把它设为唯一的全局 DNS。后缀与实际端口可在隧道页查看并复制；需要短名时，在使用端配置该 Tailnet 搜索域或相应短名规则。某些 VPN 不提供分域 DNS 配置，此时本地模式不能自动接管它的解析。
 
 透明模式先保留原请求的目标地址、UID、mark、源地址与出口信息，再验证内核路由。只有完整且一致的上下文才允许重定向；公网查询按原上下文访问原 DNS，不添加公共兜底 DNS。端口占用、能力缺失、规则丢失及策略恢复失败分别报告，只有实际 IPv4/IPv6 拦截就绪才显示对应能力。内核没有 IPv6 NAT 时保留 IPv6 隧道、AAAA 和本地 IPv6 监听，透明接管仅覆盖可用的 IPv4 路径。
+
+劫持模式把 UDP/53 报文送入 NFQUEUE，只读取查询名：命中 MagicDNS 完整名、已知短名或受支持的内部 PTR 时，以原解析器地址注入一条伪造源应答并丢弃原查询；其余报文一律 NF_ACCEPT 原样放行——保留原 socket、UID、路由与解析器路径，不存在公共兜底 DNS。不占用 mark 位、不做 NAT 重定向、不依赖 conntrack 与策略路由，因此可在 GLUE_CT 缺失或 OEM mark 掩码冲突、透明模式不可用的设备上工作。TCP/53 本期不拦截。`--queue-bypass` 使辅助进程失效时自动回到原始 DNS 转发；伪造源注入路径（含 SELinux、rp_filter 限制）由 `probe --hijack` 实测，不可用时保留本地端点。
 
 新模式会暂时关闭当前 Tailscale 账户的 `accept-dns`，避免 Android tailscaled 的全局 DNS 重定向与 VPN 争抢。原值在修改前记录到私有持久日志；停止或 App 切换账户前，仅对匹配的 profile 和节点身份恢复。用户从外部更改该偏好后，模块停止争抢，不反复覆盖。无法确认身份或恢复结果时保留日志并报告，账户切换也会中止。卸载将未解决的记录随原身份备份保留。**Tailscale 配置的公司分域 DNS、全局上游和搜索域不会自动复制到新模式**，需要使用端保留相应策略。
 

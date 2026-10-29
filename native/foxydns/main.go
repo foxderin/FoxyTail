@@ -28,6 +28,7 @@ func run(args []string) error {
 	parent := flags.Int("parent", 0, "expected guard PID for watch")
 	journal := flags.String("journal", "", "absolute captured-flow ownership journal")
 	port := flags.Uint("port", 0, "legacy listener port")
+	hijack := flags.Bool("hijack", false, "probe name-selective interception instead of transparent replay")
 	if err := flags.Parse(args[1:]); err != nil {
 		return err
 	}
@@ -46,6 +47,12 @@ func run(args []string) error {
 	if args[0] == "probe" {
 		if *queue == 0 || *queue > 65535 {
 			return errors.New("queue must be between 1 and 65535")
+		}
+		if *hijack {
+			if err := ProbeHijackCapabilities(uint16(*queue)); err != nil {
+				return err
+			}
+			return json.NewEncoder(os.Stdout).Encode(map[string]any{"ok": true, "queue": true, "inject": true})
 		}
 		if err := ProbeCapabilities(uint16(*queue)); err != nil {
 			return err

@@ -50,11 +50,11 @@ func (c Config) validate() error {
 	if err != nil || p < 0 || p > 65535 {
 		return errors.New("invalid listener port")
 	}
-	if c.Mode != "local" && c.Mode != "transparent" {
-		return errors.New("mode must be local or transparent")
+	if c.Mode != "local" && c.Mode != "transparent" && c.Mode != "hijack" {
+		return errors.New("mode must be local, hijack or transparent")
 	}
-	if c.Mode == "transparent" && c.Queue == 0 {
-		return errors.New("transparent mode requires a queue number")
+	if (c.Mode == "transparent" || c.Mode == "hijack") && c.Queue == 0 {
+		return errors.New("interception mode requires a queue number")
 	}
 	if !filepath.IsAbs(c.ContextFile) {
 		return errors.New("contextFile must be absolute")
@@ -65,8 +65,8 @@ func (c Config) validate() error {
 	if c.Mode == "transparent" && !filepath.IsAbs(c.OwnershipFile) {
 		return errors.New("transparent mode requires an absolute ownershipFile")
 	}
-	if c.Mode == "transparent" && !filepath.IsAbs(c.StateFile) {
-		return errors.New("transparent mode requires an absolute stateFile for quiescence")
+	if (c.Mode == "transparent" || c.Mode == "hijack") && !filepath.IsAbs(c.StateFile) {
+		return errors.New("interception mode requires an absolute stateFile for quiescence")
 	}
 	return nil
 }

@@ -18,7 +18,7 @@ const DNS_FACTS: [string, I18nKey][] = [
   ['enabled', 'tools_magicdns'], ['state', 'tools_fact_state'], ['reason', 'tools_fact_reason'],
   ['listenerReady', 'tools_fact_listenerReady'], ['port', 'tools_dns_port'], ['suffix', 'dns_suffix'],
   ...['interception4', 'interception6', 'repairNeeded', 'policyState', 'capabilityError', 'transparentAvailable',
-    'transparentUnavailableReason', 'upstreamNative', 'ipv6DnsInterception', 'ipv6ModuleStatus'].map(key => [key, 'tools_fact_' + key] as [string, I18nKey]),
+    'transparentUnavailableReason', 'hijackAvailable', 'hijackUnavailableReason', 'upstreamNative', 'ipv6DnsInterception', 'ipv6ModuleStatus'].map(key => [key, 'tools_fact_' + key] as [string, I18nKey]),
 ];
 const RUNTIME_FACTS: [string, I18nKey][] = [
   ['daemon', 'tools_fact_daemon'], ['backend', 'tools_fact_backend'], ['mode', 'coexist_applied_mode'],

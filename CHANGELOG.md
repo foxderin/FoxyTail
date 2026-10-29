@@ -1,5 +1,12 @@
 # Changelog
 
+## v1.9.0 — 2026-10-29 — MagicDNS 端口劫持模式
+
+- 新增 `DNS_MODE=hijack`：mangle/OUTPUT 把 UDP/53 报文送入 NFQUEUE，foxydns 只读取查询名——命中 MagicDNS 完整名、已知短名或内部 PTR 时，以原解析器地址注入伪造源应答并丢弃原查询；其余报文一律 NF_ACCEPT 原样放行，保留原 socket、UID、路由与解析器路径，不使用公共兜底 DNS。
+- 不占用 mark 位、不做 NAT 重定向、不依赖 conntrack 与策略路由，可在 GLUE_CT 缺失或 OEM mark 掩码冲突、透明模式不可用的设备上工作；TCP/53 本期透传。`--queue-bypass` 使辅助进程失效时自动回到原始 DNS 转发。
+- `foxydns probe --hijack` 实测 NFQUEUE 绑定与伪造源注入路径（含 SELinux、rp_filter），探测失败或 OUTPUT 策略不兼容时退回本地端点，能力结论按 boot 缓存；状态接口新增 `hijackAvailable`/`hijackUnavailableReason`。
+- 设置页新增劫持模式选项与能力置灰，隧道页区分劫持语义提示，诊断面板展示劫持可用性；`foxytail.dns probe-hijack` 暴露独立探测子命令，WebBridge/共存接口接受新模式。
+
 ## v1.8.0 — 2026-10-23 — Android WebView 界面
 
 - 使用 APK 内置的 SolidJS/TypeScript 前端替换 Java/View + Material 页面，复用旧 WebUI 组件与视觉样式；保留文件一级导航、节点页出口操作及当前设置、试用、共存、备份和诊断流程。

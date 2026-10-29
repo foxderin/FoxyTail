@@ -10,6 +10,7 @@ MODERN_REASON="${TS_RUN_DIR}/foxydns.reason"
 MODERN_POLICY="${TS_RUN_DIR}/foxydns.policy"
 MODERN_MODE="${TS_RUN_DIR}/foxydns.mode"
 MODERN_CAPABILITIES="${TS_RUN_DIR}/foxydns.capabilities.json"
+MODERN_HIJACK_CAPABILITIES="${TS_RUN_DIR}/foxydns.hijack-capabilities.json"
 MODERN_JOURNAL="${TS_DIR}/state/foxydns-preferences.json"
 MODERN_OWNERSHIP="${TS_DIR}/state/foxydns-flows.jsonl"
 MODERN_QUEUE=1053
@@ -56,6 +57,25 @@ modern_record_capabilities() {
     mv "${MODERN_CAPABILITIES}.next.$$" "${MODERN_CAPABILITIES}" || return 1
   _rc_error=$(printf '%s' "${_rc_value}" | jqr -r '.error // ""')
   [ -z "${_rc_error}" ] || log Warning "MagicDNS transparent capability unavailable: ${_rc_error}"
+}
+
+hijack_record_capabilities() {
+  _hc_value=$1
+  [ "$(cat "${MODERN_HIJACK_CAPABILITIES}" 2>/dev/null)" != "${_hc_value}" ] || return 0
+  (umask 077; printf '%s\n' "${_hc_value}" >"${MODERN_HIJACK_CAPABILITIES}.next.$$") &&
+    mv "${MODERN_HIJACK_CAPABILITIES}.next.$$" "${MODERN_HIJACK_CAPABILITIES}" || return 1
+  _hc_error=$(printf '%s' "${_hc_value}" | jqr -r '.error // ""')
+  [ -z "${_hc_error}" ] || log Warning "MagicDNS hijack capability unavailable: ${_hc_error}"
+}
+
+hijack_cached_capabilities() {
+  [ -e "${MODERN_HIJACK_CAPABILITIES}" ] || return 1
+  _kc_boot=$(modern_boot_id)
+  [ -n "${_kc_boot}" ] || return 1
+  jqr -c --arg boot "${_kc_boot}" '
+    select(.bootId == $boot and (.ok | type == "boolean"))
+    | {ok:.ok, error:(.error // ""), reason:(.reason // "")}' \
+    "${MODERN_HIJACK_CAPABILITIES}" 2>/dev/null
 }
 
 # Read /proc boot_id so a cached verdict dies with the kernel that produced
@@ -123,6 +143,41 @@ modern_probe_capabilities() {
   _pc_result=$(printf '%s' "${_pc_result}" | jqr -c --arg boot "${_pc_boot}" '. + {bootId:$boot}') || return 1
   modern_record_capabilities "${_pc_result}" || return 1
   printf '%s' "${_pc_result}" | jqr -e '.ok == true' >/dev/null 2>&1
+}
+
+# Full verdict for hijack mode. Gates (in order):
+#   1. An owned, ready queue already proves the kernel path works.
+#   2. foxydns probe --hijack verifies NFQUEUE binding and forged-source
+#      answer delivery; no conntrack, mark or NAT is involved.
+#   3. hijack_policy_safe verifies the mangle OUTPUT policies are ACCEPT.
+modern_probe_hijack() {
+  _hj_boot=$(modern_boot_id)
+  [ -n "${_hj_boot}" ] || return 1
+  if modern_queue_ready; then
+    _hj_result=$(jqr -n -c --arg boot "${_hj_boot}" '{ok:true,reason:"queue-active",bootId:$boot}') || return 1
+    hijack_record_capabilities "${_hj_result}" || return 1
+    return 0
+  fi
+  _hj_output=$(tmo 5 "${MODERN_BIN}" probe --queue "${MODERN_QUEUE}" --hijack 2>/dev/null)
+  _hj_rc=$?
+  _hj_result=$(printf '%s' "${_hj_output}" | jqr -e -c -s --argjson rc "${_hj_rc}" '
+    select(length == 1) | .[0] | select(type == "object")
+    | if $rc == 0 and .ok == true and .queue == true and .inject == true
+      then {ok:true}
+      else {ok:false,error:(if (.error | type) == "string" and (.error | length) > 0
+        then (.error | gsub("[[:cntrl:]]";" ") | .[0:512])
+        else "DNS capability probe returned an invalid result" end)} end' 2>/dev/null)
+  if [ -z "${_hj_result}" ]; then
+    _hj_error="DNS capability probe did not return valid JSON (exit ${_hj_rc})"
+    [ "${_hj_rc}" != 124 ] || _hj_error='DNS capability probe timed out'
+    _hj_result=$(jqr -n -c --arg error "${_hj_error}" '{ok:false,error:$error}') || return 1
+  fi
+  if [ "$(printf '%s' "${_hj_result}" | jqr -r '.ok')" = true ] && ! hijack_policy_safe; then
+    _hj_result=$(jqr -n -c '{ok:false,error:"OUTPUT chain default policy is not ACCEPT"}') || return 1
+  fi
+  _hj_result=$(printf '%s' "${_hj_result}" | jqr -c --arg boot "${_hj_boot}" '. + {bootId:$boot}') || return 1
+  hijack_record_capabilities "${_hj_result}" || return 1
+  printf '%s' "${_hj_result}" | jqr -e '.ok == true' >/dev/null 2>&1
 }
 
 modern_rules_teardown() {
@@ -210,6 +265,42 @@ modern_rules_present() {
     "${_mp_cmd}" -t nat -C "${MODERN_CAPTURE_CHAIN}" -p "${_mp_proto}" --dport 53 \
       -m mark --mark "${MODERN_CAPTURE}" -j REDIRECT --to-ports "${_mp_port}" 2>/dev/null || return 1
   done
+}
+
+# Hijack interception needs only the mangle queue chain: packets the helper
+# answers are consumed by verdict and replaced by an injected response, so no
+# NAT redirect exists to mount, mark or clean up.
+hijack_family_ready() {
+  [ "$("$1" -t mangle -S OUTPUT 2>/dev/null |
+    awk '$1=="-P" && $2=="OUTPUT" {print $3; exit}')" = ACCEPT ]
+}
+
+hijack_policy_safe() {
+  hijack_family_ready iptables || return 1
+  if [ "${IPV6}" = on ] && ip6tables -t mangle -S OUTPUT >/dev/null 2>&1; then
+    hijack_family_ready ip6tables || return 1
+  fi
+}
+
+hijack_rules_family() {
+  _hf_cmd=$1
+  hijack_family_ready "${_hf_cmd}" || return 1
+  "${_hf_cmd}" -w 2 -t mangle -N "${MODERN_QUEUE_CHAIN}" 2>/dev/null || return 1
+  "${_hf_cmd}" -w 2 -t mangle -A "${MODERN_QUEUE_CHAIN}" -m owner --uid-owner 0 --gid-owner "${MODERN_UPSTREAM_GID}" -j RETURN || return 1
+  "${_hf_cmd}" -w 2 -t mangle -A "${MODERN_QUEUE_CHAIN}" -p udp --dport 53 \
+    -j NFQUEUE --queue-num "${MODERN_QUEUE}" --queue-bypass || return 1
+  # NF_ACCEPT resumes after the iptables hook, so queueing must be last.
+  "${_hf_cmd}" -w 2 -t mangle -A OUTPUT -j "${MODERN_QUEUE_CHAIN}"
+}
+
+hijack_rules_present() {
+  _hp_cmd=$1
+  hijack_family_ready "${_hp_cmd}" || return 1
+  "${_hp_cmd}" -t mangle -C OUTPUT -j "${MODERN_QUEUE_CHAIN}" 2>/dev/null || return 1
+  [ "$("${_hp_cmd}" -t mangle -S OUTPUT 2>/dev/null | awk '$1=="-A" {last=$0} END {print last}')" = "-A OUTPUT -j ${MODERN_QUEUE_CHAIN}" ] || return 1
+  "${_hp_cmd}" -t mangle -C "${MODERN_QUEUE_CHAIN}" -m owner --uid-owner 0 --gid-owner "${MODERN_UPSTREAM_GID}" -j RETURN 2>/dev/null || return 1
+  "${_hp_cmd}" -t mangle -C "${MODERN_QUEUE_CHAIN}" -p udp --dport 53 \
+    -j NFQUEUE --queue-num "${MODERN_QUEUE}" --queue-bypass 2>/dev/null || return 1
 }
 
 modern_rules_exist() {
@@ -443,9 +534,9 @@ modern_dns_start() (
     return 0
   fi
   _mn_mode=local
-  _mn_degraded_reason=transparent-unavailable
-  if [ "${DNS_MODE}" = transparent ] && [ -n "$(modern_pids)" ] &&
-    [ "$(jqr -r '.mode' "${MODERN_CONF}" 2>/dev/null)" = transparent ] && ! modern_queue_ready; then
+  _mn_degraded_reason="${DNS_MODE}-unavailable"
+  if [ "${DNS_MODE}" != local ] && [ "${DNS_MODE}" != legacy ] && [ -n "$(modern_pids)" ] &&
+    [ "$(jqr -r '.mode' "${MODERN_CONF}" 2>/dev/null)" = "${DNS_MODE}" ] && ! modern_queue_ready; then
     modern_stop_process || return 1
   fi
   if [ "${DNS_MODE}" = transparent ]; then
@@ -459,6 +550,15 @@ modern_dns_start() (
       _mn_mode=transparent
     elif modern_probe_capabilities; then
       _mn_mode=transparent
+    fi
+  elif [ "${DNS_MODE}" = hijack ]; then
+    if ! hijack_policy_safe; then
+      _mn_degraded_reason=packet-policy-conflict
+    elif modern_queue_ready; then
+      hijack_record_capabilities "$(jqr -n -c --arg boot "$(modern_boot_id)" '{ok:true,reason:"queue-active",bootId:$boot}')" || return 1
+      _mn_mode=hijack
+    elif modern_probe_hijack; then
+      _mn_mode=hijack
     fi
   fi
   _mn_v6=false; [ "${IPV6}" != on ] || _mn_v6=true
@@ -518,12 +618,35 @@ modern_dns_start() (
     return 0
   fi
   _mn_reason=local
-  if [ "${DNS_MODE}" = transparent ] && modern_queue_ready; then
-    _mn_v6_nat=false
-    [ "${IPV6}" != on ] || ! ensure_ipv6_nat || _mn_v6_nat=true
-    if ! modern_rules_present iptables || { [ "${_mn_v6_nat}" = true ] && ! modern_rules_present ip6tables; }; then
+  _mn_intercept=false
+  if [ "${DNS_MODE}" = transparent ] && modern_queue_ready; then _mn_intercept=transparent; fi
+  if [ "${DNS_MODE}" = hijack ] && modern_queue_ready; then _mn_intercept=hijack; fi
+  if [ "${_mn_intercept}" != false ]; then
+    _mn_v6_cap=false
+    if [ "${_mn_intercept}" = transparent ]; then
+      [ "${IPV6}" != on ] || ! ensure_ipv6_nat || _mn_v6_cap=true
+    else
+      [ "${IPV6}" != on ] || ! hijack_family_ready ip6tables || _mn_v6_cap=true
+    fi
+    _mn_rules_ok=true
+    if [ "${_mn_intercept}" = transparent ]; then
+      modern_rules_present iptables || _mn_rules_ok=false
+      { [ "${_mn_rules_ok}" != true ] || [ "${_mn_v6_cap}" != true ] || modern_rules_present ip6tables || _mn_rules_ok=false; }
+    else
+      hijack_rules_present iptables || _mn_rules_ok=false
+      { [ "${_mn_rules_ok}" != true ] || [ "${_mn_v6_cap}" != true ] || hijack_rules_present ip6tables || _mn_rules_ok=false; }
+    fi
+    if [ "${_mn_rules_ok}" != true ]; then
       modern_rules_teardown || return 1
-      if ! modern_rules_family iptables || { [ "${_mn_v6_nat}" = true ] && ! modern_rules_family ip6tables; }; then
+      _mn_rules_ok=true
+      if [ "${_mn_intercept}" = transparent ]; then
+        modern_rules_family iptables || _mn_rules_ok=false
+        { [ "${_mn_rules_ok}" != true ] || [ "${_mn_v6_cap}" != true ] || modern_rules_family ip6tables || _mn_rules_ok=false; }
+      else
+        hijack_rules_family iptables || _mn_rules_ok=false
+        { [ "${_mn_rules_ok}" != true ] || [ "${_mn_v6_cap}" != true ] || hijack_rules_family ip6tables || _mn_rules_ok=false; }
+      fi
+      if [ "${_mn_rules_ok}" != true ]; then
         modern_capture_cleanup || return 1
         modern_pref_restore || return 1
         modern_reason interception-failed restored
@@ -532,7 +655,7 @@ modern_dns_start() (
       _mn_changed=true
     fi
     _mn_reason=running
-    [ "${IPV6}" != on ] || [ "${_mn_v6_nat}" = true ] || _mn_reason=ipv6-unavailable
+    [ "${IPV6}" != on ] || [ "${_mn_v6_cap}" = true ] || _mn_reason=ipv6-unavailable
     if ! modern_guard_start; then
       modern_capture_cleanup || return 1
       modern_reason guard-failed owned
@@ -541,7 +664,7 @@ modern_dns_start() (
   else
     modern_capture_cleanup || return 1
     modern_guard_stop || return 1
-    [ "${DNS_MODE}" != transparent ] || _mn_reason="${_mn_degraded_reason}"
+    [ "${DNS_MODE}" != transparent ] && [ "${DNS_MODE}" != hijack ] || _mn_reason="${_mn_degraded_reason}"
   fi
   modern_reason "${_mn_reason}" owned
   printf '%s\n' "${DNS_MODE}" >"${MODERN_MODE}" || return 1
@@ -561,15 +684,25 @@ modern_dns_status() {
   _mo_mode=${DNS_MODE}
   _mo_active_mode=$(cat "${MODERN_MODE}" 2>/dev/null)
   [ -n "${_mo_active_mode}" ] || _mo_active_mode=$(jqr -r '.mode // ""' "${MODERN_CONF}" 2>/dev/null)
-  case "${_mo_active_mode}" in local|transparent) _mo_mode=${_mo_active_mode} ;; esac
+  case "${_mo_active_mode}" in local|transparent|hijack) _mo_mode=${_mo_active_mode} ;; esac
   _mo_pending=false; [ "${_mo_mode}" = "${DNS_MODE}" ] || _mo_pending=true
   _mo_port=$(jqr -r '.listen | split(":") | last | tonumber' "${MODERN_CONF}" 2>/dev/null)
   case "${_mo_port}" in ''|*[!0-9]*) _mo_port=${DNS_PORT} ;; esac
   _mo_ready=false; modern_listener_ready && _mo_ready=true
   _mo_queue=false
   [ "${_mo_ready}" != true ] || ! printf '%s' "${_ml_state}" | jqr -e '.queueReady == true' >/dev/null 2>&1 || _mo_queue=true
-  _mo_v4=false; [ "${_mo_queue}" != true ] || ! modern_rules_present iptables "${_mo_port}" || _mo_v4=true
-  _mo_v6=false; [ "${_mo_queue}" != true ] || ! modern_rules_present ip6tables "${_mo_port}" || _mo_v6=true
+  _mo_v4=false; _mo_v6=false; _mo_v6_capable=false
+  if [ "${_mo_queue}" = true ]; then
+    if [ "${_mo_mode}" = hijack ]; then
+      hijack_rules_present iptables && _mo_v4=true
+      hijack_rules_present ip6tables && _mo_v6=true
+      hijack_family_ready ip6tables && _mo_v6_capable=true
+    else
+      modern_rules_present iptables "${_mo_port}" && _mo_v4=true
+      modern_rules_present ip6tables "${_mo_port}" && _mo_v6=true
+      ipv6_nat_available && _mo_v6_capable=true
+    fi
+  fi
   _mo_reason=$(cat "${MODERN_REASON}" 2>/dev/null)
   _mo_policy=$(cat "${MODERN_POLICY}" 2>/dev/null)
   _mo_expect_capture=false
@@ -582,8 +715,8 @@ modern_dns_status() {
         running|local|ipv6-unavailable) _mo_state=running ;;
         native-policy-unavailable|restore-pending|cleanup-failed|queue-failed|guard-failed|reconnect-needed) _mo_repair=true ;;
       esac
-      if [ "${_mo_mode}" = transparent ] && [ "${_mo_queue}" != true ] && [ "${_mo_state}" = running ]; then
-        case "${_mo_reason}" in capture-mark-conflict|packet-policy-conflict|dns-interception-conflict) ;; *) _mo_reason=transparent-unavailable ;; esac
+      if [ "${_mo_mode}" != local ] && [ "${_mo_queue}" != true ] && [ "${_mo_state}" = running ]; then
+        case "${_mo_reason}" in capture-mark-conflict|packet-policy-conflict|dns-interception-conflict) ;; *) _mo_reason="${_mo_mode}-unavailable" ;; esac
         if [ "${_mo_expect_capture}" = true ] || modern_rules_exist; then
           _mo_state=degraded; _mo_reason=queue-failed; _mo_repair=true
         fi
@@ -591,8 +724,8 @@ modern_dns_status() {
       _mo_context=$(current_dns_context)
       if [ -z "${_mo_context}" ] || [ "$(cat "${DNS_CONTEXT_FILE}" 2>/dev/null)" != "${_mo_context}" ]; then
         _mo_state=degraded; _mo_reason=context-changed; _mo_repair=true
-      elif [ "${_mo_mode}" = transparent ] && [ "${_mo_expect_capture}" = true ] && [ "${_mo_queue}" = true ] && [ "${_mo_policy}" = owned ] &&
-        { [ "${_mo_v4}" != true ] || { [ "${IPV6}" = on ] && ipv6_nat_available && [ "${_mo_v6}" != true ]; }; }; then
+      elif [ "${_mo_mode}" != local ] && [ "${_mo_expect_capture}" = true ] && [ "${_mo_queue}" = true ] && [ "${_mo_policy}" = owned ] &&
+        { [ "${_mo_v4}" != true ] || { [ "${IPV6}" = on ] && [ "${_mo_v6_capable}" = true ] && [ "${_mo_v6}" != true ]; }; }; then
         _mo_state=degraded; _mo_reason=interception-lost; _mo_repair=true
       elif [ "${_mo_v4}" = true ] && ! modern_guard_alive; then
         _mo_state=degraded; _mo_reason=guard-failed; _mo_repair=true
@@ -627,10 +760,21 @@ modern_dns_status() {
       _mo_ta_reason=$(printf '%s' "${_mo_ta_cache}" | jqr -r '.error | select(type == "string" and length > 0) | gsub("[[:cntrl:]]";" ") | .[0:512]' 2>/dev/null)
     fi
   fi
-  if [ "${_mo_mode}" = transparent ]; then
+  _mo_ha=null; _mo_ha_reason=
+  _mo_ha_cache=$(hijack_cached_capabilities)
+  if [ -n "${_mo_ha_cache}" ]; then
+    if [ "$(printf '%s' "${_mo_ha_cache}" | jqr -r '.ok')" = true ]; then
+      _mo_ha=true
+    else
+      _mo_ha=false
+      _mo_ha_reason=$(printf '%s' "${_mo_ha_cache}" | jqr -r '.error | select(type == "string" and length > 0) | gsub("[[:cntrl:]]";" ") | .[0:512]' 2>/dev/null)
+    fi
+  fi
+  if [ "${_mo_mode}" != local ]; then
     _mo_capability_error=$(printf '%s' "${_ml_state:-}" | jqr -r '(.error // "") | select(type == "string") | gsub("[[:cntrl:]]";" ") | .[0:512]' 2>/dev/null)
-    if [ -z "${_mo_capability_error}" ] && [ "${_mo_reason}" = transparent-unavailable ]; then
-      _mo_capability_error=${_mo_ta_reason}
+    if [ -z "${_mo_capability_error}" ]; then
+      if [ "${_mo_reason}" = transparent-unavailable ]; then _mo_capability_error=${_mo_ta_reason}; fi
+      if [ "${_mo_reason}" = hijack-unavailable ]; then _mo_capability_error=${_mo_ha_reason}; fi
     fi
   fi
 
@@ -642,10 +786,12 @@ modern_dns_status() {
       --argjson native "${_mo_native}" --arg module "$(ipv6_module_status)" --arg ipv6 "${IPV6}" \
       --arg capabilityError "${_mo_capability_error}" \
       --argjson ta "${_mo_ta}" --arg taReason "${_mo_ta_reason}" \
+      --argjson ha "${_mo_ha}" --arg haReason "${_mo_ha_reason}" \
       '{state:$state,mode:$mode,configuredMode:$configured,pendingMode:$pending,reason:$reason,policyState:$policy,suffix:$suffix,port:$port,binary:$binary,
         enabled:($enabled=="on"),listenerReady:$ready,interception4:$v4,interception6:$v6,repairNeeded:$repair,
         upstreamNative:$native,ipv6ModuleStatus:$module,capabilityError:(if $capabilityError=="" then null else $capabilityError end),
         transparentAvailable:$ta,transparentUnavailableReason:(if $taReason=="" then null else $taReason end),
+        hijackAvailable:$ha,hijackUnavailableReason:(if $haReason=="" then null else $haReason end),
         ipv6DnsInterception:(if $v6 then "available" elif $ipv6!="on" then "disabled" else "fallback" end)}'
   else
     printf 'MagicDNS: %s (%s), 127.0.0.1:%s; %s\n' "${_mo_state}" "${_mo_mode}" "${_mo_port}" "${_mo_reason}"

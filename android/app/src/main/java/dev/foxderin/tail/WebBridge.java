@@ -371,7 +371,7 @@ final class WebBridge {
     private static void setting(String key, String value) throws Exception {
         switch (key) {
             case "MAGIC_DNS": case "IPV6": case "POWER_SAVE": case "WATCHDOG": case "WATCHDOG_PROBE": case "STATS": case "CONTEXT": case "WEBUI_AUTO_REFRESH": choice(value, "on", "off"); return;
-            case "DNS_MODE": choice(value, "legacy", "local", "transparent"); return;
+            case "DNS_MODE": choice(value, "legacy", "local", "hijack", "transparent"); return;
             case "SOCKS_PORT": case "DNS_PORT": number(value, 1024, 65535); return;
             case "WATCHDOG_INTERVAL": number(value, 5, 300); return;
             case "STATS_INTERVAL": number(value, 10, 3600); return;

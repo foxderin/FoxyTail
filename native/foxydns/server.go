@@ -20,6 +20,19 @@ type originalTransport interface {
 	Lookup(string, net.Addr, net.Addr) (FlowContext, error)
 }
 
+// captureQueue is the kernel interception device owned by a service: the
+// transparent Interceptor replays flows while the hijack Selector verdicts
+// packets in place.
+type captureQueue interface {
+	Health() error
+	Close() error
+}
+
+// captureStats reports interception counters for health reporting.
+type captureStats interface {
+	Stats() (answered, passed, failed uint64)
+}
+
 type resolver struct {
 	records                  *recordStore
 	transport                originalTransport
@@ -124,7 +137,7 @@ type service struct {
 	cfg         Config
 	port        int
 	resolver    *resolver
-	interceptor *Interceptor
+	interceptor captureQueue
 	queueError  error
 	servers     []*dns.Server
 	closers     []interface{ Close() error }
@@ -165,13 +178,17 @@ func startService(cfg Config) (*service, error) {
 		if err != nil {
 			s.queueError = err
 		} else {
-			s.interceptor, s.queueError = NewInterceptor(cfg.Queue, journal)
-			if s.interceptor == nil {
+			var interceptor *Interceptor
+			interceptor, s.queueError = NewInterceptor(cfg.Queue, journal)
+			if interceptor == nil {
 				_ = journal.close()
 			} else {
-				s.resolver.transport = s.interceptor
+				s.interceptor = interceptor
+				s.resolver.transport = interceptor
 			}
 		}
+	} else if cfg.Mode == "hijack" {
+		s.interceptor, s.queueError = NewSelector(cfg.Queue, s.resolver.records)
 	}
 	if err := s.startControl(); err != nil {
 		s.Close()
@@ -249,6 +266,11 @@ func (s *service) healthState() healthState {
 		IPv6ListenerReady: ready && s.cfg.IPv6, QueueReady: ready && queueReady,
 		UpdatedAt: time.Now().Unix(), LocalAnswers: s.resolver.local.Load(),
 		Forwarded: s.resolver.forwarded.Load(), Failed: s.resolver.failed.Load(),
+	}
+	if counter, ok := s.interceptor.(captureStats); ok {
+		answered, _, failed := counter.Stats()
+		state.LocalAnswers += answered
+		state.Failed += failed
 	}
 	if queueError != nil {
 		state.Error = queueError.Error()

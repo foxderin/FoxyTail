@@ -36,7 +36,7 @@ export function installFixture(window, { state = 'ready', lang = 'en', theme = '
     'owner-capability': { ok: true, available: true },
     'hooks-get': { ok: true, hooks: [{ name: 'foxytail.tun.up', content: '# User hook\necho ready\n', missing: false }, { name: 'foxytail.tun.down', content: '', missing: true }] },
     'socks-check': { ok: true, success: true, httpCode: '200', elapsedMs: 18 },
-    'dns-probe': { ok: true, transparentAvailable: true },
+    'dns-probe': { ok: true, transparentAvailable: true, hijackAvailable: true },
     logs: { ok: true, lines: ['2026-10-22 [Info] Simulated tunnel ready', '2026-10-22 [Warning] Simulated peer offline'] },
     'files-inbox': { ok: true, files: [{ name: 'network-notes.pdf', size: 248928, mtime: 1788912000 }, { name: 'camera-roll.zip', size: 15687204, mtime: 1788896200 }], ignored: 0 },
     'taildrop-targets': { ok: true, peers: peers.map(({ id, hostname, ips, online }) => ({ id, hostname, ips, online })) },
@@ -156,10 +156,13 @@ export function installFixture(window, { state = 'ready', lang = 'en', theme = '
         return;
       }
       const durableId = mutation ? 'preview-operation-' + ++sequence : null;
-      if (mutation) publishControl({ id: durableId, command: key, label: key, busy: true, ownsMutation: true, canWrite: false, canCancel: true, unknown: false, result: null, tasks: [{ id: durableId, command: key, label: key, status: 'running' }] });
+      // Mirror ControlClient.readOnlyOperation: probe-style commands run as
+      // operations but never claim mutation ownership, so reads continue.
+      const readOnly = ['peer-ping', 'speedtest-exitnodes', 'derp-speedtest', 'coexist-info', 'coexist-check', 'diag-check', 'socks-check', 'dns-probe'].includes(key);
+      if (mutation) publishControl({ id: durableId, command: key, label: key, busy: true, ownsMutation: !readOnly, canWrite: false, canCancel: true, unknown: false, result: null, tasks: [{ id: durableId, command: key, label: key, status: 'running' }] });
       const value = clone(overrides.has(key) ? overrides.get(key) : mutation || name === 'control.query' ? command(key, args.arguments) : action(name, args));
       const finish = (replacement = value) => {
-        if (mutation) publishControl({ id: durableId, busy: !!replacement.unknown, unknown: !!replacement.unknown, canWrite: control.compatible && !replacement.unknown, canCancel: !!replacement.unknown, revision: control.revision + 1, result: replacement, tasks: [{ id: durableId, command: key, label: key, status: replacement.unknown ? 'unknown' : replacement.ok ? 'done' : 'error', result: replacement }] });
+        if (mutation) publishControl({ id: durableId, busy: !!replacement.unknown, ownsMutation: !!replacement.unknown && !readOnly, unknown: !!replacement.unknown, canWrite: control.compatible && !replacement.unknown, canCancel: !!replacement.unknown, revision: control.revision + 1, result: replacement, tasks: [{ id: durableId, command: key, label: key, status: replacement.unknown ? 'unknown' : replacement.ok ? 'done' : 'error', result: replacement }] });
         window.FoxyTailNative?.onmessage?.({ data: JSON.stringify({ id, result: clone(replacement) }) });
       };
       if (holdNext.delete(key)) held.push({ key, request, result: clone(value), finish });

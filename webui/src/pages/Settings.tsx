@@ -37,10 +37,12 @@ export default function Settings(): JSX.Element {
   const [settingsError, setSettingsError] = createSignal<string | null>(null);
   const [restartRequired, setRestartRequired] = createSignal(false);
   const [trialActive, setTrialActive] = createSignal(true);
-  // `null` = never probed; `false` = kernel lacks transparent capture; `true`
-  // = cached probe confirms the kernel can run transparent split DNS.
+  // `null` = never probed; `false` = kernel lacks the interception path; `true`
+  // = cached probe confirms the kernel can run that split-DNS mode.
   const [transparentAvailable, setTransparentAvailable] = createSignal<boolean | null>(null);
   const [transparentReason, setTransparentReason] = createSignal<string | null>(null);
+  const [hijackAvailable, setHijackAvailable] = createSignal<boolean | null>(null);
+  const [hijackReason, setHijackReason] = createSignal<string | null>(null);
   const backupBusy = () => getTask(BACKUP_TASK)?.status === 'running';
   const saveTask = () => getTask('settings-save');
   const serviceTask = () => getTask('service-control');
@@ -78,20 +80,27 @@ export default function Settings(): JSX.Element {
     if (res.cancelled || disposed) return;
     if (res.ok) {
       const available = res.transparentAvailable;
+      const hijackCapable = res.hijackAvailable;
       if (available === true || available === false) {
         setTransparentAvailable(available);
         setTransparentReason(typeof res.transparentUnavailableReason === 'string' ? res.transparentUnavailableReason : null);
-        return;
       }
+      if (hijackCapable === true || hijackCapable === false) {
+        setHijackAvailable(hijackCapable);
+        setHijackReason(typeof res.hijackUnavailableReason === 'string' ? res.hijackUnavailableReason : null);
+      }
+      if ((available === true || available === false) && (hijackCapable === true || hijackCapable === false)) return;
     }
-    // No cached verdict: run the kernel probe once so the choice reflects the
-    // actual device rather than a stale or absent cache. Probe is fast and
-    // idempotent; failures still record a verdict in the backend cache.
+    // No cached verdict: run the kernel probes once so the choices reflect the
+    // actual device rather than a stale or absent cache. Probes are fast and
+    // idempotent; failures still record verdicts in the backend caches.
     const probe = await scope.api('dns-probe');
     if (probe.cancelled || disposed) return;
     if (probe.ok) {
       setTransparentAvailable(probe.transparentAvailable === true);
       setTransparentReason(typeof probe.transparentUnavailableReason === 'string' ? probe.transparentUnavailableReason : null);
+      setHijackAvailable(probe.hijackAvailable === true);
+      setHijackReason(typeof probe.hijackUnavailableReason === 'string' ? probe.hijackUnavailableReason : null);
     }
   }
   function changeKey(field: Field, value: string) {
@@ -107,7 +116,9 @@ export default function Settings(): JSX.Element {
       showToast(t('tools_invalid_number') + ` ${field.range[0]}–${field.range[1]}`, 'err');
       return;
     }
-    if (field.key === 'DNS_MODE' && value === 'transparent' && transparentAvailable() === false) return;
+    if (field.key === 'DNS_MODE' &&
+        ((value === 'transparent' && transparentAvailable() === false) ||
+         (value === 'hijack' && hijackAvailable() === false))) return;
     const fresh = await loadSettings();
     if (fresh === undefined || locked() || drafts()[field.key] !== draft) return;
     const conflict = draft.baseline !== settings()?.[field.key];
@@ -160,16 +171,18 @@ export default function Settings(): JSX.Element {
   function fieldRow(field: Field): JSX.Element {
     const value = () => drafts()[field.key]?.value ?? settings()?.[field.key] ?? field.defaultValue ?? '';
     const changed = () => drafts()[field.key] && value() !== settings()?.[field.key];
-    // When the kernel probe reports transparent capture is impossible, pin
-    // the transparent choice as disabled and replace its hint with the
-    // reason. Doing it per-row keeps the change scoped to DNS_MODE without
-    // touching the shared schema.
+    // When a kernel probe reports an interception path is impossible, pin the
+    // choice as disabled and replace its hint with the reason. Doing it
+    // per-row keeps the change scoped to DNS_MODE without touching the shared
+    // schema.
     const choices = () => {
       if (field.key !== 'DNS_MODE' || !field.choices) return field.choices;
       return field.choices.map((choice) => {
-        if (choice.value !== 'transparent') return choice;
-        if (transparentAvailable() === false) {
+        if (choice.value === 'transparent' && transparentAvailable() === false) {
           return { ...choice, disabled: true, hint: 'tools_dns_mode_transparent_unavailable' as const };
+        }
+        if (choice.value === 'hijack' && hijackAvailable() === false) {
+          return { ...choice, disabled: true, hint: 'tools_dns_mode_hijack_unavailable' as const };
         }
         return choice;
       });
@@ -195,6 +208,9 @@ export default function Settings(): JSX.Element {
           </Show>
           <Show when={field.key === 'DNS_MODE' && transparentAvailable() === false && transparentReason()}>
             <span class="tool-hint" data-testid="dns-transparent-unavailable">{transparentReason()}</span>
+          </Show>
+          <Show when={field.key === 'DNS_MODE' && hijackAvailable() === false && hijackReason()}>
+            <span class="tool-hint" data-testid="dns-hijack-unavailable">{hijackReason()}</span>
           </Show>
           <Show when={changed()}>
             <p role="status">{t(drafts()[field.key]?.baseline !== settings()?.[field.key] ? 'tools_draft_conflict' : 'tools_draft_changed')}</p>

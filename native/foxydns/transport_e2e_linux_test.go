@@ -360,17 +360,21 @@ func TestPrivilegedDNSNamespace(t *testing.T) {
 			t.Fatalf("original query or source address changed: %s", query)
 		}
 	}
-	s.interceptor.mu.Lock()
+	interceptor, ok := s.interceptor.(*Interceptor)
+	if !ok {
+		t.Fatal("transparent service did not keep its interceptor")
+	}
+	interceptor.mu.Lock()
 	protocols := make(map[uint8]bool)
-	for _, observation := range s.interceptor.flows {
+	for _, observation := range interceptor.flows {
 		flow := observation.context
 		if flow.UID != 10123 || flow.Mark != 0x1234 || flow.InterfaceName != "lo" || flow.OriginalDestination.String() != "192.0.2.53:53" {
-			s.interceptor.mu.Unlock()
+			interceptor.mu.Unlock()
 			t.Fatalf("lost real netd UID/mark/interface context: %+v", flow)
 		}
 		protocols[flow.protocol] = true
 	}
-	s.interceptor.mu.Unlock()
+	interceptor.mu.Unlock()
 	if !protocols[6] || !protocols[17] || s.resolver.forwarded.Load() != 2 {
 		t.Fatalf("both real transports must be captured and forwarded: protocols=%v count=%d", protocols, s.resolver.forwarded.Load())
 	}

@@ -373,7 +373,7 @@ dns_status_healthy() {
   (if (.mode // $mode)=="legacy" then (.pid|type)=="number" and .pid>0 and .enabled==true
    else .enabled==true and .listenerReady==true and .repairNeeded==false and .policyState=="owned" and
      (((.mode // $mode)=="local" and .reason=="local") or
-      ((.mode // $mode)=="transparent" and .reason=="running" and .interception4==true)) end)
+      (((.mode // $mode)=="transparent" or (.mode // $mode)=="hijack") and .reason=="running" and .interception4==true)) end)
 ' >/dev/null 2>&1
 }
 

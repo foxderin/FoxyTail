@@ -191,7 +191,7 @@ Three files in `/data/adb/foxytail/conf/`, installed **only if missing** — you
 |---|---|---|
 | `TS_MODE` | `bridge` | `bridge` (userspace + socks5 + hev → tailscale0) · `tun` (native TUN, needs `/dev/net/tun`) · `proxy` (socks5 only) |
 | `SOCKS_PORT` | `1099` | tailscaled's local socks5 port |
-| `DNS_MODE` | `legacy` | `legacy`, `local`, or `transparent`; apply with restart |
+| `DNS_MODE` | `legacy` | `legacy`, `local`, `hijack`, or `transparent`; apply with restart |
 | `DNS_PORT` | `1053` | Local DNS port; must be unused by other resolvers |
 | `MAGIC_DNS` | `off` | Enable Tailnet name resolution in the selected mode |
 | `IPV6` | `off` | dual-stack tailscale0 + ip6tables symmetry |
@@ -297,7 +297,7 @@ FoxyTail never touches other modules' chains and probes for neighbors at boot (`
 
 ### App proxy coexistence wizard
 
-Open **Navigate → Proxy coexistence → Detect environment**. It reads applied settings, the current Tailnet and actual DNS state without changing FoxyTail or another module. A ready FoxyTail-owned `local` / `transparent` DNS listener is required. Disabled, legacy or repair-pending DNS shows prerequisites and a Settings link rather than an unusable snippet. Installed modules/apps do not prove a proxy is running.
+Open **Navigate → Proxy coexistence → Detect environment**. It reads applied settings, the current Tailnet and actual DNS state without changing FoxyTail or another module. A ready FoxyTail-owned `local` / `hijack` / `transparent` DNS listener is required. Disabled, legacy or repair-pending DNS shows prerequisites and a Settings link rather than an unusable snippet. Installed modules/apps do not prove a proxy is running.
 
 1. Confirm the destination is **mihomo / Clash.Meta** with the required fields, and select its existing fake-IP blacklist, rule mode or `redir-host`. Whitelist semantics require reviewing the existing list; the wizard does not silently convert it.
 2. Preview, copy and **merge** into existing `dns.nameserver-policy`, `proxies`, `rules` and applicable `fake-ip-filter` entries. Preserve other entries; prepend routing and rule-mode filter entries before catchalls. Do not replace the complete configuration or use the local endpoint as global DNS.
@@ -319,12 +319,15 @@ Enable MagicDNS, choose a mode and unused port in Settings, then apply the resta
 | `legacy` (default) | Existing dnsmasq behavior and DNS conflict checks. |
 | `local` | Standard loopback UDP/TCP endpoint at `127.0.0.1:DNS_PORT`, plus `[::1]:DNS_PORT` with IPv6 enabled. Configure the active Tailnet suffix in any resolver that supports split DNS. |
 | `transparent` | Intercept ordinary UDP/TCP port 53 only when kernel capabilities and the original routing context can be verified. Otherwise retain the local endpoint. Validate your actual device/VPN combination. |
+| `hijack` | Queue UDP/53 packets by query name. Only MagicDNS full names, known short names and supported internal PTRs are answered — via a response injected from the original resolver's address; all other packets pass through untouched. No conntrack, mark or NAT is needed. |
 
 The local endpoint answers current Tailnet full names, known short names, A/AAAA and PTR records. Unknown names under the Tailnet suffix return NXDOMAIN; public names return REFUSED. It is not a sole global resolver. Copy the actual endpoint and suffix from the Tunnel page; configure a search suffix or short-name policy in the consuming resolver when needed. A VPN without split-DNS controls cannot automatically use local mode.
 
 Transparent mode captures the original destination, source address, UID, mark and interface, validates the effective kernel route, and forwards public queries through that original context. Missing metadata leaves the packet on its original path. Missing context after takeover returns failure; there is no public fallback DNS. IPv4 and IPv6 interception are reported separately. Lack of IPv6 NAT retains IPv6 routing, AAAA answers and the local IPv6 listener.
 
-Both new modes temporarily disable the current Tailscale profile's `accept-dns` to remove the Android backend's global DNS redirect. A private persistent journal records the previous value before mutation. Stop and app account transitions restore only the matching profile and node identity; uncertain restoration retains the journal and blocks the account change. External preference changes relinquish ownership instead of being overwritten repeatedly. Uninstall preserves unresolved records with the saved identity. Corporate split DNS, global upstreams and search domains from Tailscale are not automatically reproduced by these modes.
+Hijack mode sends UDP/53 packets to NFQUEUE and reads only the query name: a MagicDNS match is answered by a raw response packet injected from the original resolver's address while the original query is dropped; every other packet is accepted unchanged, preserving its original socket, UID, route and resolver — there is no public fallback. No mark bit, NAT redirect, conntrack or routing policy is required, so the mode also runs on devices whose OEM mark masks or missing `CONFIG_NETFILTER_NETLINK_GLUE_CT` block transparent capture. TCP port 53 is not intercepted. `probe --hijack` validates NFQUEUE binding and the forged-source injection path (including SELinux and rp_filter constraints); when either is unavailable the local endpoint is retained instead. `--queue-bypass` fails open to normal DNS forwarding if the helper dies.
+
+The new modes temporarily disable the current Tailscale profile's `accept-dns` to remove the Android backend's global DNS redirect. A private persistent journal records the previous value before mutation. Stop and app account transitions restore only the matching profile and node identity; uncertain restoration retains the journal and blocks the account change. External preference changes relinquish ownership instead of being overwritten repeatedly. Uninstall preserves unresolved records with the saved identity. Corporate split DNS, global upstreams and search domains from Tailscale are not automatically reproduced by these modes.
 
 Transparent mode requires root, NFQUEUE, conntrack, INET_DIAG, strict route queries and socket-context capabilities. It does not intercept DoH/DoT or reproduce arbitrary SELinux/cgroup credentials. Socket UID recovery requires an exact, unambiguous INET_DIAG match; unsupported flows retain their existing path. Existing root DNS redirects or incompatible OUTPUT policies prevent transparent takeover; use the local endpoint instead. Mark bit `0x20000000` must be unused by other programs; detected collisions stop interception. Helper failure has a short cleanup window, and passing capability probes does not establish compatibility with every VPN. The detailed implementation and validation limits are documented in the [Chinese design report](docs/reviews/2026-09-09-generic-dns.zh-CN.md).
 

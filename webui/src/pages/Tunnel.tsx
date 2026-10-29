@@ -223,6 +223,10 @@ export default function Tunnel(): JSX.Element {
                   <p class="tool-hint" data-testid="dns-coexist-hint">{t(info().reason === 'transparent-unavailable'
                     ? 'tools_dns_transparent_unavailable' : 'tools_dns_transparent_limit')}</p>
                 </Show>
+                <Show when={info().mode === 'hijack' && info().listenerReady === true}>
+                  <p class="tool-hint" data-testid="dns-hijack-hint">{t(info().reason === 'hijack-unavailable'
+                    ? 'tools_dns_hijack_unavailable' : 'tools_dns_hijack_limit')}</p>
+                </Show>
                 <Show when={info().suffix}>
                   <KvRow k={t('dns_suffix')} v={info().suffix || '—'} />
                 </Show>

@@ -17,11 +17,11 @@ func controlPath(cfg Config, instance string) string {
 }
 
 func (s *service) startControl() error {
-	if s.cfg.Mode != "transparent" {
+	if s.cfg.Mode != "transparent" && s.cfg.Mode != "hijack" {
 		return nil
 	}
 	if s.cfg.StateFile == "" {
-		return errors.New("transparent service requires a private state file")
+		return errors.New("interception service requires a private state file")
 	}
 	path := controlPath(s.cfg, s.instance)
 	listener, err := net.ListenUnix("unix", &net.UnixAddr{Name: path, Net: "unix"})
@@ -64,7 +64,7 @@ func (s *service) quiesce() error {
 }
 
 func quiesceService(cfg Config) error {
-	if cfg.Mode != "transparent" {
+	if cfg.Mode != "transparent" && cfg.Mode != "hijack" {
 		return nil
 	}
 	data, err := os.ReadFile(cfg.StateFile)

@@ -695,8 +695,8 @@ dns_status() {
   fi
 
   # Machine-readable form for foxytail.webapi.sh (`status --json`). Include
-  # the cached transparent-mode capability even in legacy mode so the
-  # settings page can grey out the choice before the user switches away.
+  # the cached interception-mode capabilities even in legacy mode so the
+  # settings page can grey out choices before the user switches away.
   if [ "${_dst_json}" = true ]; then
     _dst_ta=null; _dst_ta_reason=
     _dst_ta_cache=$(modern_cached_capabilities 2>/dev/null)
@@ -708,15 +708,27 @@ dns_status() {
         _dst_ta_reason=$(printf '%s' "${_dst_ta_cache}" | jqr -r '.error | select(type == "string" and length > 0) | gsub("[[:cntrl:]]";" ") | .[0:512]' 2>/dev/null)
       fi
     fi
+    _dst_ha=null; _dst_ha_reason=
+    _dst_ha_cache=$(hijack_cached_capabilities 2>/dev/null)
+    if [ -n "${_dst_ha_cache}" ]; then
+      if [ "$(printf '%s' "${_dst_ha_cache}" | jqr -r '.ok')" = true ]; then
+        _dst_ha=true
+      else
+        _dst_ha=false
+        _dst_ha_reason=$(printf '%s' "${_dst_ha_cache}" | jqr -r '.error | select(type == "string" and length > 0) | gsub("[[:cntrl:]]";" ") | .[0:512]' 2>/dev/null)
+      fi
+    fi
     jqr -n -c --arg s "${_dst_state}" --arg sfx "${_dst_suffix}" \
       --argjson p "${DNS_PORT}" --argjson pid "${_dst_pid}" \
       --argjson enabled "${_dst_enabled}" --arg reason "${_dst_reason}" \
       --arg binary "${DNS_BIN}" --argjson native "${_dst_native}" \
       --arg v6 "${_dst_v6}" --arg module "${_dst_module}" \
       --argjson ta "${_dst_ta}" --arg taReason "${_dst_ta_reason}" \
+      --argjson ha "${_dst_ha}" --arg haReason "${_dst_ha_reason}" \
       '{state:$s,suffix:$sfx,port:$p,pid:$pid,enabled:$enabled,reason:$reason,
         binary:(if $binary=="" then null else $binary end),upstreamNative:$native,
         transparentAvailable:$ta,transparentUnavailableReason:(if $taReason=="" then null else $taReason end),
+        hijackAvailable:$ha,hijackUnavailableReason:(if $haReason=="" then null else $haReason end),
         ipv6DnsInterception:$v6,ipv6ModuleStatus:$module}'
     return 0
   fi
@@ -761,6 +773,15 @@ case "$1" in
     # the transparent choice before the user commits to it.
     if command -v modern_probe_capabilities >/dev/null 2>&1; then
       modern_probe_capabilities
+    else
+      echo "modern DNS controller unavailable" >&2
+      exit 1
+    fi
+    ;;
+  probe-hijack)
+    # Same pre-flight probe for the hijack mode's NFQUEUE+injection path.
+    if command -v modern_probe_hijack >/dev/null 2>&1; then
+      modern_probe_hijack
     else
       echo "modern DNS controller unavailable" >&2
       exit 1

@@ -142,3 +142,19 @@ func packetTuple(packet []byte) (flowTuple, bool) {
 	t.destination = netip.AddrPortFrom(destination, destinationPort)
 	return t, true
 }
+
+// udpQueryPayload returns the flow tuple and the DNS payload of a UDP/53
+// packet after the same sanity checks as packetTuple.
+func udpQueryPayload(packet []byte) (flowTuple, []byte, bool) {
+	tuple, ok := packetTuple(packet)
+	if !ok || tuple.protocol != 17 {
+		return flowTuple{}, nil, false
+	}
+	var offset, end int
+	if packet[0]>>4 == 4 {
+		offset, end = int(packet[0]&15)*4, int(binary.BigEndian.Uint16(packet[2:4]))
+	} else {
+		offset, end = 40, 40+int(binary.BigEndian.Uint16(packet[4:6]))
+	}
+	return tuple, packet[offset+8 : end], true
+}

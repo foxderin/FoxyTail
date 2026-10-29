@@ -110,7 +110,7 @@ _conf_value_error() {
     TS_MODE:bridge | TS_MODE:tun | TS_MODE:proxy | ROUTE_SCOPE:all | ROUTE_SCOPE:selected | ROUTE_SCOPE:bypass) return 0 ;;
     MAGIC_DNS:on | MAGIC_DNS:off | IPV6:on | IPV6:off | WATCHDOG:on | WATCHDOG:off) return 0 ;;
     POWER_SAVE:on | POWER_SAVE:off | STATS:on | STATS:off | CONTEXT:on | CONTEXT:off | WATCHDOG_PROBE:on | WATCHDOG_PROBE:off | WEBUI_AUTO_REFRESH:on | WEBUI_AUTO_REFRESH:off) return 0 ;;
-    DNS_MODE:legacy | DNS_MODE:local | DNS_MODE:transparent) return 0 ;;
+    DNS_MODE:legacy | DNS_MODE:local | DNS_MODE:hijack | DNS_MODE:transparent) return 0 ;;
     FWMARK:0x40000000 | FWMARK_MASK:0x40000000 | FWMARK:0xF7 | FWMARK:0xf7) return 0 ;;
   esac
   case "$1" in

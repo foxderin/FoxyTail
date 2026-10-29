@@ -242,6 +242,8 @@ cmd_dns() {
       capabilityError:.capabilityError,
       transparentAvailable:(if .transparentAvailable == null then null else .transparentAvailable end),
       transparentUnavailableReason:(if .transparentUnavailableReason == null then null else .transparentUnavailableReason end),
+      hijackAvailable:(if .hijackAvailable == null then null else .hijackAvailable end),
+      hijackUnavailableReason:(if .hijackUnavailableReason == null then null else .hijackUnavailableReason end),
       enabled:(.enabled // false),reason:(.reason // ""),binary:(.binary // null),
       upstreamNative:(.upstreamNative // false),
       ipv6DnsInterception:(.ipv6DnsInterception // null),
@@ -253,23 +255,39 @@ cmd_dns() {
   fi
 }
 
-# Force a fresh transparent-mode capability probe. Unlike the dns status
-# passthrough, this runs the kernel probe even when MagicDNS has never been
-# started, so the settings page can decide whether to grey out the
-# transparent choice. The result is cached in foxydns.capabilities.json;
-# callers should re-read dns status afterwards for the reflected state.
+# Force fresh capability probes for both interception modes. Unlike the dns
+# status passthrough, this runs the kernel probes even when MagicDNS has
+# never been started, so the settings page can grey out choices. Results are
+# cached in foxydns.*-capabilities.json; callers should re-read dns status
+# afterwards for the reflected state.
 cmd_dns_probe() {
   [ -x "${TS_SCRIPTS_DIR}/foxytail.dns" ] || jerr 'DNS controller not found'
   _cdp_out=$(_op_exec 20 "${TS_SCRIPTS_DIR}/foxytail.dns" probe-transparent 2>&1)
   _cdp_rc=$?
   _op_cancelled && jerr 'DNS probe cancelled'
   if [ "${_cdp_rc}" = 0 ]; then
-    jqr -n -c '{ok:true,transparentAvailable:true}'
+    _cdp_ta=true; _cdp_ta_reason=null
   else
-    _cdp_reason=$(jqr -r '.error // empty' "${TS_RUN_DIR}/foxydns.capabilities.json" 2>/dev/null)
-    [ -n "${_cdp_reason}" ] || _cdp_reason="${_cdp_out:-probe failed}"
-    jqr -n -c --arg r "${_cdp_reason}" '{ok:true,transparentAvailable:false,transparentUnavailableReason:$r}'
+    _cdp_ta=false
+    _cdp_ta_reason=$(jqr -r '.error // empty' "${TS_RUN_DIR}/foxydns.capabilities.json" 2>/dev/null)
+    [ -n "${_cdp_ta_reason}" ] || _cdp_ta_reason="${_cdp_out:-probe failed}"
+    _cdp_ta_reason=$(jqr -n -r --arg r "${_cdp_ta_reason}" '$r')
   fi
+  _cdp_out=$(_op_exec 20 "${TS_SCRIPTS_DIR}/foxytail.dns" probe-hijack 2>&1)
+  _cdp_rc=$?
+  _op_cancelled && jerr 'DNS probe cancelled'
+  if [ "${_cdp_rc}" = 0 ]; then
+    _cdp_ha=true; _cdp_ha_reason=null
+  else
+    _cdp_ha=false
+    _cdp_ha_reason=$(jqr -r '.error // empty' "${TS_RUN_DIR}/foxydns.hijack-capabilities.json" 2>/dev/null)
+    [ -n "${_cdp_ha_reason}" ] || _cdp_ha_reason="${_cdp_out:-probe failed}"
+    _cdp_ha_reason=$(jqr -n -r --arg r "${_cdp_ha_reason}" '$r')
+  fi
+  jqr -n -c --argjson ta "${_cdp_ta}" --argjson tr "${_cdp_ta_reason}" \
+    --argjson ha "${_cdp_ha}" --argjson hr "${_cdp_ha_reason}" \
+    '{ok:true,transparentAvailable:$ta,transparentUnavailableReason:$tr,
+      hijackAvailable:$ha,hijackUnavailableReason:$hr}'
 }
 
 # --- serve / funnel -----------------------------------------------------------

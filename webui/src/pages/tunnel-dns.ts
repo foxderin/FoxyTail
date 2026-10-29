@@ -5,7 +5,7 @@ import { t, type I18nKey } from '../i18n';
 import type { StatusTone } from '../components/Basics';
 
 export interface DnsInfo extends ApiResult {
-  mode?: 'legacy' | 'local' | 'transparent';
+  mode?: 'legacy' | 'local' | 'hijack' | 'transparent';
   enabled?: boolean;
   state?: string;
   reason?: string;
@@ -37,6 +37,7 @@ export const DNS_REASONS: Record<string, I18nKey> = {
   'ipv6-unavailable': 'tools_dns_ipv6_unavailable',
   local: 'tools_dns_local_ready',
   'transparent-unavailable': 'tools_dns_local_only',
+  'hijack-unavailable': 'tools_dns_local_only',
   'native-policy-unavailable': 'tools_dns_native_policy_unavailable',
   'native-policy-changed': 'tools_dns_native_policy_changed',
   'restore-pending': 'tools_dns_restore_pending',
@@ -54,13 +55,14 @@ export const DNS_REASONS: Record<string, I18nKey> = {
   degraded: 'dns_degraded',
 };
 
-export const modernDns = (info: DnsInfo) => info.mode === 'local' || info.mode === 'transparent';
+export const modernDns = (info: DnsInfo) =>
+  info.mode === 'local' || info.mode === 'transparent' || info.mode === 'hijack';
 export const modernDnsReady = (info: DnsInfo) =>
   info.listenerReady === true && info.state === 'running' && info.repairNeeded === false &&
   info.policyState === 'owned' && info.enabled !== false &&
   (info.mode === 'local' ? info.reason === 'local' : ['running', 'ipv6-unavailable'].includes(info.reason || ''));
-export const transparentDnsReady = (info: DnsInfo) =>
-  modernDnsReady(info) && info.mode === 'transparent' && info.interception4 === true;
+export const interceptDnsReady = (info: DnsInfo) =>
+  modernDnsReady(info) && info.mode !== 'local' && info.interception4 === true;
 
 export function dnsEndpoint(info: DnsInfo): string | null {
   const port = info.port;
@@ -71,7 +73,7 @@ export function dnsEndpoint(info: DnsInfo): string | null {
 export function dnsStatusTone(info: DnsInfo): StatusTone {
   if (modernDns(info)) {
     if (info.state === 'stopped' && info.enabled === false) return 'neutral';
-    return (info.mode === 'local' && modernDnsReady(info)) || transparentDnsReady(info)
+    return (info.mode === 'local' && modernDnsReady(info)) || interceptDnsReady(info)
       ? 'success' : 'warning';
   }
   return (info.reason === 'ipv6-unavailable' && info.ipv6DnsInterception !== 'fallback') || info.state === 'degraded'
@@ -105,13 +107,19 @@ export function dnsStatusLabel(info: DnsInfo): string {
   if (modernDns(info)) {
     const reason = info.reason;
     if (reason === 'missing-binary') return t('tools_dns_helper_missing');
-    if (reason && !['running', 'local', 'transparent-unavailable', 'ipv6-unavailable'].includes(reason)) {
+    if (reason && !['running', 'local', 'transparent-unavailable', 'hijack-unavailable', 'ipv6-unavailable'].includes(reason)) {
       return DNS_REASONS[reason] ? t(DNS_REASONS[reason]) : t('dns_degraded');
     }
     if (info.listenerReady !== true) return t('tools_dns_listener_unready');
     if (info.mode === 'local') return t(modernDnsReady(info) ? 'tools_dns_local_ready' : 'dns_degraded');
-    if (transparentDnsReady(info)) {
+    if (interceptDnsReady(info)) {
+      if (info.mode === 'hijack') {
+        return t(info.interception6 === true ? 'tools_dns_hijack_ready' : 'tools_dns_hijack_ipv4');
+      }
       return t(info.interception6 === true ? 'tools_dns_transparent_ready' : 'tools_dns_transparent_ipv4');
+    }
+    if (info.mode === 'hijack') {
+      return t(reason === 'hijack-unavailable' ? 'tools_dns_local_only' : 'tools_dns_hijack_inactive');
     }
     return t(reason === 'transparent-unavailable' ? 'tools_dns_local_only' : 'tools_dns_transparent_inactive');
   }

@@ -19,6 +19,7 @@ export const NETWORK: Field[] = [
     key: 'DNS_MODE', label: 'tools_dns_mode', defaultValue: 'legacy', choices: [
       { value: 'legacy', label: 'tools_dns_mode_legacy', hint: 'tools_dns_mode_legacy_hint' },
       { value: 'local', label: 'tools_dns_mode_local', hint: 'tools_dns_mode_local_hint' },
+      { value: 'hijack', label: 'tools_dns_mode_hijack', hint: 'tools_dns_mode_hijack_hint' },
       { value: 'transparent', label: 'tools_dns_mode_transparent_option', hint: 'tools_dns_mode_transparent_hint' },
     ],
   },
