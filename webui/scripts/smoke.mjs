@@ -98,12 +98,18 @@ await scenario('settings drafts survive navigation and conflicts require consent
   await nav('peers'); await nav('settings');
   assert(row()?.querySelector('input')?.value === '1100', 'unsaved settings draft is restored');
   fixture.settings.SOCKS_PORT = '1200';
-  click(button('save', row())); await confirm(false);
+  click(button('set_apply_all')); await flush();
+  await confirm(true); // review dialog accepts the batch
+  await confirm(false); // declined conflict review aborts the batch
   assert(fixture.log.filter(r => r.action === 'control.mutate').length === before, 'rejecting refreshed conflict does not write');
   assert(row()?.querySelector('input')?.value === '1100', 'rejected conflict preserves user draft');
-  click(button('save', row())); await confirm(true);
+  click(button('set_apply_all')); await flush();
+  await confirm(true); // review dialog accepts the batch
+  await confirm(true); // confirmed conflict review overwrites
   assert(fixture.settings.SOCKS_PORT === '1100', 'explicit confirmed save writes chosen value');
+  assert(fixture.log.some(r => r.action === 'control.mutate' && r.args.command === 'trial-start'), 'safe apply starts a rollback-protected trial instead of a plain restart');
   assert(!fixture.log.some(r => r.action === 'control.mutate' && r.args.command === 'control'), 'saving configuration never silently applies it');
+  fixture.data['trial-status'].trial = null;
   const raw = '# Unrecognized lines are user data\nssid:家:up\nfuture:format:keep\n';
   await app.native.requestNative('app.drafts', { key: 'context', value: { rules: raw, baseline: fixture.data['context-get'].rules, textMode: true } });
   await nav('peers'); await nav('settings');

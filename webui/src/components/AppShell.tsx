@@ -3,14 +3,15 @@ import { createEffect, createSignal, For, on, onCleanup, onMount, Show, type Acc
 import { Dynamic } from 'solid-js/web';
 import { hasRoot } from '../api';
 import { RouteVisible } from '../schedule';
-import { t, type I18nKey } from '../i18n';
+import { t, tf, type I18nKey } from '../i18n';
 import { MdIcon, type IconName } from '../icons';
 import { startStatusPolling } from '../state';
 import { listTasks, type Task } from '../tasks';
 import { NAV_GROUPS, PRIMARY_NAV, parentRoute, primaryRoute } from '../navigation';
+import { settingsDraftCount, restartRequired, setSettingsDrafts, setApplyRequested } from '../pending';
 import { PageHeader } from './Basics';
 import { ToastRoot } from './Toast';
-import { ConfirmHost } from './ConfirmDialog';
+import { ConfirmHost, confirmDialog } from './ConfirmDialog';
 import { NativeIssueActions, ServiceActions } from './ServiceControls';
 import { connectionChip, connectionCopy, nativeIssue, serviceBusy, serviceModeLabel, serviceOperationRunning } from '../service';
 import { CircularProgress, IconButton } from './ui';
@@ -235,8 +236,46 @@ export function AppShell(props: {
           )}
         </For>
       </nav>
+      <PendingBar route={props.route} />
       <ToastRoot />
       <ConfirmHost />
     </>
+  );
+}
+
+/* Staged settings edits surface on every page; applying still happens inside
+ * the settings page's review dialog. */
+function PendingBar(props: { route: () => string }): JSX.Element {
+  const count = settingsDraftCount;
+  async function discardAll() {
+    if (await confirmDialog({
+      title: t('set_discard_all'),
+      body: t('set_discard_all_confirm'),
+      confirmLabel: t('set_discard_all'),
+      tone: 'danger',
+    })) setSettingsDrafts({});
+  }
+  return (
+    <Show when={(count() > 0 || restartRequired()) && props.route() !== 'settings'}>
+      <div class="pending-bar" role="status">
+        <MdIcon name="sync" size={18} />
+        <span class="pending-bar-text">
+          {count() > 0 ? tf('pending_changes', { count: count() }) : t('tools_saved_pending')}
+        </span>
+        <a class="pending-bar-link" href="#/settings">{t('pending_view')}</a>
+        <Show when={count() > 0}>
+          <button type="button" class="pending-bar-btn" onClick={() => void discardAll()}>
+            {t('set_discard_all')}
+          </button>
+          <button
+            type="button"
+            class="pending-bar-btn primary"
+            onClick={() => { setApplyRequested(true); location.hash = '#/settings'; }}
+          >
+            {t('set_apply_all')}
+          </button>
+        </Show>
+      </div>
+    </Show>
   );
 }

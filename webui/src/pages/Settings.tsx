@@ -1,8 +1,9 @@
 /* Settings separate appearance, runtime configuration and recovery operations. */
 import { createEffect, createSignal, For, on, onCleanup, onMount, Show, type JSX } from 'solid-js';
 import { createApiScope, hasRoot, nativeControl } from '../api';
-import { t, languageMode, setLang, type Lang } from '../i18n';
+import { t, tf, languageMode, setLang, type Lang } from '../i18n';
 import { NETWORK, BACKGROUND, bindNativeDraft, type Field } from '../settings';
+import { settingsDrafts, setSettingsDrafts, restartRequired, setRestartRequired, applyRequested, setApplyRequested } from '../pending';
 import SettingsMaintenance from './SettingsMaintenance';
 import SettingsTrial from './SettingsTrial';
 import { refreshStatus, status } from '../state';
@@ -14,7 +15,7 @@ import { Card, SkeletonRows, ErrorState, StatusBadge } from '../components/Basic
 import { showToast, toastApiError } from '../components/Toast';
 import { confirmDialog } from '../components/ConfirmDialog';
 import { MdIcon } from '../icons';
-import { Button, Select, Switch, TextField } from '../components/ui';
+import { Button, Checkbox, Dialog, Select, Switch, TextField } from '../components/ui';
 import './tools.css';
 import { pollWhileVisible } from '../schedule';
 import { viewPollInterval } from '../state';
@@ -25,7 +26,8 @@ export default function Settings(): JSX.Element {
   let settingsLoad = 0;
   onCleanup(() => { disposed = true; });
   const [settings, setSettings] = createSignal<Record<string, string> | null>(null);
-  const [drafts, setDrafts] = createSignal<Record<string, { baseline: string; value: string }>>({});
+  const drafts = settingsDrafts;
+  const setDrafts = setSettingsDrafts;
   const draftReady = bindNativeDraft('settings', () => ({ drafts: drafts() }), value => {
     if (value.drafts && typeof value.drafts === 'object' && !Array.isArray(value.drafts)) {
       const valid = Object.entries(value.drafts).filter(([key, item]) =>
@@ -35,7 +37,10 @@ export default function Settings(): JSX.Element {
     }
   });
   const [settingsError, setSettingsError] = createSignal<string | null>(null);
-  const [restartRequired, setRestartRequired] = createSignal(false);
+  const [reviewOpen, setReviewOpen] = createSignal(false);
+  const [safeApply, setSafeApply] = createSignal(true);
+  /* The trial card exposes a confirmed-start entry for the review flow. */
+  let trialStart: ((candidate: string, duration: string) => Promise<void>) | null = null;
   const [trialActive, setTrialActive] = createSignal(true);
   // `null` = never probed; `false` = kernel lacks the interception path; `true`
   // = cached probe confirms the kernel can run that split-DNS mode.
@@ -103,40 +108,78 @@ export default function Settings(): JSX.Element {
       setHijackReason(typeof probe.hijackUnavailableReason === 'string' ? probe.hijackUnavailableReason : null);
     }
   }
+  const allFields = () => [...NETWORK, ...BACKGROUND];
+  const draftEntries = () =>
+    Object.entries(drafts())
+      .map(([key, draft]) => ({ field: allFields().find(field => field.key === key), key, ...draft }))
+      .filter(entry => entry.field);
   function changeKey(field: Field, value: string) {
     if (locked()) return;
     setDrafts(old => ({ ...old, [field.key]: { baseline: old[field.key]?.baseline ?? settings()?.[field.key] ?? field.defaultValue ?? '', value } }));
   }
-  async function saveKey(field: Field) {
-    const draft = drafts()[field.key];
-    if (locked() || !draft) return;
-    const value = draft.value.trim();
-    if (field.choices && !field.choices.some(choice => choice.value === value && !choice.disabled)) return;
-    if (field.range && (!/^\d+$/.test(value) || Number(value) < field.range[0] || Number(value) > field.range[1])) {
-      showToast(t('tools_invalid_number') + ` ${field.range[0]}–${field.range[1]}`, 'err');
-      return;
-    }
-    if (field.key === 'DNS_MODE' &&
-        ((value === 'transparent' && transparentAvailable() === false) ||
-         (value === 'hijack' && hijackAvailable() === false))) return;
-    const fresh = await loadSettings();
-    if (fresh === undefined || locked() || drafts()[field.key] !== draft) return;
-    const conflict = draft.baseline !== settings()?.[field.key];
-    if (conflict && !await confirmDialog({ title: t('confirm_conflict_title'), body: t('tools_draft_conflict'), confirmLabel: t('confirm_overwrite') })) return;
-    if (locked() || drafts()[field.key] !== draft) return;
-    settingsLoad++;
-    const res = await startTask('settings-save', 'settings-set', field.key, value).promise;
-    if (disposed) return;
-    if (res.ok) {
-      setSettings(old => ({ ...old, [field.key]: value }));
-      setDrafts(old => { const next = { ...old }; if (next[field.key] === draft) delete next[field.key]; return next; });
-      if (res.applied !== true) setRestartRequired(true);
-    } else if (!res.cancelled) toastApiError(t('op_failed'), res);
-    void loadSettings();
+  function discardKey(key: string) {
+    setDrafts(old => { const next = { ...old }; delete next[key]; return next; });
   }
-  async function applySavedSettings() {
+  async function discardAll() {
+    if (!await confirmDialog({ title: t('set_discard_all'), body: t('set_discard_all_confirm'), confirmLabel: t('set_discard_all'), tone: 'danger' })) return;
+    setDrafts({});
+  }
+  /* Every staged draft is validated and written once; conflict review happens
+   * once per batch, not once per key. */
+  async function applyAll() {
+    if (locked()) return;
+    const staged = draftEntries();
+    if (!staged.length) { setReviewOpen(false); return; }
+    for (const entry of staged) {
+      const field = entry.field!;
+      const value = entry.value.trim();
+      if (field.choices && !field.choices.some(choice => choice.value === value && !choice.disabled)) return;
+      if (field.range && (!/^\d+$/.test(value) || Number(value) < field.range[0] || Number(value) > field.range[1])) {
+        showToast(t(field.label) + ': ' + t('tools_invalid_number') + ` ${field.range[0]}–${field.range[1]}`, 'err');
+        return;
+      }
+      if (field.key === 'DNS_MODE' &&
+          ((value === 'transparent' && transparentAvailable() === false) ||
+           (value === 'hijack' && hijackAvailable() === false))) return;
+    }
+    const safe = safeApply();
+    setReviewOpen(false);
+    const fresh = await loadSettings();
+    if (fresh === undefined || locked()) return;
+    const stagedKeys = new Set(staged.map(entry => entry.key));
+    const conflicts = draftEntries().filter(entry => stagedKeys.has(entry.key) && entry.baseline !== settings()?.[entry.key]);
+    if (conflicts.length && !await confirmDialog({
+      title: t('confirm_conflict_title'),
+      body: t('tools_draft_conflict') + '\n\n' + conflicts.map(entry => t(entry.field!.label)).join('\n'),
+      confirmLabel: t('confirm_overwrite'),
+    })) return;
+    if (locked()) return;
+    settingsLoad++;
+    let failed = false;
+    for (const entry of draftEntries()) {
+      if (!stagedKeys.has(entry.key)) continue;
+      const res = await startTask('settings-save', 'settings-set', entry.key, entry.value.trim()).promise;
+      if (disposed) return;
+      if (!res.ok) {
+        if (!res.cancelled) toastApiError(t('op_failed'), res);
+        failed = true;
+        break;
+      }
+      setSettings(old => ({ ...old, [entry.key]: entry.value.trim() }));
+      discardKey(entry.key);
+      if (res.applied !== true) setRestartRequired(true);
+    }
+    void loadSettings();
+    if (failed || disposed || !restartRequired()) return;
+    if (safe && trialStart) {
+      await trialStart('saved', '120');
+    } else if (!safe) {
+      await applySavedSettings(true);
+    }
+  }
+  async function applySavedSettings(confirmed = false) {
     if (locked() || trialActive()) return;
-    if (!await confirmDialog({ title: t('confirm_apply_title'), body: t('tools_network_warning'), confirmLabel: t('tools_restart') })) return;
+    if (!confirmed && !await confirmDialog({ title: t('confirm_apply_title'), body: t('tools_network_warning'), confirmLabel: t('tools_restart') })) return;
     const trialState = await scope.api('trial-status');
     const trial = trialState.trial as { status?: string } | null | undefined;
     if (!trialState.ok || trial === undefined || (trial !== null && !['confirmed', 'rolled-back', 'superseded'].includes(trial.status ?? ''))) {
@@ -163,6 +206,15 @@ export default function Settings(): JSX.Element {
     results => { if (results.some(result => result != null)) void loadSettings(); },
     { defer: true },
   ));
+  /* The shell bar routes apply intents here; the review dialog is the single
+   * confirmation for the whole batch. The flag survives remounts. */
+  createEffect(() => {
+    if (applyRequested() && draftEntries().length && !locked() && !reviewOpen()) {
+      setApplyRequested(false);
+      setSafeApply(true);
+      setReviewOpen(true);
+    }
+  });
   onMount(() => {
     void loadTransparentCapability();
   });
@@ -214,11 +266,7 @@ export default function Settings(): JSX.Element {
           <Show when={changed()}>
             <p role="status">{t(drafts()[field.key]?.baseline !== settings()?.[field.key] ? 'tools_draft_conflict' : 'tools_draft_changed')}</p>
             <div class="tool-actions">
-              <Button disabled={locked()} onClick={() => void saveKey(field)}>{t('save')}</Button>
-              <Button variant="text" disabled={locked()} onClick={async () => {
-                if (!await confirmDialog({ title: t('confirm_discard_title'), body: t('tools_discard_confirm'), confirmLabel: t('tools_discard'), tone: 'danger' })) return;
-                if (await loadSettings() !== undefined) setDrafts(old => { const next = { ...old }; delete next[field.key]; return next; });
-              }}>{t('tools_discard')}</Button>
+              <Button variant="text" disabled={locked()} onClick={() => discardKey(field.key)}>{t('tools_discard')}</Button>
             </div>
           </Show>
         </div>
@@ -367,9 +415,26 @@ export default function Settings(): JSX.Element {
           <Card title={t('tools_background')} icon="sync">
             <For each={BACKGROUND}>{fieldRow}</For>
           </Card>
+          <Show when={draftEntries().length}>
+            <div class="tool-pending" role="status">
+              <div class="toolbar">
+                <MdIcon name="pending" size={20} />
+                <strong>{tf('pending_changes', { count: draftEntries().length })}</strong>
+              </div>
+              <div class="tool-actions">
+                <Button variant="text" disabled={locked()} onClick={() => void discardAll()}>
+                  {t('set_discard_all')}
+                </Button>
+                <Button disabled={locked()} onClick={() => { setSafeApply(true); setReviewOpen(true); }}>
+                  {t('set_apply_all')}
+                </Button>
+              </div>
+            </div>
+          </Show>
         </Show>
       </Show>
-      <SettingsTrial locked={locked()} onActive={setTrialActive} onUpdate={loadSettings} />
+      <SettingsTrial locked={locked()} onActive={setTrialActive} onUpdate={loadSettings}
+        expose={api => { trialStart = api.start; }} />
       <SettingsMaintenance locked={locked()} onPending={() => setRestartRequired(true)}>
         <Show when={settings()}>
           <div class="tool-setting">
@@ -386,6 +451,42 @@ export default function Settings(): JSX.Element {
           </div>
         </Show>
       </SettingsMaintenance>
+      <Dialog
+        open={reviewOpen()}
+        headline={t('set_review_title')}
+        onClose={() => setReviewOpen(false)}
+        actions={<>
+          <Button variant="text" data-dialog-action="cancel" onClick={() => setReviewOpen(false)}>
+            {t('cancel')}
+          </Button>
+          <Button data-dialog-action="confirm" onClick={() => void applyAll()}>
+            {t('set_apply_all')}
+          </Button>
+        </>}
+      >
+        <div class="pending-review-list">
+          <For each={draftEntries()}>
+            {(entry) => (
+              <div class="pending-review-row">
+                <strong>{t(entry.field!.label)}</strong>
+                <span class="pending-review-change">
+                  <code>{entry.baseline || '—'}</code> → <code>{entry.value}</code>
+                </span>
+                <Show when={entry.baseline !== settings()?.[entry.key]}>
+                  <span class="tool-hint">{t('tools_draft_conflict')}</span>
+                </Show>
+              </div>
+            )}
+          </For>
+        </div>
+        <label class="pending-review-safe">
+          <Checkbox
+            checked={safeApply()}
+            onChange={(event) => setSafeApply((event.target as HTMLInputElement).checked)}
+          />
+          <span>{t('set_safe_apply')}</span>
+        </label>
+      </Dialog>
     </div>
   );
 }

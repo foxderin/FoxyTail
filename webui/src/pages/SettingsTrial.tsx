@@ -37,6 +37,7 @@ function validTrial(value: unknown): value is Trial | null {
 
 export default function SettingsTrial(props: {
   locked: boolean; onActive: (active: boolean) => void; onUpdate: () => Promise<unknown>;
+  expose?: (api: { start: (candidate: string, duration: string) => Promise<void> }) => void;
 }): JSX.Element {
   const scope = createApiScope();
   const [trial, setTrial] = createSignal<Trial | null>(null);
@@ -82,10 +83,10 @@ export default function SettingsTrial(props: {
       void refreshStatus({ afterCurrent: true });
     }
   }
-  async function action(command: string) {
+  async function action(command: string, opts?: { confirmed?: boolean; candidate?: string; duration?: string }) {
     if (busy() || props.locked || !known()) return;
     if (command === 'trial-confirm' && (trial()?.status !== 'running' || (trial()?.remaining ?? 0) - (performance.now() - receivedAt()) / 1000 <= 0)) return;
-    if (!await confirmDialog({ title: t('confirm_apply_title'), body: t('tools_network_warning'), confirmLabel: t(command === 'trial-start' ? 'trial_start' : command === 'trial-confirm' ? 'trial_confirm' : 'trial_revert') })) return;
+    if (!opts?.confirmed && !await confirmDialog({ title: t('confirm_apply_title'), body: t('tools_network_warning'), confirmLabel: t(command === 'trial-start' ? 'trial_start' : command === 'trial-confirm' ? 'trial_confirm' : 'trial_revert') })) return;
     if (busy() || props.locked || !known()) return;
     if (command === 'trial-confirm' && (trial()?.remaining ?? 0) - (performance.now() - receivedAt()) / 1000 <= 0) return;
     revision++;
@@ -93,7 +94,7 @@ export default function SettingsTrial(props: {
     props.onActive(true);
     setBusy(true);
     const res = command === 'trial-start'
-      ? await scope.api(command, duration(), mode())
+      ? await scope.api(command, opts?.duration ?? duration(), opts?.candidate ?? mode())
       : await scope.api(command, trial()?.id ?? '');
     setBusy(false);
     if (!res.ok && !res.cancelled) toastApiError(t('op_failed'), res);
@@ -101,6 +102,9 @@ export default function SettingsTrial(props: {
     await props.onUpdate();
     void refreshStatus({ afterCurrent: true });
   }
+  props.expose?.({
+    start: async (candidate, duration) => action('trial-start', { confirmed: true, candidate, duration }),
+  });
   pollWhileVisible(() => draftReady.then(() => busy() ? undefined : load()), () =>
     (!known() && !error()) || (active() && trial()?.status !== 'rollback-failed') ? TRIAL_POLL_MS : false);
   pollWhileVisible(() => setNow(performance.now()), () => trial()?.status === 'running' ? TRIAL_COUNTDOWN_MS : false);
