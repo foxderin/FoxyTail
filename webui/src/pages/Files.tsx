@@ -23,7 +23,6 @@ export default function Files(): JSX.Element {
   const [files, setFiles] = createSignal<InboxFile[] | null>(null);
   const [loadError, setLoadError] = createSignal('');
   const [loading, setLoading] = createSignal(false);
-  const [ignored, setIgnored] = createSignal(0);
   const [selectMode, setSelectMode] = createSignal(false);
   const [working, setWorking] = createSignal(false);
   const [notice, setNotice] = createSignal('');
@@ -55,7 +54,7 @@ export default function Files(): JSX.Element {
       setLoadError(result.error || t('files_invalid_response')); return;
     }
     const loaded = result.files as InboxFile[];
-    setFiles(loaded); setIgnored(Number(result.ignored ?? 0)); setLoadError('');
+    setFiles(loaded); setLoadError('');
     const retained = selected().filter(name => loaded.some(file => file.name === name));
     if (retained.length !== selected().length) updateFileView({selected: retained});
   }
@@ -173,7 +172,6 @@ export default function Files(): JSX.Element {
       </>}>
       <Show when={loadError()}><ErrorState text={loadError()} onRetry={() => void loadInbox()} /></Show>
       <Show when={files() !== null} fallback={<Show when={!loadError()}><SkeletonRows rows={3} /></Show>}>
-        <Show when={ignored() > 0}><p class="tool-hint">{fileText('ft_ignored', {count: ignored()})}</p></Show>
         <div class="files-toolbar">
           <TextField label={t('tools_file_search')} value={fileView().filter} onInput={event => { updateFileView({filter: (event.target as HTMLInputElement).value}); setPage(0); }} leading-icon={<MdIcon name="search" size={18} />} />
           <details class="menu-pop"><summary aria-label={t('ft_sort')} title={t('ft_sort')}><MdIcon name="sort" size={20} /></summary><div role="group" aria-label={t('ft_sort')}>

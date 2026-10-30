@@ -23,8 +23,7 @@ button.list-row:focus-visible { outline: 2px solid var(--ft-accent); outline-off
 .files-selection-bar { border-radius: 12px; background: var(--ft-panel-inset); padding: 4px 8px; }
 .files-selection-bar > .tool-hint { flex: 1; }
 .files-card-summary { font-size: 12px; color: var(--ft-muted); }
-/* Send flow: numbered steps, peer option blocks, single add-file menu. */
-.files-step { font-size: 12px; font-weight: 600; color: var(--ft-muted); margin: 14px 0 8px; }
+/* Send flow: peer option blocks, single add-file menu. */
 .files-peer-options { display: grid; gap: 8px; max-height: 268px; overflow: auto; overscroll-behavior: contain; }
 .files-selection-list { max-height: 300px; overflow: auto; overscroll-behavior: contain; }
 .files-peer-option { display: flex; align-items: center; gap: 12px; padding: 12px 14px; border: 1px solid var(--md-sys-color-outline-variant); border-radius: 12px; cursor: pointer; transition: border-color 140ms ease, background-color 140ms ease; }

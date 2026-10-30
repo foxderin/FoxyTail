@@ -1,6 +1,6 @@
 export const filesZh = {
   ft_open: '打开', ft_share: '分享', ft_pick: '选择文件', ft_sort: '排序',
-  ft_save_as: '另存为', ft_pending_empty: '未选择文件',
+  ft_save_as: '另存为',
   ft_newest: '最新优先', ft_oldest: '最早优先', ft_name: '名称', ft_size: '大小',
   ft_matches: '选择筛选结果', ft_deselect: '取消选择', ft_clear_selection: '清空待发列表',
   ft_selection_limit: '最多选择 32 个文件。', ft_file_limit: '每个文件上限 2 GiB。',
@@ -21,12 +21,11 @@ export const filesZh = {
   ft_details: '传输详情', ft_saved: '已保存', ft_previous: '上一页', ft_next: '下一页',
   ft_page: '第 {page} / {total} 页', ft_shared: '共享存储', ft_size_unknown: '大小未知',
   files_add: '添加文件', ft_pick_system: '系统选择器', ft_pick_shared: '共享存储',
-  files_step_peer: '第 1 步 · 选择设备', files_step_files: '第 2 步 · 添加文件', files_step_send: '第 3 步 · 发送',
-} as const;
+ } as const;
 
 export const filesEn: Record<keyof typeof filesZh, string> = {
   ft_open: 'Open', ft_share: 'Share', ft_pick: 'Choose files', ft_sort: 'Sort',
-  ft_save_as: 'Save as', ft_pending_empty: 'No files selected',
+  ft_save_as: 'Save as',
   ft_newest: 'Newest first', ft_oldest: 'Oldest first', ft_name: 'Name', ft_size: 'Size',
   ft_matches: 'Select matches', ft_deselect: 'Deselect', ft_clear_selection: 'Clear pending files',
   ft_selection_limit: 'Select up to 32 files.', ft_file_limit: 'Each file must be at most 2 GiB.',
@@ -47,5 +46,4 @@ export const filesEn: Record<keyof typeof filesZh, string> = {
   ft_details: 'Transfer details', ft_saved: 'Saved', ft_previous: 'Previous page', ft_next: 'Next page',
   ft_page: 'Page {page} / {total}', ft_shared: 'Shared storage', ft_size_unknown: 'Unknown size',
   files_add: 'Add files', ft_pick_system: 'System picker', ft_pick_shared: 'Shared storage',
-  files_step_peer: 'Step 1 · Choose device', files_step_files: 'Step 2 · Add files', files_step_send: 'Step 3 · Send',
-};
+ };
