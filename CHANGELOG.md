@@ -1,10 +1,15 @@
 # Changelog
 
-## 未发布
+## v1.11.0 — 2026-10-30 — 文件直存
 
 - 文件机制改为直存：`files-inbox`/`file-read`/`file-delete`/`file-clear` 直接操作 `/sdcard/Download/Taildrop`，接收文件落盘即在列表中，不再经过私有收件箱与"导入/导出"步骤；WebUI 移除导入、导出、另存为与批量导出入口，收件卡片更名为"已接收"并 5 秒轮询自动刷新（遵循全局自动刷新开关）；Android 移除 `files.import`（TransferService IMPORT）与 `files.save`。
-- foxyfiles `inbox-list`/`inbox-read` 改为直接以 Taildrop 目录为根（`/sdcard` 前缀逐级校验，拒绝符号链接），过滤传输中的 `*.partial`/`*.deleted`；`file-clear` 同样跳过传输中文件。
+- foxyfiles `inbox-list`/`inbox-read` 改为直接以 Taildrop 目录为根（`/sdcard` 前缀逐级校验，拒绝符号链接），过滤传输中的 `*.partial`/`*.deleted`；`file-clear` 同样跳过传输中文件；`receive` 导入机制与 direct-mode 记录簿记整体移除。
 - 安全性不变：目录边界校验、符号链接拒绝、非普通文件跳过、名称校验（Unicode 格式字符）、删除/清空二次确认与取消语义保留；`file-export`/`file-export-many`/`file-receive` 命令自 WebAPI、operation 白名单与 WebBridge 校验中移除。
+- 全部下拉选择器（主题/语言/DNS/诊断/备份/场景等）统一为弹窗式菜单，触发器样式一致、当前项高亮，修复嵌套滚动容器中被裁切的问题——空间不足时向上弹出或脱离容器浮层定位。
+- 实心主操作按钮（生成诊断包、应用、保存、发送、服务控制等）统一右对齐；高级设置、Serve 添加、账户页、authkey 表单等遗漏位置补齐。
+- 首页连接卡拆出"本机"行（主机名、IP、运行时长、复制），卡片只保留状态与操作；出口节点行解析显示节点名称而非 ID；设备详情地址行改为同级 复制+测试 图标按钮，测试结果渲染为带延迟/路径/端点的面板。
+- 文件页发送卡的设备列表与已选文件列表限高内部滚动，不再撑开页面；步骤标签与引导说明行移除。
+- 验证：go test、shell `sh -n`、typecheck、834 组中英词条、主题 token、smoke 277 断言、生产构建全部通过。
 
 ## v1.10.0 — 2026-10-30 — WebUI 任务化重构
 
