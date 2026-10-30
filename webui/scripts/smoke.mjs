@@ -220,7 +220,7 @@ await scenario('snapshot sequence and displayed cancellation ownership', async (
     'older refresh snapshot cannot overwrite newer read-only completion with unchanged mutation revision');
   fixture.publishControl({ id: 'displayed-operation', busy: true, canWrite: false, canCancel: true });
   fixture.holdNext.add('control.cancel');
-  click(button('native_cancel_operation', window.document.querySelector('.root-banner')));
+  click(button('native_cancel_operation', window.document.querySelector('.conn-card')));
   const cancellation = fixture.held.find(r => r.key === 'control.cancel');
   fixture.publishControl({ id: 'replacement-operation', busy: true, canWrite: false, canCancel: true });
   assert(cancellation.request.args.id === 'displayed-operation' && cancellation.request.args.id !== fixture.control.id,
@@ -431,6 +431,27 @@ await scenario('dashboard states expose one status and a direct recovery action'
   await app.state.refreshStatus(); await flush();
   const titles = [...window.document.querySelectorAll('.page-transition:not([hidden]) h2')].filter(h => h.textContent.includes(app.t('hero_login_title')));
   assert(titles.length === 1, 'login state renders a single login status card');
+});
+
+await scenario('status sheet mirrors the connection card without top-bar controls', async ({ app, fixture, nav, window, button, click, confirm }) => {
+  await nav('dashboard');
+  assert(!window.document.querySelector('#app-header select, #app-header .service-controls'), 'service controls no longer occupy the top bar');
+  const chip = window.document.querySelector('.status-chip');
+  assert(!!chip, 'header exposes a compact status chip');
+  chip.click(); await flush();
+  const sheet = window.document.querySelector('[data-testid="status-sheet"]');
+  assert(sheet?.open && sheet.querySelector('.service-actions'), 'chip opens the shared service status sheet');
+  click(button('native_stop', sheet)); await confirm(true);
+  assert(fixture.log.some(r => r.action === 'control.mutate' && r.args.command === 'control' && r.args.arguments[0] === 'stop'), 'sheet stop confirms before mutating');
+  await app.state.refreshStatus({ afterCurrent: true }); await flush();
+  const start = button('dash_start_service', sheet);
+  assert(!!start && !start.disabled, 'stopped sheet offers the start action');
+  click(start); await flush();
+  assert(fixture.log.filter(r => r.action === 'control.mutate' && r.args.command === 'control').length === 2, 'sheet start runs through the shared store');
+  const modeRow = sheet.querySelector('.status-sheet-row');
+  assert(modeRow?.getAttribute('href') === '#/tunnel' && !window.document.querySelector('#app-header select'), 'run mode is reachable from the sheet, not the top bar');
+  await nav('tunnel');
+  assert(window.document.querySelector('[data-testid="mode-picker"]'), 'run mode picker lives on the tunnel page');
 });
 
 for (const state of ['empty', 'error', 'no-root', 'no-bridge', 'unknown']) {

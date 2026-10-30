@@ -59,6 +59,9 @@ import selectAll from '@material-symbols/svg-400/outlined/select_all.svg?raw';
 import deselect from '@material-symbols/svg-400/outlined/deselect.svg?raw';
 import save from '@material-symbols/svg-400/outlined/save.svg?raw';
 import uploadFile from '@material-symbols/svg-400/outlined/upload_file.svg?raw';
+import powerSettingsNew from '@material-symbols/svg-400/outlined/power_settings_new.svg?raw';
+import tune from '@material-symbols/svg-400/outlined/tune.svg?raw';
+import pending from '@material-symbols/svg-400/outlined/pending.svg?raw';
 
 import checkSvg from '@material-symbols/svg-400/outlined/check.svg?raw';
 import dashboardFilled from '@material-symbols/svg-400/outlined/dashboard-fill.svg?raw';
@@ -124,6 +127,9 @@ const ICONS = {
   deselect,
   save,
   upload_file: uploadFile,
+  power_settings_new: powerSettingsNew,
+  tune,
+  pending,
 } as const;
 
 export type IconName = keyof typeof ICONS;

@@ -33,6 +33,7 @@ import {
 import { createGuardedLoad } from './tools-refresh';
 import type { DerpRelay } from '../types';
 import Coexistence from './Coexistence';
+import { ModePicker } from '../components/ServiceControls';
 
 const TASK_KEY = 'derp-speedtest';
 
@@ -114,6 +115,10 @@ export default function Tunnel(): JSX.Element {
     );
   return (
     <div class="tools-page">
+      <Card title={t('mode_card_title')} icon="tune">
+        <p class="tool-hint">{t('mode_card_desc')}</p>
+        <ModePicker />
+      </Card>
       <div class="toolbar" data-testid="tunnel-actions">
         <TaskButton
           taskKey={TASK_KEY}

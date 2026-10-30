@@ -3,6 +3,7 @@ import { ROUTES } from '../src/main';
 import * as api from '../src/api';
 import * as native from '../src/native';
 import * as state from '../src/state';
+import * as service from '../src/service';
 import * as tasks from '../src/tasks';
 import * as files from '../src/files';
 import * as backup from '../src/backup';
@@ -17,5 +18,5 @@ import { setLang } from '../src/i18n';
 import { createRoot } from 'solid-js';
 import * as toolsRefresh from '../src/pages/tools-refresh';
 (window as unknown as Record<string, unknown>).__foxy = {
-  ROUTES, api, native, state, tasks, files, backup, coexistence, serve, format, toast, confirm, t, applyTheme, setLang, createRoot, toolsRefresh,
+  ROUTES, api, native, state, service, tasks, files, backup, coexistence, serve, format, toast, confirm, t, applyTheme, setLang, createRoot, toolsRefresh,
 };

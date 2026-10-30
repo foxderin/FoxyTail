@@ -1,31 +1,23 @@
 /* Responsive app shell. Navigation never waits for the native bridge. */
 import { createEffect, createSignal, For, on, onCleanup, onMount, Show, type Accessor, type Component, type JSX } from 'solid-js';
 import { Dynamic } from 'solid-js/web';
-import { hasRoot, nativeControl, refreshNativeControl } from '../api';
+import { hasRoot } from '../api';
 import { RouteVisible } from '../schedule';
-import { requestNative } from '../native';
 import { t, type I18nKey } from '../i18n';
 import { MdIcon, type IconName } from '../icons';
-import { status, statusError, statusLoading, connState, startStatusPolling } from '../state';
+import { startStatusPolling } from '../state';
 import { listTasks, type Task } from '../tasks';
 import { NAV_GROUPS, PRIMARY_NAV, primaryRoute } from '../navigation';
-import { PageHeader, StatusBadge } from './Basics';
+import { PageHeader } from './Basics';
 import { ToastRoot } from './Toast';
 import { ConfirmHost } from './ConfirmDialog';
-import { ServiceControls } from './ServiceControls';
-
-import { Button } from './ui';
-import { toastApiError } from './Toast';
+import { NativeIssueActions, ServiceActions } from './ServiceControls';
+import { connectionChip, connectionCopy, nativeIssue, serviceBusy, serviceModeLabel, serviceOperationRunning } from '../service';
+import { CircularProgress, IconButton } from './ui';
 export interface RouteDef {
   name: string;
   titleKey: I18nKey;
   component: Component;
-}
-
-function ConnectionBadge(): JSX.Element {
-  const st = () => connState(status());
-  const label = (): I18nKey => statusError() ? 'dash_status_stale' : statusLoading() ? 'shell_starting' : st() === 'running' ? 'shell_connected' : st() === 'starting' ? 'shell_starting' : st() === 'needs-login' ? 'shell_login' : st() === 'stopped' ? 'shell_stopped' : 'shell_unknown';
-  return <StatusBadge state={statusError() || statusLoading() ? 'warn' : st() === 'running' ? 'on' : st() === 'needs-login' || st() === 'starting' ? 'warn' : 'off'} label={t(label())} />;
 }
 
 function Brand(): JSX.Element {
@@ -84,7 +76,7 @@ function TaskMenu(): JSX.Element {
     if (event.key === 'Escape' && menu.open) { menu.open = false; menu.querySelector('summary')?.focus(); }
   }}>
     <summary class="task-menu-toggle" aria-label={t('shell_tasks')}>
-      <MdIcon name="sync" size={20} /><span class="task-menu-label">{t('shell_tasks')}</span>
+      <MdIcon name="pending" size={20} /><span class="task-menu-label">{t('shell_tasks')}</span>
       <Show when={running() > 0}><span class="task-count" aria-live="polite">{running()}</span></Show>
     </summary>
     <div class="task-menu-panel">
@@ -102,6 +94,47 @@ function TaskMenu(): JSX.Element {
         </a>}</For>
       </Show>
     </div>
+  </details>;
+}
+
+/* The header chip mirrors the shared connection state machine; the sheet it
+ * opens exposes the same actions as the dashboard connection card. */
+function StatusSheet(): JSX.Element {
+  let sheet!: HTMLDetailsElement;
+  onMount(() => {
+    const dismiss = (event: PointerEvent) => { if (sheet.open && event.target instanceof Node && !sheet.contains(event.target)) sheet.open = false; };
+    document.addEventListener('pointerdown', dismiss);
+    onCleanup(() => document.removeEventListener('pointerdown', dismiss));
+  });
+  const close = () => { sheet.open = false; sheet.querySelector('summary')?.focus(); };
+  const working = () => serviceBusy() !== null || serviceOperationRunning();
+  return <details class="status-sheet" ref={sheet} data-testid="status-sheet" onKeyDown={(event) => {
+    if (event.key === 'Escape' && sheet.open) close();
+  }}>
+    <summary class={'status-chip tone-' + connectionChip().tone} aria-label={t('shell_open_status')}>
+      <Show when={working()} fallback={<span class={'dot ' + (connectionChip().tone === 'ok' ? 'on' : connectionChip().tone === 'warn' ? 'warn' : 'off')} aria-hidden="true" />}>
+        <CircularProgress size={14} />
+      </Show>
+      <span class="status-chip-label">{t(connectionChip().label)}</span>
+    </summary>
+    <button type="button" class="status-sheet-scrim" aria-label={t('close')} onClick={close} tabIndex={-1} />
+    <section class="status-sheet-panel" aria-label={t('shell_status_title')}>
+      <header class="status-sheet-head">
+        <strong>{t('shell_status_title')}</strong>
+        <IconButton aria-label={t('close')} onClick={close}><MdIcon name="close" size={18} /></IconButton>
+      </header>
+      <div class="status-sheet-state">
+        <MdIcon name={connectionCopy().icon} size={22} />
+        <div><strong>{connectionCopy().title}</strong><span>{connectionCopy().hint}</span></div>
+      </div>
+      <ServiceActions />
+      <Show when={nativeIssue()}><NativeIssueActions /></Show>
+      <a class="status-sheet-row" href="#/tunnel" onClick={close}>
+        <span>{t('dash_mode')}</span>
+        <strong>{serviceModeLabel() ? t(serviceModeLabel()!) : '—'}</strong>
+        <MdIcon name="chevron_right" size={18} />
+      </a>
+    </section>
   </details>;
 }
 
@@ -153,31 +186,22 @@ export function AppShell(props: {
         <div class="sidebar-footer"><span class="sidebar-footer-icon"><MdIcon name="router" size={18} /></span><span>Tailscale <span class="dim">/ FoxyTail</span></span></div>
       </aside>
       <header id="app-header" ref={header}>
-        <div class="header-primary">
         <div class="mobile-brand"><Brand /></div>
         <div class="desktop-context"><span>{t('shell_workspace')}</span><MdIcon name="chevron_right" size={16} /><strong>{t(def().titleKey)}</strong></div>
-        <div class="header-actions"><TaskMenu /><ConnectionBadge /></div>
-        </div>
-        <ServiceControls />
+        <div class="header-actions"><TaskMenu /><StatusSheet /></div>
       </header>
       <main id="view" ref={main} tabIndex={-1}>
         <Show when={!hasRoot}>
           <div class="root-banner" role="alert"><MdIcon name="info" size={20} /><span>{t('no_root_banner')}</span></div>
         </Show>
-        <Show when={hasRoot && (!nativeControl().compatible || nativeControl().busy || nativeControl().unknown)}>
-          <div class="root-banner" role="status">
-            <span>{nativeControl().unknown ? t('native_unknown') : nativeControl().checking ? t('native_checking') : nativeControl().message || t(nativeControl().busy ? 'shell_task_running' : 'native_incompatible')}</span>
-            <div class="root-banner-actions">
-              <Button variant="text" onClick={() => void refreshNativeControl()}><MdIcon name="refresh" size={18} />{t('native_recheck')}</Button>
-              <Show when={nativeControl().canCancel}><Button variant="text" onClick={() => {
-                const id = nativeControl().id;
-                if (id) void requestNative('control.cancel', { id }).then(result => { if (!result.ok) toastApiError(t('op_failed'), result); });
-              }}><MdIcon name="close" size={18} />{t('native_cancel_operation')}</Button></Show>
-              <Show when={nativeControl().unknown}><Button variant="tonal" onClick={() => {
-                void requestNative('control.acknowledge').then(result => { if (!result.ok) toastApiError(t('op_failed'), result); });
-              }}><MdIcon name="check" size={18} />{t('native_unlock')}</Button></Show>
+        <Show when={hasRoot && props.route() !== 'dashboard' && nativeIssue()}>
+          {(issue) => (
+            <div class="root-banner" role={issue().kind === 'busy' ? 'status' : 'alert'}>
+              <MdIcon name={issue().kind === 'busy' ? 'info' : 'warning'} size={20} />
+              <span>{issue().message}</span>
+              <NativeIssueActions />
             </div>
-          </div>
+          )}
         </Show>
         <For each={visited()}>{name => {
           const routeDef = props.routes[name] ?? props.routes.dashboard;

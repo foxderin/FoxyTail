@@ -1,344 +1,118 @@
-/** Persistent shell controls. Shared status is the only source of visible state. */
-import {
-  createEffect,
-  createSignal,
-  createUniqueId,
-  on,
-  onCleanup,
-  Show,
-  type JSX,
-} from 'solid-js';
-import { hasRoot, nativeControl, api } from '../api';
-import { getTask, startTask, type Task } from '../tasks';
+/** Views over the shared service store; no surface owns lifecycle state. */
+import { For, Show, type JSX } from 'solid-js';
+import { nativeControl } from '../api';
+import { getTask } from '../tasks';
 import { t, type I18nKey } from '../i18n';
-import {
-  refreshStatus,
-  status,
-  statusError,
-  statusLoading,
-  type StatusSnapshot,
-} from '../state';
 import { MdIcon } from '../icons';
-import { confirmDialog } from './ConfirmDialog';
-import { showToast, toastApiError } from './Toast';
-import { Button, CircularProgress, IconButton, Select, Switch } from './ui';
+import {
+  MODE_LABELS, RUN_MODES, type RunMode,
+  acknowledgeNative, cancelNativeOperation, emergencyStop, emergencyStopAvailable, recheckNative,
+  runService, serviceBusy, serviceFeedback, serviceKnown, serviceLocked, serviceMessage, serviceMode,
+  serviceOperationRunning, servicePending, serviceRunning, serviceWarning, verifyService,
+} from '../service';
+import { Button, CircularProgress } from './ui';
 
-type ServiceAction = 'start' | 'stop' | 'restart' | 'mode';
-type ExpectedState = {
-  running: boolean;
-  mode: string;
-  action: ServiceAction;
-  configPending?: boolean;
-};
-type Feedback = { key: I18nKey; tone: 'info' | 'warning'; settings?: boolean; unconfirmed?: boolean };
-const MODES = ['tun', 'bridge', 'proxy'] as const;
+const MODE_HINTS: Record<RunMode, I18nKey> = { tun: 'tools_tun_desc', bridge: 'tools_bridge_desc', proxy: 'tools_proxy_desc' };
 
-export function ServiceControls(): JSX.Element {
-  const feedbackId = createUniqueId();
-  let container!: HTMLDivElement;
-  let disposed = false;
-  const [busy, setBusy] = createSignal<ServiceAction | 'refresh' | null>(null);
-  const [phase, setPhase] = createSignal<'confirm' | 'run' | 'verify' | null>(
-    null,
-  );
-  const [pending, setPending] = createSignal<ExpectedState | null>(null);
-  const [feedback, setFeedback] = createSignal<Feedback | null>(null);
-  onCleanup(() => {
-    disposed = true;
-  });
-
-  const knownSnapshot = (
-    snapshot: StatusSnapshot | null,
-  ): snapshot is StatusSnapshot =>
-    Boolean(
-      snapshot?.ok &&
-        ['running', 'stopped'].includes(snapshot.daemon || '') &&
-        !(snapshot.daemon === 'stopped' && snapshot.backend === 'unreachable') &&
-        MODES.includes(snapshot.mode as (typeof MODES)[number]),
-    );
-  const known = () =>
-    !statusLoading() && !statusError() && knownSnapshot(status());
-  const running = () => status()?.daemon === 'running';
-  const mode = () => status()?.mode || '';
-  const serviceTask = () => getTask('service-control');
-  const operationRunning = () => serviceTask()?.status === 'running' || (serviceTask()?.status === 'unknown' && nativeControl().unknown);
-  const canWrite = () => !disposed && hasRoot && known() && nativeControl().canWrite && !nativeControl().busy;
-  const locked = () => !canWrite() || Boolean(busy()) || Boolean(pending()) || operationRunning();
-  const matches = (snapshot: StatusSnapshot | null, expected: ExpectedState) =>
-    knownSnapshot(snapshot) &&
-    (snapshot.daemon === 'running') === expected.running &&
-    snapshot.mode === expected.mode;
-
-  // Native controls change before an async handler runs. Restore them explicitly;
-  // unchanged Solid props alone do not roll back a rejected checkbox/select.
-  function syncControls() {
-    if (!container) return;
-    const toggle = container.querySelector<HTMLInputElement>(
-      'input[role="switch"]',
-    );
-    const select = container.querySelector<HTMLSelectElement>('select');
-    if (toggle) toggle.checked = running();
-    if (select) select.value = knownSnapshot(status()) ? mode() : '';
-  }
-  function confirmed(action: ServiceAction) {
-    setFeedback(null);
-    showToast(
-      t(action === 'mode' ? 'net_controls_mode_applied' : 'dash_action_done'),
-      'ok',
-    );
-  }
-  function finish(expected: ExpectedState) {
-    if (expected.configPending) {
-      setFeedback({
-        key: 'net_controls_config_pending',
-        tone: 'warning',
-        settings: true,
-      });
-      showToast(t('set_restart_required'), 'info');
-    } else confirmed(expected.action);
-  }
-
-  // A later shared poll can resolve a pending result without a new private poller.
-  createEffect(() => {
-    const expected = pending();
-    const snapshot = status();
-    if (expected && known() && matches(snapshot, expected)) {
-      setPending(null);
-      finish(expected);
-    }
-  });
-
-  async function reconcile(task: Task) {
-    if (!task.result) return;
-    if (!task.args.length) { await refreshStatus({ afterCurrent: true }); return; }
-    const action = task.cmd === 'mode-set' ? 'mode' : task.args[0] as ServiceAction;
-    const expected: ExpectedState = {
-      action,
-      running: action !== 'stop',
-      mode: action === 'mode' ? String(task.args[0]) : mode(),
-      configPending: task.result.applied === false || task.result.restartRequired === true,
-    };
-    setBusy(action);
-    setPhase('verify');
-    try {
-      const observed = await refreshStatus({ afterCurrent: true });
-      if (disposed || serviceTask()?.call !== task.call) return;
-      if (!task.result.ok || task.result.cancelled) {
-        setFeedback({ key: 'net_controls_result_unknown', tone: 'warning', unconfirmed: true });
-        if (!task.result.cancelled && !(action !== 'restart' && action !== 'mode' && matches(observed, expected))) {
-          toastApiError(t('op_failed'), task.result);
-        }
-      } else if (!observed || !matches(observed, expected)) {
-        setPending(expected);
-        setFeedback({ key: 'net_controls_pending', tone: 'warning' });
-      } else finish(expected);
-    } finally {
-      if (!disposed) {
-        setBusy(null);
-        setPhase(null);
-        syncControls();
-      }
-    }
-  }
-  let reconciledCall = serviceTask()?.result ? serviceTask()?.call : undefined;
-  createEffect(on(serviceTask, task => {
-    if (!task?.result || task.call === reconciledCall) return;
-    reconciledCall = task.call;
-    void reconcile(task);
-  }));
-
-  async function mutate(action: ServiceAction, nextMode?: string) {
-    if (locked()) {
-      syncControls();
-      return;
-    }
-    if (
-      action === 'mode' &&
-      (!nextMode ||
-        !MODES.includes(nextMode as (typeof MODES)[number]) ||
-        nextMode === mode())
-    )
-      return;
-    setBusy(action);
-    setFeedback(null);
-    try {
-      if (action !== 'start') {
-        setPhase('confirm');
-        const approved = await confirmDialog(
-          action === 'mode'
-            ? { title: t('confirm_mode_title'), body: t('net_mode_confirm'), confirmLabel: t('net_mode_switch') }
-            : action === 'stop'
-              ? { title: t('confirm_stop_title'), body: t('net_stop_confirm'), confirmLabel: t('native_stop'), tone: 'danger' }
-              : { title: t('confirm_restart_title'), body: t('net_restart_confirm'), confirmLabel: t('dash_restart') },
-        );
-        if (!approved || !canWrite()) return;
-      }
-      if (!canWrite()) return;
-      setPhase('run');
-      if (operationRunning()) return;
-      if (action === 'mode') startTask('service-control', 'mode-set', nextMode!);
-      else startTask('service-control', 'control', action);
-    } finally {
-      setBusy(null);
-      setPhase(null);
-      syncControls();
-    }
-  }
-
-  async function verify() {
-    if (busy() || disposed) return;
-    setBusy('refresh');
-    setPhase('verify');
-    try {
-      const expected = pending();
-      const observed = await refreshStatus({ afterCurrent: true });
-      if (!disposed && !expected && knownSnapshot(observed)) setFeedback(null);
-      if (
-        !disposed &&
-        expected &&
-        knownSnapshot(observed) &&
-        !matches(observed, expected)
-      ) {
-        // An explicit check has confirmed a different device state. Release the
-        // controls so the user can recover instead of trapping them in pending.
-        setPending(null);
-        setFeedback({ key: 'net_controls_mismatch', tone: 'warning' });
-      }
-    } finally {
-      setBusy(null);
-      setPhase(null);
-      syncControls();
-    }
-  }
-  const message = (): string =>
-    operationRunning() && serviceTask()?.call.timedOut
-      ? t('task_timeout_running')
-      : operationRunning() && !busy()
-        ? t('net_working')
-      : phase() === 'confirm'
-      ? t('net_controls_awaiting_confirm')
-      : phase() === 'verify'
-        ? t('net_controls_verifying')
-        : phase() === 'run'
-          ? t('net_working')
-          : feedback()?.unconfirmed
-            ? t(!known() ? 'net_controls_result_unknown' : running() ? 'net_controls_response_running' : 'net_controls_response_stopped')
-          : feedback()
-            ? t(feedback()!.key)
-            : !known() && !statusLoading()
-              ? t('net_controls_unknown')
-              : '';
-
+export function ServiceActions(): JSX.Element {
+  const taskAction = () => {
+    const task = getTask('service-control');
+    return serviceOperationRunning() && task ? (task.cmd === 'mode-set' ? 'mode' : String(task.args[0] ?? '')) : '';
+  };
+  const working = (action: string) => serviceBusy() === action || taskAction() === action;
+  const message = () => !serviceKnown() && !serviceFeedback() && !serviceBusy() && !serviceOperationRunning() ? '' : serviceMessage();
+  const verify = () => serviceKnown() && !serviceBusy() && !serviceOperationRunning() && Boolean(servicePending() || serviceFeedback()?.unconfirmed);
   return (
-    <div
-      ref={container}
-      class="service-controls"
-      role="group"
-      aria-label={t('net_controls_label')}
-      aria-busy={Boolean(busy()) || operationRunning()}
-    >
-      <div class="service-controls-row">
-        <div class="service-controls-toggle" data-testid="service-toggle">
-          <div class="service-controls-label">
-            <span>{t('net_controls_service')}</span>
-          </div>
-          <Switch
-            aria-label={t('net_controls_service') + (!known() ? ` (${t('net_unknown')})` : '')}
-            aria-describedby={message() ? feedbackId : undefined}
-            checked={running()}
-            indeterminate={!known()}
-            disabled={locked()}
-            onChange={(event) => {
-              const input = event.target as HTMLInputElement;
-              const next = input.checked;
-              input.checked = running();
-              if (next !== running()) void mutate(next ? 'start' : 'stop');
-            }}
-          />
-        </div>
-        <div class="service-controls-mode" data-testid="service-mode">
-          <Select
-            aria-label={t('dash_mode')}
-            value={knownSnapshot(status()) ? mode() : ''}
-            disabled={locked()}
-            onChange={(event) => {
-              const select = event.target as HTMLSelectElement;
-              const next = select.value;
-              select.value = knownSnapshot(status()) ? mode() : '';
-              void mutate('mode', next);
-            }}
+    <div class="service-actions" role="group" aria-label={t('net_controls_label')} aria-busy={Boolean(serviceBusy()) || serviceOperationRunning()}>
+      <div class="service-actions-row">
+        <Show
+          when={serviceKnown()}
+          fallback={
+            <Button variant="outlined" busy={serviceBusy() === 'refresh'} onClick={() => void verifyService()}>
+              <MdIcon name="refresh" size={18} />{t('native_recheck')}
+            </Button>
+          }
+        >
+          <Show
+            when={serviceRunning()}
+            fallback={
+              <Button busy={working('start')} disabled={serviceLocked()} onClick={() => void runService('start')}>
+                <MdIcon name="play_arrow" size={18} />{t('dash_start_service')}
+              </Button>
+            }
           >
-            <option value="" disabled>
-              {t('net_unknown')}
-            </option>
-            <option value="tun">{t('net_mode_tun')}</option>
-            <option value="bridge">{t('net_mode_bridge')}</option>
-            <option value="proxy">{t('net_mode_proxy')}</option>
-          </Select>
-        </div>
-        <div class="service-controls-restart" data-testid="service-restart">
-          <IconButton
-            aria-label={t('dash_restart')}
-            disabled={locked() || !running()}
-            onClick={() => void mutate('restart')}
-          >
-            <Show
-              when={busy() === 'restart'}
-              fallback={<MdIcon name="restart_alt" size={20} />}
-            >
-              <CircularProgress size={20} />
-            </Show>
-          </IconButton>
-        </div>
-        <Show when={nativeControl().canStop && !nativeControl().canWrite && !nativeControl().busy}>
-          <Button variant="outlined" class="danger" onClick={async () => {
-            if (!await confirmDialog({ title: t('confirm_stop_title'), body: t('net_stop_confirm'), confirmLabel: t('native_stop'), tone: 'danger' })) return;
-            const result = await api('control', 'stop');
-            if (!result.ok) toastApiError(t('op_failed'), result);
-            await refreshStatus({ afterCurrent: true });
-          }}><MdIcon name="stop" size={18} />{t('native_emergency_stop')}</Button>
+            <Button variant="outlined" class="danger" busy={working('stop')} disabled={serviceLocked()} onClick={() => void runService('stop')}>
+              <MdIcon name="stop" size={18} />{t('native_stop')}
+            </Button>
+            <Button variant="outlined" busy={working('restart')} disabled={serviceLocked()} onClick={() => void runService('restart')}>
+              <MdIcon name="restart_alt" size={18} />{t('dash_restart')}
+            </Button>
+          </Show>
+        </Show>
+        <Show when={emergencyStopAvailable()}>
+          <Button variant="outlined" class="danger" onClick={() => void emergencyStop()}>
+            <MdIcon name="stop" size={18} />{t('native_emergency_stop')}
+          </Button>
         </Show>
       </div>
       <Show when={message()}>
-        <div
-          id={feedbackId}
-          class="service-controls-feedback"
-          classList={{
-            warning: feedback()?.tone === 'warning' || !known(),
-            pending: Boolean(pending()),
-          }}
-          role="status"
-        >
-          <Show
-            when={busy() || operationRunning()}
-            fallback={
-              <MdIcon
-                name={
-                  feedback()?.tone === 'warning' || !known()
-                    ? 'warning'
-                    : 'info'
-                }
-                size={16}
-              />
-            }
-          >
+        <div class="service-controls-feedback" classList={{ warning: serviceWarning() }} role="status">
+          <Show when={serviceBusy() || serviceOperationRunning()} fallback={<MdIcon name={serviceWarning() ? 'warning' : 'info'} size={16} />}>
             <CircularProgress size={16} />
           </Show>
           <span>{message()}</span>
-          <Show when={!busy() && !operationRunning() && (pending() || !known() || feedback()?.unconfirmed)}>
-            <Button
-              variant="text"
-              class="service-controls-retry"
-              onClick={() => void verify()}
-            >
-              {t('retry')}
-            </Button>
+          <Show when={verify()}>
+            <Button variant="text" class="service-controls-retry" onClick={() => void verifyService()}>{t('retry')}</Button>
           </Show>
-          <Show when={!busy() && feedback()?.settings}>
+          <Show when={!serviceBusy() && serviceFeedback()?.settings}>
             <a href="#/settings">{t('set_title')}</a>
           </Show>
         </div>
       </Show>
+    </div>
+  );
+}
+
+export function NativeIssueActions(): JSX.Element {
+  return (
+    <div class="root-banner-actions">
+      <Button variant="text" onClick={recheckNative}><MdIcon name="refresh" size={18} />{t('native_recheck')}</Button>
+      <Show when={nativeControl().canCancel}>
+        <Button variant="text" onClick={cancelNativeOperation}><MdIcon name="close" size={18} />{t('native_cancel_operation')}</Button>
+      </Show>
+      <Show when={nativeControl().unknown}>
+        <Button variant="tonal" onClick={acknowledgeNative}><MdIcon name="check" size={18} />{t('native_unlock')}</Button>
+      </Show>
+    </div>
+  );
+}
+
+export function ModePicker(): JSX.Element {
+  let group!: HTMLDivElement;
+  const reset = () => group.querySelectorAll<HTMLInputElement>('input[name="run-mode"]').forEach(input => { input.checked = input.value === serviceMode(); });
+  return (
+    <div class="tool-policy-list" role="radiogroup" aria-label={t('dash_mode')} ref={group} data-testid="mode-picker">
+      <For each={RUN_MODES}>
+        {(mode) => (
+          <label class="tool-policy">
+            <input
+              type="radio"
+              name="run-mode"
+              value={mode}
+              checked={serviceMode() === mode}
+              disabled={serviceLocked()}
+              onChange={() => { reset(); void runService('mode', mode).finally(reset); }}
+            />
+            <span class="tool-policy-copy">
+              <strong>
+                {t(MODE_LABELS[mode])}
+                <Show when={serviceKnown() && serviceMode() === mode}><span class="network-small-badge">{t('exit_current')}</span></Show>
+              </strong>
+              <span class="tool-hint">{t(MODE_HINTS[mode])}</span>
+            </span>
+          </label>
+        )}
+      </For>
     </div>
   );
 }

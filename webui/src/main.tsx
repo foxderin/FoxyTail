@@ -9,6 +9,7 @@ import { requestNative, type NativeResult } from './native';
 import { toastApiError } from './components/Toast';
 import { t } from './i18n';
 import { AppShell, type RouteDef } from './components/AppShell';
+import { initServiceControl } from './service';
 import { ROUTE_META, ROUTE_NAMES, acceptNativeNavigation, recordNavigation, type RouteName } from './navigation';
 
 import Dashboard from './pages/Dashboard';
@@ -89,6 +90,7 @@ async function mountApp(target: HTMLElement): Promise<void> {
       if (!result.ok) toastApiError(t('op_failed'), result);
     });
   });
+  initServiceControl();
   render(() => {
     const route = createRouter();
     return <AppShell route={route} routes={ROUTES} />;
