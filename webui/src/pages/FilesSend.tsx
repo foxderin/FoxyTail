@@ -238,7 +238,7 @@ export default function FilesSend(props: {inboxSettled: boolean}): JSX.Element {
           <Show when={selection().length}><IconButton aria-label={t('ft_clear_selection')} disabled={locked()} onClick={() => void nativeAction('files.clear')}><MdIcon name="deselect" size={18} /></IconButton></Show>
         </div>
         <Show when={!selection().length}><p class="tool-hint">{t('ft_pending_empty')}</p></Show>
-        <For each={selection()}>{file => <div class="list-row"><div class="main"><div class="title">{file.name}</div><div class="sub">{file.size < 0 ? t('ft_size_unknown') : fmtBytes(file.size)}</div></div><IconButton aria-label={t('files_remove_selection') + ' ' + file.name} disabled={locked()} onClick={() => void nativeAction('files.remove', {key: file.key})}><MdIcon name="close" size={18} /></IconButton></div>}</For>
+        <Show when={selection().length}><div class="files-selection-list"><For each={selection()}>{file => <div class="list-row"><div class="main"><div class="title">{file.name}</div><div class="sub">{file.size < 0 ? t('ft_size_unknown') : fmtBytes(file.size)}</div></div><IconButton aria-label={t('files_remove_selection') + ' ' + file.name} disabled={locked()} onClick={() => void nativeAction('files.remove', {key: file.key})}><MdIcon name="close" size={18} /></IconButton></div>}</For></div></Show>
         </Show>
         <Button busy={submitting()} disabled={!sendAllowed() || !selection().length || !peers()?.some(node => node.id === fileView().peer)} onClick={() => void send()}><MdIcon name="send" size={18} />{t('files_send_btn')}</Button>
         <Show when={actionError()}><ErrorState text={actionError()} /></Show>
