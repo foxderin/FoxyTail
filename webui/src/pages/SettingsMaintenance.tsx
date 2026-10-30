@@ -85,7 +85,7 @@ export default function SettingsMaintenance(props: ParentProps<{
           <details class="tool-disclosure" onToggle={event => { if (event.currentTarget.open) void loadDiagnostics(); }}>
             <summary><MdIcon name="monitoring" size={18} />{t('diag_title')}</summary>
             <Card title={t('dns_title')} icon="dns">
-              <Button disabled={props.locked || diagnosticsBusy()} busy={diagnosticsBusy()} onClick={() => void loadDiagnostics(true)}>{t('dns_check')}</Button>
+              <div class="tool-actions"><Button disabled={props.locked || diagnosticsBusy()} busy={diagnosticsBusy()} onClick={() => void loadDiagnostics(true)}>{t('dns_check')}</Button></div>
               <Show when={dns()?.error}><ErrorState text={String(dns()?.error)} /></Show>
               <For each={DNS_FACTS}>{([key, label]) => <KvRow k={t(label)} v={fact(dns()?.ok ? dns()?.[key] : null)} />}</For>
             </Card>

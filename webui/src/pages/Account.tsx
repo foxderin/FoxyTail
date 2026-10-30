@@ -247,7 +247,7 @@ export default function Account(): JSX.Element {
                 disabled={actionBusy()}
                 onInput={(e) => setAuthkey((e.target as HTMLInputElement).value)}
               />
-              <div>
+              <div class="tool-actions">
                 <Button
                   variant="tonal"
                   busy={authkeyBusy()}
@@ -270,7 +270,7 @@ export default function Account(): JSX.Element {
                 disabled={actionBusy()}
                 onInput={(e) => setHsServer((e.target as HTMLInputElement).value)}
               />
-              <div>
+              <div class="tool-actions">
                 <Button
                   variant="tonal"
                   disabled={!hsServer().trim() || actionBusy() || !hasRoot}
@@ -290,7 +290,7 @@ export default function Account(): JSX.Element {
             <MdIcon name="logout" size={18} /> {t('acc_logout')}
           </h2>
           <p class="tool-hint">{t('tools_logout_desc')}</p>
-          <div>
+          <div class="tool-actions">
             <Button
               variant="outlined"
               class="danger"

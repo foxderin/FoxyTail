@@ -270,7 +270,7 @@ export default function Serve(): JSX.Element {
           <Show when={formError()}>
             <ErrorState text={formError()} />
           </Show>
-          <div>
+          <div class="tool-actions">
             <Button
               busy={addBusy()}
               disabled={!port().trim() || !target().trim() || mutationBusy() || !hasRoot}
