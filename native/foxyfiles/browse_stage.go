@@ -201,6 +201,13 @@ type stageResult struct {
 	Size int64  `json:"size"`
 }
 
+// Names tailscaled only produces for a finished transfer: in-flight
+// *.partial/*.deleted files and internal directories never complete.
+func taildropCompletedName(name string) bool {
+	return plainName(name) && name != ".taildrop" && name != ".outgoing" &&
+		!strings.HasSuffix(name, ".partial") && !strings.HasSuffix(name, ".deleted")
+}
+
 func stageFile(rootPath, name string, expected int64, input io.Reader) (stageResult, error) {
 	result := stageResult{}
 	if expected < -1 || expected > maxSendSize {

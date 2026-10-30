@@ -99,15 +99,14 @@ export function installFixture(window, { state = 'ready', lang = 'en', theme = '
       case 'diag': case 'backup': return { ok: true, path: '/data/adb/foxytail/exports/preview.tar.gz', artifactId: token, mode: args[0] || 'share' };
       case 'restore-preview': return { ok: true, path: args[0], sha256: 'b'.repeat(64), baselineSha256: 'c'.repeat(64), changes: [{ file: 'foxytail.conf', key: 'SOCKS_PORT', before: '1099', after: '1100' }], hooks: ['foxytail.tun.up'] };
       case 'restore': return { ok: true, saved: true, applied: false, restartRequired: true, previous: '/data/adb/foxytail/conf.bak-preview', note: null };
-      case 'file-delete-many': case 'file-export-many': {
+      case 'file-delete-many': {
         const names = JSON.parse(args[0]);
         const results = names.map((name, i) => i === 0 ? { name, ok: true } : { name, ok: false, error: 'Simulated file busy' });
-        if (name === 'file-delete-many') data['files-inbox'].files = data['files-inbox'].files.filter(f => !results.some(r => r.ok && r.name === f.name));
+        data['files-inbox'].files = data['files-inbox'].files.filter(f => !results.some(r => r.ok && r.name === f.name));
         return { ok: true, results };
       }
       case 'file-delete': data['files-inbox'].files = data['files-inbox'].files.filter(f => f.name !== args[0]); return { ok: true };
       case 'file-clear': { const removed = data['files-inbox'].files.length; data['files-inbox'].files = []; return { ok: true, removed, ignored: 0 }; }
-      case 'file-export': return { ok: true, path: '/sdcard/Download/' + args[0] };
       case 'file-send-delete': case 'file-send-clear': { const rows = data['file-send-history'].transfers; data['file-send-history'].transfers = name === 'file-send-clear' ? [] : rows.filter(r => r.id !== args[0]); return { ok: true, removed: rows.length - data['file-send-history'].transfers.length, retained: 0 }; }
       case 'file-send-status': return data['file-send-history'].transfers.find(t => t.id === args[0]) ? { ok: true, transfer: clone(data['file-send-history'].transfers.find(t => t.id === args[0])) } : fail('unknown transfer');
       case 'trial-start': { const summary = { mode: settings.TS_MODE, dnsMode: settings.DNS_MODE, routeScope: 'all' }; data['trial-status'].trial = { id: 'preview-trial', status: 'running', remaining: Number(args[0]), reason: '', previous: summary, candidate: summary }; return { ok: true }; }
@@ -141,7 +140,7 @@ export function installFixture(window, { state = 'ready', lang = 'en', theme = '
       case 'files.addShared':
         if (!listedDownload || !Array.isArray(args.handles) || args.handles.length !== 1 || args.handles[0] !== 'preview-notes') return fail('unknown source handle');
         publishFiles({ selection: [{ key: 'preview-source', name: 'notes.txt', size: 120, source: 'path', path: '/sdcard/Download/notes.txt' }] }); return { ok: true };
-      case 'files.pick': case 'files.import': case 'backup.import': case 'files.open': case 'files.share': case 'files.save': case 'artifact.save': case 'artifact.share':
+      case 'files.pick': case 'backup.import': case 'files.open': case 'files.share': case 'artifact.save': case 'artifact.share':
       case 'files.send': case 'files.retry': case 'files.adopt': case 'files.cancel': case 'files.cancelExport': return fail('requires Android native file I/O; no bytes were read or transferred');
       default: return unsupportedResult(name);
     }

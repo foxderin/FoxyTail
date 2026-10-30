@@ -1,5 +1,11 @@
 # Changelog
 
+## 未发布
+
+- 文件机制改为直存：`files-inbox`/`file-read`/`file-delete`/`file-clear` 直接操作 `/sdcard/Download/Taildrop`，接收文件落盘即在列表中，不再经过私有收件箱与"导入/导出"步骤；WebUI 移除导入、导出、另存为与批量导出入口，收件卡片更名为"已接收"并 5 秒轮询自动刷新（遵循全局自动刷新开关）；Android 移除 `files.import`（TransferService IMPORT）与 `files.save`。
+- foxyfiles `inbox-list`/`inbox-read` 改为直接以 Taildrop 目录为根（`/sdcard` 前缀逐级校验，拒绝符号链接），过滤传输中的 `*.partial`/`*.deleted`；`file-clear` 同样跳过传输中文件。
+- 安全性不变：目录边界校验、符号链接拒绝、非普通文件跳过、名称校验（Unicode 格式字符）、删除/清空二次确认与取消语义保留；`file-export`/`file-export-many`/`file-receive` 命令自 WebAPI、operation 白名单与 WebBridge 校验中移除。
+
 ## v1.10.0 — 2026-10-30 — WebUI 任务化重构
 
 - 依据 `docs/reviews/2026-10-30-webui-ux-review.zh-CN.md` 完成界面重构：主导航改为首页·设备·文件·网络·设置五区，网络与设置拆为中心页+详情子页，诊断入口合一，出口节点为独立页并支持点选即切换；Android 页面白名单同步更新。

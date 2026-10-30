@@ -7,15 +7,13 @@ import (
 
 func run(args []string) error {
 	if len(args) == 0 {
-		return fmt.Errorf("usage: foxyfiles extract|artifact-stage|artifact-create|artifact-read|artifact-delete|artifact-extract|receive|receive-mode|stats-summary|taildrop-targets|browse|stage|stage-delete|inbox-list|inbox-read|send-start|send-status|send-cancel|send-history|send-delete|send-clear|send-stop [arguments]")
+		return fmt.Errorf("usage: foxyfiles extract|artifact-stage|artifact-create|artifact-read|artifact-delete|artifact-extract|receive-mode|stats-summary|taildrop-targets|browse|stage|stage-delete|inbox-list|inbox-read|send-start|send-status|send-cancel|send-history|send-delete|send-clear|send-stop [arguments]")
 	}
 	switch args[0] {
 	case "artifact-stage", "artifact-create", "artifact-read", "artifact-delete", "artifact-extract", "artifact-pin":
 		return runArtifact(args[0][len("artifact-"):], args[1:])
 	case "extract":
 		return runArchive(args[1:])
-	case "receive":
-		return runTaildrop(args[1:])
 	case "receive-mode":
 		return runReceiveMode(args[1:])
 	case "stats-summary":

@@ -40,6 +40,15 @@ func openChildRoot(parent *os.Root, name string) (*os.Root, error) {
 	return root, nil
 }
 
+func syncRoot(root *os.Root) error {
+	directory, err := root.Open(".")
+	if err != nil {
+		return err
+	}
+	defer directory.Close()
+	return directory.Sync()
+}
+
 // /sdcard itself is Android's trusted storage alias; all child components
 // must be real directories, so swapping a shared path cannot escape it.
 func archiveSourceRoot(path string) (*os.Root, error) {

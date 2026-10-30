@@ -9,8 +9,8 @@ import { showToast } from '../components/Toast';
 import { MdIcon } from '../icons';
 import { Checkbox, IconButton, TextField } from '../components/ui';
 import { onNativeEvent, requestNative } from '../native';
-import { DATA_DIR } from '../config';
-import { appActive, RouteVisible } from '../schedule';
+import { appActive, pollWhileVisible, RouteVisible } from '../schedule';
+import { viewPollInterval } from '../state';
 import { acceptSnapshot, count, fileName, filesSnapshot, fileText, fileView, initializeFiles, MAX_FILES, record, resultError, snapshotError, updateFileView, type ExportState } from '../files';
 import type { InboxFile } from '../types';
 import FilesSend from './FilesSend';
@@ -96,18 +96,15 @@ export default function Files(): JSX.Element {
     setWorking(true); setNotice('');
     const result = await requestNative(action, args); setWorking(false);
     if (!result.ok && !result.cancelled) setNotice(resultError(result));
-    else if (action === 'files.save' && result.ok && !result.cancelled) showToast(t('ft_saved'), 'ok');
-    if (action === 'files.import') inboxDirty = true;
   }
   async function mutate(command: string, names: string[] = []) {
     if (!canWrite()) return;
-    const exporting = command.includes('export');
-    const prompt = command === 'file-clear' ? t('ft_clear_confirm') : exporting ? t('ft_export_confirm') : t('ft_delete_confirm');
+    const prompt = command === 'file-clear' ? t('ft_clear_confirm') : t('ft_delete_confirm');
     if (!await confirmDialog({
-      title: t(command === 'file-clear' ? 'confirm_clear_inbox_title' : exporting ? 'confirm_export_title' : 'confirm_delete_title'),
+      title: t(command === 'file-clear' ? 'confirm_clear_inbox_title' : 'confirm_delete_title'),
       body: prompt + (names.length ? '\n\n' + names.join('\n') : ''),
-      confirmLabel: t(command === 'file-clear' ? 'files_clear' : exporting ? 'files_export' : 'delete'),
-      tone: exporting ? 'default' : 'danger',
+      confirmLabel: t(command === 'file-clear' ? 'files_clear' : 'delete'),
+      tone: 'danger',
     }) || !canWrite()) return;
     setWorking(true); setNotice('');
     const result = await api(command, ...(command.endsWith('-many') ? [JSON.stringify(names)] : names));
@@ -124,8 +121,7 @@ export default function Files(): JSX.Element {
     } else if (command === 'file-clear') {
       if (!count(result.removed) || (result.ignored !== undefined && !count(result.ignored))) setNotice(t('files_invalid_response'));
       else setNotice(t('files_cleared') + ' (' + result.removed + ')' + (result.ignored ? '\n' + fileText('ft_ignored', {count: Number(result.ignored)}) : ''));
-    } else if (command === 'file-export') setNotice(t('files_exported_to') + ' ' + String(result.path ?? ''));
-    else showToast(t('files_deleted'), 'ok');
+    } else showToast(t('files_deleted'), 'ok');
     inboxRevision++;
     if (!result.unknown) void loadInbox();
   }
@@ -146,6 +142,9 @@ export default function Files(): JSX.Element {
     onNativeEvent('navigate', value => { if (value.page === 'files') requestAnimationFrame(() => { if (inboxDirty || files() === null) void loadInbox(); }); }),
   ];
   onCleanup(() => subscriptions.forEach(stop => stop()));
+  // Received files land in Download/Taildrop as they arrive; poll so new
+  // deliveries appear without a manual import or refresh.
+  pollWhileVisible(loadInbox, () => viewPollInterval(5000));
   onMount(async () => { await initializeFiles(); setExportState(filesSnapshot()?.export ?? null); void loadInbox(); });
   createEffect(on(() => nativeControl().compatible, compatible => { if (compatible && files() === null) void loadInbox(); }));
   createEffect(on(() => routeVisible() && appActive(), shown => {
@@ -165,7 +164,6 @@ export default function Files(): JSX.Element {
       actions={<>
         <IconButton aria-label={t('tools_refresh')} disabled={loading()} onClick={() => void loadInbox()}><MdIcon name="refresh" size={18} /></IconButton>
         <details class="menu-pop"><summary aria-label={t('more')} title={t('more')}><MdIcon name="more_horiz" size={20} /></summary><div>
-          <button type="button" aria-label={t('files_receive')} disabled={!canWrite() || filesSnapshot()?.busy || filesSnapshot()?.unknown} onClick={event => menuAction(event, () => void nativeAction('files.import'))}>{t('files_receive')}</button>
           <button type="button" aria-label={t('ft_matches')} disabled={!canSelect() || !filtered().length} onClick={event => menuAction(event, selectMatches)}>{t('ft_matches')}</button>
           <button type="button" aria-label={t('files_clear')} class="danger" disabled={!canWrite() || !files()?.length} onClick={event => menuAction(event, () => void mutate('file-clear'))}>{t('files_clear')}</button>
         </div></details>
@@ -182,7 +180,6 @@ export default function Files(): JSX.Element {
           <div class="files-toolbar files-selection-bar" role="group" aria-label={t('files_select')}>
             <span class="tool-hint" aria-live="polite">{fileText('ft_selected', {count: selected().length, visible: filtered().length})}</span>
             <IconButton aria-label={t('ft_share')} disabled={!canSelect() || !selected().length} onClick={() => void nativeAction('files.share', {names: [...selected()]})}><MdIcon name="share" size={18} /></IconButton>
-            <IconButton aria-label={t('ft_batch_export')} disabled={!canSelect() || !canWrite() || !selected().length} onClick={() => void mutate('file-export-many', [...selected()])}><MdIcon name="open_in_new" size={18} /></IconButton>
             <IconButton aria-label={t('ft_batch_delete')} disabled={!canSelect() || !canWrite() || !selected().length} onClick={() => void mutate('file-delete-many', [...selected()])}><MdIcon name="delete" size={18} /></IconButton>
             <IconButton aria-label={t('ft_deselect')} disabled={!canSelect()} onClick={exitSelectMode}><MdIcon name="deselect" size={18} /></IconButton>
           </div>
@@ -201,9 +198,7 @@ export default function Files(): JSX.Element {
             </Show>
             <details class="menu-pop files-row-menu"><summary aria-label={t('more') + ': ' + file.name}><MdIcon name="more_horiz" size={20} /></summary><div>
               <button type="button" disabled={locked()} onClick={event => menuAction(event, () => void nativeAction('files.open', {name: file.name}))}>{t('ft_open')}</button>
-              <button type="button" onClick={event => menuAction(event, () => void copyWithToast(DATA_DIR + '/files/' + file.name, 'info'))}>{t('tools_copy_path')}</button>
-              <button type="button" disabled={locked()} onClick={event => menuAction(event, () => void nativeAction('files.save', {name: file.name}))}>{t('ft_save_as')}</button>
-              <button type="button" disabled={!canWrite()} onClick={event => menuAction(event, () => void mutate('file-export', [file.name]))}>{t('files_export')}</button>
+              <button type="button" onClick={event => menuAction(event, () => void copyWithToast('/sdcard/Download/Taildrop/' + file.name, 'info'))}>{t('tools_copy_path')}</button>
               <button type="button" disabled={locked()} onClick={event => menuAction(event, () => void nativeAction('files.share', {names: [file.name]}))}>{t('ft_share')}</button>
               <button type="button" aria-label={t('files_select') + ' ' + file.name} disabled={!canSelect()} onClick={event => menuAction(event, () => { setSelectMode(true); if (!selected().includes(file.name)) toggle(file.name); })}>{t('files_select')}</button>
               <button type="button" class="danger" disabled={!canWrite()} onClick={event => menuAction(event, () => void mutate('file-delete', [file.name]))}>{t('files_delete')}</button>
