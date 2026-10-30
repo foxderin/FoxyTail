@@ -391,7 +391,7 @@ function PeerProbe(props: { peerId: string; ip: string; disabled: boolean }): JS
     }
   };
   return (
-    <div data-peer-probe={props.ip}>
+    <div class="tool-actions" data-peer-probe={props.ip}>
       <TaskButton taskKey={key()} cmd="peer-ping" args={[props.peerId, props.ip]}
         label={t('net_peer_probe') + (props.ip.includes(':') ? ' IPv6' : ' IPv4')}
         disabled={props.disabled} />

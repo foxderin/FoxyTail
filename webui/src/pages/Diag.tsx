@@ -75,7 +75,7 @@ export default function Diag(): JSX.Element {
       </Show>
       <Card title={t('diag_check')} icon="network_check" description={t('diag_check_hint')}>
         <TaskProgress taskKey="diag-check" />
-        <TaskButton taskKey="diag-check" cmd="diag-check" label={t('diag_check')} />
+        <div class="tool-actions"><TaskButton taskKey="diag-check" cmd="diag-check" label={t('diag_check')} /></div>
         <Show when={check()?.status === 'error'}><ErrorState text={check()?.result?.error || t('error')} /></Show>
         <Show when={check()?.status === 'done' && !checks().length}><ErrorState text={t('diag_unknown')} /></Show>
         <div aria-live="polite" data-testid="diag-checks">

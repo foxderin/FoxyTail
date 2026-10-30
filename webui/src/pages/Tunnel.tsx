@@ -114,7 +114,7 @@ export default function Tunnel(): JSX.Element {
     );
   return (
     <div class="tools-page">
-      <div class="toolbar" data-testid="tunnel-actions">
+      <div class="tool-actions" data-testid="tunnel-actions">
         <TaskButton
           taskKey={TASK_KEY}
           cmd="derp-speedtest"
@@ -239,14 +239,14 @@ export default function Tunnel(): JSX.Element {
           </div>
         </Show>
         <div class="tool-actions spread" data-testid="dns-actions">
-          <Button variant="tonal" busy={dnsBusy()} disabled={!hasRoot} onClick={() => void checkDns()}>
-            <MdIcon name="network_check" size={18} />
-            {dnsBusy() ? t('loading') : dns() ? t('tools_dns_check_again') : t('dns_check')}
-          </Button>
           <a class="tool-text-link" href="#/settings">
             {t('tools_dns_settings')}
             <MdIcon name="chevron_right" size={16} />
           </a>
+          <Button variant="tonal" busy={dnsBusy()} disabled={!hasRoot} onClick={() => void checkDns()}>
+            <MdIcon name="network_check" size={18} />
+            {dnsBusy() ? t('loading') : dns() ? t('tools_dns_check_again') : t('dns_check')}
+          </Button>
         </div>
       </Card>
       <Coexistence />

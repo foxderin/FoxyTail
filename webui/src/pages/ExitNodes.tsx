@@ -132,7 +132,7 @@ export default function ExitNodes(): JSX.Element {
 
   return (
     <div class="page-stack network-page">
-      <div class="toolbar">
+      <div class="tool-actions">
         <TaskButton
           taskKey={TASK_KEY}
           cmd="speedtest-exitnodes"
