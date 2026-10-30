@@ -155,6 +155,10 @@ export function TextField(props: {
   );
 }
 
+/* The native <select> stays as the data and event carrier (hidden, so option
+ * <For>/<Show> children still resolve normally); the visible control is a
+ * menu-pop whose items are rebuilt from select.options on each open and which
+ * dispatches a real change event so every caller keeps working unchanged. */
 export function Select(props: ParentProps<{
   label?: string;
   value?: string | number;
@@ -166,17 +170,58 @@ export function Select(props: ParentProps<{
   class?: string;
   onChange?: (e: Event) => void;
 }>): JSX.Element {
+  let selectEl!: HTMLSelectElement;
+  let menuEl!: HTMLDivElement;
+  const [rev, bump] = createSignal(0);
+  onMount(() => {
+    const mo = new MutationObserver(() => bump(v => v + 1));
+    mo.observe(selectEl, { childList: true, subtree: true, characterData: true });
+    onCleanup(() => mo.disconnect());
+    bump(v => v + 1); // options render before onMount, so re-read once for the initial label
+  });
+  const options = () => (rev(), Array.from(selectEl?.options ?? []));
+  const currentText = () => {
+    const value = String(props.value ?? '');
+    return options().find(o => o.value === value)?.text ?? value;
+  };
+  const syncMenu = () => {
+    menuEl.replaceChildren(...options().map(opt => {
+      const item = document.createElement('button');
+      item.type = 'button';
+      item.setAttribute('role', 'option');
+      item.setAttribute('aria-selected', String(opt.value === String(props.value ?? '')));
+      item.disabled = opt.disabled;
+      item.textContent = opt.text;
+      item.onclick = () => {
+        selectEl.value = opt.value;
+        selectEl.dispatchEvent(new Event('change', { bubbles: true }));
+        menuEl.closest('details')?.removeAttribute('open');
+      };
+      return item;
+    }));
+  };
   return (
     <label class={'text-field select-field' + (props.disabled ? ' is-disabled' : '') + (!props.label ? ' no-label' : '') + (props.class ? ' ' + props.class : '')} style={props.style}>
       <span class={'text-field-label' + (String(props.value ?? '').length > 0 ? ' floating' : '')}>
         {props.label}
       </span>
-      <MdIcon name="chevron_right" size={18} class="select-caret" />
+      <MdIcon name="unfold_more" size={18} class="select-caret" />
+      <details class="menu-pop select-pop" onToggle={(e) => { if (e.currentTarget.open) syncMenu(); }}>
+        <summary
+          aria-label={props['aria-label'] || props.label}
+          aria-haspopup="listbox"
+          aria-disabled={props.disabled || undefined}
+          onClick={(e) => { if (props.disabled) e.preventDefault(); }}
+        >
+          <span class="select-value">{currentText()}</span>
+        </summary>
+        <div ref={menuEl} role="listbox" aria-label={props['aria-label'] || props.label} />
+      </details>
       <select
-        class="text-field-input"
+        ref={selectEl}
+        hidden
         id={props.id}
         name={props.name}
-        aria-label={props['aria-label']}
         value={props.value ?? ''}
         disabled={props.disabled || false}
         onChange={props.onChange}

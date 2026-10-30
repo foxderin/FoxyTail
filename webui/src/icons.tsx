@@ -42,6 +42,7 @@ import backup from '@material-symbols/svg-400/outlined/backup.svg?raw';
 import speed from '@material-symbols/svg-400/outlined/speed.svg?raw';
 import networkCheck from '@material-symbols/svg-400/outlined/network_check.svg?raw';
 import chevronRight from '@material-symbols/svg-400/outlined/chevron_right.svg?raw';
+import unfoldMore from '@material-symbols/svg-400/outlined/unfold_more.svg?raw';
 import send from '@material-symbols/svg-400/outlined/send.svg?raw';
 import download from '@material-symbols/svg-400/outlined/download.svg?raw';
 import sync from '@material-symbols/svg-400/outlined/sync.svg?raw';
@@ -111,6 +112,7 @@ const ICONS = {
   speed,
   network_check: networkCheck,
   chevron_right: chevronRight,
+  unfold_more: unfoldMore,
   send,
   download,
   sync,

@@ -118,6 +118,29 @@ await scenario('settings drafts survive navigation and conflicts require consent
   assert([...window.document.querySelectorAll('textarea')].some(e => e.value === raw), 'context draft retains comments, Unicode and unknown lines verbatim');
 });
 
+await scenario('popup selects open option lists and dispatch native change events', async ({ nav, window, fixture, click }) => {
+  await nav('settings');
+  const field = name => [...window.document.querySelectorAll('.select-field')]
+    .find(f => f.querySelector('.select-pop summary')?.getAttribute('aria-label') === window.__foxy.t(name));
+  const theme = field('set_theme');
+  assert(!!theme?.querySelector('select[hidden]') && !!theme.querySelector('.select-pop > summary'), 'selects keep a hidden option carrier behind a popup trigger');
+  assert(!!theme.querySelector('.select-value')?.textContent.trim(), 'trigger shows the current option text');
+  const open = pop => { pop.open = true; pop.dispatchEvent(new window.Event('toggle')); };
+  open(theme.querySelector('.select-pop')); await flush();
+  const options = [...theme.querySelectorAll('.select-pop [role="option"]')];
+  assert(options.length === 3 && options.filter(o => o.getAttribute('aria-selected') === 'true').length === 1, 'listbox rebuilds from native options with one selection');
+  click(options.find(o => o.textContent.trim() === window.__foxy.t('set_theme_dark'))); await flush();
+  const themePop = theme.querySelector('.select-pop');
+  assert(theme.querySelector('select').value === 'dark' && fixture.appearance.theme === 'dark' && !themePop.open, 'popup option dispatches native change and closes');
+  assert(themePop.querySelector('.select-value')?.textContent.trim() === window.__foxy.t('set_theme_dark'), 'trigger reflects the chosen option');
+  const dns = field('tools_dns_mode');
+  open(dns.querySelector('.select-pop')); await flush();
+  const dnsOption = [...dns.querySelectorAll('.select-pop [role="option"]')].find(o => o.getAttribute('aria-selected') !== 'true' && !o.disabled);
+  click(dnsOption); await flush();
+  assert(dns.querySelector('select').value !== 'local' && fixture.settings.DNS_MODE === 'local', 'settings popup stages a draft without auto-saving');
+  assert(!!window.document.querySelector('[data-setting="DNS_MODE"] [role="status"]'), 'staged popup change marks the field as pending review');
+});
+
 await scenario('Files partial outcomes, native snapshots and selection limits', async ({ app, fixture, nav, window, button, click, confirm }) => {
   await nav('files');
   click(button('ft_matches')); await flush();

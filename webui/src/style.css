@@ -69,7 +69,7 @@ button:disabled { cursor: not-allowed; }
 .status-sheet-row > span { color: var(--ft-muted); }
 .status-sheet-row > strong { flex: 1; font-weight: 600; }
 .service-actions { display: flex; flex-direction: column; gap: 10px; width: 100%; }
-.service-actions-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.service-actions-row { display: flex; align-items: center; justify-content: flex-end; gap: 8px; flex-wrap: wrap; }
 .service-controls-feedback { display: flex; gap: 8px; align-items: center; font-size: 12px; line-height: 1.5; color: var(--ft-muted); }
 .service-controls-feedback > span:not(.md-icon) { flex: 1; }
 .service-controls-feedback.warning { color: var(--md-sys-color-on-tertiary-container); }
@@ -273,3 +273,11 @@ canvas.chart, canvas.topo { width: 100%; display: block; touch-action: pan-y; }
 .menu-pop button.danger { color: var(--md-sys-color-error); }
 .menu-pop button:disabled { opacity: .45; cursor: default; }
 .menu-pop .menu-label { padding: 8px 12px 2px; font-size: 11px; font-weight: 600; color: var(--ft-muted); }
+/* Select renders as a menu-pop listbox over a hidden native select. */
+.select-pop { display: block; }
+.select-pop > summary { display: block; width: 100%; min-height: 0; padding: 0; border-radius: 0; cursor: pointer; }
+.select-pop > summary .select-value { display: block; min-height: 56px; padding: 23px 0 7px; font-size: 13px; color: var(--ft-text); }
+.select-field.no-label .select-pop > summary .select-value { min-height: 44px; padding: 11px 0; }
+.select-pop > summary[aria-disabled] { opacity: .55; cursor: default; }
+.select-pop > div { left: -13px; right: -36px; max-height: 300px; }
+.menu-pop [role='option'][aria-selected='true'] { background: var(--md-sys-color-secondary-container); color: var(--md-sys-color-on-secondary-container); }
