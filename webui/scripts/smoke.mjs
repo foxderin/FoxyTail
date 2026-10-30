@@ -293,6 +293,9 @@ await scenario('exit rows switch with one tap after confirmation and recheck acc
   assert(writes().length === 0, 'declined exit switch does not submit a mutation');
   choose('nas'); await confirm(true);
   assert(writes().length === 1 && writes()[0].args.command === 'exitnode-set' && writes()[0].args.arguments[0] === 'nas', 'confirmed tap submits the chosen peer');
+  await app.state.refreshStatus(); await nav('dashboard'); await flush();
+  assert([...window.document.querySelectorAll('.conn-row')].find(r => r.textContent.includes(window.__foxy.t('dash_exitnode')))?.textContent.includes('home-server'), 'dashboard exit row shows the peer hostname instead of the raw node id');
+  await nav('exit');
   choose(''); await confirm(false);
   assert(writes().length === 1, 'declined exit clear retains current exit');
   choose(''); await confirm(true);

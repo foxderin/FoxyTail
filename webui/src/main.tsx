@@ -93,6 +93,49 @@ async function mountApp(target: HTMLElement): Promise<void> {
     });
   });
   initServiceControl();
+  /* Overflow menus live inside scroll containers; flip them up when there is
+     no room below but enough above, otherwise the container clips them. */
+  document.addEventListener('toggle', event => {
+    const details = event.target;
+    if (!(details instanceof HTMLDetailsElement) || !details.open || !details.classList.contains('menu-pop')) return;
+    const pop = details.querySelector(':scope > div');
+    if (!(pop instanceof HTMLElement)) return;
+    const needed = pop.offsetHeight + 8;
+    let clipTop = 0, clipBottom = window.innerHeight;
+    for (let el = details.parentElement; el; el = el.parentElement) {
+      const overflow = getComputedStyle(el).overflowY;
+      if (overflow === 'auto' || overflow === 'scroll' || overflow === 'hidden') {
+        const bound = el.getBoundingClientRect();
+        clipTop = Math.max(clipTop, bound.top);
+        clipBottom = Math.min(clipBottom, bound.bottom);
+        break;
+      }
+    }
+    const rect = details.getBoundingClientRect();
+    pop.style.bottom = '';
+    pop.style.position = '';
+    pop.style.left = '';
+    pop.style.top = '';
+    pop.style.right = '';
+    if (clipBottom - rect.bottom >= needed) return;
+    if (rect.top - clipTop > needed) {
+      pop.style.bottom = '100%';
+      return;
+    }
+    // The clipping ancestor cannot hold the menu either way; escape it.
+    const viewBottom = document.getElementById('bottom-nav')?.getBoundingClientRect().top ?? window.innerHeight;
+    pop.style.position = 'fixed';
+    pop.style.right = 'auto';
+    const left = Math.max(8, Math.min(rect.right - pop.offsetWidth, window.innerWidth - pop.offsetWidth - 8));
+    const top = Math.max(8, Math.min(rect.bottom, viewBottom - needed));
+    // A transformed or contained ancestor becomes the containing block for
+    // fixed descendants; measuring the element at 0,0 gives its viewport origin.
+    pop.style.left = '0px';
+    pop.style.top = '0px';
+    const origin = pop.getBoundingClientRect();
+    pop.style.left = (left - origin.left) + 'px';
+    pop.style.top = (top - origin.top) + 'px';
+  }, true);
   render(() => {
     const route = createRouter();
     return <AppShell route={route} routes={ROUTES} />;
