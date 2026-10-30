@@ -11,7 +11,7 @@ import { refreshStatus, invalidateAccountState } from '../state';
 import { Card, SkeletonRows, EmptyState, StatusBadge } from '../components/Basics';
 import { LoadGate } from '../components/LoadGate';
 import { copyWithToast } from '../clipboard';
-import { confirmDialog } from '../components/ConfirmDialog';
+import { confirmDialog, type ConfirmOptions } from '../components/ConfirmDialog';
 import { showToast, toastApiError } from '../components/Toast';
 import { MdIcon } from '../icons';
 import type { AccountEntry } from '../types';
@@ -33,8 +33,8 @@ export default function Account(): JSX.Element {
   const [loggingOut, setLoggingOut] = createSignal(false);
   const [checking, setChecking] = createSignal(false);
   const actionBusy = () => checking() || waiting() || authkeyBusy() || switching() !== null || loggingOut() || !nativeControl().canWrite || nativeControl().busy;
-  async function preflight() {
-    if (actionBusy() || !await confirmDialog(t('tools_network_warning'))) return false;
+  async function preflight(confirm: ConfirmOptions) {
+    if (actionBusy() || !await confirmDialog({ body: t('tools_network_warning'), ...confirm })) return false;
     if (actionBusy()) return false;
     setChecking(true);
     const result = await scope.api('file-send-history');
@@ -55,7 +55,7 @@ export default function Account(): JSX.Element {
   onCleanup(() => { clearSecrets(); stopNavigation(); stopLifecycle(); window.removeEventListener('hashchange', onHash); });
 
   async function doLogin(extraArgs: string[] = []) {
-    if (!await preflight()) return;
+    if (!await preflight({ title: t('confirm_login_title'), confirmLabel: t('acc_login') })) return;
     setWaiting(true);
     setLoginUrl(null);
     setAlready(false);
@@ -70,7 +70,7 @@ export default function Account(): JSX.Element {
 
   async function loginAuthkey() {
     const key = authkey().trim();
-    if (!key || !await preflight()) return;
+    if (!key || !await preflight({ title: t('confirm_login_title'), confirmLabel: t('acc_login_authkey') })) return;
     setAuthkey('');
     setAuthkeyBusy(true);
     const res = await scope.api('login-authkey', key);
@@ -113,7 +113,7 @@ export default function Account(): JSX.Element {
   );
 
   async function switchAccount(name: string) {
-    if (!await preflight()) return;
+    if (!await preflight({ title: t('confirm_switch_title'), body: t('tools_account_list_desc'), confirmLabel: t('acc_switch') })) return;
     setLoginUrl(null);
     setSwitching(name);
     const res = await scope.api('switch', name);
@@ -128,7 +128,7 @@ export default function Account(): JSX.Element {
   }
 
   async function doLogout() {
-    if (!await preflight()) return;
+    if (!await preflight({ title: t('confirm_logout_title'), body: t('tools_logout_desc'), confirmLabel: t('acc_logout'), tone: 'danger' })) return;
     setLoginUrl(null);
     setLoggingOut(true);
     const res = await scope.api('logout');

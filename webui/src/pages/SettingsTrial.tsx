@@ -85,7 +85,7 @@ export default function SettingsTrial(props: {
   async function action(command: string) {
     if (busy() || props.locked || !known()) return;
     if (command === 'trial-confirm' && (trial()?.status !== 'running' || (trial()?.remaining ?? 0) - (performance.now() - receivedAt()) / 1000 <= 0)) return;
-    if (!await confirmDialog(t('tools_network_warning'))) return;
+    if (!await confirmDialog({ title: t('confirm_apply_title'), body: t('tools_network_warning'), confirmLabel: t(command === 'trial-start' ? 'trial_start' : command === 'trial-confirm' ? 'trial_confirm' : 'trial_revert') })) return;
     if (busy() || props.locked || !known()) return;
     if (command === 'trial-confirm' && (trial()?.remaining ?? 0) - (performance.now() - receivedAt()) / 1000 <= 0) return;
     revision++;

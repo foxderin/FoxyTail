@@ -32,14 +32,14 @@ export default function Diag(): JSX.Element {
   const [exportBusy, setExportBusy] = createSignal(false);
   async function collect() {
     const selected = mode();
-    if (selected === 'local' && !await confirmDialog(t('diag_local_hint'))) return;
+    if (selected === 'local' && !await confirmDialog({ body: t('diag_local_hint'), confirmLabel: t('diag_run') })) return;
     if (!nativeControl().canWrite || nativeControl().busy) return;
     await startTask(TASK_KEY, 'diag', selected).promise;
   }
   async function exportBundle(share: boolean) {
     const result = task()?.result;
     if (exportBusy() || !result || !path()) return;
-    if (share && !await confirmDialog(t(result.mode === 'local' ? 'diag_local_hint' : 'tools_diag_sensitive'))) return;
+    if (share && !await confirmDialog({ title: t('confirm_share_title'), body: t(result.mode === 'local' ? 'diag_local_hint' : 'tools_diag_sensitive'), confirmLabel: t('tools_share') })) return;
     setExportBusy(true);
     const exported = await requestNative(share ? 'artifact.share' : 'artifact.save', {
       token: result.artifactId, name: `foxytail-diagnostics-${result.mode}.tar.gz`,

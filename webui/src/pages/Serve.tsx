@@ -75,7 +75,7 @@ export default function Serve(): JSX.Element {
     return refreshKinds[k]();
   }
   async function del(k: Kind, mapping: Mapping) {
-    if (mutationBusy() || !(await confirmDialog(t('serve_del_confirm')))) return;
+    if (mutationBusy() || !(await confirmDialog({ title: t('confirm_serve_delete_title'), body: t('serve_del_confirm'), confirmLabel: t('delete'), tone: 'danger' }))) return;
     if (mutationBusy()) return;
     setDelBusy(mappingKey(k, mapping));
     const res = await scope.api(k + '-del', ...serveDeleteArgs(mapping));
@@ -101,7 +101,7 @@ export default function Serve(): JSX.Element {
       return;
     }
     const submitted = { kind: kind(), proto: proto(), port: port().trim(), target: target().trim() };
-    if (submitted.kind === 'funnel' && !await confirmDialog(`${t('tools_serve_public_hint')}\n${submitted.proto}:${submitted.port} → ${submitted.target}`)) return;
+    if (submitted.kind === 'funnel' && !await confirmDialog({ title: t('confirm_funnel_title'), body: `${t('tools_serve_public_hint')}\n${submitted.proto}:${submitted.port} → ${submitted.target}`, confirmLabel: t('add'), tone: 'danger' })) return;
     if (mutationBusy()) return;
     setFormError('');
     setAddBusy(true);

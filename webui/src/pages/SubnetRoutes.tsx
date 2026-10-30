@@ -55,7 +55,7 @@ export default function SubnetRoutes(props: {
     if (acceptanceLocked() || next === acceptanceOn()) return;
     setAcceptConfirming(true);
     try {
-      const approved = await confirmDialog(t(next ? 'tools_subnet_enable_confirm' : 'tools_subnet_disable_confirm'));
+      const approved = await confirmDialog({ title: t('confirm_subnet_title'), body: t(next ? 'tools_subnet_enable_confirm' : 'tools_subnet_disable_confirm') });
       if (!approved || disposed || !nativeControl().canWrite || nativeControl().busy || !acceptanceKnown() || acceptRoutesBusy()) return;
       void changeAcceptRoutes(next);
     } finally {

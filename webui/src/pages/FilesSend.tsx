@@ -116,7 +116,7 @@ export default function FilesSend(props: {inboxSettled: boolean}): JSX.Element {
     const sources = job ? unsuccessful(job) : selection();
     const selectionKeys = selection().map(file => file.key).join('\n'), accountRevision = nativeControl().accountRevision;
     if (!sources.length || sources.length > MAX_FILES) return;
-    if (!await confirmDialog(fileText(job ? 'ft_retry_confirm' : 'ft_send_confirm', {peer: destination.hostname || destination.id}) + '\n\n' + sources.map(file => file.name).join('\n')) || !sendAllowed()) return;
+    if (!await confirmDialog({ title: t('confirm_send_title'), body: fileText(job ? 'ft_retry_confirm' : 'ft_send_confirm', {peer: destination.hostname || destination.id}) + '\n\n' + sources.map(file => file.name).join('\n'), confirmLabel: t('files_send_btn') }) || !sendAllowed()) return;
     if (accountRevision !== nativeControl().accountRevision || (!job && selectionKeys !== selection().map(file => file.key).join('\n')) ||
       !peers()?.some(node => node.id === destination.id && node.ips[0] === destination.ips[0])) {
       setActionError(t('ft_selection_changed')); return;
@@ -134,7 +134,7 @@ export default function FilesSend(props: {inboxSettled: boolean}): JSX.Element {
   }
   async function removeHistory(job?: Transfer) {
     if (!writable() || submitting() || !historyReady() || historyError() || job && active(job)) return;
-    if (!await confirmDialog(t('ft_history_confirm')) || !writable() || submitting()) return;
+    if (!await confirmDialog({ title: t('confirm_history_title'), body: t('ft_history_confirm'), confirmLabel: t('delete'), tone: 'danger' }) || !writable() || submitting()) return;
     setSubmitting(true); setActionError('');
     const candidates = (history() ?? []).filter(item => !active(item) && (!job || item.id === job.id)).map(item => item.id);
     const result = await api(job ? 'file-send-delete' : 'file-send-clear', ...(job ? [job.id] : [])); setSubmitting(false);
@@ -186,7 +186,7 @@ export default function FilesSend(props: {inboxSettled: boolean}): JSX.Element {
       <Card title={t('files_send')} icon="send" actions={<IconButton aria-label={t('files_refresh_targets')} disabled={peerLoading()} onClick={() => void loadPeers()}><MdIcon name="refresh" size={18} /></IconButton>}>
         <Show when={filesSnapshot()?.message}><p class="files-notice" role="status">{filesSnapshot()?.message}</p></Show>
         <Show when={filesSnapshot()?.unknown}><div class="files-toolbar"><p role="alert">{t('ft_unknown')}</p><IconButton aria-label={t('ft_acknowledge')} disabled={submitting() || filesSnapshot()?.busy} onClick={async () => {
-          if (await confirmDialog(t('ft_acknowledge_confirm'))) await nativeAction('files.acknowledge');
+          if (await confirmDialog({ body: t('ft_acknowledge_confirm'), confirmLabel: t('ft_acknowledge') })) await nativeAction('files.acknowledge');
         }}><MdIcon name="check_circle" size={18} /></IconButton></div></Show>
         <Show when={filesSnapshot()?.preparing}><p role="status">{t('ft_preparing')}</p></Show>
         <Show when={filesSnapshot()?.busy}><IconButton aria-label={t('files_cancel_send')} disabled={cancelling()} onClick={() => void nativeAction('files.cancel', filesSnapshot()?.job ? {job: filesSnapshot()!.job} : {})}><MdIcon name="close" size={18} /></IconButton></Show>

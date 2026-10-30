@@ -13,6 +13,8 @@ export function Button(props: ParentProps<{
   'aria-label'?: string;
   'aria-expanded'?: boolean;
   'aria-controls'?: string;
+  'aria-describedby'?: string;
+  'data-dialog-action'?: string;
   title?: string;
   autofocus?: boolean;
   class?: string;
@@ -31,6 +33,8 @@ export function Button(props: ParentProps<{
       aria-label={props['aria-label']}
       aria-expanded={props['aria-expanded']}
       aria-controls={props['aria-controls']}
+      aria-describedby={props['aria-describedby']}
+      data-dialog-action={props['data-dialog-action']}
       title={props.title}
       autofocus={props.autofocus || undefined}
       onClick={props.onClick}

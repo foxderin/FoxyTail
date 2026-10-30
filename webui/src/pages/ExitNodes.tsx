@@ -126,7 +126,7 @@ export default function ExitNodes(): JSX.Element {
     if (selected === null || !identity) return;
     setSwitching(true);
     try {
-      if (!await confirmDialog(t('native_exit_confirm'))) return;
+      if (!await confirmDialog({ body: t('native_exit_confirm'), confirmLabel: t('net_exit_apply') })) return;
       if (!canApply() || selectedId() !== selected || status()?.self?.id !== identity ||
           nativeControl().accountRevision !== accountRevision || nativeControl().revision !== revision ||
           (selected !== '' && (!selectedPeer()?.online || selectedPeer()?.id !== selected))) {

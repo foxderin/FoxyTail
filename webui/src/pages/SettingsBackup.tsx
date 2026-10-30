@@ -49,7 +49,7 @@ export default function SettingsBackup(props: {
   }
   async function exportBackup(token: string, share: boolean) {
     if (!token || exportBusy()) return;
-    if (share && !await confirmDialog(t('tools_backup_sensitive'))) return;
+    if (share && !await confirmDialog({ title: t('confirm_share_title'), body: t('tools_backup_sensitive'), confirmLabel: t('tools_share') })) return;
     setExportBusy(true);
     const result = await requestNative(share ? 'artifact.share' : 'artifact.save', { token, name: 'foxytail-backup.tar.gz' });
     setExportBusy(false);
@@ -92,7 +92,7 @@ export default function SettingsBackup(props: {
   async function restore() {
     const choice = preview();
     if (props.locked || restoreBusy() || !choice || choice.path !== selected()) return;
-    if (!(await confirmDialog(`${t('set_restore_confirm')}\nSHA-256: ${choice.sha256}\nBaseline SHA-256: ${choice.baselineSha256}`))) return;
+    if (!(await confirmDialog({ title: t('confirm_restore_title'), body: `${t('set_restore_confirm')}\nSHA-256: ${choice.sha256}\nBaseline SHA-256: ${choice.baselineSha256}`, confirmLabel: t('set_restore'), tone: 'danger' }))) return;
     if (preview() !== choice || props.locked || restoreBusy()) return;
     setPreview(null);
     await restoreBackup(choice);

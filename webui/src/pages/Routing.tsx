@@ -128,7 +128,7 @@ export default function Routing(): JSX.Element {
   async function apply() {
     if (locked() || (scope_() !== 'all' && !perAppSupported())) return;
     const saved = current();
-    if (!await confirmDialog((conflict() ? t('tools_draft_conflict') + '\n\n' : '') + t('tools_network_warning'))) return;
+    if (!await confirmDialog({ title: t(conflict() ? 'confirm_conflict_title' : 'confirm_apply_title'), body: (conflict() ? t('tools_draft_conflict') + '\n\n' : '') + t('tools_network_warning'), confirmLabel: t('tools_apply_rules') })) return;
     if (locked() || JSON.stringify(saved) !== JSON.stringify(current())) return;
     readRevision++;
     setApplyBusy(true);
@@ -255,7 +255,7 @@ export default function Routing(): JSX.Element {
               </Show>
             </span>
             <Button variant="text" disabled={applyBusy()} onClick={async () => {
-              if (!dirty() || await confirmDialog(t('tools_discard_confirm'))) await loadRoutes(true);
+              if (!dirty() || await confirmDialog({ title: t('confirm_discard_title'), body: t('tools_discard_confirm'), confirmLabel: t('tools_discard'), tone: 'danger' })) await loadRoutes(true);
             }}>{t(dirty() ? 'tools_discard' : 'tools_refresh')}</Button>
             <Button
               busy={applyBusy()}

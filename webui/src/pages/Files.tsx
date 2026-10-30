@@ -79,8 +79,14 @@ export default function Files(): JSX.Element {
   }
   async function mutate(command: string, names: string[] = []) {
     if (!canWrite()) return;
-    const prompt = command === 'file-clear' ? t('ft_clear_confirm') : command.includes('export') ? t('ft_export_confirm') : t('ft_delete_confirm');
-    if (!await confirmDialog(prompt + (names.length ? '\n\n' + names.join('\n') : '')) || !canWrite()) return;
+    const exporting = command.includes('export');
+    const prompt = command === 'file-clear' ? t('ft_clear_confirm') : exporting ? t('ft_export_confirm') : t('ft_delete_confirm');
+    if (!await confirmDialog({
+      title: t(command === 'file-clear' ? 'confirm_clear_inbox_title' : exporting ? 'confirm_export_title' : 'confirm_delete_title'),
+      body: prompt + (names.length ? '\n\n' + names.join('\n') : ''),
+      confirmLabel: t(command === 'file-clear' ? 'files_clear' : exporting ? 'files_export' : 'delete'),
+      tone: exporting ? 'default' : 'danger',
+    }) || !canWrite()) return;
     setWorking(true); setNotice('');
     const result = await api(command, ...(command.endsWith('-many') ? [JSON.stringify(names)] : names));
     setWorking(false);

@@ -405,6 +405,17 @@ await scenario('native file preflight cancellation and repeated active cancellat
   assert(!button('files_cancel_send', sendSection).disabled && fixture.files.busy, 'requested cancellation is feedback, not a fabricated terminal transfer outcome');
 });
 
+await scenario('feedback primitives keep errors readable and name destructive actions', async ({ app, window }) => {
+  app.toast.showToast('Simulated failure detail', 'err'); await flush();
+  const error = [...window.document.querySelectorAll('.toast.err')].find(node => node.textContent.includes('Simulated failure detail'));
+  assert(error?.querySelector(`button[aria-label="${app.t('close')}"]`) && error.querySelector(`button[aria-label="${app.t('copy')}"]`), 'error toast offers copy and explicit dismissal');
+  const answer = app.confirm.confirmDialog({ title: 'Stop?', body: 'Body', confirmLabel: 'Stop now', tone: 'danger' }); await flush();
+  const accept = window.document.querySelector('dialog[open] [data-dialog-action="confirm"]');
+  assert(accept?.textContent.trim() === 'Stop now' && accept.classList.contains('danger'), 'destructive confirmation uses a verb and danger styling');
+  window.document.querySelector('dialog[open] [data-dialog-action="cancel"]').click();
+  assert(await answer === false, 'cancel resolves the confirmation as declined');
+});
+
 await scenario('dashboard states expose one status and a direct recovery action', async ({ app, fixture, nav, window, button, click }) => {
   const now = Date.UTC(2026, 9, 30);
   assert(app.format.keyExpiry('0001-01-01T00:00:00Z', now) === null, 'disabled key expiry sentinel is not reported');

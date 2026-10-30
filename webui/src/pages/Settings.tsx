@@ -122,7 +122,7 @@ export default function Settings(): JSX.Element {
     const fresh = await loadSettings();
     if (fresh === undefined || locked() || drafts()[field.key] !== draft) return;
     const conflict = draft.baseline !== settings()?.[field.key];
-    if (conflict && !await confirmDialog(t('tools_draft_conflict'))) return;
+    if (conflict && !await confirmDialog({ title: t('confirm_conflict_title'), body: t('tools_draft_conflict'), confirmLabel: t('confirm_overwrite') })) return;
     if (locked() || drafts()[field.key] !== draft) return;
     settingsLoad++;
     const res = await startTask('settings-save', 'settings-set', field.key, value).promise;
@@ -136,7 +136,7 @@ export default function Settings(): JSX.Element {
   }
   async function applySavedSettings() {
     if (locked() || trialActive()) return;
-    if (!await confirmDialog(t('tools_network_warning'))) return;
+    if (!await confirmDialog({ title: t('confirm_apply_title'), body: t('tools_network_warning'), confirmLabel: t('tools_restart') })) return;
     const trialState = await scope.api('trial-status');
     const trial = trialState.trial as { status?: string } | null | undefined;
     if (!trialState.ok || trial === undefined || (trial !== null && !['confirmed', 'rolled-back', 'superseded'].includes(trial.status ?? ''))) {
@@ -216,7 +216,7 @@ export default function Settings(): JSX.Element {
             <div class="tool-actions">
               <Button disabled={locked()} onClick={() => void saveKey(field)}>{t('save')}</Button>
               <Button variant="text" disabled={locked()} onClick={async () => {
-                if (!await confirmDialog(t('tools_discard_confirm'))) return;
+                if (!await confirmDialog({ title: t('confirm_discard_title'), body: t('tools_discard_confirm'), confirmLabel: t('tools_discard'), tone: 'danger' })) return;
                 if (await loadSettings() !== undefined) setDrafts(old => { const next = { ...old }; delete next[field.key]; return next; });
               }}>{t('tools_discard')}</Button>
             </div>

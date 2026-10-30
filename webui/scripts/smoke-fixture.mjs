@@ -53,7 +53,7 @@ export async function boot(options = {}) {
     await flush();
     const dialog = window.document.querySelector('[role="dialog"], dialog[open]');
     assert(!!dialog, 'destructive/conflict action requires confirmation');
-    click(button(accepted ? 'confirm' : 'cancel', dialog || window.document));
+    click((dialog || window.document).querySelector(`[data-dialog-action="${accepted ? 'confirm' : 'cancel'}"]`));
     await flush();
   };
   return { window, fixture, app: window.__foxy, nav, input, button, click, confirm, close: () => window.close() };

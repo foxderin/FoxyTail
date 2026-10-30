@@ -165,13 +165,11 @@ export function ServiceControls(): JSX.Element {
       if (action !== 'start') {
         setPhase('confirm');
         const approved = await confirmDialog(
-          t(
-            action === 'mode'
-              ? 'net_mode_confirm'
-              : action === 'stop'
-                ? 'net_stop_confirm'
-                : 'net_restart_confirm',
-          ),
+          action === 'mode'
+            ? { title: t('confirm_mode_title'), body: t('net_mode_confirm'), confirmLabel: t('net_mode_switch') }
+            : action === 'stop'
+              ? { title: t('confirm_stop_title'), body: t('net_stop_confirm'), confirmLabel: t('native_stop'), tone: 'danger' }
+              : { title: t('confirm_restart_title'), body: t('net_restart_confirm'), confirmLabel: t('dash_restart') },
         );
         if (!approved || !canWrite()) return;
       }
@@ -294,7 +292,7 @@ export function ServiceControls(): JSX.Element {
         </div>
         <Show when={nativeControl().canStop && !nativeControl().canWrite && !nativeControl().busy}>
           <Button variant="outlined" class="danger" onClick={async () => {
-            if (!await confirmDialog(t('net_stop_confirm'))) return;
+            if (!await confirmDialog({ title: t('confirm_stop_title'), body: t('net_stop_confirm'), confirmLabel: t('native_stop'), tone: 'danger' })) return;
             const result = await api('control', 'stop');
             if (!result.ok) toastApiError(t('op_failed'), result);
             await refreshStatus({ afterCurrent: true });

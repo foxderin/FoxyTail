@@ -83,7 +83,7 @@
 .subnet-route-row .main { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
 .subnet-route-row code, [data-custom-cidr] code { overflow-wrap: anywhere; word-break: break-word; }
 .subnet-route-row .btn { flex: none; white-space: nowrap; padding-inline: 9px; }
-.subnet-route-primary { color: var(--md-sys-color-on-surface-variant); font-size: 10px; }
+.subnet-route-primary { color: var(--md-sys-color-on-surface-variant); font-size: 11px; }
 .subnet-route-add { display: flex; flex-wrap: nowrap; margin-bottom: 10px; }
 .subnet-route-add .text-field { flex: 1; min-width: 0; }
 .subnet-route-add .btn { flex: none; }
@@ -351,7 +351,7 @@
   flex-wrap: wrap;
   gap: 8px;
   color: var(--md-sys-color-on-surface-variant);
-  font-size: 11px;
+  font-size: 12px;
 }
 .tool-log {
   max-height: 62vh;
