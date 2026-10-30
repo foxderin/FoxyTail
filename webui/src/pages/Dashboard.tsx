@@ -65,7 +65,7 @@ export default function Dashboard(): JSX.Element {
     return t(label) + dns;
   };
   const rows = (): { icon: IconName; label: string; value: string; href: string }[] => [
-    { icon: 'logout', label: t('dash_exitnode'), value: exitNodeLabel(), href: '#/peers' },
+    { icon: 'logout', label: t('dash_exitnode'), value: exitNodeLabel(), href: '#/exit' },
     { icon: 'group', label: t('dash_peers_online'), value: peersLabel(), href: '#/peers' },
     { icon: 'monitoring', label: t('dash_today_traffic'), value: today() ? `↓ ${fmtBytes(today()!.rx)} · ↑ ${fmtBytes(today()!.tx)}` : '—', href: '#/traffic' },
     { icon: 'router', label: t('dash_mode'), value: modeLabel(), href: '#/tunnel' },

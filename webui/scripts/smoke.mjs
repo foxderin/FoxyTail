@@ -263,25 +263,25 @@ await scenario('Back ignores hidden retained disclosures', async ({ fixture, nav
   assert(window.location.hash === '#/files' && details.open, 'Back navigates history without closing a disclosure on the hidden retained route');
 });
 
-await scenario('exit apply and clear require confirmation and recheck account', async ({ app, fixture, nav, window, button, click, confirm }) => {
-  await nav('peers');
+await scenario('exit rows switch with one tap after confirmation and recheck account', async ({ app, fixture, nav, window, click, confirm }) => {
+  await nav('exit');
   const choose = value => click([...window.document.querySelectorAll('input[name="exit-node"]')].find(input => input.value === value));
   const writes = () => fixture.log.filter(r => r.action === 'control.mutate' && ['exitnode-set', 'exitnode-clear'].includes(r.args.command));
-  choose('nas'); click(button('net_exit_apply')); await confirm(false);
-  assert(writes().length === 0, 'declined exit selection does not submit a mutation');
-  click(button('net_exit_apply')); await confirm(true);
-  assert(writes().length === 1 && writes()[0].args.command === 'exitnode-set' && writes()[0].args.arguments[0] === 'nas', 'confirmed exit apply submits the exact selected peer');
-  choose(''); click(button('net_exit_apply')); await confirm(false);
+  choose('nas'); await confirm(false);
+  assert(writes().length === 0, 'declined exit switch does not submit a mutation');
+  choose('nas'); await confirm(true);
+  assert(writes().length === 1 && writes()[0].args.command === 'exitnode-set' && writes()[0].args.arguments[0] === 'nas', 'confirmed tap submits the chosen peer');
+  choose(''); await confirm(false);
   assert(writes().length === 1, 'declined exit clear retains current exit');
-  click(button('net_exit_apply')); await confirm(true);
+  choose(''); await confirm(true);
   assert(writes().length === 2 && writes()[1].args.command === 'exitnode-clear', 'explicitly confirmed clear submits once');
-  choose('nas'); click(button('net_exit_apply')); await flush();
+  choose('nas'); await flush();
   fixture.data.status.self.id = 'changed-account';
   fixture.data['exit-routing'].selfId = 'changed-account';
   fixture.publishControl({ accountRevision: fixture.control.accountRevision + 1 });
   await app.state.refreshStatus({ afterCurrent: true }); await flush();
   await confirm(true);
-  assert(writes().length === 2, 'account change while confirmation is open invalidates the selected target');
+  assert(writes().length === 2, 'account change while confirmation is open invalidates the tapped target');
 });
 
 await scenario('failed context baseline cannot enable replacement editing', async h => {
@@ -457,6 +457,14 @@ await scenario('status sheet mirrors the connection card without top-bar control
   assert(window.document.querySelector('.tool-links'), 'network hub links into the detail tools');
   await nav('tunnel');
   assert(window.document.querySelector('.back-link')?.getAttribute('href') === '#/network', 'tunnel detail navigates back to the network hub');
+  await nav('exit');
+  assert(window.document.querySelector('.back-link')?.getAttribute('href') === '#/network', 'exit detail navigates back to the network hub');
+  assert(window.document.querySelectorAll('input[name="exit-node"]').length > 0, 'exit page renders switchable rows');
+  assert(window.document.querySelectorAll('.network-exit-options button').length === 0, 'exit switching has no separate apply button');
+  const hubExit = [...window.document.querySelectorAll('a')].find(a => a.getAttribute('href') === '#/exit');
+  assert(!!hubExit, 'exit page is reachable through a link');
+  await nav('peers');
+  assert(!window.document.querySelector('input[name="exit-node"]'), 'device inventory no longer embeds the exit workflow');
 });
 
 for (const state of ['empty', 'error', 'no-root', 'no-bridge', 'unknown']) {

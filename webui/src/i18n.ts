@@ -48,11 +48,14 @@ const zh = {
   hero_banner_login: '尚未登录 tailnet', hero_banner_stopped: '服务已停止',
 
   peers_title: '设备', peers_list: '列表', peers_topology: '拓扑',
-  peers_empty: '没有发现其他节点', peers_detail: '节点详情',
+  peers_empty: '还没有其他设备，在另一台设备上登录同一账号后自动出现', peers_detail: '设备详情',
   peers_rx: '接收', peers_tx: '发送',
+  peer_copy_name: '复制名称', peer_set_exit: '设为出口', peer_send_files: '发送文件',
 
   exit_title: '出口节点', exit_test: '测速', exit_testing: '测速中…',
-  exit_current: '当前',
+  exit_current: '当前', exit_capable: '可作为出口',
+  exit_switch_title: '切换出口节点', exit_switch: '切换出口', exit_clear: '取消出口',
+  exit_offline_hint: '离线 · 暂不可选',
   exit_empty: '没有可用的出口节点', exit_set_done: '出口节点已切换', exit_cleared: '已取消出口节点',
 
   acc_title: '账号', acc_login: '登录', acc_login_url_hint: '复制下面的链接并在浏览器中完成授权：',
@@ -195,11 +198,14 @@ const en: Record<I18nKey, string> = {
   hero_banner_login: 'Not logged in to the tailnet', hero_banner_stopped: 'Service stopped',
 
   peers_title: 'Devices', peers_list: 'List', peers_topology: 'Topology',
-  peers_empty: 'No peers found', peers_detail: 'Peer details',
+  peers_empty: 'No other devices yet — they appear here after signing in on another device', peers_detail: 'Device details',
   peers_rx: 'RX', peers_tx: 'TX',
+  peer_copy_name: 'Copy name', peer_set_exit: 'Use as exit node', peer_send_files: 'Send files',
 
   exit_title: 'Exit Nodes', exit_test: 'Speed test', exit_testing: 'Testing…',
-  exit_current: 'Current',
+  exit_current: 'Current', exit_capable: 'Can serve as exit',
+  exit_switch_title: 'Switch exit node', exit_switch: 'Switch exit', exit_clear: 'Clear exit',
+  exit_offline_hint: 'Offline — unavailable',
   exit_empty: 'No exit nodes available', exit_set_done: 'Exit node switched', exit_cleared: 'Exit node cleared',
 
   acc_title: 'Account', acc_login: 'Log in', acc_login_url_hint: 'Copy the link below and finish authorization in a browser:',

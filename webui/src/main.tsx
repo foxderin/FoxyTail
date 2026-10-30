@@ -16,6 +16,7 @@ import Dashboard from './pages/Dashboard';
 import Peers from './pages/Peers';
 import Traffic from './pages/Traffic';
 import Network from './pages/Network';
+import ExitNodes from './pages/ExitNodes';
 import Tunnel from './pages/Tunnel';
 import Routing from './pages/Routing';
 import Account from './pages/Account';
@@ -30,6 +31,7 @@ const PAGES: Record<RouteName, RouteDef['component']> = {
   peers: Peers,
   traffic: Traffic,
   network: Network,
+  exit: ExitNodes,
   tunnel: Tunnel,
   routing: Routing,
   account: Account,

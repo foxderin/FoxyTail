@@ -1,4 +1,4 @@
-/** Exit selection is explicit; native owns probes and their cancellation. */
+/** Exit switching is one tap per row; native owns probes and their cancellation. */
 import {
   createEffect,
   createMemo,
@@ -25,11 +25,10 @@ import { OsIcon } from '../components/OsIcon';
 import { TaskButton, TaskProgress } from '../components/TaskProgress';
 import { showToast, toastApiError } from '../components/Toast';
 import { MdIcon } from '../icons';
-import { Button } from '../components/ui';
+import { Button, CircularProgress } from '../components/ui';
 import type { ExitNodeProbe } from '../types';
 import './network.css';
 import { createGuardedLoad } from './tools-refresh';
-import { bindNativeDraft } from '../settings';
 import { confirmDialog } from '../components/ConfirmDialog';
 
 const TASK_KEY = 'speedtest-exitnodes';
@@ -39,51 +38,22 @@ export default function ExitNodes(): JSX.Element {
   const peers = () => sharedPeers()?.filter(peer => peer.exitNodeOption) ?? null;
   const [loadError, setLoadError] = createSignal<string | null>(null);
   const [loading, setLoading] = createSignal(false);
-  const [switching, setSwitching] = createSignal(false);
-  // null follows shared status; the empty string deliberately selects no exit.
-  const [draftId, setDraftId] = createSignal<string | null>(null);
+  // id of the row currently applying, or null; '' means "clear to local".
+  const [applying, setApplying] = createSignal<string | null>(null);
+  // last accepted target awaiting confirmation from a fresh status snapshot.
   const [pendingId, setPendingId] = createSignal<string | null>(null);
-  const [draftIdentity, setDraftIdentity] = createSignal('');
-  const draftReady = bindNativeDraft('exit', () => ({
-    identity: draftId() === null ? '' : draftIdentity(), id: draftId() ?? '',
-  }), value => {
-    if (typeof value.identity === 'string' && value.identity && typeof value.id === 'string') {
-      if (status()?.self?.id && status()?.self?.id !== value.identity) return;
-      setDraftIdentity(value.identity); setDraftId(value.id);
-    }
-  });
   const task = () => getTask(TASK_KEY);
   // A live daemon can be stopped even when its exit preferences are unreadable.
   const statusKnown = () =>
     !statusError() && status()?.exitRouting?.known === true && !['unknown', 'stopped'].includes(connState(status()));
   const currentId = () =>
     statusKnown() ? (status()?.exitRouting?.selected?.auto ? `auto:${status()!.exitRouting!.selected!.auto}` : status()?.exitRouting?.selected?.id || status()?.exitRouting?.selected?.ip || '') : null;
-  const selectedId = () => draftId() ?? currentId();
-  const changed = () =>
-    selectedId() !== null &&
-    currentId() !== null &&
-    selectedId() !== currentId();
-  const selectedPeer = () =>
-    (peers() || []).find((peer) => peer.id === selectedId());
-  const canApply = () =>
-    nativeControl().canWrite && !nativeControl().busy &&
-    statusKnown() &&
-    pendingId() === null &&
-    (changed() || status()?.exitRouting?.effective === 'not-effective') &&
-    (selectedId() === '' || selectedPeer()?.online);
-  const choose = (id: string) => {
-    setPendingId(null);
-    setDraftId(id);
-  };
-  createEffect(() => {
-    const next = status()?.self?.id;
-    if (next && next !== draftIdentity()) { setDraftId(null); setPendingId(null); setDraftIdentity(next); }
-  });
+  const peerById = (id: string) =>
+    (peers() || []).find((peer) => peer.id === id);
   createEffect(() => {
     const expected = pendingId();
     if (expected !== null && statusKnown() && currentId() === expected && status()?.exitRouting?.effective !== 'not-effective') {
       setPendingId(null);
-      setDraftId(null);
       showToast(t(expected === '' ? 'exit_cleared' : 'exit_set_done'), 'ok');
     }
   });
@@ -117,36 +87,48 @@ export default function ExitNodes(): JSX.Element {
     setLoading,
   );
 
-  async function applySelection() {
-    if (switching() || !canApply()) return;
-    const selected = selectedId();
+  const switchable = () =>
+    applying() === null &&
+    nativeControl().canWrite && !nativeControl().busy &&
+    statusKnown() && hasRoot;
+
+  async function applyTo(target: string) {
+    if (!switchable()) return;
+    // Re-tapping the current exit retries only when the previous apply did not take.
+    if (target === currentId() && status()?.exitRouting?.effective !== 'not-effective') return;
+    if (target !== '' && !peerById(target)?.online) return;
     const identity = status()?.self?.id;
     const accountRevision = nativeControl().accountRevision;
     const revision = nativeControl().revision;
-    if (selected === null || !identity) return;
-    setSwitching(true);
+    if (!identity) return;
+    setApplying(target);
     try {
-      if (!await confirmDialog({ body: t('native_exit_confirm'), confirmLabel: t('net_exit_apply') })) return;
-      if (!canApply() || selectedId() !== selected || status()?.self?.id !== identity ||
+      if (!await confirmDialog({
+        title: t('exit_switch_title'),
+        body: t('native_exit_confirm'),
+        confirmLabel: t(target === '' ? 'exit_clear' : 'exit_switch'),
+      })) return;
+      if (status()?.self?.id !== identity || !statusKnown() ||
           nativeControl().accountRevision !== accountRevision || nativeControl().revision !== revision ||
-          (selected !== '' && (!selectedPeer()?.online || selectedPeer()?.id !== selected))) {
+          (target !== '' && (!peerById(target)?.online || target === currentId() && status()?.exitRouting?.effective !== 'not-effective'))) {
         showToast(t('native_exit_changed'), 'info');
         return;
       }
-      const res = selected === ''
+      const res = target === ''
         ? await scope.api('exitnode-clear')
-        : await scope.api('exitnode-set', selected);
+        : await scope.api('exitnode-set', target);
       if (res.cancelled || status()?.self?.id !== identity || nativeControl().accountRevision !== accountRevision) return;
       if (res.ok) {
-        setDraftId(selected);
-        setPendingId(selected);
+        setPendingId(target);
       } else toastApiError(t('op_failed'), res);
       await refreshStatus({ afterCurrent: true });
       await refreshExitRouting();
-    } finally { setSwitching(false); }
+    } finally { setApplying(null); }
   }
 
-  onMount(() => void draftReady.then(loadList));
+  onMount(() => void loadList());
+
+  const optionBusy = (id: string) => applying() === id || pendingId() === id;
 
   return (
     <div class="page-stack network-page">
@@ -205,7 +187,7 @@ export default function ExitNodes(): JSX.Element {
           fallback={
             <Button
               variant="outlined"
-              disabled={statusLoading() || switching()}
+              disabled={statusLoading() || applying() !== null}
               onClick={() => void refreshStatus({ afterCurrent: true })}
             >
               <MdIcon name="refresh" size={18} />
@@ -239,15 +221,15 @@ export default function ExitNodes(): JSX.Element {
         >
           <label
             class="network-exit-option"
-            classList={{ 'is-selected': selectedId() === '' }}
+            classList={{ 'is-selected': currentId() === '', 'is-busy': optionBusy('') }}
           >
             <input
               type="radio"
               name="exit-node"
               value=""
-              checked={selectedId() === ''}
-              disabled={switching() || !hasRoot || !statusKnown()}
-              onChange={() => choose('')}
+              checked={currentId() === ''}
+              disabled={!switchable()}
+              onClick={() => void applyTo('')}
             />
             <div class="network-device-avatar">
               <MdIcon name="language" size={23} />
@@ -255,6 +237,12 @@ export default function ExitNodes(): JSX.Element {
             <div class="network-exit-option-copy">
               <strong>{t('net_exit_local')}</strong>
               <span>{t('net_exit_local_hint')}</span>
+              <Show when={optionBusy('')}>
+                <span class="network-exit-option-state">
+                  <CircularProgress size={14} />
+                  {t('net_working')}
+                </span>
+              </Show>
             </div>
             <Show when={currentId() === ''}>
               <span class="network-small-badge">{t('exit_current')}</span>
@@ -277,22 +265,20 @@ export default function ExitNodes(): JSX.Element {
                   <label
                     class="network-exit-option"
                     classList={{
-                      'is-selected': selectedId() === peer.id,
+                      'is-selected': currentId() === peer.id,
                       'is-offline': !peer.online,
+                      'is-busy': optionBusy(peer.id),
                     }}
                   >
                     <input
                       type="radio"
                       name="exit-node"
                       value={peer.id}
-                      checked={selectedId() === peer.id}
+                      checked={currentId() === peer.id}
                       disabled={
-                        !peer.online ||
-                        switching() ||
-                        !hasRoot ||
-                        !statusKnown()
+                        !peer.online || !switchable()
                       }
-                      onChange={() => choose(peer.id)}
+                      onClick={() => void applyTo(peer.id)}
                     />
                     <OsIcon os={peer.os} />
                     <div class="network-exit-option-copy">
@@ -312,10 +298,20 @@ export default function ExitNodes(): JSX.Element {
                         </Show>
                       </span>
                       <span class="network-exit-option-state">
-                        <StatusDot state={peer.online ? 'on' : 'off'} />
-                        {peer.online
-                          ? t('net_filter_online')
-                          : t('net_filter_offline')}
+                        <Show
+                          when={optionBusy(peer.id)}
+                          fallback={
+                            <>
+                              <StatusDot state={peer.online ? 'on' : 'off'} />
+                              {peer.online
+                                ? t('net_filter_online')
+                                : t('exit_offline_hint')}
+                            </>
+                          }
+                        >
+                          <CircularProgress size={14} />
+                          {t('net_working')}
+                        </Show>
                       </span>
                     </div>
                     <div
@@ -340,7 +336,7 @@ export default function ExitNodes(): JSX.Element {
           <div>
             <StatusDot
               state={
-                !statusKnown() || pendingId() !== null || changed() || status()?.exitRouting?.effective === 'not-effective'
+                !statusKnown() || pendingId() !== null || status()?.exitRouting?.effective === 'not-effective'
                   ? 'warn'
                   : 'on'
               }
@@ -350,32 +346,21 @@ export default function ExitNodes(): JSX.Element {
                 ? t('net_exit_confirming')
                 : !statusKnown()
                   ? t('net_exit_unknown')
-                  : changed()
-                    ? t('net_exit_pending') +
-                      ' · ' +
-                      (selectedPeer()?.hostname || t('net_exit_local'))
-                    : t(exitRoutingLabel())}
+                  : status()?.exitRouting?.effective === 'not-effective'
+                    ? t('net_exit_failed')
+                    : t('net_exit_applied')}
             </span>
           </div>
           <Show when={pendingId() !== null}>
             <Button
               variant="text"
-              disabled={switching()}
+              disabled={applying() !== null}
               onClick={() => void refreshStatus({ afterCurrent: true })}
             >
               <MdIcon name="refresh" size={18} />
               {t('retry')}
             </Button>
           </Show>
-          <Button
-            variant="filled"
-            busy={switching()}
-            disabled={!canApply() || !hasRoot}
-            onClick={() => void applySelection()}
-          >
-            <MdIcon name="check" size={18} />
-            {switching() ? t('net_working') : t('net_exit_apply')}
-          </Button>
         </div>
       </Card>
     </div>

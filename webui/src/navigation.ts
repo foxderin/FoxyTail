@@ -11,7 +11,7 @@ export interface RouteMeta extends NavItem { pageTitleKey: I18nKey }
  * contract — ControlActivity whitelists the same set. */
 export const ROUTE_NAMES = [
   'dashboard', 'peers', 'files', 'traffic', 'network',
-  'tunnel', 'routing', 'serve',
+  'exit', 'tunnel', 'routing', 'serve',
   'account', 'logs', 'settings', 'diag',
 ] as const;
 export type RouteName = (typeof ROUTE_NAMES)[number];
@@ -21,6 +21,7 @@ export const ROUTE_META: Record<RouteName, RouteMeta> = {
   peers: { name: 'peers', icon: 'group', titleKey: 'nav_peers', pageTitleKey: 'peers_title' },
   traffic: { name: 'traffic', icon: 'monitoring', titleKey: 'nav_traffic', pageTitleKey: 'traffic_title' },
   network: { name: 'network', icon: 'hub', titleKey: 'nav_network', pageTitleKey: 'nav_network' },
+  exit: { name: 'exit', icon: 'logout', titleKey: 'exit_title', pageTitleKey: 'exit_title' },
   tunnel: { name: 'tunnel', icon: 'router', titleKey: 'tun_title', pageTitleKey: 'tun_title' },
   routing: { name: 'routing', icon: 'alt_route', titleKey: 'route_title', pageTitleKey: 'route_title' },
   serve: { name: 'serve', icon: 'dns', titleKey: 'serve_title', pageTitleKey: 'serve_title' },
@@ -38,12 +39,12 @@ const meta = (name: RouteName): NavItem => ROUTE_META[name];
  * PARENT. */
 const GROUPS: { titleKey: I18nKey; names: RouteName[] }[] = [
   { titleKey: 'shell_nav_main', names: ['dashboard', 'peers', 'files', 'network', 'settings'] },
-  { titleKey: 'shell_network', names: ['tunnel', 'routing', 'serve', 'traffic'] },
+  { titleKey: 'shell_network', names: ['exit', 'tunnel', 'routing', 'serve', 'traffic'] },
   { titleKey: 'shell_manage', names: ['account', 'logs', 'diag'] },
 ];
 const PRIMARY: RouteName[] = GROUPS[0].names;
 const PARENT: Partial<Record<RouteName, RouteName>> = {
-  traffic: 'network', tunnel: 'network', routing: 'network', serve: 'network',
+  exit: 'network', traffic: 'network', tunnel: 'network', routing: 'network', serve: 'network',
   account: 'settings', logs: 'settings', diag: 'settings',
 };
 

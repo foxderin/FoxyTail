@@ -20,7 +20,7 @@ export default function Network(): JSX.Element {
     });
   });
   const links = (): { route: RouteName; icon: IconName; label: string; desc: string }[] => [
-    { route: 'peers', icon: 'logout', label: t('dash_exitnode'), desc: exitNodeLabel() },
+    { route: 'exit', icon: 'logout', label: t('dash_exitnode'), desc: exitNodeLabel() },
     { route: 'tunnel', icon: 'router', label: t('tun_title'), desc: tun() ? `tailscale0 · ${t(tun()!.ifaceUp ? 'tun_up' : 'tun_down')}` : t('tools_tunnel_desc') },
     { route: 'routing', icon: 'alt_route', label: t('route_title'), desc: t('tools_routing_desc') },
     { route: 'serve', icon: 'dns', label: t('serve_title'), desc: t('tools_serve_desc') },

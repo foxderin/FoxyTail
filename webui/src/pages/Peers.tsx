@@ -11,7 +11,6 @@ import { getTask } from '../tasks';
 import { TaskButton, TaskProgress } from '../components/TaskProgress';
 import { t } from '../i18n';
 import { status, viewPollInterval, peers, refreshPeers } from '../state';
-import ExitNodes from './ExitNodes';
 import { fmtBytes } from '../format';
 import {
   KvRow,
@@ -99,6 +98,7 @@ export default function Peers(): JSX.Element {
       </div>
 
       <div class="panel network-inventory-panel">
+        <Show when={peers() === null || (peers() || []).length > 0}>
         <div class="network-inventory-toolbar">
           <TextField
             type="search"
@@ -165,6 +165,7 @@ export default function Peers(): JSX.Element {
             {visiblePeers().length} {t('net_result_count')}
           </span>
         </div>
+        </Show>
         <LoadGate
           ready={peers() !== null}
           error={loadError()}
@@ -290,10 +291,6 @@ export default function Peers(): JSX.Element {
             </Show>
         </LoadGate>
       </div>
-      <section aria-label={t('exit_title')}>
-        <h2>{t('exit_title')}</h2>
-        <ExitNodes />
-      </section>
 
       <Show when={detail()}>
         {(peer) => (
@@ -338,10 +335,33 @@ export default function Peers(): JSX.Element {
             <KvRow k={t('peers_rx')} v={fmtBytes(peer().rxBytes)} />
             <KvRow k={t('peers_tx')} v={fmtBytes(peer().txBytes)} />
             <KvRow
-              k={t('exit_title')}
+              k={t('exit_capable')}
               v={peer().exitNodeOption ? t('net_enabled') : t('net_disabled')}
             />
-            <div class="md-dialog-actions">
+            <div class="md-dialog-actions network-detail-actions">
+              <Button
+                variant="text"
+                onClick={() => copyWithToast(peer().hostname)}
+              >
+                <MdIcon name="content_copy" size={16} />
+                {t('peer_copy_name')}
+              </Button>
+              <Button
+                variant="text"
+                onClick={() => { setDetailId(null); location.hash = '#/files'; }}
+              >
+                <MdIcon name="send" size={16} />
+                {t('peer_send_files')}
+              </Button>
+              <Show when={peer().exitNodeOption}>
+                <Button
+                  variant="text"
+                  onClick={() => { setDetailId(null); location.hash = '#/exit'; }}
+                >
+                  <MdIcon name="logout" size={16} />
+                  {t('peer_set_exit')}
+                </Button>
+              </Show>
               <Button variant="text" onClick={() => setDetailId(null)}>
                 {t('close')}
               </Button>

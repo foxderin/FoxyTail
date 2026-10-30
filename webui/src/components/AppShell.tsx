@@ -28,7 +28,7 @@ function Brand(): JSX.Element {
 }
 
 const TASK_DESTINATIONS: Record<string, { route: string; label: I18nKey; icon: IconName }> = {
-  'speedtest-exitnodes': { route: 'peers', label: 'exit_test', icon: 'speed' },
+  'speedtest-exitnodes': { route: 'exit', label: 'exit_test', icon: 'speed' },
   'derp-speedtest': { route: 'tunnel', label: 'tun_derp', icon: 'network_check' },
   diag: { route: 'diag', label: 'diag_run', icon: 'bug_report' },
   'diag-check': { route: 'diag', label: 'diag_check', icon: 'network_check' },
@@ -47,8 +47,8 @@ const TASK_DESTINATIONS: Record<string, { route: string; label: I18nKey; icon: I
   'trial-revert': { route: 'settings', label: 'task_trial', icon: 'sync' },
   'routes-set': { route: 'routing', label: 'task_routes', icon: 'alt_route' },
   'context-set': { route: 'settings', label: 'set_context', icon: 'sync' },
-  'exitnode-set': { route: 'peers', label: 'task_exit', icon: 'logout' },
-  'exitnode-clear': { route: 'peers', label: 'task_exit', icon: 'logout' },
+  'exitnode-set': { route: 'exit', label: 'task_exit', icon: 'logout' },
+  'exitnode-clear': { route: 'exit', label: 'task_exit', icon: 'logout' },
   'serve-set': { route: 'serve', label: 'serve_title', icon: 'dns' },
   'serve-del': { route: 'serve', label: 'serve_title', icon: 'dns' },
   'funnel-set': { route: 'serve', label: 'serve_title', icon: 'dns' },
