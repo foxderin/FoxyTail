@@ -133,25 +133,6 @@ export default function Dashboard(): JSX.Element {
           <div class="network-health-copy">
             <h2>{copy().title}</h2>
             <p>{copy().hint}</p>
-            <Show when={view() === 'running' && status()?.self}>
-              {(self) => (
-                <p class="conn-identity">
-                  <strong>{self().hostname}</strong>
-                  <Show when={self().ips?.length}>
-                    <code>{self().ips[0]}</code>
-                    <IconButton
-                      aria-label={t('net_copy_address') + ': ' + self().ips[0]}
-                      onClick={() => copyWithToast(self().ips[0])}
-                    >
-                      <MdIcon name="content_copy" size={16} />
-                    </IconButton>
-                  </Show>
-                  <Show when={status()?.uptime != null}>
-                    <span class="dim">{tf('dash_uptime', { time: fmtUptime(status()!.uptime) })}</span>
-                  </Show>
-                </p>
-              )}
-            </Show>
             <Show when={view() === 'login'}>
               <LoginActions />
             </Show>
@@ -169,6 +150,30 @@ export default function Dashboard(): JSX.Element {
             <p class="network-stale-label">{t('dash_stale_data')}</p>
           </Show>
           <div class="conn-rows" classList={{ 'is-stale': stale() }}>
+            <Show when={status()?.self}>
+              {(self) => (
+                <div class="conn-row conn-identity-row">
+                  <MdIcon name="devices" size={22} />
+                  <div class="conn-row-copy">
+                    <strong>{self().hostname || t('dash_self')}</strong>
+                    <span>
+                      {self().ips?.[0] ?? ''}
+                      {self().ips?.[0] && status()?.uptime != null ? ' · ' : ''}
+                      {status()?.uptime != null ? tf('dash_uptime', { time: fmtUptime(status()!.uptime!) }) : ''}
+                      {!self().ips?.[0] && status()?.uptime == null ? '—' : ''}
+                    </span>
+                  </div>
+                  <Show when={self().ips?.[0]}>
+                    <IconButton
+                      aria-label={t('net_copy_address') + ': ' + self().ips[0]}
+                      onClick={() => copyWithToast(self().ips[0])}
+                    >
+                      <MdIcon name="content_copy" size={18} />
+                    </IconButton>
+                  </Show>
+                </div>
+              )}
+            </Show>
             <For each={rows()}>
               {(row) => (
                 <a class="conn-row" href={row.href}>

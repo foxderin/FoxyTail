@@ -273,23 +273,8 @@
 .conn-card .login-actions {
   margin-top: 12px;
 }
-.conn-identity {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 6px;
-  margin-top: 4px;
-}
-.conn-identity code {
-  font-size: 13px;
-  white-space: nowrap;
-}
-.conn-identity .icon-btn {
+.conn-identity-row .icon-btn {
   margin: -8px 0;
-}
-.conn-identity .dim {
-  font-size: 12px;
-  opacity: 0.75;
 }
 /* Summary rows link out to the detail pages. */
 .conn-rows {
