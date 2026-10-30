@@ -7,8 +7,9 @@ import {
   type JSX,
 } from 'solid-js';
 import { pollWhileVisible } from '../schedule';
-import { getTask } from '../tasks';
-import { TaskButton, TaskProgress } from '../components/TaskProgress';
+import { getTask, startTask } from '../tasks';
+import { hasRoot, nativeControl } from '../api';
+import { TaskProgress } from '../components/TaskProgress';
 import { t } from '../i18n';
 import { status, viewPollInterval, peers, refreshPeers } from '../state';
 import { fmtBytes } from '../format';
@@ -25,7 +26,7 @@ import { RefreshButton } from '../components/RefreshButton';
 import { TopologyChart } from '../components/TopologyChart';
 import { OsIcon } from '../components/OsIcon';
 import { MdIcon } from '../icons';
-import { Button, Dialog, IconButton, TextField } from '../components/ui';
+import { Button, CircularProgress, Dialog, IconButton, TextField } from '../components/ui';
 import './network.css';
 import { createGuardedLoad } from './tools-refresh';
 
@@ -323,8 +324,9 @@ export default function Peers(): JSX.Element {
                       >
                         <MdIcon name="content_copy" size={18} />
                       </IconButton>
+                      <PeerProbeButton peerId={peer().id} ip={ip} disabled={Boolean(loadError())} />
                     </div>
-                    <PeerProbe peerId={peer().id} ip={ip} disabled={Boolean(loadError())} />
+                    <PeerProbe peerId={peer().id} ip={ip} />
                   </div>
                 )}
               </For>
@@ -373,8 +375,30 @@ export default function Peers(): JSX.Element {
   );
 }
 
-function PeerProbe(props: { peerId: string; ip: string; disabled: boolean }): JSX.Element {
-  const key = () => 'peer-ping:' + props.peerId + ':' + props.ip;
+function probeKey(peerId: string, ip: string) {
+  return 'peer-ping:' + peerId + ':' + ip;
+}
+
+function PeerProbeButton(props: { peerId: string; ip: string; disabled: boolean }): JSX.Element {
+  const key = () => probeKey(props.peerId, props.ip);
+  const task = () => getTask(key());
+  const running = () => task()?.status === 'running' || (task()?.status === 'unknown' && nativeControl().unknown);
+  return (
+    <IconButton
+      class="peer-probe-trigger"
+      aria-label={t('net_peer_probe') + ': ' + props.ip}
+      disabled={running() || props.disabled || !hasRoot || !nativeControl().canWrite || nativeControl().busy}
+      onClick={() => { if (!running()) startTask(key(), 'peer-ping', props.peerId, props.ip); }}
+    >
+      <Show when={!running()} fallback={<CircularProgress size={16} />}>
+        <MdIcon name="network_check" size={18} />
+      </Show>
+    </IconButton>
+  );
+}
+
+function PeerProbe(props: { peerId: string; ip: string }): JSX.Element {
+  const key = () => probeKey(props.peerId, props.ip);
   const task = () => getTask(key());
   const result = () => {
     const value = task()?.result;
@@ -391,18 +415,20 @@ function PeerProbe(props: { peerId: string; ip: string; disabled: boolean }): JS
     }
   };
   return (
-    <div class="tool-actions" data-peer-probe={props.ip}>
-      <TaskButton taskKey={key()} cmd="peer-ping" args={[props.peerId, props.ip]}
-        label={t('net_peer_probe') + (props.ip.includes(':') ? ' IPv6' : ' IPv4')}
-        disabled={props.disabled} />
+    <div data-peer-probe={props.ip}>
       <TaskProgress taskKey={key()} />
-      <Show when={task()?.status === 'done' && result()?.ok}>
-        <p role="status">{path()} · {Number(result()?.latencyMs)} ms <code>{String(result()?.via ?? '')}</code></p>
+      <Show when={task()?.status === 'done' && result()}>
+        <div class="peer-probe-result" role="status">
+          <MdIcon name="check_circle" size={18} />
+          <strong class="peer-probe-latency">{Number(result()?.latencyMs)} ms</strong>
+          <span class="peer-probe-path">{path()}</span>
+          <code>{String(result()?.via ?? '')}</code>
+        </div>
       </Show>
       <Show when={task()?.status === 'error' || (task()?.status === 'done' && !result())}>
         <ErrorState text={String(task()?.result?.error || t('net_peer_probe_invalid'))} />
       </Show>
-      <Show when={task()?.status === 'cancelled'}><p role="status">{t('cancelled')}</p></Show>
+      <Show when={task()?.status === 'cancelled'}><p class="peer-probe-note" role="status">{t('cancelled')}</p></Show>
     </div>
   );
 }

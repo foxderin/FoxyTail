@@ -141,6 +141,19 @@ await scenario('popup selects open option lists and dispatch native change event
   assert(!!window.document.querySelector('[data-setting="DNS_MODE"] [role="status"]'), 'staged popup change marks the field as pending review');
 });
 
+await scenario('peer detail probes run from the address row and render a result panel', async ({ nav, window, click }) => {
+  await nav('peers');
+  click([...window.document.querySelectorAll('.network-peer-main')].find(r => r.textContent.includes('home-server'))); await flush();
+  const dialog = window.document.querySelector('dialog[open], [role="dialog"]');
+  assert(!!dialog, 'peer detail dialog opens');
+  const address = dialog.querySelector('.network-address');
+  assert(!!address?.querySelector('.peer-probe-trigger') && address.querySelectorAll('.icon-btn').length === 2, 'address row pairs a probe trigger with the copy button');
+  assert(!dialog.querySelector('[data-peer-probe] .btn'), 'no standalone probe buttons remain');
+  click(address.querySelector('.peer-probe-trigger')); await flush();
+  const panel = dialog.querySelector('.peer-probe-result');
+  assert(!!panel && panel.textContent.includes('23 ms') && !!panel.querySelector('code'), 'probe result renders latency, path and endpoint in a panel');
+});
+
 await scenario('Files partial outcomes, native snapshots and selection limits', async ({ app, fixture, nav, window, button, click, confirm }) => {
   await nav('files');
   click(button('ft_matches')); await flush();
