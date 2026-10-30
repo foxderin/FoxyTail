@@ -71,10 +71,17 @@ echo "Building FoxyTail ${VERSION}"
 echo "========================================"
 
 WORK_DIR=$(mktemp -d)
-trap 'rm -rf "$WORK_DIR"' EXIT
+cleanup() {
+  # An early failure must not leave downloads or source builds running.
+  for pid in $(jobs -p); do kill "$pid" 2>/dev/null || true; done
+  rm -rf "$WORK_DIR"
+}
+trap cleanup EXIT
 BIN_DIR="${WORK_DIR}/bin"
 mkdir -p "$BIN_DIR" "$DIST_DIR"
 
+# Downloads overlap with the source builds below; the checksum gate still
+# waits for every asset before verifying or packaging.
 for ARCH in arm arm64; do
   case $ARCH in
     arm)
@@ -103,12 +110,13 @@ for ARCH in arm arm64; do
   download "$url" "${BIN_DIR}/hev-socks5-tunnel-${ARCH}"
 
   chmod 0755 "${BIN_DIR}/tailscaled-${ARCH}" "${BIN_DIR}/jq-${ARCH}" "${BIN_DIR}/hev-socks5-tunnel-${ARCH}"
-done
+done &
+downloads_pid=$!
 
-echo ""
 if [ "$UPDATE_CHECKSUMS" = true ]; then
   # Explicit dependency update mode creates a candidate for human review.
   # It never packages or publishes binaries under newly accepted checksums.
+  wait "$downloads_pid"
   {
     echo '# Reviewed upstream binary hashes. Normal builds only verify this file.'
     echo '# Update explicitly with .github/tools/build.sh --update-checksums and review the diff.'
@@ -118,6 +126,15 @@ if [ "$UPDATE_CHECKSUMS" = true ]; then
   exit 0
 fi
 
+NATIVE_DIR="${WORK_DIR}/native"
+bash .github/tools/build-native.sh "$NATIVE_DIR" >"$WORK_DIR/native.log" 2>&1 &
+native_pid=$!
+# The companion APK is a sibling release artifact; the module never installs it.
+bash .github/tools/build-android.sh release "${DIST_DIR}/FoxyTail-${VERSION}.apk"
+wait "$native_pid" && native_status=0 || native_status=$?
+cat "$WORK_DIR/native.log"
+[ "$native_status" -eq 0 ]
+wait "$downloads_pid"
 echo "- Verifying every pinned binary against the reviewed manifest"
 awk '!/^[[:space:]]*(#|$)/' "$REVIEWED_MANIFEST" >"${WORK_DIR}/checksums.verify"
 (cd "$BIN_DIR" && sha256sum --strict -c "${WORK_DIR}/checksums.verify")
@@ -125,11 +142,6 @@ for binary in tailscaled-arm tailscaled-arm64 jq-arm jq-arm64 hev-socks5-tunnel-
   # Missing/duplicate entries must fail even if sha256sum accepted other lines.
   test "$(awk -v name="$binary" '$2==name {n++} END {print n+0}' "$REVIEWED_MANIFEST")" = 1
  done
-
-NATIVE_DIR="${WORK_DIR}/native"
-bash .github/tools/build-native.sh "$NATIVE_DIR"
-# The companion APK is a sibling release artifact; the module never installs it.
-bash .github/tools/build-android.sh release "${DIST_DIR}/FoxyTail-${VERSION}.apk"
 
 # An explicit shipping allowlist prevents tests, local evidence, dependency
 # caches or future development directories from entering a root module ZIP.
