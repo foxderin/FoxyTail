@@ -209,7 +209,8 @@ export function exitNodeLabel(): string {
   const selected = route.selected;
   if (!selected) return t('net_exit_local');
   if (selected.auto) return `${t('dash_exit_auto')} · ${selected.auto}`;
-  return selected.id || selected.ip || t('net_exit_unknown');
+  const peer = selected.id ? status()?.peerList?.find(p => p.id === selected.id) : undefined;
+  return peer?.hostname || selected.ip || selected.id || t('net_exit_unknown');
 }
 export function connectionChip(): { label: I18nKey; tone: 'ok' | 'warn' | 'off' } {
   const view = connectionView();
