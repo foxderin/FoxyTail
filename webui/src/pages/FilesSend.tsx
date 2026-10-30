@@ -204,7 +204,7 @@ export default function FilesSend(props: {inboxSettled: boolean}): JSX.Element {
         </Show>
         <p class="files-step">{t('files_step_files')}</p>
         <div class="files-toolbar">
-          <details class="files-sort files-labeled"><summary class="btn-like" aria-disabled={locked() || undefined} onClick={event => { if (locked()) event.preventDefault(); }}><MdIcon name="add" size={18} />{t('files_add')}</summary><div>
+          <details class="menu-pop files-labeled"><summary class="btn-like" aria-disabled={locked() || undefined} onClick={event => { if (locked()) event.preventDefault(); }}><MdIcon name="add" size={18} />{t('files_add')}</summary><div>
             <button type="button" aria-label={t('ft_pick')} disabled={locked()} onClick={event => { event.currentTarget.closest('details')?.removeAttribute('open'); void nativeAction('files.pick'); }}>{t('ft_pick_system')}</button>
             <button type="button" aria-label={t('files_choose')} disabled={locked()} onClick={event => { event.currentTarget.closest('details')?.removeAttribute('open'); void browse(fileView().directory); }}>{t('ft_pick_shared')}</button>
           </div></details>

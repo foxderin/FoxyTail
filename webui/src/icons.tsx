@@ -22,6 +22,7 @@ import vpnKey from '@material-symbols/svg-400/outlined/vpn_key.svg?raw';
 import login from '@material-symbols/svg-400/outlined/login.svg?raw';
 import refresh from '@material-symbols/svg-400/outlined/refresh.svg?raw';
 import playArrow from '@material-symbols/svg-400/outlined/play_arrow.svg?raw';
+import pause from '@material-symbols/svg-400/outlined/pause.svg?raw';
 import stop from '@material-symbols/svg-400/outlined/stop.svg?raw';
 import restartAlt from '@material-symbols/svg-400/outlined/restart_alt.svg?raw';
 import checkCircle from '@material-symbols/svg-400/outlined/check_circle.svg?raw';
@@ -89,6 +90,7 @@ const ICONS = {
   login,
   refresh,
   play_arrow: playArrow,
+  pause,
   stop,
   restart_alt: restartAlt,
   check_circle: checkCircle,

@@ -182,6 +182,22 @@ await scenario('full log text and missing-versus-zero traffic', async ({ fixture
   input(window.document.querySelector('.tool-log-controls input'), 'another');
   click(button('tools_logs_copy')); await flush();
   assert(fixture.log.findLast(r => r.action === 'app.copy')?.args.text === '[Warning] another line', 'local filtering copies only visible original lines');
+  input(window.document.querySelector('.tool-log-controls input'), '');
+  click(button('tools_logs_level_warn')); await flush();
+  assert(window.document.querySelectorAll('.tool-log-line').length === 1 && window.document.querySelector('.tool-log-line.is-warn'), 'warning filter keeps warning and error lines with warn styling');
+  click(button('tools_logs_level_error')); await flush();
+  assert(!window.document.querySelector('.tool-log-line'), 'error filter shows an empty state when no error lines are loaded');
+  click(button('tools_logs_level_all')); await flush();
+  assert(window.document.querySelectorAll('.tool-log-line').length === 2, 'all filter restores every loaded line');
+  const liveToggle = window.document.querySelector('.logs-live-toggle');
+  assert(liveToggle?.disabled && liveToggle.getAttribute('aria-pressed') === 'false' && window.document.querySelector('.logs-meta')?.textContent.includes(window.__foxy.t('tools_logs_paused')), 'disabled auto-refresh shows a paused, disabled live toggle');
+  fixture.data.status.autoRefresh = true;
+  await app.state.refreshStatus(); await flush();
+  assert(!liveToggle.disabled && liveToggle.getAttribute('aria-pressed') === 'true', 'live toggle resumes when auto-refresh is available');
+  click(liveToggle); await flush();
+  assert(liveToggle.getAttribute('aria-pressed') === 'false', 'play/pause toggle pauses live refresh');
+  fixture.data.status.autoRefresh = false;
+  await app.state.refreshStatus(); await flush();
   fixture.data.traffic = { ok: true, hours: [{ hour: 1, samples: 0, iface: { rx: 0, tx: 0 } }], days: [], topn: [], uids: [] };
   await nav('traffic');
   assert(window.document.querySelector('.network-traffic-metrics .metric-value')?.textContent === '—', 'missing traffic samples are unknown, not zero');
@@ -261,7 +277,7 @@ await scenario('validated task failure remains authoritative after native succes
 
 await scenario('Back ignores hidden retained disclosures', async ({ fixture, nav, window }) => {
   await nav('files');
-  const details = window.document.querySelector('.files-sort');
+  const details = window.document.querySelector('.menu-pop');
   details.querySelector('summary').click(); await flush();
   assert(details.open, 'Files sorting disclosure is open before navigation');
   await nav('dashboard');

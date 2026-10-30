@@ -13,12 +13,6 @@
 .files-operation > span { flex: 1; }
 .files-page progress { width: 100%; accent-color: var(--md-sys-color-primary); }
 .files-back { transform: rotate(180deg); }
-.files-sort { position: relative; }
-.files-sort > summary { list-style: none; display: grid; place-items: center; width: 48px; min-height: 48px; cursor: pointer; border-radius: 50%; }
-.files-sort > summary::-webkit-details-marker { display: none; }
-.files-sort > div { position: absolute; right: 0; z-index: 5; min-width: 160px; padding: 4px; border-radius: 12px; background: var(--md-sys-color-surface-container-high); box-shadow: 0 2px 12px #0003; }
-.files-sort button { display: block; width: 100%; min-height: 48px; padding: 8px 12px; text-align: start; font: inherit; color: inherit; background: none; border: 0; cursor: pointer; border-radius: 8px; }
-.files-sort button[aria-pressed=true] { background: var(--md-sys-color-secondary-container); color: var(--md-sys-color-on-secondary-container); }
 .files-transfer > details > summary { min-height: 48px; display: flex; align-items: center; cursor: pointer; }
 .files-page section[id] { scroll-margin-top: 16px; }
 /* Inbox rows: tap opens, long-press starts multi-select, trailing overflow menu. */
@@ -26,7 +20,6 @@
 .files-inbox-row .list-row { flex: 1; min-width: 0; border-bottom: 0; }
 button.list-row { background: none; border: 0; font: inherit; color: inherit; text-align: start; cursor: pointer; }
 button.list-row:focus-visible { outline: 2px solid var(--ft-accent); outline-offset: -2px; border-radius: 8px; }
-.files-sort button.danger { color: var(--md-sys-color-error); }
 .files-selection-bar { border-radius: 12px; background: var(--ft-panel-inset); padding: 4px 8px; }
 .files-selection-bar > .tool-hint { flex: 1; }
 .files-card-summary { font-size: 12px; color: var(--ft-muted); }

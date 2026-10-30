@@ -165,7 +165,7 @@ export default function Files(): JSX.Element {
       description={files() !== null ? files()!.length + ' ' + t('tools_file_count') + ' · ' + fmtBytes(files()!.reduce((sum, file) => sum + file.size, 0)) : undefined}
       actions={<>
         <IconButton aria-label={t('tools_refresh')} disabled={loading()} onClick={() => void loadInbox()}><MdIcon name="refresh" size={18} /></IconButton>
-        <details class="files-sort"><summary aria-label={t('more')} title={t('more')}><MdIcon name="more_horiz" size={20} /></summary><div>
+        <details class="menu-pop"><summary aria-label={t('more')} title={t('more')}><MdIcon name="more_horiz" size={20} /></summary><div>
           <button type="button" aria-label={t('files_receive')} disabled={!canWrite() || filesSnapshot()?.busy || filesSnapshot()?.unknown} onClick={event => menuAction(event, () => void nativeAction('files.import'))}>{t('files_receive')}</button>
           <button type="button" aria-label={t('ft_matches')} disabled={!canSelect() || !filtered().length} onClick={event => menuAction(event, selectMatches)}>{t('ft_matches')}</button>
           <button type="button" aria-label={t('files_clear')} class="danger" disabled={!canWrite() || !files()?.length} onClick={event => menuAction(event, () => void mutate('file-clear'))}>{t('files_clear')}</button>
@@ -176,7 +176,7 @@ export default function Files(): JSX.Element {
         <Show when={ignored() > 0}><p class="tool-hint">{fileText('ft_ignored', {count: ignored()})}</p></Show>
         <div class="files-toolbar">
           <TextField label={t('tools_file_search')} value={fileView().filter} onInput={event => { updateFileView({filter: (event.target as HTMLInputElement).value}); setPage(0); }} leading-icon={<MdIcon name="search" size={18} />} />
-          <details class="files-sort"><summary aria-label={t('ft_sort')} title={t('ft_sort')}><MdIcon name="sort" size={20} /></summary><div role="group" aria-label={t('ft_sort')}>
+          <details class="menu-pop"><summary aria-label={t('ft_sort')} title={t('ft_sort')}><MdIcon name="sort" size={20} /></summary><div role="group" aria-label={t('ft_sort')}>
             <For each={['ft_newest', 'ft_oldest', 'ft_name', 'ft_size'] as I18nKey[]}>{(key, index) => <button type="button" aria-pressed={fileView().sort === index()} onClick={event => { updateFileView({sort: index()}); setPage(0); event.currentTarget.closest('details')?.removeAttribute('open'); }}>{t(key)}</button>}</For>
           </div></details>
         </div>
@@ -201,7 +201,7 @@ export default function Files(): JSX.Element {
             <Show when={selectMode()}>
               <Checkbox aria-label={t('files_select') + ' ' + file.name} checked={selected().includes(file.name)} disabled={!canSelect() || selected().length >= MAX_FILES && !selected().includes(file.name)} onChange={() => toggle(file.name)} />
             </Show>
-            <details class="files-sort files-row-menu"><summary aria-label={t('more') + ': ' + file.name}><MdIcon name="more_horiz" size={20} /></summary><div>
+            <details class="menu-pop files-row-menu"><summary aria-label={t('more') + ': ' + file.name}><MdIcon name="more_horiz" size={20} /></summary><div>
               <button type="button" disabled={locked()} onClick={event => menuAction(event, () => void nativeAction('files.open', {name: file.name}))}>{t('ft_open')}</button>
               <button type="button" onClick={event => menuAction(event, () => void copyWithToast(DATA_DIR + '/files/' + file.name, 'info'))}>{t('tools_copy_path')}</button>
               <button type="button" disabled={locked()} onClick={event => menuAction(event, () => void nativeAction('files.save', {name: file.name}))}>{t('ft_save_as')}</button>
