@@ -235,37 +235,18 @@ _file_name_valid() {
 }
 
 cmd_files_inbox() {
-  _file_json_command 15 inbox-list --root "${TS_DIR}"
+  _file_json_command 15 inbox-list --root /sdcard/Download/Taildrop
 }
 
-
-cmd_file_receive() {
-  taildrop_direct_ready || taildrop_confirm_direct || jerr 'Taildrop direct receive mode is unknown or shared storage is locked; unlock storage and restart FoxyTail if the current daemon cannot confirm direct mode'
-  mkdir -p "${FILES_DIR}" || jerr 'file-receive: cannot create private inbox'
-  _fr_out=$(_op_exec 60 "${TS_BIN_DIR}/foxyfiles" receive --source /sdcard --destination "${FILES_DIR}" 2>&1) ||
-    jerr "file-receive failed: ${_fr_out:-cancelled}"
-  printf '%s' "${_fr_out}" | jqr -e '.ok==true and (.received|type=="number") and (.received>=0) and (.received==(.received|floor)) and ((.ignored // 0)|type=="number") and ((.ignored // 0)>=0) and ((.ignored // 0)==((.ignored // 0)|floor)) and (.files|type=="array") and (.received==(.files|length)) and all(.files[]; type=="string" and length>0 and utf8bytelength<=255 and .!=".taildrop" and .!=".outgoing" and .!="." and .!=".." and ((contains("/") or contains("\\"))|not) and all(explode[]; ('"${_file_name_codepoint_jq}"')))' >/dev/null || jerr 'invalid Taildrop import response'
-  _fr_names=$(printf '%s' "${_fr_out}" | jqr -r '.files[]') || jerr 'invalid Taildrop import response'
-  _fr_count=$(printf '%s' "${_fr_out}" | jqr -r '.received') || jerr 'invalid Taildrop import response'
-  _fr_ignored=$(printf '%s' "${_fr_out}" | jqr -r '.ignored // 0') || jerr 'invalid Taildrop import response'
-  _fr_exported=0
-  while IFS= read -r _fr_name; do
-    [ -n "${_fr_name}" ] || continue
-    if _file_export_to_download "${FILES_DIR}/${_fr_name}" "${_fr_name}"; then _fr_exported=$((_fr_exported + 1)); fi
-  done <<EOF_FILES
-${_fr_names}
-EOF_FILES
-  jqr -n -c --argjson count "${_fr_count}" --argjson exported "${_fr_exported}" --argjson ignored "${_fr_ignored}" \
-    '{ok:true,received:$count,exported:$exported} + (if $ignored > 0 then {ignored:$ignored} else {} end)'
-}
-
-# Inbox item operations: delete one, clear all, export one to Download, or
-# print one for the webapi caller to download. Names are validated to live
-# strictly inside the inbox directory.
+# Inbox item operations on the shared Taildrop directory: delete one, clear
+# all, or read one for the caller. Received files already live under
+# Download/Taildrop, so there is no import or export step. Names are validated
+# to live strictly inside the inbox directory.
 _file_inbox_path() {
   _file_name_valid "$1" || return 1
-  [ ! -L "${FILES_DIR}/$1" ] || return 1
-  printf '%s/%s' "${FILES_DIR}" "$1"
+  _fip_dir=$(taildrop_inbox_dir) || return 1
+  [ ! -L "${_fip_dir}/$1" ] || return 1
+  printf '%s/%s' "${_fip_dir}" "$1"
 }
 
 cmd_file_delete() {
@@ -277,63 +258,16 @@ cmd_file_delete() {
 }
 
 cmd_file_clear() {
-  mkdir -p "${FILES_DIR}" 2>/dev/null
+  _fc_dir=$(taildrop_inbox_dir) || { echo '{"ok":true,"removed":0}'; return 0; }
   _fc_removed=0 _fc_ignored=0
-  for _fc_path in "${FILES_DIR}"/* "${FILES_DIR}"/.[!.]* "${FILES_DIR}"/..?*; do
-    [ "${_fc_path##*/}" != .taildrop ] && [ "${_fc_path##*/}" != .outgoing ] && [ -f "${_fc_path}" ] && [ ! -L "${_fc_path}" ] || continue
-    if ! _file_name_valid "${_fc_path##*/}"; then _fc_ignored=$((_fc_ignored + 1)); continue; fi
+  for _fc_path in "${_fc_dir}"/* "${_fc_dir}"/.[!.]* "${_fc_dir}"/..?*; do
+    _fc_name=${_fc_path##*/}
+    case "${_fc_name}" in .taildrop | .outgoing | *.partial | *.deleted) continue ;; esac
+    [ -f "${_fc_path}" ] && [ ! -L "${_fc_path}" ] || continue
+    if ! _file_name_valid "${_fc_name}"; then _fc_ignored=$((_fc_ignored + 1)); continue; fi
     rm -f "${_fc_path}" && _fc_removed=$((_fc_removed + 1))
   done
   jqr -n -c --argjson r "${_fc_removed}" --argjson ignored "${_fc_ignored}" '{ok:true,removed:$r} + (if $ignored > 0 then {ignored:$ignored} else {} end)'
-}
-
-# Both automatic and manual exports use exclusive creation. The destination
-# stays open for the entire copy: a concurrent exporter cannot truncate it.
-_file_export_to_download() {
-  _fx_base="${2%.*}"; _fx_ext="${2##*.}"
-  [ "${_fx_base}" != "${_fx_ext}" ] || _fx_ext=
-  _fx_n=0
-  while [ "${_fx_n}" -lt 100 ]; do
-    if [ "${_fx_n}" -eq 0 ]; then
-      _fx_dst="/sdcard/Download/$2"
-    elif [ -n "${_fx_ext}" ] && [ "${_fx_ext}" != "$2" ]; then
-      _fx_dst="/sdcard/Download/${_fx_base}-${_fx_n}.${_fx_ext}"
-    else
-      _fx_dst="/sdcard/Download/${2}-${_fx_n}"
-    fi
-    _fx_n=$((_fx_n + 1))
-    [ ! -e "${_fx_dst}" ] && [ ! -L "${_fx_dst}" ] || continue
-    (
-      set -C
-      if { cat "$1" || { rm -f "${_fx_dst}"; exit 2; }; } >"${_fx_dst}"; then
-        exit 0
-      fi
-      exit 3
-    ) 2>/dev/null
-    _fx_rc=$?
-    case "${_fx_rc}" in
-      0)
-        # The validated name may still contain characters like '#' or '?'
-        # that truncate a file:// URI; percent-encode it for the scanner.
-        _fx_uri=$(printf '%s' "${_fx_dst##*/}" | jqr -Rr '@uri' 2>/dev/null) || _fx_uri=
-        am broadcast -a android.intent.action.MEDIA_SCANNER_SCAN_FILE \
-          -d "file://${_fx_dst%/*}/${_fx_uri:-${_fx_dst##*/}}" >/dev/null 2>&1 || true
-        return 0 ;;
-      2) return 1 ;;
-    esac
-    # Exclusive creation can lose a race; only a collision warrants another
-    # candidate. Permission/storage errors fail without touching the inbox.
-    [ -e "${_fx_dst}" ] || [ -L "${_fx_dst}" ] || return 1
-  done
-  return 1
-}
-
-cmd_file_export() {
-  [ -n "$1" ] || jerr "file-export: expected <name>"
-  _fe_path=$(_file_inbox_path "$1") || jerr "file-export: invalid name"
-  [ -f "${_fe_path}" ] || jerr "file-export: no such file: $1"
-  _file_export_to_download "${_fe_path}" "$1" || jerr 'file-export: cannot create an unused file in Download'
-  jqr -n -c --arg p "${_fx_dst}" '{ok:true,path:$p}'
 }
 
 _file_batch() (
@@ -349,7 +283,6 @@ _file_batch() (
   while IFS= read -r _fb_name; do
     case "${_fb_action}" in
       delete) if _fb_result=$(cmd_file_delete "${_fb_name}"); then _fb_rc=0; else _fb_rc=$?; fi ;;
-      export) if _fb_result=$(cmd_file_export "${_fb_name}"); then _fb_rc=0; else _fb_rc=$?; fi ;;
       *) jerr 'invalid inbox batch action' ;;
     esac
     jqr -n -c --arg name "${_fb_name}" --argjson result "${_fb_result}" --argjson code "${_fb_rc}" '
@@ -365,9 +298,4 @@ EOF_BATCH
 cmd_file_delete_many() {
   [ "$#" = 1 ] || jerr 'file-delete-many: expected a file name array'
   _file_batch delete "$1"
-}
-
-cmd_file_export_many() {
-  [ "$#" = 1 ] || jerr 'file-export-many: expected a file name array'
-  _file_batch export "$1"
 }

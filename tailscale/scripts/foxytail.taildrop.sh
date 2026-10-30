@@ -14,6 +14,19 @@ taildrop_prepare_direct() {
   _TAIL_DROP_READY=1
 }
 
+# /sdcard/Download/Taildrop doubles as the inbox: received files land there
+# directly. Validates the same boundaries as taildrop_prepare_direct but never
+# creates the directory, so a missing inbox simply means "no files yet".
+taildrop_inbox_dir() {
+  [ -d /sdcard ] || return 1
+  _tid_root=$(realpath /sdcard 2>/dev/null) || return 1
+  [ ! -L /sdcard/Download ] && [ ! -L /sdcard/Download/Taildrop ] || return 1
+  [ -d /sdcard/Download/Taildrop ] || return 1
+  _tid_dir=$(realpath /sdcard/Download/Taildrop 2>/dev/null) || return 1
+  [ "${_tid_dir}" = "${_tid_root}/Download/Taildrop" ] || return 1
+  printf '%s' /sdcard/Download/Taildrop
+}
+
 taildrop_record_direct() {
   [ "${_TAIL_DROP_READY:-0}" = 1 ] || return 1
   _td_stamp=$(_proc_starttime "$1") _td_boot=$(boot_identity)

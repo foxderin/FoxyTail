@@ -11,7 +11,7 @@ import java.util.concurrent.*;
 
 public final class TransferService extends Service {
     static final String UPDATE = "dev.foxderin.tail.TRANSFER_UPDATE";
-    static final String START = "start", ADOPT = "adopt", CANCEL = "cancel", IMPORT = "import", RECOVER = "recover";
+    static final String START = "start", ADOPT = "adopt", CANCEL = "cancel", RECOVER = "recover";
     private static final String CHANNEL = "taildrop";
     private static final int NOTIFICATION = 41;
     private final ExecutorService worker = Executors.newSingleThreadExecutor();
@@ -54,11 +54,11 @@ public final class TransferService extends Service {
         uncertaintyOwner = null;
         SharedPreferences.Editor started = prefs.edit();
         if (!prefs.getBoolean("unknown", false)) started.putString("message", getString(R.string.working));
-        if (intent != null && (START.equals(intent.getAction()) || IMPORT.equals(intent.getAction()))) started.remove("snapshot");
+        if (intent != null && START.equals(intent.getAction())) started.remove("snapshot");
         started.apply();
         startForeground(NOTIFICATION, notification(getString(R.string.working)));
         sendBroadcast(new Intent(UPDATE).setPackage(getPackageName()));
-        if (intent != null && (START.equals(intent.getAction()) || IMPORT.equals(intent.getAction()))) {
+        if (intent != null && START.equals(intent.getAction())) {
             ControlClient client = ControlClient.get(this);
             if (!client.canWrite() || client.busy() || prefs.getBoolean("unknown", false) || (intent.hasExtra("accountRevision") && intent.getLongExtra("accountRevision", -1) != client.accountRevision())) {
                 publish(getString(R.string.busy), null); finish(); return START_NOT_STICKY;
@@ -70,27 +70,13 @@ public final class TransferService extends Service {
     }
     private void runTask(Intent intent) {
         List<String> staged = new ArrayList<>();
-        boolean submissionAttempted = false, importAttempted = false;
+        boolean submissionAttempted = false;
         try {
             if (intent == null) return;
             String action = intent.getAction();
             if (!ADOPT.equals(action)) cleanupInterrupted();
             if (RECOVER.equals(action)) {
                 publish(getString(R.string.interrupted_stage), null);
-                return;
-            }
-            if (IMPORT.equals(action)) {
-                requestId = RootApi.requestId(); currentCall = new RootApi.Call();
-                uncertaintyOwner = "import:" + requestId;
-                if (!prefs.edit().putString("request", requestId).putBoolean("unknown", true).putString("unknownOwner", uncertaintyOwner).commit()) throw new IOException(getString(R.string.control_record_failed));
-                importAttempted = true;
-                JSONObject result = RootApi.json(this, requestId, null, null, 150, currentCall, "file-receive");
-                long received = Models.number(result, "received");
-                long ignored = result.has("ignored") ? Models.number(result, "ignored") : 0;
-                String message = getString(R.string.imported, received);
-                if (ignored > 0) message += "\n" + getString(R.string.repair_files_ignored_import, ignored);
-                prefs.edit().remove("unknown").remove("unknownOwner").commit();
-                publish(message, null);
                 return;
             }
             if (ADOPT.equals(action)) {
@@ -167,9 +153,8 @@ public final class TransferService extends Service {
                 Thread.sleep(1000);
             }
         } catch (Exception e) {
-            if (e instanceof RootApi.Failure && jobId == null && (submissionAttempted || importAttempted)) prefs.edit().remove("unknown").remove("unknownOwner").commit();
-            publish(importAttempted && prefs.getBoolean("unknown", false) ? getString(R.string.submission_unknown, RootApi.message(e))
-                    : failureMessage(this, e, cancelRequested, submissionAttempted, jobId, !staged.isEmpty()), null);
+            if (e instanceof RootApi.Failure && jobId == null && submissionAttempted) prefs.edit().remove("unknown").remove("unknownOwner").commit();
+            publish(failureMessage(this, e, cancelRequested, submissionAttempted, jobId, !staged.isEmpty()), null);
         } finally {
             if (requestId != null) {
                 try { RootApi.json(this, "cancel", requestId); } catch (Exception ignored) { }

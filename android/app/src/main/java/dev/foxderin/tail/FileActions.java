@@ -152,10 +152,9 @@ final class FileActions {
                     else throw new IOException(s(R.string.cancelled_local));
                     break;
                 }
-                case "files.import": fields(args); writable(); requestNotifications(); launch(new Intent(activity, TransferService.class).setAction(TransferService.IMPORT)); respond(reply, object("ok", true, "accepted", true)); break;
-                case "files.open": case "files.save": {
+                case "files.open": {
                     fields(args, "name"); String name = text(args, "name"); Models.requireName(name); exportAvailable();
-                    if (action.equals("files.save")) chooseSave(name, null, reply); else startExport(Collections.singletonList(name), null, null, false, reply);
+                    startExport(Collections.singletonList(name), null, null, false, reply);
                     break;
                 }
                 case "files.share": {

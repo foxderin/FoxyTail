@@ -4,7 +4,6 @@
 
 COMPAT_JSON="${TS_RUN_DIR}/compat.json"
 COMPAT_ALERT="${TS_RUN_DIR}/compat-alert"
-FILES_DIR="${TS_DIR}/files"
 
 # --- Helpers -----------------------------------------------------------------
 
@@ -82,7 +81,7 @@ _op_record() {
 
 _op_initial_phase() {
   case "$1" in
-    control | mode-set | routes-set | subnet-routes-set | settings-set | context-set | backup | trial-start | trial-confirm | trial-revert | file-send-start | file-send-cancel | file-send-delete | file-send-clear | exitnode-set | exitnode-clear | login-authkey | logout | switch | serve-set | serve-del | funnel-set | funnel-del | file-delete | file-delete-many | file-clear | file-export | file-export-many | file-receive)
+    control | mode-set | routes-set | subnet-routes-set | settings-set | context-set | backup | trial-start | trial-confirm | trial-revert | file-send-start | file-send-cancel | file-send-delete | file-send-clear | exitnode-set | exitnode-clear | login-authkey | logout | switch | serve-set | serve-del | funnel-set | funnel-del | file-delete | file-delete-many | file-clear)
       _op_commit_begin ;;
     *) return 0 ;;
   esac

@@ -452,15 +452,10 @@ func runStageDelete(args []string) error {
 }
 
 func readInbox(rootPath, name string, output io.Writer) error {
-	if !plainName(name) || name == ".taildrop" || name == ".outgoing" {
+	if !plainName(name) || name == ".taildrop" || name == ".outgoing" || strings.HasSuffix(name, ".partial") || strings.HasSuffix(name, ".deleted") {
 		return errors.New("invalid inbox filename")
 	}
-	module, err := moduleRoot(rootPath)
-	if err != nil {
-		return err
-	}
-	defer module.Close()
-	inbox, err := openChildRoot(module, "files")
+	inbox, err := archiveSourceRoot(rootPath)
 	if err != nil {
 		return err
 	}
@@ -490,7 +485,7 @@ func readInbox(rootPath, name string, output io.Writer) error {
 
 func runInboxRead(args []string) error {
 	flags := flag.NewFlagSet("inbox-read", flag.ContinueOnError)
-	root := flags.String("root", "", "module root")
+	root := flags.String("root", "", "inbox directory")
 	name := flags.String("name", "", "inbox filename")
 	if err := flags.Parse(args); err != nil {
 		return err

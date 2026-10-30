@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"sort"
+	"strings"
 )
 
 // The private inbox cap is a variable only so tests can exercise it small.
@@ -27,7 +28,7 @@ type inboxResult struct {
 
 func (result *inboxResult) appendEntry(inbox *os.Root, entry os.DirEntry) error {
 	name := entry.Name()
-	if name == ".taildrop" || name == ".outgoing" || !entry.Type().IsRegular() {
+	if name == ".taildrop" || name == ".outgoing" || strings.HasSuffix(name, ".partial") || strings.HasSuffix(name, ".deleted") || !entry.Type().IsRegular() {
 		return nil
 	}
 	info, err := inbox.Lstat(name)
@@ -51,20 +52,18 @@ func (result *inboxResult) appendEntry(inbox *os.Root, entry os.DirEntry) error 
 	return nil
 }
 
+// rootPath is the shared Taildrop directory itself (…/Download/Taildrop):
+// receivers drop files there, so it doubles as the inbox with no import step.
 func listInbox(rootPath string) (inboxResult, error) {
 	result := inboxResult{Files: []inboxEntry{}}
-	module, err := moduleRoot(rootPath)
-	if err != nil {
-		return result, err
-	}
-	defer module.Close()
-	inbox, err := openChildRoot(module, "files")
+	inbox, err := archiveSourceRoot(rootPath)
 	if errors.Is(err, os.ErrNotExist) {
-		// A fresh installation has no inbox until its first receive or stage.
-		if _, statErr := module.Lstat("files"); errors.Is(statErr, os.ErrNotExist) {
-			result.OK = true
-			return result, nil
+		// A missing inbox reports empty, but a dangling symlink must not.
+		if entry, statErr := os.Lstat(rootPath); statErr == nil && entry.Mode()&os.ModeSymlink != 0 {
+			return result, errors.New("inbox directory must not be a symlink")
 		}
+		result.OK = true
+		return result, nil
 	}
 	if err != nil {
 		return result, err
@@ -102,7 +101,7 @@ func listInbox(rootPath string) (inboxResult, error) {
 
 func runInboxList(args []string) error {
 	flags := flag.NewFlagSet("inbox-list", flag.ContinueOnError)
-	root := flags.String("root", "", "module root")
+	root := flags.String("root", "", "inbox directory")
 	if err := flags.Parse(args); err != nil {
 		return err
 	}

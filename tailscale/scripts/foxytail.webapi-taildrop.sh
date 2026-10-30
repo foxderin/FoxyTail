@@ -112,5 +112,5 @@ cmd_file_stage_delete() {
 
 cmd_file_read() {
   [ -x "${TS_BIN_DIR}/foxyfiles" ] || { echo 'FoxyTail file helper not found' >&2; return 1; }
-  _op_exec 1800 "${TS_BIN_DIR}/foxyfiles" inbox-read --root "${TS_DIR}" --name "$1"
+  _op_exec 1800 "${TS_BIN_DIR}/foxyfiles" inbox-read --root /sdcard/Download/Taildrop --name "$1"
 }

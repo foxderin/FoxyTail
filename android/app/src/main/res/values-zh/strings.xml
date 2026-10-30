@@ -11,7 +11,6 @@
     <string name="cancel_requested">已请求取消，正在等待工作进程确认。</string>
     <string name="cancelled_local">已取消，未提交传输。</string>
     <string name="busy">已有传输正在进行。</string>
-    <string name="imported">已导入 %1$d 个完成的文件。</string>
     <string name="saved">副本已保存。</string>
     <string name="root_unavailable">无法启动 su。请在 Magisk/KernelSU 中允许 FoxyTail 使用超级用户权限，然后重新打开应用。</string>
     <string name="root_denied">Root 命令未获得 UID 0，请检查 Magisk/KernelSU 中的授权。</string>

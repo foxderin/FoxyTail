@@ -103,15 +103,15 @@ func TestStageLengthPermissionsDeletionAndInboxRead(t *testing.T) {
 		t.Fatal(err)
 	}
 	var output bytes.Buffer
-	if err = readInbox(root, "large.bin", &output); err != nil || !bytes.Equal(payload, output.Bytes()) {
+	if err = readInbox(inbox, "large.bin", &output); err != nil || !bytes.Equal(payload, output.Bytes()) {
 		t.Fatal("raw read corrupted/truncated bytes", err)
 	}
 	if err = os.Symlink(filepath.Join(inbox, "large.bin"), filepath.Join(inbox, "linked")); err != nil {
 		t.Fatal(err)
 	}
-	for _, name := range []string{"../files/large.bin", ".outgoing", ".taildrop", "linked"} {
+	for _, name := range []string{"../files/large.bin", ".outgoing", ".taildrop", "linked", "wip.partial", "gone.deleted"} {
 		output.Reset()
-		if err = readInbox(root, name, &output); err == nil || output.Len() != 0 {
+		if err = readInbox(inbox, name, &output); err == nil || output.Len() != 0 {
 			t.Fatalf("accepted inbox boundary %q", name)
 		}
 	}

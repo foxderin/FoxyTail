@@ -18,14 +18,15 @@ func TestInboxListNamesMetadataAndOrdering(t *testing.T) {
 	if err := os.Mkdir(inbox, 0700); err != nil {
 		t.Fatal(err)
 	}
-	valid := []string{".env", "..hidden", "你好.txt", "meeting ' * [1].txt", "unfinished.partial", "old.deleted"}
+	valid := []string{".env", "..hidden", "你好.txt", "meeting ' * [1].txt"}
 	invalid := []string{"back\\slash", "bidi\u202Ename", "zero\u200Bwidth"}
 	for character := rune(1); character <= 0x9f; character++ {
 		if character <= 0x1f || character >= 0x7f {
 			invalid = append(invalid, "bad"+string(character)+"name")
 		}
 	}
-	for _, name := range append(append([]string{}, valid...), invalid...) {
+	// In-flight tailscaled names (*.partial, *.deleted) must never surface.
+	for _, name := range append(append(append([]string{}, valid...), invalid...), "unfinished.partial", "old.deleted") {
 		path := filepath.Join(inbox, name)
 		if err := os.WriteFile(path, []byte("payload"), 0600); err != nil {
 			t.Fatal(err)
@@ -51,7 +52,7 @@ func TestInboxListNamesMetadataAndOrdering(t *testing.T) {
 	if err := syscall.Mkfifo(filepath.Join(inbox, "fifo"), 0600); err != nil {
 		t.Fatal(err)
 	}
-	result, err := listInbox(root)
+	result, err := listInbox(inbox)
 	if err != nil || !result.OK || len(result.Files) != len(valid) || result.Ignored != len(invalid) {
 		t.Fatalf("listing: %+v %v", result, err)
 	}
@@ -96,7 +97,7 @@ func TestInboxListInvalidUTF8IsIgnored(t *testing.T) {
 		}
 		t.Fatal(err)
 	}
-	result, err := listInbox(root)
+	result, err := listInbox(inbox)
 	if err != nil || !result.OK || len(result.Files) != 0 || result.Ignored != 1 {
 		t.Fatalf("invalid UTF-8 listing: %+v %v", result, err)
 	}
@@ -107,7 +108,8 @@ func TestInboxListInvalidUTF8IsIgnored(t *testing.T) {
 
 func TestInboxListEmptyReservedAndRootBoundaries(t *testing.T) {
 	root := t.TempDir()
-	result, err := listInbox(root)
+	inboxPath := filepath.Join(root, "files")
+	result, err := listInbox(inboxPath)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -115,7 +117,7 @@ func TestInboxListEmptyReservedAndRootBoundaries(t *testing.T) {
 	if err != nil || string(body) != `{"ok":true,"files":[]}` {
 		t.Fatalf("empty listing shape: %s %v", body, err)
 	}
-	if _, err := os.Lstat(filepath.Join(root, "files")); !errors.Is(err, os.ErrNotExist) {
+	if _, err := os.Lstat(inboxPath); !errors.Is(err, os.ErrNotExist) {
 		t.Fatal("read-only listing created inbox", err)
 	}
 	outside := t.TempDir()
@@ -124,11 +126,10 @@ func TestInboxListEmptyReservedAndRootBoundaries(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	inboxPath := filepath.Join(root, "files")
 	if err := os.Symlink(outside, inboxPath); err != nil {
 		t.Fatal(err)
 	}
-	if result, err = listInbox(root); err == nil || result.OK {
+	if result, err = listInbox(inboxPath); err == nil || result.OK {
 		t.Fatal("accepted symlink inbox")
 	}
 	if err := os.Remove(inboxPath); err != nil {
@@ -137,7 +138,7 @@ func TestInboxListEmptyReservedAndRootBoundaries(t *testing.T) {
 	if err := os.Symlink(filepath.Join(outside, "absent"), inboxPath); err != nil {
 		t.Fatal(err)
 	}
-	if result, err = listInbox(root); err == nil || result.OK {
+	if result, err = listInbox(inboxPath); err == nil || result.OK {
 		t.Fatal("dangling symlink reported empty inbox")
 	}
 	if err := os.Remove(inboxPath); err != nil {
@@ -146,12 +147,12 @@ func TestInboxListEmptyReservedAndRootBoundaries(t *testing.T) {
 	if err := os.Rename(outside, inboxPath); err != nil {
 		t.Fatal(err)
 	}
-	result, err = listInbox(root)
+	result, err = listInbox(inboxPath)
 	if err != nil || !result.OK || len(result.Files) != 0 || result.Ignored != 0 {
 		t.Fatalf("reserved regular files exposed or counted: %+v %v", result, err)
 	}
 	linkedRoot := filepath.Join(t.TempDir(), "module")
-	if err := os.Symlink(root, linkedRoot); err != nil {
+	if err := os.Symlink(inboxPath, linkedRoot); err != nil {
 		t.Fatal(err)
 	}
 	if result, err = listInbox(linkedRoot); err == nil || result.OK {
@@ -225,14 +226,14 @@ func TestInboxListBoundsOnlyReturnedFiles(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	result, err := listInbox(root)
+	result, err := listInbox(inbox)
 	if err != nil || !result.OK || len(result.Files) != maxInboxFiles || result.Ignored != 129 {
 		t.Fatalf("non-files consumed valid capacity: %d ignored=%d %v", len(result.Files), result.Ignored, err)
 	}
 	if err := os.WriteFile(filepath.Join(inbox, "one-too-many"), nil, 0600); err != nil {
 		t.Fatal(err)
 	}
-	if result, err = listInbox(root); err == nil || result.OK || !strings.Contains(err.Error(), "10000") {
+	if result, err = listInbox(inbox); err == nil || result.OK || !strings.Contains(err.Error(), "10000") {
 		t.Fatalf("overflow reported a complete listing: %d %v", len(result.Files), err)
 	}
 }

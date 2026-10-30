@@ -305,7 +305,7 @@ final class WebBridge {
     }
     private void validateMutation(String name, String[] a) throws Exception {
         switch (name) {
-            case "exitnode-clear": case "logout": case "backup": case "file-clear": case "file-receive": case "file-send-clear":
+            case "exitnode-clear": case "logout": case "backup": case "file-clear": case "file-send-clear":
             case "speedtest-exitnodes": case "derp-speedtest": case "coexist-info": case "diag-check": case "dns-probe": case "socks-check": count(a, 0); return;
             case "control": count(a, 1); choice(a[0], "start", "stop", "restart"); return;
             case "mode-set": count(a, 1); choice(a[0], "bridge", "tun", "proxy"); return;
@@ -319,8 +319,8 @@ final class WebBridge {
             case "diag": count(a, 0, 1); if (a.length == 1) choice(a[0], "share", "local"); return;
             case "trial-start": count(a, 0, 1, 2); if (a.length > 0) SettingsRules.duration(a[0]); if (a.length > 1) choice(a[1], "saved", "bridge", "tun", "proxy"); return;
             case "trial-confirm": case "trial-revert": count(a, 1); pattern(a[0], "[0-9]+_[A-Za-z0-9_-]{1,128}"); return;
-            case "file-delete": case "file-export": count(a, 1); Models.requireName(a[0]); return;
-            case "file-delete-many": case "file-export-many":
+            case "file-delete": count(a, 1); Models.requireName(a[0]); return;
+            case "file-delete-many":
                 count(a, 1); if (a[0].getBytes(StandardCharsets.UTF_8).length > 16384) throw new IOException("File selection too large");
                 JSONArray names = new JSONArray(a[0]); if (names.length() == 0 || names.length() > 10000) throw new IOException("Invalid file selection");
                 for (int i = 0; i < names.length(); i++) { if (!(names.get(i) instanceof String)) throw new IOException("Invalid file name"); Models.requireName(names.getString(i)); }
