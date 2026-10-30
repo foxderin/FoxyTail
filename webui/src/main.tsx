@@ -15,7 +15,7 @@ import { ROUTE_META, ROUTE_NAMES, acceptNativeNavigation, recordNavigation, type
 import Dashboard from './pages/Dashboard';
 import Peers from './pages/Peers';
 import Traffic from './pages/Traffic';
-import More from './pages/More';
+import Network from './pages/Network';
 import Tunnel from './pages/Tunnel';
 import Routing from './pages/Routing';
 import Account from './pages/Account';
@@ -29,7 +29,7 @@ const PAGES: Record<RouteName, RouteDef['component']> = {
   dashboard: Dashboard,
   peers: Peers,
   traffic: Traffic,
-  more: More,
+  network: Network,
   tunnel: Tunnel,
   routing: Routing,
   account: Account,

@@ -203,6 +203,14 @@ export function connectionCopy() {
     hint: issue ? issue.message : view === 'error' && statusError() ? statusError()! : t(copy.hint),
   };
 }
+export function exitNodeLabel(): string {
+  const route = status()?.exitRouting;
+  if (!status()?.ok || !route?.known) return t('net_exit_unknown');
+  const selected = route.selected;
+  if (!selected) return t('net_exit_local');
+  if (selected.auto) return `${t('dash_exit_auto')} · ${selected.auto}`;
+  return selected.id || selected.ip || t('net_exit_unknown');
+}
 export function connectionChip(): { label: I18nKey; tone: 'ok' | 'warn' | 'off' } {
   const view = connectionView();
   if (view === 'running') return { label: 'shell_connected', tone: 'ok' };

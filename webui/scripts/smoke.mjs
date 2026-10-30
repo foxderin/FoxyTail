@@ -449,9 +449,14 @@ await scenario('status sheet mirrors the connection card without top-bar control
   click(start); await flush();
   assert(fixture.log.filter(r => r.action === 'control.mutate' && r.args.command === 'control').length === 2, 'sheet start runs through the shared store');
   const modeRow = sheet.querySelector('.status-sheet-row');
-  assert(modeRow?.getAttribute('href') === '#/tunnel' && !window.document.querySelector('#app-header select'), 'run mode is reachable from the sheet, not the top bar');
+  assert(modeRow?.getAttribute('href') === '#/network' && !window.document.querySelector('#app-header select'), 'run mode is reachable from the sheet, not the top bar');
+  const bottomItems = [...window.document.querySelectorAll('#bottom-nav .nav-item')].map(item => item.getAttribute('href'));
+  assert(bottomItems.length === 5 && bottomItems.includes('#/network') && bottomItems.includes('#/settings') && !bottomItems.includes('#/more'), 'primary navigation is home, devices, files, network, settings');
+  await nav('network');
+  assert(window.document.querySelector('[data-testid="mode-picker"]'), 'run mode picker lives on the network page');
+  assert(window.document.querySelector('.tool-links'), 'network hub links into the detail tools');
   await nav('tunnel');
-  assert(window.document.querySelector('[data-testid="mode-picker"]'), 'run mode picker lives on the tunnel page');
+  assert(window.document.querySelector('.back-link')?.getAttribute('href') === '#/network', 'tunnel detail navigates back to the network hub');
 });
 
 for (const state of ['empty', 'error', 'no-root', 'no-bridge', 'unknown']) {

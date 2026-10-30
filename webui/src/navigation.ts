@@ -7,9 +7,10 @@ interface NavItem { name: string; icon: IconName; titleKey: I18nKey }
 export interface RouteMeta extends NavItem { pageTitleKey: I18nKey }
 
 /* Route metadata is the single source for the shell navigation, the page
- * headings and the more-page tool grid. */
+ * headings and sub-page back links. Route names are part of the native
+ * contract — ControlActivity whitelists the same set. */
 export const ROUTE_NAMES = [
-  'dashboard', 'peers', 'files', 'traffic', 'more',
+  'dashboard', 'peers', 'files', 'traffic', 'network',
   'tunnel', 'routing', 'serve',
   'account', 'logs', 'settings', 'diag',
 ] as const;
@@ -19,7 +20,7 @@ export const ROUTE_META: Record<RouteName, RouteMeta> = {
   dashboard: { name: 'dashboard', icon: 'dashboard', titleKey: 'nav_dashboard', pageTitleKey: 'nav_dashboard' },
   peers: { name: 'peers', icon: 'group', titleKey: 'nav_peers', pageTitleKey: 'peers_title' },
   traffic: { name: 'traffic', icon: 'monitoring', titleKey: 'nav_traffic', pageTitleKey: 'traffic_title' },
-  more: { name: 'more', icon: 'more_horiz', titleKey: 'nav_more', pageTitleKey: 'more_title' },
+  network: { name: 'network', icon: 'hub', titleKey: 'nav_network', pageTitleKey: 'nav_network' },
   tunnel: { name: 'tunnel', icon: 'router', titleKey: 'tun_title', pageTitleKey: 'tun_title' },
   routing: { name: 'routing', icon: 'alt_route', titleKey: 'route_title', pageTitleKey: 'route_title' },
   serve: { name: 'serve', icon: 'dns', titleKey: 'serve_title', pageTitleKey: 'serve_title' },
@@ -32,22 +33,32 @@ export const ROUTE_META: Record<RouteName, RouteMeta> = {
 
 const meta = (name: RouteName): NavItem => ROUTE_META[name];
 
-/* Shell navigation groups, in display order. The first group plus the more
- * entry forms the bottom navigation. */
+/* Bottom navigation is exactly the first group; the remaining groups only
+ * render in the desktop sidebar. Detail pages map back to their hub via
+ * PARENT. */
 const GROUPS: { titleKey: I18nKey; names: RouteName[] }[] = [
-  { titleKey: 'shell_network', names: ['dashboard', 'peers', 'files', 'traffic'] },
-  { titleKey: 'shell_services', names: ['tunnel', 'routing', 'serve'] },
-  { titleKey: 'shell_manage', names: ['account', 'logs', 'settings', 'diag', 'more'] },
+  { titleKey: 'shell_nav_main', names: ['dashboard', 'peers', 'files', 'network', 'settings'] },
+  { titleKey: 'shell_network', names: ['tunnel', 'routing', 'serve', 'traffic'] },
+  { titleKey: 'shell_manage', names: ['account', 'logs', 'diag'] },
 ];
+const PRIMARY: RouteName[] = GROUPS[0].names;
+const PARENT: Partial<Record<RouteName, RouteName>> = {
+  traffic: 'network', tunnel: 'network', routing: 'network', serve: 'network',
+  account: 'settings', logs: 'settings', diag: 'settings',
+};
 
-export const PRIMARY_NAV: NavItem[] = GROUPS[0].names.map(meta).concat(meta('more'));
+export const PRIMARY_NAV: NavItem[] = PRIMARY.map(meta);
 export const NAV_GROUPS: { titleKey: I18nKey; items: NavItem[] }[] =
   GROUPS.map((group) => ({ titleKey: group.titleKey, items: group.names.map(meta) }));
 export function routeIcon(name: RouteName): IconName {
   return ROUTE_META[name].icon;
 }
 export function primaryRoute(name: string): string {
-  return PRIMARY_NAV.some((item) => item.name === name) ? name : 'more';
+  return PARENT[name as RouteName] ?? (PRIMARY.includes(name as RouteName) ? name : 'dashboard');
+}
+export function parentRoute(name: string): { route: string; labelKey: I18nKey } | null {
+  const parent = PARENT[name as RouteName];
+  return parent ? { route: parent, labelKey: ROUTE_META[parent].titleKey } : null;
 }
 
 const [nativeFilesSection, setNativeFilesSection] = createSignal<'send' | 'history'>();
@@ -77,7 +88,7 @@ export function handleBack(): void {
   if (previous) { goingBack = true; location.hash = '#/' + previous; }
   else if (route && route !== 'dashboard') {
     goingBack = true;
-    location.hash = '#/' + (primaryRoute(route) === 'more' && route !== 'more' ? 'more' : 'dashboard');
+    location.hash = '#/' + (parentRoute(route)?.route ?? 'dashboard');
   } else void requestNative('app.close');
 }
 onNativeEvent('back', handleBack);

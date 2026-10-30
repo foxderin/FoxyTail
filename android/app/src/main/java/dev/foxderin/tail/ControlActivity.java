@@ -39,7 +39,7 @@ import java.util.Map;
 
 public class ControlActivity extends Activity {
     static final String DESTINATION = "destination";
-    private static final String[] PAGES = {"dashboard", "peers", "files", "traffic", "more", "tunnel", "routing", "serve", "account", "logs", "settings", "diag"};
+    private static final String[] PAGES = {"dashboard", "peers", "files", "traffic", "network", "tunnel", "routing", "serve", "account", "logs", "settings", "diag"};
     private static final String CSP = "default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'none'; frame-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'";
     private WebView web;
     private WebBridge bridge;

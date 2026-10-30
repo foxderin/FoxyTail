@@ -282,6 +282,24 @@ export default function Settings(): JSX.Element {
           </div>
         </div>
       </Show>
+      <div class="tool-links">
+        <For each={[
+          { route: 'account', icon: 'person' as const, label: 'acc_title' as const, desc: 'tools_account_desc' as const },
+          { route: 'logs', icon: 'article' as const, label: 'logs_title' as const, desc: 'tools_logs_desc' as const },
+          { route: 'diag', icon: 'bug_report' as const, label: 'diag_title' as const, desc: 'tools_diag_desc' as const },
+        ]}>
+          {(item) => (
+            <a class="tool-link" href={'#/' + item.route}>
+              <span class="tool-link-icon"><MdIcon name={item.icon} size={22} /></span>
+              <span class="tool-link-copy">
+                <span class="tool-link-name">{t(item.label)}</span>
+                <span class="tool-link-desc">{t(item.desc)}</span>
+              </span>
+              <MdIcon name="chevron_right" size={19} />
+            </a>
+          )}
+        </For>
+      </div>
       <Card title={t('tools_appearance')} icon="dark_mode">
         <div class="tool-setting wide-control">
           <span class="tool-setting-label">{t('set_theme')}</span>

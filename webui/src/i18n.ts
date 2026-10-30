@@ -23,7 +23,7 @@ const zh = {
   ...networkZh,
   ...uxZh,
   no_root_banner: '应用连接不可用。请重新打开 FoxyTail。',
-  nav_dashboard: '仪表盘', nav_peers: '节点', nav_exitnodes: '出口', nav_traffic: '流量', nav_more: '更多',
+  nav_dashboard: '首页', nav_peers: '设备', nav_exitnodes: '出口', nav_traffic: '流量', nav_network: '网络',
   loading: '加载中…', empty: '暂无数据', error: '出错了',
   save: '保存', cancel: '取消', confirm: '确认', delete: '删除', add: '添加',
   copy: '复制', copied: '已复制', open_browser: '浏览器打开',
@@ -47,7 +47,7 @@ const zh = {
   hero_minimize: '收起', hero_expand: '登录 / 启动',
   hero_banner_login: '尚未登录 tailnet', hero_banner_stopped: '服务已停止',
 
-  peers_title: '节点', peers_list: '列表', peers_topology: '拓扑',
+  peers_title: '设备', peers_list: '列表', peers_topology: '拓扑',
   peers_empty: '没有发现其他节点', peers_detail: '节点详情',
   peers_rx: '接收', peers_tx: '发送',
 
@@ -158,9 +158,6 @@ const zh = {
   diag_share_hint: '使用同一组代号替换账户、设备名、SSID 和地址，保留排障关联；分享前仍可检查内容。',
   diag_local_hint: '保留网络地址、账户和设备信息，仅用于本机排查，请勿公开分享。',
 
-  more_title: '更多', more_tunnel: '隧道', more_routing: '路由', more_account: '账号',
-  more_serve: 'Serve/Funnel', more_files: '文件', more_logs: '日志',
-  more_settings: '设置', more_diag: '诊断',
 } as const;
 
 export type I18nKey = keyof typeof zh;
@@ -173,7 +170,7 @@ const en: Record<I18nKey, string> = {
   ...networkEn,
   ...uxEn,
   no_root_banner: 'App connection unavailable. Reopen FoxyTail.',
-  nav_dashboard: 'Dashboard', nav_peers: 'Peers', nav_exitnodes: 'Exit', nav_traffic: 'Traffic', nav_more: 'More',
+  nav_dashboard: 'Home', nav_peers: 'Devices', nav_exitnodes: 'Exit', nav_traffic: 'Traffic', nav_network: 'Network',
   loading: 'Loading…', empty: 'No data', error: 'Something went wrong',
   save: 'Save', cancel: 'Cancel', confirm: 'Confirm', delete: 'Delete', add: 'Add',
   copy: 'Copy', copied: 'Copied', open_browser: 'Open in browser',
@@ -197,7 +194,7 @@ const en: Record<I18nKey, string> = {
   hero_minimize: 'Minimize', hero_expand: 'Log in / start',
   hero_banner_login: 'Not logged in to the tailnet', hero_banner_stopped: 'Service stopped',
 
-  peers_title: 'Peers', peers_list: 'List', peers_topology: 'Topology',
+  peers_title: 'Devices', peers_list: 'List', peers_topology: 'Topology',
   peers_empty: 'No peers found', peers_detail: 'Peer details',
   peers_rx: 'RX', peers_tx: 'TX',
 
@@ -308,9 +305,6 @@ const en: Record<I18nKey, string> = {
   diag_share_hint: 'Consistent aliases replace accounts, device names, SSIDs and addresses across files. Review contents before sharing.',
   diag_local_hint: 'Includes network addresses, accounts and device information. Keep this bundle private.',
 
-  more_title: 'More', more_tunnel: 'Tunnel', more_routing: 'Routing', more_account: 'Account',
-  more_serve: 'Serve/Funnel', more_files: 'Files', more_logs: 'Logs',
-  more_settings: 'Settings', more_diag: 'Diagnostics',
 };
 
 const DICT: Record<Lang, Record<I18nKey, string>> = { zh, en };

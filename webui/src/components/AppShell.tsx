@@ -7,7 +7,7 @@ import { t, type I18nKey } from '../i18n';
 import { MdIcon, type IconName } from '../icons';
 import { startStatusPolling } from '../state';
 import { listTasks, type Task } from '../tasks';
-import { NAV_GROUPS, PRIMARY_NAV, primaryRoute } from '../navigation';
+import { NAV_GROUPS, PRIMARY_NAV, parentRoute, primaryRoute } from '../navigation';
 import { PageHeader } from './Basics';
 import { ToastRoot } from './Toast';
 import { ConfirmHost } from './ConfirmDialog';
@@ -129,7 +129,7 @@ function StatusSheet(): JSX.Element {
       </div>
       <ServiceActions />
       <Show when={nativeIssue()}><NativeIssueActions /></Show>
-      <a class="status-sheet-row" href="#/tunnel" onClick={close}>
+      <a class="status-sheet-row" href="#/network" onClick={close}>
         <span>{t('dash_mode')}</span>
         <strong>{serviceModeLabel() ? t(serviceModeLabel()!) : '—'}</strong>
         <MdIcon name="chevron_right" size={18} />
@@ -208,8 +208,10 @@ export function AppShell(props: {
           const visible = () => props.route() === name;
           return <div class="page-transition" hidden={!visible()}>
             <RouteVisible.Provider value={visible}>
-              <Show when={primaryRoute(name) === 'more' && name !== 'more'}>
-                <a class="back-link" href="#/more"><MdIcon name="chevron_right" size={18} />{t('shell_back_tools')}</a>
+              <Show when={parentRoute(name)}>
+                {(parent) => (
+                  <a class="back-link" href={'#/' + parent().route}><MdIcon name="chevron_right" size={18} />{t('shell_back')} · {t(parent().labelKey)}</a>
+                )}
               </Show>
               <PageHeader id={'app-title-' + name} title={t(routeDef.titleKey)} />
               <Dynamic component={routeDef.component} />

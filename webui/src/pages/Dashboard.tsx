@@ -14,6 +14,7 @@ import { IconButton } from '../components/ui';
 import {
   connectionCopy,
   connectionView,
+  exitNodeLabel,
   nativeIssue,
   serviceModeLabel,
   serviceRunning,
@@ -53,14 +54,6 @@ export default function Dashboard(): JSX.Element {
   });
   createEffect(on(() => nativeControl().accountRevision, () => { setToday(null); void loadToday(); }));
 
-  const exitLabel = (): string => {
-    const route = status()?.exitRouting;
-    if (!status()?.ok || !route?.known) return t('net_exit_unknown');
-    const selected = route.selected;
-    if (!selected) return t('net_exit_local');
-    if (selected.auto) return `${t('dash_exit_auto')} · ${selected.auto}`;
-    return selected.id || selected.ip || t('net_exit_unknown');
-  };
   const peersLabel = (): string => {
     const peers = status()?.peers;
     return peers ? `${peers.online} / ${peers.online + peers.offline}` : '—';
@@ -72,7 +65,7 @@ export default function Dashboard(): JSX.Element {
     return t(label) + dns;
   };
   const rows = (): { icon: IconName; label: string; value: string; href: string }[] => [
-    { icon: 'logout', label: t('dash_exitnode'), value: exitLabel(), href: '#/peers' },
+    { icon: 'logout', label: t('dash_exitnode'), value: exitNodeLabel(), href: '#/peers' },
     { icon: 'group', label: t('dash_peers_online'), value: peersLabel(), href: '#/peers' },
     { icon: 'monitoring', label: t('dash_today_traffic'), value: today() ? `↓ ${fmtBytes(today()!.rx)} · ↑ ${fmtBytes(today()!.tx)}` : '—', href: '#/traffic' },
     { icon: 'router', label: t('dash_mode'), value: modeLabel(), href: '#/tunnel' },
