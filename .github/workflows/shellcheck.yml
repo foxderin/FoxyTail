@@ -10,7 +10,7 @@ concurrency:
   group: verify-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || github.sha }}
   cancel-in-progress: true
 jobs:
-  verify:
+  checks:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -43,7 +43,21 @@ jobs:
           packages: platform-tools
       - run: sdkmanager 'platforms;android-37.0' 'build-tools;36.0.0'
       - run: sudo apt-get update && sudo apt-get install -y shellcheck jq mksh
-      - run: bash .github/tools/verify.sh
+      - run: bash .github/tools/verify.sh checks
+  # Timing-sensitive shell suites get a dedicated runner: sharing a CPU with
+  # the compile checks starved subprocess deadlines and caused real failures.
+  backend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: native/foxydns/go.mod
+          cache-dependency-path: |
+            native/*/go.mod
+            native/*/go.sum
+      - run: sudo apt-get update && sudo apt-get install -y jq mksh
+      - run: bash .github/tools/verify.sh backend
   native-kernel:
     runs-on: ubuntu-latest
     steps:
