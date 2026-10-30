@@ -71,10 +71,9 @@ _test_taildrop_write() {
 cmd_file_send_delete() { _test_taildrop_write file-send-delete; }
 cmd_file_send_clear() { _test_taildrop_write file-send-clear; }
 cmd_file_delete_many() { _test_taildrop_write file-delete-many; }
-cmd_file_export_many() { _test_taildrop_write file-export-many; }
 ''')
         commands = [('file-send-delete', 'a' * 32), ('file-send-clear',),
-                    ('file-delete-many', '["one"]'), ('file-export-many', '["one"]')]
+                    ('file-delete-many', '["one"]')]
         (self.conf / 'foxytail.conf').write_text('TS_MODE=invalid\n')
         for index, args in enumerate(commands):
             with self.subTest(command=args[0]):
@@ -96,14 +95,14 @@ cmd_file_export_many() { _test_taildrop_write file-export-many; }
 
     def test_taildrop_write_operations_reject_wrong_argument_counts_and_large_batches(self):
         commands = [('file-send-delete', 'a' * 32), ('file-send-clear',),
-                    ('file-delete-many', '["one"]'), ('file-export-many', '["one"]')]
+                    ('file-delete-many', '["one"]')]
         for index, args in enumerate(commands):
             request = self.request('taildrop_args_' + str(index))
             self.assertIn('argument count', self.entry('operation-start', request, *args, 'extra', ok=False)['error'])
             if len(args) == 2:
                 self.assertIn('argument count', self.entry('operation-start', request, args[0], ok=False)['error'])
             self.assertFalse((self.run / 'operations' / request).exists())
-        for index, command in enumerate(('file-delete-many', 'file-export-many')):
+        for index, command in enumerate(('file-delete-many',)):
             request = self.request('taildrop_large_' + str(index))
             self.assertIn('too large', self.entry('operation-start', request, command, 'x' * 16385, ok=False)['error'])
             self.assertFalse((self.run / 'operations' / request).exists())

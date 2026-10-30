@@ -49,7 +49,7 @@ class WebapiHardeningTests(ApiTestCase):
 
     def test_single_file_ops_survive_broken_configuration_like_batch_forms(self):
         self.entry_fixture()
-        inbox = self.base / 'files'
+        inbox = self.sdcard / 'Download' / 'Taildrop'
         inbox.mkdir()
         (inbox / 'a.txt').write_text('alpha')
         (inbox / 'b.txt').write_text('beta')
@@ -57,15 +57,9 @@ class WebapiHardeningTests(ApiTestCase):
         # The single-name inbox operations must degrade exactly like their
         # batch equivalents: their own validation still applies, and only a
         # handler-level failure may reject the request.
-        result = self.entry('file-export', 'a.txt')
-        self.assertEqual(result['path'], str(self.sdcard / 'Download' / 'a.txt'))
-        self.assertEqual((self.sdcard / 'Download' / 'a.txt').read_text(), 'alpha')
         self.assertEqual(self.entry('file-delete', 'a.txt'), {'ok': True})
         self.assertIn('invalid name', self.entry('file-delete', '../escape', ok=False)['error'])
         self.assertEqual(self.entry('file-clear'), {'ok': True, 'removed': 1})
-        result = self.entry('file-receive', ok=False)
-        self.assertIn('receive mode is unknown', result['error'])
-        self.assertNotIn('invalid configuration', result['error'])
         # Proof the configuration really is broken: gated commands still fail.
         self.assertIn('invalid configuration', self.entry('settings-get', ok=False)['error'])
         # The upgrade gate still covers the same commands independently.
@@ -73,7 +67,7 @@ class WebapiHardeningTests(ApiTestCase):
         self.assertIn('upgrade', self.entry('file-delete', 'b.txt', ok=False)['error'])
 
     def test_format_character_names_are_rejected_like_other_spoofed_names(self):
-        inbox = self.base / 'files'
+        inbox = self.sdcard / 'Download' / 'Taildrop'
         inbox.mkdir()
         marks = ['\u061c', '\u200b', '\u200e', '\u200f', '\ufeff']
         marks += [chr(codepoint) for codepoint in range(0x202a, 0x202f)]  # U+202A..U+202E
@@ -82,11 +76,14 @@ class WebapiHardeningTests(ApiTestCase):
         for mark in marks:
             name = 'evil' + mark + '.txt'
             (inbox / name).write_text('spoofed')
-            for command in ('cmd_file_delete', 'cmd_file_export'):
+            for command in ('cmd_file_delete', 'cmd_file_read'):
                 with self.subTest(command=command, codepoint=f'U+{ord(mark):04X}'):
                     result = self.shell(command + ' ' + shlex.quote(name), ok=False)
                     self.assertNotEqual(result.returncode, 0)
-                    self.assertFalse(json.loads(result.stdout)['ok'])
+                    if command == 'cmd_file_read':
+                        self.assertEqual(result.stdout, '')
+                    else:
+                        self.assertFalse(json.loads(result.stdout)['ok'])
             with self.subTest(command='cmd_file_delete_many', codepoint=f'U+{ord(mark):04X}'):
                 result = self.shell('cmd_file_delete_many ' + shlex.quote(json.dumps([name])), ok=False)
                 self.assertNotEqual(result.returncode, 0)

@@ -222,23 +222,13 @@ cmd_backup''', ok=False)
 
 
 
-    def test_file_delete_clear_export_read_lifecycle(self):
-        inbox = self.base / 'files'
+    def test_file_delete_clear_read_lifecycle(self):
+        inbox = self.sdcard / 'Download' / 'Taildrop'
         inbox.mkdir(parents=True, exist_ok=True)
         (inbox / 'a.txt').write_text('alpha')
         (inbox / 'b.txt').write_text('beta-content')
-        # export copies to Download, leaving the inbox copy alone
-        result = json.loads(self.shell("cmd_file_export a.txt").stdout)
-        self.assertTrue(result['ok'])
-        self.assertEqual(result['path'], str(self.sdcard / 'Download' / 'a.txt'))
-        exported = self.sdcard / 'Download' / 'a.txt'
-        self.assertEqual(exported.read_text(), 'alpha')
-        self.assertTrue((inbox / 'a.txt').exists())
-        # a second export of the same name must number-suffix, never overwrite
-        result = json.loads(self.shell("cmd_file_export a.txt").stdout)
-        self.assertTrue(result['ok'])
-        self.assertNotEqual(result['path'], str(self.sdcard / 'Download' / 'a.txt'))
-        self.assertEqual((self.sdcard / 'Download' / 'a-1.txt').read_text(), 'alpha')
+        # files already live in Download/Taildrop; read streams bytes in place
+        self.assertEqual(self.shell("cmd_file_read a.txt").stdout, 'alpha')
         self.assertEqual(self.shell("cmd_file_read b.txt").stdout, 'beta-content')
         # delete removes one file
         result = json.loads(self.shell("cmd_file_delete b.txt").stdout)
@@ -252,13 +242,12 @@ cmd_backup''', ok=False)
         self.assertEqual(list(inbox.iterdir()), [])
 
     def test_file_ops_reject_path_escape(self):
-        inbox = self.base / 'files'
+        inbox = self.sdcard / 'Download' / 'Taildrop'
         inbox.mkdir(parents=True, exist_ok=True)
         outside = self.base / 'outside.txt'
         outside.write_text('secret')
         for cmd in ("cmd_file_delete '../outside.txt'",
                     "cmd_file_read '../outside.txt'",
-                    "cmd_file_export '../outside.txt'",
                     "cmd_file_delete 'a/b'",
                     "cmd_file_read '..'",
                     "cmd_file_delete ''"):

@@ -46,7 +46,7 @@ class TaildropJobsApiTests(ApiTestCase):
         self.assertFalse((self.base / 'escape').exists())
 
     def test_inbox_stream_has_no_json_wrapper_or_size_cap(self):
-        inbox = self.base / 'files'
+        inbox = self.sdcard / 'Download' / 'Taildrop'
         inbox.mkdir()
         payload = bytes(range(256)) * 40000
         (inbox / 'large.bin').write_bytes(payload)

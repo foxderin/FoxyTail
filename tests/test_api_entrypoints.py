@@ -49,15 +49,13 @@ class ApiEntrypointTests(ApiTestCase):
         self.script('bin/id', 'echo 0\n')
         self.api.write_text(self.api.read_text().replace('# --- dispatch', '''
 cmd_file_delete_many() { jqr -n --arg names "$1" '{ok:true,names:$names}'; }
-cmd_file_export_many() { jqr -n --arg names "$1" '{ok:true,names:$names}'; }
 # --- dispatch''', 1))
         self.script('bin/foxyfiles', '''
 printf '%s\\n' "$@" >"$TEST_DIR/helper-args"
 printf '%s\\n' '{"ok":true,"removed":1,"retained":2}'
 ''')
         commands = [('file-send-delete', 'a' * 32), ('file-send-clear',),
-                    ('file-delete-many', '["quote \' and space.txt"]'),
-                    ('file-export-many', '["quote \' and space.txt"]')]
+                    ('file-delete-many', '["quote \' and space.txt"]')]
         advertised = self.entry('backend-info')['commands']
         (self.conf / 'foxytail.conf').write_text('TS_MODE=invalid\n')
         for args in commands:
