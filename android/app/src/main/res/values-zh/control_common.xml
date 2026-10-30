@@ -13,5 +13,6 @@
     <string name="control_finished">已完成：%1$s。</string>
     <string name="control_unknown">操作结果未知，请勿重复修改。%1$s</string>
     <string name="control_archive_limit">配置归档不能超过 1 MiB。</string>
+    <string name="control_archive_type">所选文件必须是 FoxyTail .tar.gz 备份归档。</string>
     <string name="control_import_interrupted">归档导入被中断，未提交恢复。</string>
 </resources>

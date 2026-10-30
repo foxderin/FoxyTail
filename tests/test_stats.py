@@ -107,17 +107,16 @@ class StatsRegression(unittest.TestCase):
   replacement.write_text(json.dumps(dict(ts=0,iface=None))+'\n')
   replacement.replace(self.file)
   self.assertEqual(self.query('daily')['days'][0]['samples'],0)
- def test_valid_json_bad_counter_fails_without_cache_or_temporary_leak(self):
+ def test_valid_json_bad_counter_is_skipped_without_temporary_leak(self):
   self.file.write_text('{"ts":0,"iface":{"rx":0}}\n{"ts":1,"iface":{"rx":"bad"}}\n')
   result=subprocess.run(['sh',str(self.script),'daily'],env={**os.environ,'TEST_DIR':str(self.dir),'SAMPLES':str(self.file),'TZ':'UTC'},text=True,capture_output=True)
-  self.assertNotEqual(result.returncode,0)
-  self.assertEqual(result.stdout,'')
-  self.assertFalse((self.dir/'.stats-summary-cache').exists())
+  self.assertEqual(result.returncode,0,result.stderr)
+  self.assertEqual(json.loads(result.stdout)['days'],[dict(date='1970-01-01',samples=1,rx=0,tx=0)])
   self.assertEqual(list(self.dir.glob('.stats-order-*')),[])
   self.assertEqual(list(self.dir.glob('.stats-cache-*')),[])
- def test_first_bad_counter_is_baseline_and_next_number_is_reset(self):
+ def test_bad_counter_row_is_skipped_not_a_baseline(self):
   self.file.write_text('{"ts":0,"iface":{"rx":"bad"}}\n{"ts":1,"iface":{"rx":10}}\n')
-  self.assertEqual(self.query('daily')['days'],[dict(date='1970-01-01',samples=2,rx=10,tx=0)])
+  self.assertEqual(self.query('daily')['days'],[dict(date='1970-01-01',samples=1,rx=0,tx=0)])
  def test_uid_collection_sums_ipv4_ipv6_as_transmit_bytes(self):
   snapshot=self.dir/'route.snapshot';snapshot.mkdir()
   for family in ['iptables','ip6tables']:

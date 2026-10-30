@@ -129,6 +129,21 @@ fi
         self.assertFalse(self.events.exists())
         self.assertFalse((self.base / 'unsafe').exists())
 
+    def test_exit_node_zone_id_is_rejected_at_parse_time(self):
+        # A %zone-id suffix belongs to the socket layer, not a node identity:
+        # exit_target rejects it, so an argument that parses here but can never
+        # resolve there must fail while the rules file is still being read.
+        for rule in ['ssid:Home:exit-node:fe80::1%wlan0',
+                     'cellular:-:exit-node:100.64.0.1%eth0']:
+            with self.subTest(rule=rule):
+                self.rules.write_bytes(('# heading\n\n' + rule).encode())
+                result = self.run_script('validate', self.rules, ok=False)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn(f'{self.rules}:3:', result.stderr)
+                self.assertIn('exit-node requires a node name', result.stderr)
+                self.assertEqual(result.stdout, '')
+        self.assertFalse(self.events.exists())
+
     def test_validate_requires_a_regular_file_and_does_not_load_config(self):
         self.rules.write_text('cellular:-:up')
         (self.base / 'conf/foxytail.conf').write_text('TS_MODE=invalid\n')

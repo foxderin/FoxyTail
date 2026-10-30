@@ -27,6 +27,7 @@ type healthState struct {
 	LocalAnswers      uint64 `json:"localAnswers"`
 	Forwarded         uint64 `json:"forwarded"`
 	Failed            uint64 `json:"failed"`
+	Passed            uint64 `json:"passed"`
 	Error             string `json:"error,omitempty"`
 }
 

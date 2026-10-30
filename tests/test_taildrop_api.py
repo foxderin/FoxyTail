@@ -170,7 +170,7 @@ cp() { return 1; }
         self.assertEqual(self.receive({'a.txt': 'second'})['received'], 1)
         self.assertEqual((self.inbox / 'a.txt').read_text(), 'first')
         self.assertEqual((self.inbox / 'a-1.txt').read_text(), 'second')
-        self.assertEqual((self.downloads / 'Taildrop/a.txt').read_text(), 'second')
+        self.assertFalse((self.downloads / 'Taildrop/a.txt').exists())
         self.assertEqual(self.receive({})['received'], 0)
 
     def test_receive_skips_unfinished_files_and_keeps_receipts_after_clear(self):
@@ -180,7 +180,8 @@ cp() { return 1; }
         self.assertEqual(json.loads(self.shell('cmd_file_clear').stdout)['removed'], 1)
         self.assertTrue((self.inbox / '.taildrop').is_dir())
         self.assertEqual(self.receive({})['received'], 0)
-        self.assertEqual((self.downloads / 'Taildrop/done.txt').read_text(), 'complete')
+        self.assertFalse((self.downloads / 'Taildrop/done.txt').exists())
+        self.assertEqual((self.downloads / 'Taildrop/later.partial').read_text(), 'partial')
 
     def test_private_receipts_and_symlinks_are_not_file_api_items(self):
         receipts = self.inbox / '.taildrop'

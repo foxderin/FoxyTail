@@ -136,7 +136,9 @@ func (s *Selector) decide(a nfqueue.Attribute) int {
 		s.passed.Add(1)
 		return nfqueue.NfAccept
 	}
-	if s.Health() != nil || a.Payload == nil ||
+	// Only LOCAL_OUT packets reach this queue; anything else keeps its path
+	// untouched, in step with the transparent interceptor's observe().
+	if s.Health() != nil || a.Hook == nil || *a.Hook != unix.NF_INET_LOCAL_OUT || a.Payload == nil ||
 		(a.CapLen != nil && int(*a.CapLen) > len(*a.Payload)) {
 		s.passed.Add(1)
 		return nfqueue.NfAccept

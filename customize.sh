@@ -366,6 +366,17 @@ cp -f "${STAGE}/root/"* "$CANDIDATE/" || abort "! Failed to stage shared runtime
 # Match executable paths and exact script/callback arguments, never a broad
 # `pkill -f foxytail`. The installer itself is outside these software paths.
 installed_pids() {
+  # Scripts also run under argv that never names the scripts directory: through
+  # the systemless mount (/system/bin or the modules*/bin path) or by bare
+  # name after an interpreter. Collect every shipped script basename so those
+  # invocation forms are matched exactly instead of by a loose substring.
+  _ip_names=""
+  for _ip_dir in "${TS_SCRIPTS_DIR}" ${CANDIDATE:+"${CANDIDATE}/scripts"} ${STAGE:+"${STAGE}/scripts"}; do
+    for _ip_file in "${_ip_dir}/"*; do
+      [ -f "${_ip_file}" ] || continue
+      case " ${_ip_names}" in *" ${_ip_file##*/} "*) ;; *) _ip_names="${_ip_names}${_ip_file##*/} " ;; esac
+    done
+  done
   for _ip_proc in /proc/[0-9]*; do
     _ip_pid=${_ip_proc##*/}
     # Some Android vendors expose entries such as /proc/8350_reg. A leading
@@ -376,11 +387,66 @@ installed_pids() {
     case "$_ip_exe" in
       "${TS_BIN_DIR}/"*) echo "$_ip_pid"; continue ;;
     esac
-    if tr '\0' '\n' <"${_ip_proc}/cmdline" 2>/dev/null |
-      awk -v prefix="${TS_SCRIPTS_DIR}/" 'index($0,prefix)==1 {found=1} END {exit !found}'; then
+    if _inst_cmdline "${_ip_pid}" |
+      awk -v names="${_ip_names}" -v scripts="${TS_SCRIPTS_DIR}/" \
+        -v modbin="${MODPATH:+${MODPATH}/system/bin/}" \
+        -v live="/data/adb/modules/foxytail/system/bin/" \
+        -v stage="/data/adb/modules_update/foxytail/system/bin/" '
+        BEGIN { n = split(names, a, " "); for (i = 1; i <= n; i++) known[a[i]] = 1 }
+        {
+          arg = $0
+          if (index(arg, scripts) == 1 ||
+              (modbin != "" && index(arg, modbin) == 1) ||
+              index(arg, live) == 1 || index(arg, stage) == 1 ||
+              index(arg, "/system/bin/foxytail.") == 1) { found = 1; exit }
+          word = arg; sub(/[ \t].*$/, "", word)
+          base = word; sub(/.*\//, "", base)
+          if (base in known) {
+            if (index(word, "/")) {
+              # A path ending in a known name; generic basenames like start.sh
+              # still need a foxytail component to stay conservative, and an
+              # option such as --flag=/path is not an invocation.
+              if (index(word, "=") == 0 &&
+                  (index(base, "foxytail") == 1 || index(arg, "foxytail"))) { found = 1; exit }
+            } else {
+              # A bare name is our script only as an interpreter argument or
+              # the first word of an `sh -c` command string.
+              pb = prev; sub(/.*\//, "", pb)
+              ppb = pprev; sub(/.*\//, "", ppb)
+              if (pb ~ /^(sh|mksh|ash|bash|busybox)$/ ||
+                  (pb == "-c" && ppb ~ /^(sh|mksh|ash|bash|busybox)$/)) { found = 1; exit }
+            }
+          }
+          pprev = prev; prev = arg
+        }
+        END { exit !found }'; then
       echo "$_ip_pid"
     fi
   done
+}
+
+# Run <cmd...> under timeout(1) when available; warn once and run unbounded
+# otherwise. Mirrors settings.sh tmo, which the installer cannot source.
+_inst_tmo() {
+  if command -v timeout >/dev/null 2>&1; then
+    timeout "$@"
+    return
+  fi
+  if [ "${_INST_TMO_WARNED:-0}" != 1 ]; then
+    _INST_TMO_WARNED=1
+    type ui_print >/dev/null 2>&1 &&
+      ui_print "! timeout(1) unavailable; process scans run without a time limit"
+  fi
+  shift
+  "$@"
+}
+
+# Snapshot only the small argument prefix needed to identify our processes.
+# Same bounded read as settings.sh _proc_cmdline: a candidate exiting during
+# the read can leave an unbounded reader spinning on the stale descriptor.
+_inst_cmdline() {
+  case "$1" in '' | *[!0-9]*) return 1 ;; esac
+  _inst_tmo 2 dd "if=/proc/$1/cmdline" bs=4096 count=1 2>/dev/null | tr '\n' '\r' | tr '\000' '\n'
 }
 
 quiesce_installed() {
@@ -388,8 +454,7 @@ quiesce_installed() {
   # hence explicit watcher and resident shutdown before the old service.
   [ "$(cat "${TS_DIR}/.installing")" = "$_INSTALL_OWNER" ] || return 1
   for _qi_pid in $(installed_pids); do
-    if tr '\0' '\n' <"/proc/${_qi_pid}/cmdline" 2>/dev/null |
-      grep -qxF "${TS_SCRIPTS_DIR}/foxytail.inotify"; then
+    if _inst_cmdline "${_qi_pid}" | grep -qxF "${TS_SCRIPTS_DIR}/foxytail.inotify"; then
       kill -TERM "$_qi_pid" 2>/dev/null
     fi
   done

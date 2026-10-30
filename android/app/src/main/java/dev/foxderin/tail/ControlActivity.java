@@ -223,7 +223,7 @@ public class ControlActivity extends Activity {
             Iterator<String> names = object.keys();
             while (names.hasNext()) {
                 String key = names.next();
-                if (key.toLowerCase(java.util.Locale.ROOT).matches(".*(authkey|password|credential|secret|sourceuri).*")) throw new IOException("Credentials and source URIs cannot be saved as drafts");
+                if (key.toLowerCase(java.util.Locale.ROOT).matches(".*(authkey|password|credential|secret|sourceuri|token|key|apikey|passwd|auth).*")) throw new IOException("Credentials and source URIs cannot be saved as drafts");
                 checkDraft(object.get(key));
             }
         } else if (value instanceof org.json.JSONArray) {

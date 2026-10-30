@@ -4,11 +4,13 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net"
 	"net/netip"
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -185,6 +187,51 @@ func TestConfigAndContextValidation(t *testing.T) {
 	}
 }
 
+// The control socket lives beside StateFile; keep its path inside the unix
+// socket sun_path limit on every platform's t.TempDir layout.
+func shortStateFile(t *testing.T, cfg *Config) {
+	t.Helper()
+	dir, err := os.MkdirTemp("", "fdns-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	cfg.StateFile = filepath.Join(dir, "state")
+}
+
+// A failing NFQUEUE open returns a typed nil *Selector. Storing it in the
+// captureQueue interface used to nil-deref health and Close; the service must
+// instead start degraded with the queue error reported.
+func TestHijackQueueFailureDegradesWithoutPanic(t *testing.T) {
+	original := newSelector
+	newSelector = func(uint16, *recordStore) (*Selector, error) {
+		return nil, errors.New("NFQUEUE unavailable")
+	}
+	defer func() { newSelector = original }()
+	cfg := contextFixture(t)
+	cfg.Mode, cfg.Queue = "hijack", 1053
+	shortStateFile(t, &cfg)
+	s, err := startService(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	if s.interceptor != nil || s.queueError == nil {
+		t.Fatal("failed queue must be reported as an error, not stored")
+	}
+	state := s.healthState()
+	if state.QueueReady || state.Error == "" {
+		t.Fatalf("degraded queue not surfaced in health: %+v", state)
+	}
+	if r := query(t, "udp", s.servers[0].Listener.Addr().String(), "nas.", dns.TypeA); r.Rcode != 0 || len(r.Answer) != 1 {
+		t.Fatalf("degraded queue took the local endpoint down: %v", r)
+	}
+	s.Close()
+	if after := s.healthState(); after.Ready {
+		t.Fatal("closed service still reports ready")
+	}
+}
+
 type fakeFlowLookup struct {
 	flow  FlowContext
 	err   error
@@ -350,5 +397,229 @@ func TestMalformedQuestionAndTruncation(t *testing.T) {
 	r.ServeDNS(w, q)
 	if !w.msg.Truncated || w.msg.Len() > dns.MinMsgSize {
 		t.Fatalf("oversized UDP response: %d", w.msg.Len())
+	}
+}
+
+type failingQueue struct{ calls int }
+
+func (f *failingQueue) Health() error { return nil }
+func (f *failingQueue) Close() error {
+	f.calls++
+	return errors.New("closeOnce cached failure")
+}
+
+// A deterministically failing quiesce (closeOnce caches the error) used to
+// make every SIGTERM retry forever. The drain must give up bounded and loud.
+func TestShutdownCaptureRetriesBoundedly(t *testing.T) {
+	original := cleanupOwned
+	defer func() { cleanupOwned = original }()
+	cleanupCalls := 0
+	cleanupOwned = func(string) error { cleanupCalls++; return nil }
+	queue := &failingQueue{}
+	s := &service{cfg: Config{Mode: "transparent"}, interceptor: queue}
+	started := time.Now()
+	if err := s.shutdownCapture(); err == nil || queue.calls != 3 || cleanupCalls != 0 {
+		t.Fatalf("deterministic quiesce failure must stop retrying: calls=%d cleanup=%d err=%v", queue.calls, cleanupCalls, err)
+	}
+	if elapsed := time.Since(started); elapsed > 3*time.Second {
+		t.Fatalf("bounded shutdown exceeded its budget: %s", elapsed)
+	}
+
+	cleanupCalls = 0
+	cleanupOwned = func(string) error { cleanupCalls++; return errors.New("conntrack unavailable") }
+	s = &service{cfg: Config{Mode: "transparent"}}
+	if err := s.shutdownCapture(); err == nil || cleanupCalls != 3 {
+		t.Fatalf("deterministic cleanup failure must stop retrying: cleanup=%d err=%v", cleanupCalls, err)
+	}
+
+	cleanupCalls = 0
+	cleanupOwned = func(string) error { cleanupCalls++; return nil }
+	if err := s.shutdownCapture(); err != nil || cleanupCalls != 1 {
+		t.Fatalf("clean drain must succeed on the first attempt: cleanup=%d err=%v", cleanupCalls, err)
+	}
+}
+
+// serve honors --queue as an override of the config's queue number instead of
+// silently ignoring it.
+func TestServeQueueFlagOverridesConfig(t *testing.T) {
+	cfg := contextFixture(t)
+	cfg.Mode, cfg.Queue = "hijack", 1053
+	shortStateFile(t, &cfg)
+	configPath := filepath.Join(t.TempDir(), "foxydns.json")
+	body := fmt.Sprintf(`{"Listen":"127.0.0.1:0","Mode":"hijack","Queue":1053,"ContextFile":%q,"StateFile":%q}`, cfg.ContextFile, cfg.StateFile)
+	if err := os.WriteFile(configPath, []byte(body), 0600); err != nil {
+		t.Fatal(err)
+	}
+	original := newSelector
+	defer func() { newSelector = original }()
+	queues := make(chan uint16, 1)
+	newSelector = func(queue uint16, _ *recordStore) (*Selector, error) {
+		queues <- queue
+		return nil, errors.New("NFQUEUE unavailable")
+	}
+	done := make(chan error, 1)
+	go func() { done <- run([]string{"serve", "--config", configPath, "--queue", "1054"}) }()
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		if _, err := os.Stat(cfg.StateFile); err == nil {
+			break
+		}
+		select {
+		case err := <-done:
+			t.Fatalf("serve exited early: %v", err)
+		case <-time.After(10 * time.Millisecond):
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("service did not start")
+		}
+	}
+	self, err := os.FindProcess(os.Getpid())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = self.Signal(syscall.SIGTERM); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case err = <-done:
+		if err != nil {
+			t.Fatalf("hijack-mode SIGTERM failed: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("SIGTERM did not stop serve")
+	}
+	if got := <-queues; got != 1054 {
+		t.Fatalf("--queue was ignored; service used queue %d", got)
+	}
+	for _, args := range [][]string{
+		{"serve", "--config", configPath, "--queue", "0"},
+		{"serve", "--config", configPath, "--queue", "70000"},
+		{"check", "--config", configPath, "--queue", "0"},
+	} {
+		if err := run(args); err == nil {
+			t.Fatalf("accepted out-of-range queue flag: %v", args)
+		}
+	}
+}
+
+// The SIGTERM path used to retry a failing cleanup on every signal forever.
+// It now reports to stderr and exits non-zero after a few attempts.
+func TestServeTerminatesAfterBoundedCleanupRetries(t *testing.T) {
+	cfg := contextFixture(t)
+	cfg.Mode, cfg.Queue = "transparent", 1053
+	shortStateFile(t, &cfg)
+	cfg.OwnershipFile = filepath.Join(t.TempDir(), "flows.jsonl")
+	configPath := filepath.Join(t.TempDir(), "foxydns.json")
+	body := fmt.Sprintf(`{"Listen":"127.0.0.1:0","Mode":"transparent","Queue":1053,"ContextFile":%q,"StateFile":%q,"OwnershipFile":%q}`, cfg.ContextFile, cfg.StateFile, cfg.OwnershipFile)
+	if err := os.WriteFile(configPath, []byte(body), 0600); err != nil {
+		t.Fatal(err)
+	}
+	original := cleanupOwned
+	defer func() { cleanupOwned = original }()
+	cleanupCalls := 0
+	cleanupOwned = func(string) error { cleanupCalls++; return errors.New("conntrack unavailable") }
+	done := make(chan error, 1)
+	go func() { done <- run([]string{"serve", "--config", configPath}) }()
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		if _, err := os.Stat(cfg.StateFile); err == nil {
+			break
+		}
+		select {
+		case err := <-done:
+			t.Fatalf("serve exited early: %v", err)
+		case <-time.After(10 * time.Millisecond):
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("service did not start")
+		}
+	}
+	self, err := os.FindProcess(os.Getpid())
+	if err != nil {
+		t.Fatal(err)
+	}
+	started := time.Now()
+	if err = self.Signal(syscall.SIGTERM); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case err = <-done:
+		if err == nil {
+			t.Fatal("failing cleanup exited successfully")
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("failing cleanup made SIGTERM unkillable")
+	}
+	if cleanupCalls != 3 || time.Since(started) > 5*time.Second {
+		t.Fatalf("cleanup retried unboundedly: calls=%d elapsed=%s", cleanupCalls, time.Since(started))
+	}
+}
+
+type statQueue struct{}
+
+func (statQueue) Health() error                   { return nil }
+func (statQueue) Close() error                    { return nil }
+func (statQueue) Stats() (uint64, uint64, uint64) { return 2, 40, 7 }
+
+// The selector's passed-through count was counted but never surfaced; keep it
+// additive in the state JSON.
+func TestHealthStateSurfacesPassedAnswers(t *testing.T) {
+	s := &service{cfg: Config{Mode: "hijack"}, interceptor: statQueue{}, resolver: &resolver{}}
+	s.ready.Store(true)
+	state := s.healthState()
+	if state.Passed != 40 || state.LocalAnswers != 2 || state.Failed != 7 {
+		t.Fatalf("selector counters lost: %+v", state)
+	}
+	data, err := json.Marshal(state)
+	if err != nil || !strings.Contains(string(data), `"passed":40`) {
+		t.Fatalf("passed count missing from state JSON: %s", data)
+	}
+}
+
+func TestTailnetRecordsRejectNonRoutableHostAddresses(t *testing.T) {
+	cfg := contextFixture(t)
+	for _, ip := range []string{"0.0.0.0", "::", "224.0.0.1", "ff02::1", "127.0.0.1", "::1", "169.254.7.1", "fe80::1"} {
+		body := fmt.Sprintf(`{"suffix":"tail.test.ts.net","hosts":[{"ip":%q,"name":"nas.tail.test.ts.net","short":"nas"}]}`, ip)
+		if err := os.WriteFile(cfg.ContextFile, []byte(body), 0600); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := loadRecords(cfg.ContextFile); err == nil {
+			t.Fatalf("accepted non-routable Tailnet host %s", ip)
+		}
+	}
+}
+
+// The several fail-closed gates before the upstream dial must share a single
+// kernel re-verification; the write path then performs one fresh check.
+func TestFlowContextSharesOneValidationBeforeWrite(t *testing.T) {
+	calls := 0
+	verify := &flowVerify{validate: func() error { calls++; return nil }}
+	f := validTestFlow()
+	f.validate = verify.cached
+	f.revalidate = verify.validate
+	for range 4 {
+		if err := f.check(); err != nil || calls != 1 {
+			t.Fatalf("dial-path gates must share one validation: calls=%d err=%v", calls, err)
+		}
+	}
+	if err := f.recheck(); err != nil || calls != 2 {
+		t.Fatalf("write must perform one fresh validation: calls=%d err=%v", calls, err)
+	}
+	if err := f.recheck(); err != nil || calls != 3 {
+		t.Fatalf("each write revalidates: calls=%d err=%v", calls, err)
+	}
+	f.revalidate = nil
+	if err := f.recheck(); err != nil || calls != 3 {
+		t.Fatalf("recheck must fall back to the cached validator: calls=%d err=%v", calls, err)
+	}
+
+	calls = 0
+	broken := &flowVerify{validate: func() error { calls++; return ErrFlowContext }}
+	f.validate = broken.cached
+	if err := f.check(); err == nil {
+		t.Fatal("failed validation must reject")
+	}
+	if err := f.check(); err == nil || calls != 2 {
+		t.Fatalf("a failed validation must not latch as success: calls=%d", calls)
 	}
 }

@@ -126,8 +126,16 @@ final class FileActions {
                     if (all.size() > 32) throw new IOException(s(R.string.file_limit));
                     for (Models.Source source : additions) add(source); publish(); respond(reply, snapshot()); break;
                 }
-                case "files.remove": fields(args, "key"); editable(); selection.remove(text(args, "key")); publish(); respond(reply, snapshot()); break;
-                case "files.clear": fields(args); editable(); generation++; resolving.clear(); selection.clear(); message = ""; publish(); respond(reply, snapshot()); break;
+                case "files.remove": {
+                    fields(args, "key"); editable(); Models.Source removed = selection.remove(text(args, "key"));
+                    if (removed != null) release(removed.uri); publish(); respond(reply, snapshot()); break;
+                }
+                case "files.clear": {
+                    fields(args); editable(); ArrayList<Uri> abandoned = new ArrayList<>(resolving);
+                    for (Models.Source source : selection.values()) if (source.uri != null && !abandoned.contains(source.uri)) abandoned.add(source.uri);
+                    generation++; resolving.clear(); selection.clear(); for (Uri uri : abandoned) drop(uri);
+                    message = ""; publish(); respond(reply, snapshot()); break;
+                }
                 case "files.send": fields(args, "peer", "ip"); send(args, false, reply); break;
                 case "files.retry": fields(args, "job", "peer", "ip"); send(args, true, reply); break;
                 case "files.adopt": fields(args, "job"); idle(); launch(new Intent(activity, TransferService.class).setAction(TransferService.ADOPT).putExtra("job", Models.id(args, "job"))); respond(reply, object("ok", true, "accepted", true)); break;
@@ -214,9 +222,9 @@ final class FileActions {
         }
     }
     private void resolveUris(List<Uri> uris, Consumer<JSONObject> reply) {
-        if (uris.isEmpty() || uris.size() > 32) { message = s(uris.isEmpty() ? R.string.invalid_uri : R.string.file_limit); respond(reply, object("ok", false, "error", message)); publish(); return; }
+        if (uris.isEmpty() || uris.size() > 32) { message = s(uris.isEmpty() ? R.string.invalid_uri : R.string.file_limit); respond(reply, object("ok", false, "error", message)); for (Uri uri : uris) release(uri); publish(); return; }
         LinkedHashSet<Uri> combined = new LinkedHashSet<>(resolving); combined.addAll(uris);
-        if (combined.size() > 32) { message = s(R.string.file_limit); respond(reply, object("ok", false, "error", message)); publish(); return; }
+        if (combined.size() > 32) { message = s(R.string.file_limit); respond(reply, object("ok", false, "error", message)); for (Uri uri : uris) release(uri); publish(); return; }
         ArrayList<Uri> pending = new ArrayList<>(); for (Uri uri : uris) if (resolving.add(uri)) pending.add(uri);
         if (pending.isEmpty()) { respond(reply, snapshot()); return; }
         int revision = generation; publish();
@@ -227,18 +235,29 @@ final class FileActions {
             } catch (Exception error) { if (errors.length() > 0) errors.append('\n'); errors.append(RootApi.message(error)); }
             activity.runOnUiThread(() -> {
                 if (destroyed) return;
-                if (revision != generation) { respond(reply, cancelled()); return; }
+                if (revision != generation) { for (Uri uri : pending) release(uri); respond(reply, cancelled()); return; }
                 resolving.removeAll(pending);
-                if (transferBusy()) { message = s(R.string.busy); respond(reply, object("ok", false, "error", message)); publish(); return; }
+                if (transferBusy()) { for (Uri uri : pending) release(uri); message = s(R.string.busy); respond(reply, object("ok", false, "error", message)); publish(); return; }
                 for (Models.Source source : accepted) {
                     boolean exists = selection.values().stream().anyMatch(current -> current.key().equals(source.key()));
                     if (exists) continue;
                     if (selection.size() < 32) add(source); else { if (errors.length() > 0) errors.append('\n'); errors.append(s(R.string.file_limit)); }
                 }
+                for (Uri uri : pending) release(uri);
                 message = errors.length() == 0 ? "" : s(R.string.selection_errors, errors.toString());
                 publish(); respond(reply, errors.length() == 0 ? snapshot() : object("ok", false, "error", message, "partial", !accepted.isEmpty()));
             });
         });
+    }
+    private void release(Uri uri) {
+        // Persistable grants are per user document; drop each once its source leaves the queue.
+        if (uri == null || resolving.contains(uri)) return;
+        for (Models.Source source : selection.values()) if (uri.equals(source.uri)) return;
+        drop(uri);
+    }
+    private void drop(Uri uri) {
+        if (uri == null) return;
+        try { activity.getContentResolver().releasePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION); } catch (SecurityException ignored) { }
     }
     private void beginPicker(int code, Intent intent, Consumer<JSONObject> reply) throws IOException {
         if (picker != 0 || (export != null && export.busy)) throw new IOException(s(R.string.busy));
@@ -408,6 +427,7 @@ final class FileActions {
     }
     void destroy() {
         destroyed = true; pickerReply = null; backupReply = null;
+        if (activity.isFinishing()) { for (Uri uri : resolving) drop(uri); for (Models.Source source : selection.values()) drop(source.uri); }
         if (registered) { activity.unregisterReceiver(updates); client.removeListener(changed); BackupImport.get(activity).remove(imported); registered = false; }
         if (browseCall != null) browseCall.cancel();
         if (export != null && export.owner.get() == this) { export.reply = null; if (!export.committing) export.cancel(); export.owner.clear(); }

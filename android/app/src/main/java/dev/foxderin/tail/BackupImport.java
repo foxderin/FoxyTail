@@ -66,6 +66,7 @@ final class BackupImport {
                         if (z >= 0 && !cursor.isNull(z)) size = cursor.getLong(z);
                     }
                 }
+                if (!name.endsWith(".tar.gz")) throw new IOException(context.getString(R.string.control_archive_type));
                 if (size > 1024 * 1024) throw new IOException(context.getString(R.string.control_archive_limit));
                 JSONObject staged;
                 try (InputStream input = context.getContentResolver().openInputStream(uri)) {

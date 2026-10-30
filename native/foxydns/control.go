@@ -63,6 +63,33 @@ func (s *service) quiesce() error {
 	return s.interceptor.Close()
 }
 
+// cleanupOwned is replaceable in tests; production drains the real journal.
+var cleanupOwned = cleanupOwnedFlows
+
+// shutdownCapture drains the queue and its owned conntrack state before the
+// process exits. A deterministically failing quiesce or cleanup retries only
+// a few short times: an unbounded retry would make the listener unkillable by
+// SIGTERM. The last failure is logged and returned so the exit stays non-zero.
+func (s *service) shutdownCapture() error {
+	var last error
+	for attempt := 1; attempt <= 3; attempt++ {
+		if attempt > 1 {
+			time.Sleep(100 * time.Millisecond)
+		}
+		last = nil
+		if err := s.quiesce(); err != nil {
+			last = fmt.Errorf("DNS quiesce failed: %w", err)
+		} else if err := cleanupOwned(s.cfg.OwnershipFile); err != nil {
+			last = fmt.Errorf("DNS cleanup pending; listener retained: %w", err)
+		}
+		if last == nil {
+			return nil
+		}
+		fmt.Fprintf(os.Stderr, "%v\n", last)
+	}
+	return last
+}
+
 func quiesceService(cfg Config) error {
 	if cfg.Mode != "transparent" && cfg.Mode != "hijack" {
 		return nil

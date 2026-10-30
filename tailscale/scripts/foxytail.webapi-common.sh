@@ -179,24 +179,36 @@ cmd_cancel() {
   _op_registry || jerr 'cannot open private operation registry'
   _oc_dir="${TS_RUN_DIR}/operations/$1"
   [ ! -L "${_oc_dir}" ] || jerr 'invalid operation directory'
+  # The registry lock stays held through every mutation of the operation
+  # directory: concurrent receipt GC may rm -rf a finished directory while a
+  # phase link or a signal record below is still being written.
   _control_lock
-  if [ -f "${_oc_dir}/durable" ]; then _control_unlock; _control_cancel "${_oc_dir}"; return; fi
+  if [ -f "${_oc_dir}/durable" ]; then
+    # _control_cancel never takes the registry lock itself, so holding it here
+    # cannot deadlock. The subshell keeps its jerr exits from stranding it.
+    ( _control_cancel "${_oc_dir}" )
+    _oc_rc=$?
+    _control_unlock
+    return "${_oc_rc}"
+  fi
   if [ ! -d "${_oc_dir}" ] && ! _op_recent_id "$1"; then
     _control_unlock
     echo '{"ok":true,"cancelled":true,"expired":true}'; return 0
   fi
   mkdir -p "${_oc_dir}" || { _control_unlock; jerr 'cannot record cancellation'; }
-  _control_unlock
   _oc_socket=$(cat "${_oc_dir}/socket" 2>/dev/null)
-  [ -z "${_oc_socket}" ] || [ "${_oc_socket}" = "${TS_SOCKET}" ] || jerr 'operation socket mismatch'
+  if [ -n "${_oc_socket}" ] && [ "${_oc_socket}" != "${TS_SOCKET}" ]; then
+    _control_unlock; jerr 'operation socket mismatch'
+  fi
   if ! ln -s cancelled "${_oc_dir}/phase" 2>/dev/null; then
     case "$(readlink "${_oc_dir}/phase" 2>/dev/null)" in
       cancelled) ;;
       committing)
-        if _op_pid_alive "${_oc_dir}/runner"; then jerr 'operation is committing changes and cannot be cancelled'; fi
-        [ -f "${_oc_dir}/done" ] || jerr 'operation outcome is unknown; refresh current state'
+        if _op_pid_alive "${_oc_dir}/runner"; then _control_unlock; jerr 'operation is committing changes and cannot be cancelled'; fi
+        [ -f "${_oc_dir}/done" ] || { _control_unlock; jerr 'operation outcome is unknown; refresh current state'; }
+        _control_unlock
         echo '{"ok":true,"completed":true}'; return 0 ;;
-      *) jerr 'cannot record cancellation' ;;
+      *) _control_unlock; jerr 'cannot record cancellation' ;;
     esac
   fi
   _oc_i=0
@@ -210,10 +222,14 @@ cmd_cancel() {
       fi
     done
     _op_pid_alive "${_oc_dir}/runner" && _oc_busy=1
-    [ "${_oc_busy}" = 0 ] && { jqr -n -c --arg id "$1" '{ok:true,cancelled:true,requestId:$id}'; return 0; }
+    if [ "${_oc_busy}" = 0 ]; then
+      _control_unlock
+      jqr -n -c --arg id "$1" '{ok:true,cancelled:true,requestId:$id}'; return 0
+    fi
     sleep 0.1
     _oc_i=$((_oc_i + 1))
   done
+  _control_unlock
   jerr 'operation has not stopped; replacement was not authorized'
 }
 

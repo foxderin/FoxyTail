@@ -54,10 +54,13 @@ func run(args []string) error {
 			}
 			return json.NewEncoder(os.Stdout).Encode(map[string]any{"ok": true, "queue": true, "inject": true})
 		}
-		if err := ProbeCapabilities(uint16(*queue)); err != nil {
+		ipv6, err := ProbeCapabilities(uint16(*queue))
+		if err != nil {
 			return err
 		}
-		return json.NewEncoder(os.Stdout).Encode(map[string]any{"ok": true, "queue": true, "conntrack": true, "socketContext": true})
+		// ok means IPv4 interception works; ipv6 is additive information for
+		// consumers that also install v6 rules.
+		return json.NewEncoder(os.Stdout).Encode(map[string]any{"ok": true, "queue": true, "conntrack": true, "socketContext": true, "ipv6": ipv6})
 	}
 	if args[0] != "check" && args[0] != "serve" && args[0] != "health" && args[0] != "watch" && args[0] != "quiesce" {
 		return errors.New("unknown command")
@@ -68,6 +71,20 @@ func run(args []string) error {
 	}
 	if *state != "" {
 		cfg.StateFile = *state
+	}
+	// The config carries the queue number; an explicit --queue overrides it
+	// for serve just like --state, rather than being silently ignored.
+	queueOverride := false
+	flags.Visit(func(f *flag.Flag) {
+		if f.Name == "queue" {
+			queueOverride = true
+		}
+	})
+	if queueOverride {
+		if *queue == 0 || *queue > 65535 {
+			return errors.New("queue must be between 1 and 65535")
+		}
+		cfg.Queue = uint16(*queue)
 	}
 	if err = cfg.validate(); err != nil {
 		return err
@@ -96,16 +113,20 @@ func run(args []string) error {
 		select {
 		case <-signals:
 			if cfg.Mode == "transparent" {
-				if err := s.quiesce(); err != nil {
-					continue
-				}
-				if err := cleanupOwnedFlows(cfg.OwnershipFile); err != nil {
-					fmt.Fprintf(os.Stderr, "DNS cleanup pending; listener retained: %v\n", err)
-					continue
+				if err := s.shutdownCapture(); err != nil {
+					return err
 				}
 			}
 			return nil
 		case err := <-s.errors:
+			if cfg.Mode == "transparent" {
+				// The deferred Close stops the queue but never drains owned
+				// DNAT state; a crashed listener gets the same bounded
+				// cleanup as the signal path before reporting its failure.
+				if cleanupErr := s.shutdownCapture(); cleanupErr != nil {
+					err = errors.Join(err, cleanupErr)
+				}
+			}
 			return fmt.Errorf("DNS server stopped: %w", err)
 		}
 	}

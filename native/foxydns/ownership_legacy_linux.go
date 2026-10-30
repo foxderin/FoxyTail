@@ -83,6 +83,9 @@ func legacyOwnership(path string, port uint16, cleanup bool) error {
 	}
 	claimed := false
 	if st.Size() != 0 {
+		if st.Size() > maxOwnershipBytes {
+			return errors.New("oversized ownership journal")
+		}
 		header, flows, err := readFlowJournal(f)
 		if err != nil || len(flows) != 0 {
 			return errors.New("invalid legacy claim")

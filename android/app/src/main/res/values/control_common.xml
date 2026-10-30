@@ -13,5 +13,6 @@
     <string name="control_finished">Completed: %1$s.</string>
     <string name="control_unknown">The operation result is unknown; do not repeat the change. %1$s</string>
     <string name="control_archive_limit">Configuration archives must not exceed 1 MiB.</string>
+    <string name="control_archive_type">Selected file must be a FoxyTail .tar.gz backup archive.</string>
     <string name="control_import_interrupted">Archive import was interrupted; no restore was submitted.</string>
 </resources>

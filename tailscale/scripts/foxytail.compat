@@ -13,7 +13,14 @@
 DIR=$(dirname "$(realpath "$0")")
 # shellcheck source=../settings.sh
 . "$DIR"/../settings.sh
-load_conf || exit 1
+# check paths compare live chains against the APPLIED runtime configuration;
+# a saved but unapplied TS_MODE/IPV6 change would skew the proxy-skip and
+# ip6tables verdicts. probe/suggest stay on the saved configuration, matching
+# what diag records for forensics.
+case "${1:-}" in
+  check | check-dns-hijack) load_runtime_conf || exit 1 ;;
+  *) load_conf || exit 1 ;;
+esac
 ensure_run_dirs
 
 ALERT_FILE="${TS_RUN_DIR}/compat-alert"

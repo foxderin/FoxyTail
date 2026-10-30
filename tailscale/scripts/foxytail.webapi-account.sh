@@ -10,7 +10,7 @@ _login_probe() {
   _op_cancelled && return 0
   [ -f "${_cl_tmp}" ] || return 1
   grep -q 'https://' "${_cl_tmp}" 2>/dev/null && return 0
-  grep -qi -e already -e success "${_cl_tmp}" 2>/dev/null
+  grep -qi -e already -e success -e foxytail-login-lock-busy "${_cl_tmp}" 2>/dev/null
 }
 
 # Hold a profile-transition marker across preference restoration and the CLI
@@ -68,9 +68,27 @@ cmd_login() {
   _cl_tmp="${TS_RUN_DIR}/webapi-login.$$"
   rm -f "${_cl_tmp}"
   # The CLI blocks until auth completes; keep it alive after we grab the URL.
-  ( _op_exec 180 tailscale --socket="${TS_SOCKET}" login "$@"; sleep 25; rm -f "${_cl_tmp}" ) >"${_cl_tmp}" 2>&1 </dev/null &
+  # A dedicated owner lock serializes the interactive login: the worker owns
+  # it, so it covers the whole CLI even after this request has returned.
+  (
+    _lock_identity || exit 1
+    _cl_token=${_LOCK_TOKEN}
+    _owner_lock_acquire "${TS_RUN_DIR}/.login-lock" "${_cl_token}" 3 0.1 || {
+      echo 'foxytail-login-lock-busy'
+      exit 1
+    }
+    trap '_owner_lock_release "${TS_RUN_DIR}/.login-lock" "${_cl_token}"' 0
+    _op_exec 180 tailscale --socket="${TS_SOCKET}" login "$@"
+    _owner_lock_release "${TS_RUN_DIR}/.login-lock" "${_cl_token}"
+    sleep 25
+    rm -f "${_cl_tmp}"
+  ) >"${_cl_tmp}" 2>&1 </dev/null &
   if wait_for "login URL" 20 1 _login_probe; then
     _op_cancelled && jerr "login cancelled"
+    if grep -q foxytail-login-lock-busy "${_cl_tmp}" 2>/dev/null; then
+      rm -f "${_cl_tmp}"
+      jerr 'another login is in progress; retry when it completes'
+    fi
     _cl_url=$(grep -o 'https://[^ ]*' "${_cl_tmp}" 2>/dev/null | head -n 1)
     if [ -n "${_cl_url}" ]; then
       rm -f "${_cl_tmp}"
@@ -80,6 +98,10 @@ cmd_login() {
     rm -f "${_cl_tmp}"
     echo '{"ok":true,"already":true}'
     return 0
+  fi
+  if grep -q foxytail-login-lock-busy "${_cl_tmp}" 2>/dev/null; then
+    rm -f "${_cl_tmp}"
+    jerr 'another login is in progress; retry when it completes'
   fi
   rm -f "${_cl_tmp}"
   # Only this request owns its CLI record.
@@ -125,6 +147,9 @@ cmd_accounts() {
 
 cmd_switch() {
   [ -n "$1" ] || jerr "switch: missing account name"
+  case "$1" in
+    -*) jerr "switch: invalid account name" ;;
+  esac
   _dns_account_begin
   _sw_out=$(ts_cli 30 switch "$1" 2>&1)
   if [ $? -eq 0 ]; then

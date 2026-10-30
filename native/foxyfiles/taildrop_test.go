@@ -18,7 +18,7 @@ func taildropFixture(t *testing.T) (string, string, string) {
 	return shared, incoming, filepath.Join(base, "private")
 }
 
-func TestTaildropImportPreservesInputAndReceipts(t *testing.T) {
+func TestTaildropImportPreservesReceiptsAndRemovesSources(t *testing.T) {
 	shared, incoming, inbox := taildropFixture(t)
 	name := "meeting ' * [1].txt"
 	input := filepath.Join(incoming, name)
@@ -29,8 +29,8 @@ func TestTaildropImportPreservesInputAndReceipts(t *testing.T) {
 	if err != nil || result.Received != 1 || result.Files[0] != name {
 		t.Fatalf("first import: %+v %v", result, err)
 	}
-	if body, err := os.ReadFile(input); err != nil || string(body) != "first" {
-		t.Fatal("input changed")
+	if _, err := os.Lstat(input); !os.IsNotExist(err) {
+		t.Fatal("imported source retained", err)
 	}
 	result, err = importTaildrop(shared, inbox)
 	if err != nil || result.Received != 0 {
@@ -39,9 +39,16 @@ func TestTaildropImportPreservesInputAndReceipts(t *testing.T) {
 	if err = os.Remove(filepath.Join(inbox, name)); err != nil {
 		t.Fatal(err)
 	}
+	// The same content re-dropped is deduplicated by its receipt, not reimported.
+	if err = os.WriteFile(input, []byte("first"), 0600); err != nil {
+		t.Fatal(err)
+	}
 	result, err = importTaildrop(shared, inbox)
 	if err != nil || result.Received != 0 {
 		t.Fatal("deleted receipt was reimported", err)
+	}
+	if _, err := os.Lstat(input); !os.IsNotExist(err) {
+		t.Fatal("deduplicated source retained", err)
 	}
 	if err = os.WriteFile(input, []byte("second"), 0600); err != nil {
 		t.Fatal(err)
@@ -57,7 +64,8 @@ func TestTaildropImportPreservesInputAndReceipts(t *testing.T) {
 
 func TestTaildropRepairsPublicationWithoutReceipt(t *testing.T) {
 	shared, incoming, inbox := taildropFixture(t)
-	if err := os.WriteFile(filepath.Join(incoming, "a.txt"), []byte("received"), 0600); err != nil {
+	source := filepath.Join(incoming, "a.txt")
+	if err := os.WriteFile(source, []byte("received"), 0600); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := importTaildrop(shared, inbox); err != nil {
@@ -78,6 +86,10 @@ func TestTaildropRepairsPublicationWithoutReceipt(t *testing.T) {
 	if err = os.WriteFile(filepath.Join(inbox, ".taildrop", "stage"), []byte("interrupted"), 0600); err != nil {
 		t.Fatal(err)
 	}
+	// Offering the same content again repairs the missing receipt.
+	if err = os.WriteFile(source, []byte("received"), 0600); err != nil {
+		t.Fatal(err)
+	}
 	result, err := importTaildrop(shared, inbox)
 	if err != nil || result.Received != 0 {
 		t.Fatalf("crash recovery: %+v %v", result, err)
@@ -86,6 +98,9 @@ func TestTaildropRepairsPublicationWithoutReceipt(t *testing.T) {
 		t.Fatal("duplicate published after crash")
 	}
 	if err = os.Remove(filepath.Join(inbox, "a.txt")); err != nil {
+		t.Fatal(err)
+	}
+	if err = os.WriteFile(source, []byte("received"), 0600); err != nil {
 		t.Fatal(err)
 	}
 	result, err = importTaildrop(shared, inbox)
@@ -122,7 +137,7 @@ func TestTaildropSkipsIncompleteAndUnsafeEntries(t *testing.T) {
 }
 
 func TestTaildropNamesMatchInboxBoundary(t *testing.T) {
-	for _, name := range []string{"", ".", "..", ".taildrop", ".outgoing", "a/b", "a\\b", strings.Repeat("a", 256), strings.Repeat("界", 86), "invalid\xff"} {
+	for _, name := range []string{"", ".", "..", ".taildrop", ".outgoing", "a/b", "a\\b", strings.Repeat("a", 256), strings.Repeat("界", 86), "invalid\xff", "bidi\u202Ename", "zero\u200Bwidth", "\uFEFFbom", "soft\u00ADhyphen"} {
 		if taildropCompletedName(name) {
 			t.Errorf("accepted incompatible name %q", name)
 		}
@@ -248,15 +263,15 @@ func TestTaildropExclusivePublicationAndRootReplacement(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer receipts.Close()
-	for _, name := range []string{"../secret", "/secret", ".taildrop", ".outgoing", "x.partial", "tab\tname", "c1\u0085name", "delete\x7fname"} {
-		if _, err = importTaildropFile(root, private, receipts, name); err == nil {
+	for _, name := range []string{"../secret", "/secret", ".taildrop", ".outgoing", "x.partial", "tab\tname", "c1\u0085name", "delete\x7fname", "bidi\u202Ename"} {
+		if _, _, err = importTaildropFile(root, private, receipts, name); err == nil {
 			t.Fatal("accepted unsafe name", name)
 		}
 	}
 	if err = os.Symlink(outside, filepath.Join(incoming+"-old", "race.txt")); err != nil {
 		t.Fatal(err)
 	}
-	if _, err = importTaildropFile(root, private, receipts, "race.txt"); err == nil {
+	if _, _, err = importTaildropFile(root, private, receipts, "race.txt"); err == nil {
 		t.Fatal("followed symlink swapped before leaf open")
 	}
 }
@@ -274,7 +289,126 @@ func TestTaildropConcurrentImportLock(t *testing.T) {
 	if err = taildropLock(lock); err != nil {
 		t.Fatal(err)
 	}
-	if _, err = importTaildrop(shared, inbox); err == nil {
-		t.Fatal("concurrent receiver bypassed lock")
+	if _, err = importTaildrop(shared, inbox); err == nil || !strings.Contains(err.Error(), "in progress") {
+		t.Fatal("concurrent receiver bypassed lock", err)
+	}
+}
+
+func TestTaildropCollectsFailuresAndEnforcesCaps(t *testing.T) {
+	restoreSize, restoreBytes, restoreFiles := maxReceiveSize, maxReceiveBytes, maxInboxFiles
+	defer func() { maxReceiveSize, maxReceiveBytes, maxInboxFiles = restoreSize, restoreBytes, restoreFiles }()
+
+	// A poisoned first entry must not block later files; oversized drops are
+	// skipped and reported, never imported or deleted.
+	shared, incoming, inbox := taildropFixture(t)
+	poison := filepath.Join(incoming, "aaa-poison")
+	if err := os.WriteFile(poison, []byte("denied"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(poison, 0); err != nil {
+		t.Fatal(err)
+	}
+	defer os.Chmod(poison, 0600)
+	good := filepath.Join(incoming, "mid-good")
+	if err := os.WriteFile(good, []byte("good"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	huge := filepath.Join(incoming, "zzz-huge")
+	if err := os.WriteFile(huge, []byte("012345"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	maxReceiveSize = 4
+	result, err := importTaildrop(shared, inbox)
+	if err != nil || !result.OK || result.Received != 1 || len(result.Files) != 1 || result.Files[0] != "mid-good" {
+		t.Fatalf("per-file failure isolation: %+v %v", result, err)
+	}
+	if result.FailedCount != 1 || len(result.Failed) != 1 || result.Failed[0].Name != "aaa-poison" {
+		t.Fatalf("failure not reported: %+v", result)
+	}
+	if result.SkippedCount != 1 || len(result.Skipped) != 1 || result.Skipped[0].Name != "zzz-huge" {
+		t.Fatalf("oversize not skipped: %+v", result)
+	}
+	if _, err := os.Lstat(good); !os.IsNotExist(err) {
+		t.Fatal("imported source retained", err)
+	}
+	for _, kept := range []string{poison, huge} {
+		if _, err := os.Lstat(kept); err != nil {
+			t.Fatal("unimported source removed", kept, err)
+		}
+	}
+	maxReceiveSize = restoreSize
+
+	// The per-call byte cap stops new imports once the budget is spent.
+	maxReceiveBytes = 4
+	shared, incoming, inbox = taildropFixture(t)
+	for _, name := range []string{"a", "b", "c"} {
+		if err := os.WriteFile(filepath.Join(incoming, name), []byte("xxx"), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	result, err = importTaildrop(shared, inbox)
+	if err != nil || result.Received != 2 || len(result.Files) != 2 {
+		t.Fatalf("byte cap: %+v %v", result, err)
+	}
+	if result.SkippedCount != 1 || len(result.Skipped) != 1 {
+		t.Fatalf("byte cap not reported: %+v", result)
+	}
+	kept := result.Skipped[0].Name
+	if kept != "a" && kept != "b" && kept != "c" {
+		t.Fatalf("unexpected skip: %+v", result.Skipped)
+	}
+	if _, err := os.Lstat(filepath.Join(incoming, kept)); err != nil {
+		t.Fatal("capped source removed", err)
+	}
+	for _, name := range []string{"a", "b", "c"} {
+		if name != kept {
+			if _, err := os.Lstat(filepath.Join(incoming, name)); !os.IsNotExist(err) {
+				t.Fatal("imported source retained", name, err)
+			}
+		}
+	}
+	maxReceiveBytes = restoreBytes
+
+	// Existing inbox entries consume the file-count budget before new imports.
+	maxInboxFiles = 2
+	shared, incoming, inbox = taildropFixture(t)
+	if err := os.MkdirAll(inbox, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(inbox, "exists"), []byte("old"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"first", "second"} {
+		if err := os.WriteFile(filepath.Join(incoming, name), []byte("new"), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	result, err = importTaildrop(shared, inbox)
+	if err != nil || result.Received != 1 || len(result.Files) != 1 {
+		t.Fatalf("inbox cap: %+v %v", result, err)
+	}
+	if result.SkippedCount != 1 || len(result.Skipped) != 1 || !strings.Contains(result.Skipped[0].Reason, "full") {
+		t.Fatalf("inbox cap not reported: %+v", result)
+	}
+	if result.Files[0] == result.Skipped[0].Name {
+		t.Fatalf("same file imported and skipped: %+v", result)
+	}
+	if _, err := os.Lstat(filepath.Join(incoming, result.Skipped[0].Name)); err != nil {
+		t.Fatal("inbox-full source removed", err)
+	}
+	maxInboxFiles = restoreFiles
+}
+
+func TestTaildropRejectsUncleanReceivePaths(t *testing.T) {
+	destination := filepath.Join(t.TempDir(), "inbox")
+	for _, args := range [][]string{
+		{"--source", "/sdcard/../escape", "--destination", destination},
+		{"--source", "/sdcard", "--destination", "/tmp/../inbox"},
+		{"--source", "relative/dir", "--destination", destination},
+		{"--source", "/sdcard/", "--destination", destination},
+	} {
+		if err := runTaildrop(args); err == nil {
+			t.Fatalf("accepted unclean receive arguments %v", args)
+		}
 	}
 }

@@ -12,11 +12,18 @@ ROOT = Path(__file__).resolve().parents[2]
 
 def run_module(path):
     started = time.monotonic()
-    result = subprocess.run(
-        [sys.executable, '-m', 'unittest', '-v', path.stem], cwd=path.parent,
-        stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
-    )
-    return result.returncode, result.stdout, time.monotonic() - started
+    try:
+        result = subprocess.run(
+            [sys.executable, '-m', 'unittest', '-v', path.stem], cwd=path.parent,
+            stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+            timeout=300,
+        )
+        return result.returncode, result.stdout, time.monotonic() - started
+    except subprocess.TimeoutExpired as error:
+        output = error.stdout or ''
+        if isinstance(output, bytes):
+            output = output.decode(errors='replace')
+        return 1, f'{output}\n{path.name}: module timed out after 300s\n', time.monotonic() - started
 
 
 def verify(test_dir, workers):

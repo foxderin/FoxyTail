@@ -92,7 +92,8 @@ func loadRecords(path string) (*records, error) {
 			return nil, errors.New("host short name does not match its full name")
 		}
 		ip, err := netip.ParseAddr(h.IP)
-		if err != nil || ip.Zone() != "" || ip.IsUnspecified() || ip.IsMulticast() {
+		if err != nil || ip.Zone() != "" || ip.IsUnspecified() || ip.IsMulticast() ||
+			ip.IsLoopback() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() {
 			return nil, errors.New("invalid Tailnet host address")
 		}
 		ip = ip.Unmap()

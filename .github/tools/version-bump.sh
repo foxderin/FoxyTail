@@ -20,6 +20,11 @@ if [[ ! "$BUMP_TYPE" =~ ^(major|minor|patch)$ ]]; then
 fi
 
 CURRENT=$(grep '^version=' module.prop | cut -d'=' -f2)
+if [[ "$CURRENT" =~ ^v[0-9]+\.[0-9]+\.[0-9]+- ]]; then
+  echo "WARNING: current version '${CURRENT}' carries a prerelease suffix, but" >&2
+  echo "         versionCode ignores it, so it shares a code with the final release" >&2
+  echo "         and OTA cannot tell them apart. Bump to a clean release before shipping." >&2
+fi
 VERSION_NUM="${CURRENT#v}"
 VERSION_NUM="${VERSION_NUM%%-*}" # drop any -rc suffix for the math
 IFS='.' read -r MAJOR MINOR PATCH <<<"$VERSION_NUM"

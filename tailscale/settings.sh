@@ -396,11 +396,14 @@ resident_identity_alive() {
   [ -n "${_ria_boot}" ] && [ "${_ria_boot}" = "$(boot_identity)" ] || return 1
   [ "$(_proc_starttime "${_ria_pid}")" = "${_ria_stamp}" ] || return 1
   if [ "${_ria_name}" = inotifyd ]; then
-    _proc_cmdline "${_ria_pid}" | awk -v script="${TS_SCRIPTS_DIR}/foxytail.inotify" -v module="${TS_MOD_DIR}" '
+    # The watcher may monitor the manager-visible module dir instead of the
+    # staging dir chosen at start_inotifyd time; both are valid identities.
+    _proc_cmdline "${_ria_pid}" | awk -v script="${TS_SCRIPTS_DIR}/foxytail.inotify" \
+      -v module="${TS_MOD_DIR}" -v managed="/data/adb/modules/foxytail" '
       NR==1 { if ($0 ~ /(^|\/)inotifyd$/) command=2; busybox=($0 ~ /(^|\/)busybox$/) }
       NR==2 && busybox && $0=="inotifyd" { command=3 }
       NR==command && $0==script { handler=1 }
-      NR==command+1 && $0==module { directory=1 }
+      NR==command+1 && ($0==module || $0==managed) { directory=1 }
       END { exit !(handler && directory) }'
     return $?
   fi

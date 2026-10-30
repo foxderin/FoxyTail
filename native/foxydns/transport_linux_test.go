@@ -392,3 +392,34 @@ func TestAmbiguousAndUnconnectedSocketsKeepOriginalPath(t *testing.T) {
 		}
 	}
 }
+
+// Lookup's context shares one kernel re-verification across the request's
+// fail-closed gates; originalConnection.Write forces a fresh check per write.
+func TestWriteRevalidatesFlowOncePerWrite(t *testing.T) {
+	calls := 0
+	verify := &flowVerify{validate: func() error { calls++; return nil }}
+	flow := validTestFlow()
+	flow.validate = verify.cached
+	flow.revalidate = verify.validate
+	flow.checkSource = func(netip.AddrPort) error { return nil }
+	conn := &originalConnection{Conn: &reviewWriteConn{}, flow: flow, source: flow.OriginalSource}
+	if err := flow.check(); err != nil || calls != 1 {
+		t.Fatalf("dial-time validation: calls=%d err=%v", calls, err)
+	}
+	for range 3 {
+		if err := flow.check(); err != nil || calls != 1 {
+			t.Fatalf("request-path gates reuse one validation: calls=%d err=%v", calls, err)
+		}
+	}
+	if _, err := conn.Write([]byte("q")); err != nil || calls != 2 {
+		t.Fatalf("first write must revalidate once: calls=%d err=%v", calls, err)
+	}
+	if _, err := conn.Write([]byte("q")); err != nil || calls != 3 {
+		t.Fatalf("every write must revalidate: calls=%d err=%v", calls, err)
+	}
+	flow.revalidate = func() error { return errors.New("route changed") }
+	conn.flow = flow
+	if _, err := conn.Write([]byte("q")); err == nil {
+		t.Fatal("stale original context was not rejected at write time")
+	}
+}

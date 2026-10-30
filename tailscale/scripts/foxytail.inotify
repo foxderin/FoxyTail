@@ -2,17 +2,21 @@
 # FoxyTail - inotifyd callback: react to the module disable flag.
 #
 # inotifyd invokes this as: foxytail.inotify <events> <dir> <file>
-#   n (created) -> module disabled -> stop everything
-#   d (deleted) -> module enabled  -> start everything
+# BusyBox emits one letter per event bit in <events>: n=create, d=delete,
+# y=moved-into-dir, m=moved-out, w=closed-write, and more. A manager that
+# installs the flag by renaming it into place produces 'y', never 'n', so
+# matching individual letters silently misses toggles. The flag's meaning
+# is its existence: any event on it reconciles idempotently instead.
 
 DIR=$(dirname "$(realpath "$0")")
 # shellcheck source=../settings.sh
 . "$DIR"/../settings.sh
 
 events="$1"
-# monitor_dir="$2"
+monitor_dir="$2"
 monitor_file="$3"
 
+[ -n "$events" ] || exit 0
 [ "$monitor_file" = "disable" ] || exit 0
 
 _ctl() {
@@ -30,15 +34,13 @@ _ctl() {
   fi
 }
 
-# inotifyd passes one event code per callback; match it exactly so an
-# unexpected or combined code cannot masquerade as a flag toggle.
-case "$events" in
-  n)
-    log Info "module disabled via manager; stopping FoxyTail"
-    _ctl stop
-    ;;
-  d)
-    log Info "module enabled via manager; starting FoxyTail"
-    _ctl start
-    ;;
-esac
+# Reconcile on any event letter (create, delete, rename into or out of the
+# module dir, metadata changes). Existence is the only source of truth, so
+# duplicate or combined event strings can never flip the state backwards.
+if [ -f "${monitor_dir}/${monitor_file}" ]; then
+  log Info "module disabled via manager; stopping FoxyTail"
+  _ctl stop
+else
+  log Info "module enabled via manager; starting FoxyTail"
+  _ctl start
+fi

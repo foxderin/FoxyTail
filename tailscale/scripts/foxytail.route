@@ -27,8 +27,13 @@ route_exit_destinations() {
   fi
   ROUTE_EXIT_FINGERPRINT=$(printf '%s' "${_re_snapshot}" | jqr -c '{profile,self,pref,actual:(.actual.ID // "")}') || return 1
   ROUTE_DESTINATIONS=""
+  ROUTE_SKIPPED_DEFAULTS=""
   for _re_net in ${ROUTE_SUBNETS}; do
-    case "${_re_net}" in 0.0.0.0/0|::/0) continue ;; esac
+    case "${_re_net}" in
+      0.0.0.0/0|::/0)
+        ROUTE_SKIPPED_DEFAULTS="${ROUTE_SKIPPED_DEFAULTS}${ROUTE_SKIPPED_DEFAULTS:+ }${_re_net}"
+        continue ;;
+    esac
     ROUTE_DESTINATIONS="${ROUTE_DESTINATIONS}${ROUTE_DESTINATIONS:+ }${_re_net}"
   done
   if [ "${TS_MODE}" = bridge ] &&
@@ -41,6 +46,22 @@ route_exit_destinations() {
       case " ${ROUTE_DESTINATIONS} " in *' ::/0 '*) ;; *) ROUTE_DESTINATIONS="${ROUTE_DESTINATIONS} ::/0" ;; esac
     fi
   fi
+  # A configured default route only ever forwards through an online exit
+  # node; naming what remains skipped is far better than routing nothing
+  # silently while `check` still passes and `status` claims applied.
+  _re_still_skipped=""
+  for _re_net in ${ROUTE_SKIPPED_DEFAULTS}; do
+    case " ${ROUTE_DESTINATIONS} " in
+      *" ${_re_net} "*) ;;
+      *)
+        _re_still_skipped="${_re_still_skipped}${_re_still_skipped:+ }${_re_net}"
+        case "${_re_net}" in
+          ::/0) log Warning "ROUTE_SUBNETS entry ${_re_net} is skipped: a default route applies only through an online exit node and requires IPV6=on" ;;
+          *) log Warning "ROUTE_SUBNETS entry ${_re_net} is skipped: a default route applies only through an online exit node" ;;
+        esac ;;
+    esac
+  done
+  ROUTE_SKIPPED_DEFAULTS=${_re_still_skipped}
 }
 
 route_validate() {
@@ -326,9 +347,18 @@ case "$1" in
   teardown) route_lock || exit 1; route_cleanup ;;
   status)
     load_runtime_conf || exit 1
+    ROUTE_SKIPPED_DEFAULTS=""
     if route_check; then echo 'Policy routing: applied'; else echo 'Policy routing: incomplete'; fi
+    # Additive notes keep the first line's applied/incomplete contract intact.
+    for _st_skip in ${ROUTE_SKIPPED_DEFAULTS}; do
+      echo "note: ROUTE_SUBNETS entry ${_st_skip} is skipped (default routes apply only through an online exit node)"
+    done
     ip -4 rule show
     ip -4 route show table "${ROUTE_TABLE}"
+    if [ "${IPV6}" = on ]; then
+      ip -6 rule show
+      ip -6 route show table "${ROUTE_TABLE}"
+    fi
     ;;
   *) echo "usage: $0 {apply|teardown|reload|check|status}" >&2; exit 1 ;;
 esac

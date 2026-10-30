@@ -56,7 +56,7 @@ func TestBrowseRejectsEscapesAndBoundsEntries(t *testing.T) {
 
 func TestStageLengthPermissionsDeletionAndInboxRead(t *testing.T) {
 	root := t.TempDir()
-	for _, name := range []string{"", ".", "..", "a/b", "a\\b", "bad\x01", ".lease", ".data"} {
+	for _, name := range []string{"", ".", "..", "a/b", "a\\b", "bad\x01", ".lease", ".data", ".taildrop", ".outgoing", "x.partial", "x.deleted", "bidi\u202Ename", "zero\u200Bwidth", "\uFEFFbom"} {
 		if _, err := stageFile(root, name, 0, strings.NewReader("")); err == nil {
 			t.Fatalf("accepted stage name %q", name)
 		}
@@ -153,6 +153,30 @@ func TestSendSourceRejectsMissingSymlinkAndMutation(t *testing.T) {
 	if err = source.unchanged(); err == nil {
 		t.Fatal("missed source identity replacement")
 	}
+}
+
+func TestSendSourceRejectsReceiverDroppedNames(t *testing.T) {
+	root, shared := t.TempDir(), t.TempDir()
+	for _, name := range []string{"x.partial", "x.deleted", ".taildrop", ".outgoing", "bidi\u202Ename"} {
+		path := filepath.Join(shared, name)
+		if err := os.WriteFile(path, []byte("payload"), 0600); err != nil {
+			t.Fatal(err)
+		}
+		source, err := openSendSource(root, shared, path)
+		if err == nil {
+			source.Close()
+			t.Fatalf("accepted receiver-dropped name %q", name)
+		}
+	}
+	path := filepath.Join(shared, "kept.txt")
+	if err := os.WriteFile(path, []byte("payload"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	source, err := openSendSource(root, shared, path)
+	if err != nil {
+		t.Fatal("rejected sendable name", err)
+	}
+	source.Close()
 }
 
 func TestStageExpirationPreservesActiveAndCurrentWrites(t *testing.T) {

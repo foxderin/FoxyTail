@@ -20,14 +20,28 @@ _redact() {
   sed -E 's|https://login\.tailscale\.com/[^[:space:]]*|[redacted-login-url]|g; s|tskey-[A-Za-z0-9_-]+|[redacted-key]|g'
 }
 
+# jq --rawfile is a strict UTF-8 reader: a single non-UTF-8 byte in any staged
+# file (helper stderr, binary-ish log tails) would fail the entire share
+# bundle. Drop undecodable bytes exactly like the WebAPI's _sanitize_text
+# (replicated here; that helper lives in the WebAPI-only library).
+_sanitize_text() {
+  if printf '\377' | iconv -c -f UTF-8 -t UTF-8 >/dev/null 2>&1; then
+    iconv -c -f UTF-8 -t UTF-8
+  else
+    tr -d '\200-\377'
+  fi
+}
+
 # One bundle-wide mapping preserves relationships across status, logs and
 # rules. The raw mapping/input never enters shared storage or the archive.
 share_redact() {
   _redact_input=$(mktemp "${TS_RUN_DIR}/diag-records.XXXXXX") || return 1
   _redact_output=$(mktemp "${TS_RUN_DIR}/diag-redacted.XXXXXX") || return 1
+  _redact_clean=$(mktemp "${TS_RUN_DIR}/diag-clean.XXXXXX") || return 1
   for _dr_file in "$_stage"/* "$_stage"/conf/*; do
     [ -f "$_dr_file" ] || continue
-    jqr -n -c --arg path "${_dr_file#"$_stage"/}" --rawfile text "$_dr_file" \
+    _sanitize_text <"$_dr_file" >"$_redact_clean" || return 1
+    jqr -n -c --arg path "${_dr_file#"$_stage"/}" --rawfile text "$_redact_clean" \
       '{path:$path,text:$text}' >>"$_redact_input" || return 1
   done
   jqr -s -c '
@@ -73,14 +87,28 @@ share_redact() {
 diag_cleanup() {
   _diag_rc=$?
   rm -rf "${_stage}"
-  rm -f "${_partial}" "${_redact_input:-}" "${_redact_output:-}"
+  rm -f "${_partial}" "${_redact_input:-}" "${_redact_output:-}" "${_redact_clean:-}"
   [ "$_diag_rc" = 0 ] || rm -f "$_out"
   exit "$_diag_rc"
 }
 
 collect() {
-  _outdir=$1
-  _mode=${2:-share}
+  # Positional disambiguation: a lone mode keyword in slot 1 names the mode,
+  # never an output directory. `collect share` must not create ./share.
+  case "${1:-}" in
+    share|local)
+      case "${2:-}" in
+        share|local) echo 'expected share|local' >&2; return 1 ;;
+      esac
+      _mode=$1
+      _outdir=${2:-}
+      ;;
+    *)
+      _outdir=$1
+      _mode=${2:-share}
+      ;;
+  esac
+  _mode=${_mode:-share}
   case "$_mode" in share|local) ;; *) echo 'expected share|local' >&2; return 1 ;; esac
   umask 077
   # A local bundle skips anonymization entirely: without an explicit output

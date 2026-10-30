@@ -19,7 +19,7 @@ func TestInboxListNamesMetadataAndOrdering(t *testing.T) {
 		t.Fatal(err)
 	}
 	valid := []string{".env", "..hidden", "你好.txt", "meeting ' * [1].txt", "unfinished.partial", "old.deleted"}
-	invalid := []string{"back\\slash"}
+	invalid := []string{"back\\slash", "bidi\u202Ename", "zero\u200Bwidth"}
 	for character := rune(1); character <= 0x9f; character++ {
 		if character <= 0x1f || character >= 0x7f {
 			invalid = append(invalid, "bad"+string(character)+"name")

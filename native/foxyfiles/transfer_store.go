@@ -157,8 +157,7 @@ func (s *transferStore) save(record *transferRecord) error {
 		return err
 	}
 	defer s.root.Remove(name)
-	_, err = file.Write(data)
-	if err == nil {
+	if err = fullWrite(file, data); err == nil {
 		err = file.Sync()
 	}
 	closeErr := file.Close()
@@ -172,6 +171,15 @@ func (s *transferStore) save(record *transferRecord) error {
 		return err
 	}
 	return syncRoot(s.root)
+}
+
+// A single Write may legally return early; a record must land completely.
+func fullWrite(w io.Writer, data []byte) error {
+	n, err := w.Write(data)
+	if err == nil && n != len(data) {
+		err = errors.New("transfer record write was incomplete")
+	}
+	return err
 }
 
 func (s *transferStore) load(id string) (*transferRecord, error) {
@@ -200,30 +208,53 @@ func (s *transferStore) load(id string) (*transferRecord, error) {
 	return &record, nil
 }
 
-func (s *transferStore) records() ([]*transferRecord, error) {
+// Directory reads stay bounded, but only real records consume record capacity:
+// lock, cancel, write-temp and quarantined entries never count against it.
+func (s *transferStore) entries() ([]os.DirEntry, error) {
 	dir, err := s.root.Open(".")
 	if err != nil {
 		return nil, err
 	}
 	defer dir.Close()
-	entries, err := dir.ReadDir(1025)
-	if err != nil && !errors.Is(err, io.EOF) {
-		return nil, err
+	entries := []os.DirEntry{}
+	for {
+		batch, readErr := dir.ReadDir(1024)
+		entries = append(entries, batch...)
+		if errors.Is(readErr, io.EOF) {
+			break
+		}
+		if readErr != nil {
+			return nil, readErr
+		}
+		if len(entries) > 4*1024 {
+			return nil, errors.New("too many private transfer entries")
+		}
 	}
-	if len(entries) > 1024 {
-		return nil, errors.New("too many private transfer records")
+	return entries, nil
+}
+
+func (s *transferStore) records() ([]*transferRecord, error) {
+	entries, err := s.entries()
+	if err != nil {
+		return nil, err
 	}
 	records := []*transferRecord{}
 	for _, entry := range entries {
-		name := entry.Name()
-		if !strings.HasSuffix(name, ".json") || !validID(strings.TrimSuffix(name, ".json")) {
+		id, ok := strings.CutSuffix(entry.Name(), ".json")
+		if !ok || !validID(id) {
 			continue
 		}
-		record, err := s.load(strings.TrimSuffix(name, ".json"))
+		record, err := s.load(id)
 		if err != nil {
-			return nil, err
+			// A torn or invalid record can never be parsed; quarantine it so a
+			// single power-loss fragment cannot wedge every caller.
+			s.root.Rename(entry.Name(), id+".corrupt")
+			continue
 		}
 		records = append(records, record)
+		if len(records) > 1024 {
+			return nil, errors.New("too many private transfer records")
+		}
 	}
 	sort.Slice(records, func(i, j int) bool {
 		if records[i].StartedAt == records[j].StartedAt {
@@ -373,8 +404,48 @@ func (s *transferStore) cancelled(id string) (bool, error) {
 	return true, nil
 }
 
+// Stale write temporaries, quarantined records and orphaned cancellation
+// markers are swept before any strict record read so leftovers can never
+// wedge maintenance.
+func (s *transferStore) sweepAux() error {
+	entries, err := s.entries()
+	if err != nil {
+		return err
+	}
+	hasRecord := map[string]bool{}
+	for _, entry := range entries {
+		if id, ok := strings.CutSuffix(entry.Name(), ".json"); ok && validID(id) {
+			hasRecord[id] = true
+		}
+	}
+	for _, entry := range entries {
+		name := entry.Name()
+		stale := strings.HasPrefix(name, ".write-")
+		if !stale {
+			if id, ok := strings.CutSuffix(name, ".corrupt"); ok {
+				stale = validID(id)
+			} else if id, ok := strings.CutSuffix(name, ".cancel"); ok {
+				stale = validID(id) && !hasRecord[id]
+			}
+		}
+		if !stale {
+			continue
+		}
+		info, err := s.root.Lstat(name)
+		if err == nil && info.Mode().IsRegular() && olderThanDay(info) {
+			if err = s.root.Remove(name); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
 // Called under state.lock; active.lock protects every worker source, not PIDs.
 func (s *transferStore) maintain() error {
+	if err := s.sweepAux(); err != nil {
+		return err
+	}
 	if err := s.recoverInterrupted(); err != nil {
 		return err
 	}
@@ -466,6 +537,13 @@ func (s *transferStore) maintain() error {
 			if err == nil {
 				err = outgoing.Remove(entry.Name())
 			}
+		} else {
+			// A stale stage that violates the layout policy is force-collected;
+			// claimed or unremovable children are retried by the next pass.
+			stagePath := filepath.Join(s.path, "files", ".outgoing", entry.Name())
+			if collectErr := collectStaleStage(stage, activePaths, stagePath); collectErr == nil {
+				outgoing.Remove(entry.Name())
+			}
 		}
 		lease.Close()
 		stage.Close()
@@ -473,27 +551,40 @@ func (s *transferStore) maintain() error {
 			return err
 		}
 	}
-	stateDir, err := s.root.Open(".")
-	if err != nil {
-		return err
-	}
-	stateEntries, err := stateDir.ReadDir(1025)
-	stateDir.Close()
-	if err != nil && !errors.Is(err, io.EOF) {
-		return err
-	}
-	for _, entry := range stateEntries {
-		if !strings.HasPrefix(entry.Name(), ".write-") {
-			continue
+	return nil
+}
+
+// Stale stages that violate the expected layout are collected anyway: bounded
+// recursive sweeps remove everything except actively-claimed children.
+func collectStaleStage(stage *os.Root, activePaths map[string]bool, stagePath string) error {
+	for sweeps := 0; sweeps < 64; sweeps++ {
+		dir, err := stage.Open(".")
+		if err != nil {
+			return err
 		}
-		info, err := s.root.Lstat(entry.Name())
-		if err == nil && info.Mode().IsRegular() && olderThanDay(info) {
-			if err = s.root.Remove(entry.Name()); err != nil {
+		children, readErr := dir.ReadDir(64)
+		dir.Close()
+		if readErr != nil && !errors.Is(readErr, io.EOF) {
+			return readErr
+		}
+		if len(children) == 0 {
+			return nil
+		}
+		progressed := false
+		for _, child := range children {
+			if activePaths[filepath.Join(stagePath, child.Name())] {
+				continue
+			}
+			if err := stage.RemoveAll(child.Name()); err != nil {
 				return err
 			}
+			progressed = true
+		}
+		if !progressed {
+			return errors.New("stale stage holds only claimed children")
 		}
 	}
-	return nil
+	return errors.New("stale stage sweep exceeded limit")
 }
 
 type sendSource struct {
@@ -539,6 +630,10 @@ func openSendSource(rootPath, source, path string) (*sendSource, error) {
 		root = next
 	}
 	name := parts[len(parts)-1]
+	if !taildropCompletedName(name) {
+		root.Close()
+		return nil, errors.New("receivers silently drop .taildrop, .outgoing, *.partial and *.deleted names")
+	}
 	file, err := root.OpenFile(name, taildropReadFlags(), 0)
 	if err != nil {
 		root.Close()

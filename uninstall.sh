@@ -21,6 +21,7 @@ fi
 
 # Do not signal processes based on a substring in their command line. The
 # controller verified each daemon PID and stopped the exact watcher callback.
+_dns_state_found=0
 for _state in "${TS_DIR}/state/tailscaled.state" "${TS_DIR}/tailscaled.state"; do
   if [ -f "$_state" ]; then
     if ! cp "$_state" "${STATE_BACKUP}.tmp" ||
@@ -45,9 +46,20 @@ for _state in "${TS_DIR}/state/tailscaled.state" "${TS_DIR}/tailscaled.state"; d
       say "! Unable to remove stale DNS preference ownership; FoxyTail data retained"
       exit 1
     fi
+    _dns_state_found=1
     break
   fi
 done
+# The journal backup only has meaning paired with an identity: the installer's
+# restore publishes it solely alongside ${STATE_BACKUP}. A backup left behind
+# with neither live state nor a saved identity is orphaned ownership that must
+# not leak into a future install; one still paired with a saved identity is
+# user data retained for recovery and survives repeated uninstalls.
+if [ "${_dns_state_found}" != 1 ] && [ ! -f "$STATE_BACKUP" ] &&
+  ! rm -f "${DNS_PREFERENCES_BACKUP}"; then
+  say "! Unable to remove stale DNS preference ownership; FoxyTail data retained"
+  exit 1
+fi
 for _name in tailscale tailscaled foxytail.service; do
   case "$_name" in
     tailscale|tailscaled) _target="${TS_DIR}/bin/tailscaled" ;;

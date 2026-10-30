@@ -514,7 +514,13 @@ dns_start() {
   _ds_context=$(current_dns_context)
   if [ -z "${_ds_context}" ]; then
     log Warning "current tailnet MagicDNS is unavailable; removing stale resolver state"
-    dns_stop || { set_state degraded; return 1; }
+    dns_stop || {
+      # dns_stop already recorded a precise reason (cleanup-failed or a
+      # retained reconnect-needed); never overwrite it with a generic one.
+      _ds_stop_reason=$(cat "${DNS_REASON_FILE}" 2>/dev/null)
+      set_state degraded "${_ds_stop_reason:-cleanup-failed}"
+      return 1
+    }
     set_state degraded tailnet-unavailable
     return 0
   fi
@@ -756,7 +762,12 @@ usage() {
 
 case "$1" in
   guard)
-    modern_dns_guard
+    if command -v modern_dns_guard >/dev/null 2>&1; then
+      modern_dns_guard
+    else
+      echo "modern DNS controller unavailable" >&2
+      exit 1
+    fi
     ;;
   start)
     dns_start
@@ -772,6 +783,10 @@ case "$1" in
     # MagicDNS is currently running; the settings page uses this to grey out
     # the transparent choice before the user commits to it.
     if command -v modern_probe_capabilities >/dev/null 2>&1; then
+      # Capability checks inspect the IPv6 tables only when IPV6=on; the
+      # probe subcommand never loaded configuration, so a verdict could skip
+      # IPv6 vetting entirely while the runtime config enables it.
+      load_runtime_conf || exit 1
       modern_probe_capabilities
     else
       echo "modern DNS controller unavailable" >&2
@@ -781,6 +796,7 @@ case "$1" in
   probe-hijack)
     # Same pre-flight probe for the hijack mode's NFQUEUE+injection path.
     if command -v modern_probe_hijack >/dev/null 2>&1; then
+      load_runtime_conf || exit 1
       modern_probe_hijack
     else
       echo "modern DNS controller unavailable" >&2

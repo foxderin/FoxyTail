@@ -568,7 +568,7 @@ modern_dns_start() (
   _mn_changed=false
   if [ "$(cat "${DNS_CONTEXT_FILE}" 2>/dev/null)" != "${_mn_context}" ] ||
     [ "$(cat "${MODERN_CONF}" 2>/dev/null)" != "${_mn_config}" ] || ! modern_listener_ready ||
-    { [ "${_mn_mode}" = transparent ] && ! modern_queue_ready; }; then
+    { [ "${_mn_mode}" != local ] && ! modern_queue_ready; }; then
     modern_rules_teardown || return 1
     modern_stop_process || return 1
     (umask 077; printf '%s\n' "${_mn_context}" >"${DNS_CONTEXT_FILE}" && printf '%s\n' "${_mn_config}" >"${MODERN_CONF}") || return 1

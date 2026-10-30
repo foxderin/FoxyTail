@@ -34,7 +34,12 @@ start_inotifyd() (
   trap 'if [ "${_si_published}" = 0 ] && resident_identity_alive inotifyd "${_si_pid}" "${_si_stamp}" "${_si_boot}"; then kill -TERM "${_si_pid}" 2>/dev/null; fi; rm -f "${TS_PID_DIR}/inotifyd.pid.$$"; _owner_lock_release "${_si_lock}" "${_si_token}"' 0
   trap 'exit 1' HUP INT TERM
   daemon_pid_alive inotifyd && exit 0
-  inotifyd "${TS_SCRIPTS_DIR}/foxytail.inotify" "${TS_MOD_DIR}" \
+  # The watched entity is the manager-visible module directory. During a staged
+  # install TS_MOD_DIR names the staging tree; watch the live directory when it
+  # exists so a manager `disable` toggle is seen without waiting for reboot.
+  _si_watch=${TS_MOD_DIR}
+  [ ! -d /data/adb/modules/foxytail ] || _si_watch=/data/adb/modules/foxytail
+  inotifyd "${TS_SCRIPTS_DIR}/foxytail.inotify" "${_si_watch}" \
     >>"${TS_RUN_DIR}/inotifyd.log" 2>&1 &
   _si_pid=$! _si_boot=$(boot_identity)
   _si_stamp=$(_proc_starttime "${_si_pid}") || exit 1
@@ -139,7 +144,9 @@ start_residents || _start_rc=1
 if [ -x "${TS_SCRIPTS_DIR}/foxytail.compat" ]; then
   "${TS_SCRIPTS_DIR}/foxytail.compat" probe >"${TS_RUN_DIR}/compat.json" 2>/dev/null
 fi
-[ "${1:-}" = enable ] || start_inotifyd || _start_rc=1
+# The watcher must run on every start path, including a manual `enable`:
+# start_inotifyd is idempotent and returns early when one is already alive.
+start_inotifyd || _start_rc=1
 if [ "${1:-}" = reload ] && [ "$_start_rc" = 0 ]; then
   if conf_lock_acquire; then
     if _conf_runtime_dir && [ "${_RUNTIME_CONF_DIR}" != "${TS_CONF_DIR}" ] &&

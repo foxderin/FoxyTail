@@ -4,6 +4,7 @@ package main
 
 import (
 	"encoding/binary"
+	"errors"
 	"net/netip"
 	"testing"
 
@@ -77,5 +78,37 @@ func TestRouteResponseMustProveIPv4UIDMarkAndDestination(t *testing.T) {
 	attrs[0].Data = number(0)
 	if _, err := routeInterface(response(attrs), tuple, 10025, 0x23456); err == nil {
 		t.Fatal("kernel ignored requested UID and used root")
+	}
+}
+
+// The capability verdict means IPv4 interception works. IPv6-less kernels
+// must still pass it while reporting ipv6:false for the additive field.
+func TestRouteProbeRequiresIPv4Only(t *testing.T) {
+	original := routeProbeFamily
+	defer func() { routeProbeFamily = original }()
+	probed := map[string]int{}
+	routeProbeFamily = func(address string) error {
+		probed[address]++
+		if address == "::1" {
+			return errors.New("kernel without IPv6")
+		}
+		return nil
+	}
+	ipv6, err := probeRouteContext()
+	if err != nil || ipv6 || probed["127.0.0.1"] != 1 || probed["::1"] != 1 {
+		t.Fatalf("IPv6-less kernel must keep the IPv4 verdict: ipv6=%v err=%v calls=%v", ipv6, err, probed)
+	}
+	routeProbeFamily = func(string) error { return nil }
+	if ipv6, err = probeRouteContext(); err != nil || !ipv6 {
+		t.Fatalf("dual-stack kernel must report IPv6 support: ipv6=%v err=%v", ipv6, err)
+	}
+	routeProbeFamily = func(address string) error {
+		if address == "127.0.0.1" {
+			return errors.New("IPv4 route query broken")
+		}
+		return nil
+	}
+	if _, err = probeRouteContext(); err == nil {
+		t.Fatal("IPv4 route capability failure must fail the verdict")
 	}
 }

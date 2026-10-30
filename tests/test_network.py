@@ -294,12 +294,62 @@ esac
   self.env.pop('MOCK_FAIL_DELETE');self.run_script('foxytail.route','teardown')
   self.assertFalse((self.dir/'run/route.state').exists())
   self.assertFalse(self.read()['routes']['-4:1052'])
+ def test_route_status_notes_skipped_defaults_and_scopes_ipv6(self):
+  # Configured /0 destinations are dropped from ROUTE_DESTINATIONS unless the
+  # exit snapshot authorizes them; status must say so instead of reporting a
+  # clean "applied" over a silently smaller policy.
+  self.config(ROUTE_SUBNETS='100.64.0.0/10 fd7a:115c:a1e0::/48 0.0.0.0/0 ::/0')
+  self.run_script('foxytail.route','apply')
+  s=self.read();s['rules']['-6'].insert(0,['0:','from','all','lookup','main']);self.write(s)
+  out=self.run_script('foxytail.route','status').stdout
+  self.assertIn('Policy routing: applied',out.splitlines()[0])
+  self.assertIn('note: ROUTE_SUBNETS entry 0.0.0.0/0 is skipped',out)
+  self.assertIn('note: ROUTE_SUBNETS entry ::/0 is skipped',out)
+  # The foreign -6 rule proves the IPv6 inventory ran; nothing v6 leaks into
+  # the IPV6=off report below.
+  self.assertIn('0: from all lookup main',out)
+  self.assertIn('12510: from all fwmark 0x40000000/0x40000000 lookup 1052',out)
+  self.config(IPV6='off',ROUTE_SUBNETS='100.64.0.0/10')
+  self.run_script('foxytail.route','teardown');self.run_script('foxytail.route','apply')
+  out=self.run_script('foxytail.route','status').stdout
+  self.assertNotIn('note:',out);self.assertNotIn('0: from all lookup main',out)
+  self.assertIn('12510: from all fwmark 0x40000000/0x40000000 lookup 1052',out)
+  # Once an online exit node authorizes the defaults they are applied, not
+  # skipped, so no note remains for them.
+  self.config(IPV6='on',ROUTE_SUBNETS='100.64.0.0/10 fd7a:115c:a1e0::/48 0.0.0.0/0 ::/0')
+  self.exit_snapshot();self.run_script('foxytail.route','apply')
+  out=self.run_script('foxytail.route','status').stdout
+  self.assertNotIn('note:',out)
+  self.assertIn('0.0.0.0/0',out);self.assertIn('::/0',out)
+
  def test_dns_detection_families_tables_and_targets(self):
   for cmd,table,target in (('iptables','nat','REDIRECT'),('ip6tables','mangle','TPROXY'),('ip6tables','nat','DNAT')):
    s=self.read();s['chains']={cmd+':'+table:{'OUTPUT':[['-p','udp','--dport','53','-j','OTHER_DNS']],'OTHER_DNS':[['-j',target]]}};self.write(s)
    self.run_script('foxytail.compat','check-dns-hijack',ok=False)
   for chains in ({'OUTPUT':[['-p','udp','--dport','53','-j','ACCEPT']]},{'OUTPUT':[],'ORPHAN':[['-p','udp','--dport','53','-j','REDIRECT']]},{'OUTPUT':[['-j','FOXY_DNS']],'FOXY_DNS':[['-p','udp','--dport','53','-j','REDIRECT']]}):
    s=self.read();s['chains']={'iptables:nat':chains};self.write(s);self.run_script('foxytail.compat','check-dns-hijack')
+
+ def test_compat_checks_use_applied_runtime_not_saved_settings(self):
+  # check/check-dns-hijack compare live chains against the APPLIED config; a
+  # saved but unapplied mode must not decide the proxy skip or v6 table scan.
+  (self.dir/'settings.sh').write_text((self.dir/'settings.sh').read_text() +
+   '\nload_runtime_conf() { . "$TEST_DIR/runtime-config"; }\n')
+  self.config()  # saved: bridge + IPV6=on
+  (self.dir/'runtime-config').write_text(
+   (self.dir/'config').read_text().replace('TS_MODE="bridge"','TS_MODE="proxy"').replace('IPV6="on"','IPV6="off"'))
+  # Saved TS_MODE=bridge would run `route check` and fail; runtime proxy skips.
+  self.run_script('foxytail.compat','check')
+  self.assertFalse((self.dir/'run/compat-alert').exists())
+  # A dead ip6tables inventory counts as a possible hijack only when IPV6 is
+  # on; the runtime off verdict must win over the saved one.
+  (self.dir/'bin/ip6tables').unlink()
+  (self.dir/'bin/ip6tables').write_text('#!/bin/sh\nexit 1\n');(self.dir/'bin/ip6tables').chmod(0o755)
+  self.run_script('foxytail.compat','check-dns-hijack')
+  # probe keeps the saved configuration for forensics, so the same dead
+  # inventory still reports the conflict through its warning list.
+  data=json.loads(self.run_script('foxytail.compat','probe').stdout)
+  self.assertEqual(len(data['warnings']),1)
+  self.assertIn('port 53',data['warnings'][0])
 
  def test_installed_proxy_is_inventory_until_dns_conflict_exists(self):
   pm=self.dir/'bin/pm';pm.write_text('#!/bin/sh\necho package:com.follow.clash\n');pm.chmod(0o755)
@@ -623,5 +673,42 @@ esac
   self.env.pop('FAIL_STOP');run('dns_stop');self.assertEqual(json.loads(run('dns_status','--json'))['state'],'stopped')
   self.assertEqual(json.loads(run('dns_status','--json'))['reason'],'apply-pending')
   self.config(MAGIC_DNS='off');self.assertEqual(json.loads(run('dns_status','--json'))['reason'],'disabled')
+
+ def test_dns_start_tailnet_loss_preserves_stop_failure_reason(self):
+  # When the tailnet's MagicDNS disappears, dns_start stops the resolver; a
+  # stop failure must keep dns_stop's precise reason instead of collapsing to
+  # a generic 'degraded'.
+  run,current=self.setup_dns_runtime()
+  run('dns_start')
+  self.assertEqual(json.loads(run('dns_status','--json'))['state'],'running')
+  current['CurrentTailnet']['MagicDNSEnabled']=False
+  (self.dir/'current.json').write_text(json.dumps(current))
+  self.env['FAIL_STOP']='1'
+  run('dns_start',ok=False)
+  self.assertEqual((self.dir/'run/dnsmasq.reason').read_text().strip(),'cleanup-failed')
+  # A retained reconnect-needed survives another failed stop attempt.
+  (self.dir/'run/dnsmasq.reason').write_text('reconnect-needed\n')
+  run('dns_start',ok=False)
+  self.assertEqual((self.dir/'run/dnsmasq.reason').read_text().strip(),'reconnect-needed')
+  self.assertEqual((self.dir/'run/dnsmasq.state').read_text().strip(),'degraded')
+
+ def test_dns_probe_arms_load_applied_runtime_config(self):
+  # probe-transparent/probe-hijack never loaded configuration; the probes
+  # consult IPV6, so they must see the applied runtime values.
+  (self.dir/'settings.sh').write_text((self.dir/'settings.sh').read_text() +
+   '\nload_runtime_conf() { . "$TEST_DIR/runtime-config"; }\n')
+  self.config(IPV6='on')
+  (self.dir/'runtime-config').write_text(
+   (self.dir/'config').read_text().replace('IPV6="on"','IPV6="off"'))
+  (self.dir/'scripts/foxytail.dns-modern.sh').write_text(
+   'modern_probe_capabilities() { echo "v6=$IPV6"; }\n'
+   'modern_probe_hijack() { echo "h6=$IPV6"; }\n')
+  self.assertEqual(self.run_script('foxytail.dns','probe-transparent').stdout,'v6=off\n')
+  self.assertEqual(self.run_script('foxytail.dns','probe-hijack').stdout,'h6=off\n')
+  # Without the modern controller library each arm fails closed and clear.
+  (self.dir/'scripts/foxytail.dns-modern.sh').unlink()
+  for arm in ('guard','probe-transparent','probe-hijack'):
+   r=self.run_script('foxytail.dns',arm,ok=False)
+   self.assertIn('unavailable',r.stderr,arm)
 
 if __name__=='__main__':unittest.main()

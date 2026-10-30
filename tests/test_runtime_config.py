@@ -188,11 +188,68 @@ test -f "$TS_RUN_DIR/settings.pending"
         service.write_text('#!/bin/sh\nprintf "%s\\n" "$*" >' +
                            shlex.quote(str(self.run / 'stop-args')) + '\n')
         service.chmod(0o755)
+        (self.base / 'disable').touch()
         result = subprocess.run(['sh', str(callback), 'n', str(self.base), 'disable'],
                                 cwd=self.base, text=True, capture_output=True, timeout=10)
         self.assertNotEqual(result.returncode, 0)
         self.assertEqual((self.run / 'stop-args').read_text(), 'stop --internal\n')
         self.assertFalse((self.run / 'manual-stop').exists())
+
+    def test_disable_callback_covers_rename_events_and_enable_by_absence(self):
+        # busybox inotifyd emits 'y' (moved-into-dir) for a flag installed by
+        # rename, never 'n'; removal events report 'd'/'m' with the flag gone.
+        callback = self.scripts / 'foxytail.inotify'
+        callback.write_text((ROOT / 'tailscale/scripts/foxytail.inotify').read_text().replace(
+            '"${TS_SCRIPTS_DIR}/foxytail.service" stop',
+            'sh "${TS_SCRIPTS_DIR}/foxytail.service" stop').replace(
+            '"${TS_SCRIPTS_DIR}/start.sh" enable',
+            'sh "${TS_SCRIPTS_DIR}/start.sh" enable').replace(
+            '|| "${TS_SCRIPTS_DIR}/${_s}" stop',
+            '|| sh "${TS_SCRIPTS_DIR}/${_s}" stop'))
+        service = self.scripts / 'foxytail.service'
+        service.write_text('#!/bin/sh\nprintf "%s\\n" "$*" >' +
+                           shlex.quote(str(self.run / 'stop-args')) + '\n')
+        service.chmod(0o755)
+        start = self.scripts / 'start.sh'
+        start.write_text('#!/bin/sh\nprintf "%s\\n" "$*" >' +
+                         shlex.quote(str(self.run / 'start-args')) + '\n')
+        start.chmod(0o755)
+        (self.base / 'disable').touch()
+        for events in ('y', 'w'):
+            result = subprocess.run(['sh', str(callback), events, str(self.base), 'disable'],
+                                    cwd=self.base, text=True, capture_output=True, timeout=10)
+            self.assertEqual(result.returncode, 0, events + result.stdout + result.stderr)
+            self.assertEqual((self.run / 'stop-args').read_text(), 'stop --internal\n')
+            self.assertFalse((self.run / 'start-args').exists())
+        (self.base / 'disable').unlink()
+        for events in ('d', 'm'):
+            result = subprocess.run(['sh', str(callback), events, str(self.base), 'disable'],
+                                    cwd=self.base, text=True, capture_output=True, timeout=10)
+            self.assertEqual(result.returncode, 0, events + result.stdout + result.stderr)
+            self.assertEqual((self.run / 'start-args').read_text(), 'enable\n')
+            (self.run / 'start-args').unlink()
+        # Events naming other files never toggle the service.
+        for name in ('disable.tmp', 'remove'):
+            result = subprocess.run(['sh', str(callback), 'n', str(self.base), name],
+                                    cwd=self.base, text=True, capture_output=True, timeout=10)
+            self.assertEqual(result.returncode, 0, name + result.stdout + result.stderr)
+        self.assertFalse((self.run / 'start-args').exists())
+        self.assertEqual((self.run / 'stop-args').read_text(), 'stop --internal\n')
+
+    def test_conf_parse_tolerates_crlf_indented_comments_and_key_whitespace(self):
+        # A stray CR, indented comment or blank line must not brick the file;
+        # whitespace is trimmed around the KEY and at line ends only.
+        self.main.write_bytes(b'# header\r\n  \t# indented comment\r\n   \r\n\t\r\n'
+                              b'TS_MODE =bridge\r\n  MAGIC_DNS\t= on  \r\n')
+        self.shell('load_conf && test "$TS_MODE:$MAGIC_DNS" = bridge:on')
+        # Internal value spacing stays verbatim and is never collapsed.
+        (self.conf / 'routes.conf').write_text(
+            'UID_LIST="10101   10102"\nROUTE_SUBNETS="100.64.0.0/10"\t \r\n')
+        self.shell('load_conf && test "$UID_LIST" = "10101   10102" '
+                   '&& test "$ROUTE_SUBNETS" = "100.64.0.0/10"')
+        # A line that is not a record still fails the whole file.
+        self.main.write_bytes(b'TS_MODE=bridge\r\nnot a record\r\n')
+        self.shell('! load_conf')
 
     def test_incompatible_native_hot_routes_are_not_promoted(self):
         self.main.write_text('TS_MODE=tun\n')

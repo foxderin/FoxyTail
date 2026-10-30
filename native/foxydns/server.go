@@ -33,6 +33,10 @@ type captureStats interface {
 	Stats() (answered, passed, failed uint64)
 }
 
+// newSelector builds the hijack capture queue. Tests replace it to exercise
+// degraded startup without kernel NFQUEUE access.
+var newSelector = NewSelector
+
 type resolver struct {
 	records                  *recordStore
 	transport                originalTransport
@@ -188,7 +192,14 @@ func startService(cfg Config) (*service, error) {
 			}
 		}
 	} else if cfg.Mode == "hijack" {
-		s.interceptor, s.queueError = NewSelector(cfg.Queue, s.resolver.records)
+		// NewSelector returns a typed nil on failure; storing it in the
+		// captureQueue interface would nil-deref health and Close. Mirror the
+		// transparent branch: keep only a real selector and degrade cleanly.
+		var selector *Selector
+		selector, s.queueError = newSelector(cfg.Queue, s.resolver.records)
+		if selector != nil {
+			s.interceptor = selector
+		}
 	}
 	if err := s.startControl(); err != nil {
 		s.Close()
@@ -268,8 +279,9 @@ func (s *service) healthState() healthState {
 		Forwarded: s.resolver.forwarded.Load(), Failed: s.resolver.failed.Load(),
 	}
 	if counter, ok := s.interceptor.(captureStats); ok {
-		answered, _, failed := counter.Stats()
+		answered, passed, failed := counter.Stats()
 		state.LocalAnswers += answered
+		state.Passed += passed
 		state.Failed += failed
 	}
 	if queueError != nil {

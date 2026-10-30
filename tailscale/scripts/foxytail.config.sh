@@ -146,12 +146,29 @@ _conf_parse_file() {
   _cpf_name="${2:-${_cpf_file##*/}}"
   _cpf_seen=" "
   _cpf_n=0
+  _cpf_ws=$(printf ' \t\r')
   [ -f "${_cpf_file}" ] && [ ! -L "${_cpf_file}" ] || { echo "${_cpf_name}: expected regular file" >&2; return 1; }
   while IFS= read -r _cpf_line || [ -n "${_cpf_line}" ]; do
     _cpf_n=$((_cpf_n + 1))
-    case "${_cpf_line}" in '' | '#'*) continue ;; *=*) ;; *) echo "${_cpf_name}:${_cpf_n}: expected KEY=value" >&2; return 1 ;; esac
-    _cpf_key=${_cpf_line%%=*}
-    _cpf_val=${_cpf_line#*=}
+    # Normalize invisible bytes before classification so a stray CR, trailing
+    # space or indented comment cannot brick the entire file. Whitespace is
+    # trimmed around the KEY, the = separator and at line ends; value bytes
+    # stay verbatim for schema validation (spacing is never collapsed).
+    _cpf_line=${_cpf_line%"${_cpf_line##*[!${_cpf_ws}]}"}
+    case "${_cpf_line}" in
+      *[!${_cpf_ws}]*) ;;
+      *) continue ;;
+    esac
+    _cpf_rest=${_cpf_line#"${_cpf_line%%[!${_cpf_ws}]*}"}
+    case "${_cpf_rest}" in
+      '#'*) continue ;;
+      *=*) ;;
+      *) echo "${_cpf_name}:${_cpf_n}: expected KEY=value" >&2; return 1 ;;
+    esac
+    _cpf_key=${_cpf_rest%%=*}
+    _cpf_key=${_cpf_key%"${_cpf_key##*[!${_cpf_ws}]}"}
+    _cpf_val=${_cpf_rest#*=}
+    _cpf_val=${_cpf_val#"${_cpf_val%%[!${_cpf_ws}]*}"}
     if ! _conf_has_key "${_cpf_name}" "${_cpf_key}"; then
       echo "${_cpf_name}:${_cpf_n}: unknown key" >&2; return 1
     fi

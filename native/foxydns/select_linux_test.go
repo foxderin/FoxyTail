@@ -156,6 +156,23 @@ func TestSelectorRejectsMalformedAndHelperPackets(t *testing.T) {
 	}
 }
 
+func TestSelectorAnswersOnlyLocalOutPackets(t *testing.T) {
+	for _, hook := range []uint8{unix.NF_INET_LOCAL_IN, unix.NF_INET_FORWARD, unix.NF_INET_PRE_ROUTING, unix.NF_INET_POST_ROUTING} {
+		s, sources, _ := selectorFixture(t)
+		a := selectionAttr(t, dnsQueryPacket("nas.tail.test.ts.net.", false))
+		a.Hook = ptr(hook)
+		if verdict := s.decide(a); verdict != nfqueue.NfAccept || len(*sources) != 0 {
+			t.Fatalf("hook %d must not be answered", hook)
+		}
+	}
+	s, sources, _ := selectorFixture(t)
+	a := selectionAttr(t, dnsQueryPacket("nas.tail.test.ts.net.", false))
+	a.Hook = nil
+	if verdict := s.decide(a); verdict != nfqueue.NfAccept || len(*sources) != 0 {
+		t.Fatal("missing hook must not be answered")
+	}
+}
+
 func TestSelectorIPv6TailnetAnswer(t *testing.T) {
 	s, sources, _ := selectorFixture(t)
 	packet := dnsQueryPacket("nas.tail.test.ts.net.", true)
@@ -227,5 +244,15 @@ func TestInjectedPacketLayoutAndChecksums(t *testing.T) {
 	}
 	if sum := checksumSum(pseudo6, udp6[:6], udp6[8:]); sum != binary.BigEndian.Uint16(udp6[6:8]) {
 		t.Fatalf("IPv6 checksum field does not match header sum: %#x != %#x", sum, binary.BigEndian.Uint16(udp6[6:8]))
+	}
+}
+
+func TestInjectPayloadBoundMatchesIPv4TotalLength(t *testing.T) {
+	// IPv4 total length is 20-byte header + 8-byte UDP + payload <= 0xffff.
+	if err := injectUDP(netip.MustParseAddrPort("192.0.2.53:53"), netip.MustParseAddrPort("192.0.2.7:53000"), make([]byte, 0xffff-27)); err == nil || err.Error() != "invalid injection endpoints" {
+		t.Fatalf("payload beyond the IPv4 total-length field was not rejected before send: %v", err)
+	}
+	if err := injectUDP(netip.MustParseAddrPort("[fd7a::53]:53"), netip.MustParseAddrPort("[fd7a::7]:53000"), make([]byte, 0xffff-27)); err == nil || err.Error() != "invalid injection endpoints" {
+		t.Fatalf("payload beyond the UDP length field was not rejected before send: %v", err)
 	}
 }

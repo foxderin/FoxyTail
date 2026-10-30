@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -286,12 +287,35 @@ func stopTransfers(store *transferStore) error {
 		guard.Close()
 		return err
 	}
+	entries, err := store.entries()
+	if err != nil {
+		guard.Close()
+		return err
+	}
+	active := map[string]bool{}
 	for _, record := range records {
-		if activeTransfer(record.Status) {
-			if err = store.requestCancel(record.ID); err != nil {
-				guard.Close()
-				return err
-			}
+		active[record.ID] = activeTransfer(record.Status)
+	}
+	// Cancel by filename identity too: a torn record may still own a live worker.
+	for _, entry := range entries {
+		var id string
+		switch {
+		case strings.HasSuffix(entry.Name(), ".json"):
+			id = strings.TrimSuffix(entry.Name(), ".json")
+		case strings.HasSuffix(entry.Name(), ".corrupt"):
+			id = strings.TrimSuffix(entry.Name(), ".corrupt")
+		default:
+			continue
+		}
+		if !validID(id) {
+			continue
+		}
+		if live, found := active[id]; found && !live {
+			continue
+		}
+		if err = store.requestCancel(id); err != nil {
+			guard.Close()
+			return err
 		}
 	}
 	guard.Close()

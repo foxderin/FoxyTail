@@ -96,7 +96,9 @@ parse_rules() {
       arg=""
       if (f[3] == "exit-node") {
         arg=substr($0,length(f[1])+length(f[2])+length(f[3])+4)
-        if (arg !~ /^[A-Za-z0-9:][A-Za-z0-9_.:%-]*$/) {
+        # Keep the argument alphabet identical to exit_target validation:
+        # a %zone-id suffix parses here but can never resolve there.
+        if (arg !~ /^[A-Za-z0-9:][A-Za-z0-9_.:-]*$/) {
           error("exit-node requires a node name or IP address argument"); next
         }
       } else if (f[3] == "up" || f[3] == "down" || f[3] == "no-exit-node") {

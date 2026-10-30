@@ -87,6 +87,42 @@ func TestSocketDiagRejectsWrongOrUnconnectedTuple(t *testing.T) {
 	}
 }
 
+// Same per-family rule as the route probe: only IPv4 socket isolation gates
+// the verdict; IPv6 is probed best-effort for the additive field.
+func TestSocketProbeRequiresIPv4Only(t *testing.T) {
+	original := socketProbeFamily
+	defer func() { socketProbeFamily = original }()
+	var calls [][]string
+	socketProbeFamily = func(networks ...string) error {
+		calls = append(calls, append([]string(nil), networks...))
+		for _, network := range networks {
+			if network == "udp6" || network == "tcp6" {
+				return errors.New("kernel without IPv6")
+			}
+		}
+		return nil
+	}
+	ipv6, err := probeHelperSocketContext()
+	if err != nil || ipv6 || len(calls) != 2 || calls[0][0] != "udp4" || calls[0][1] != "tcp4" || calls[1][0] != "udp6" || calls[1][1] != "tcp6" {
+		t.Fatalf("IPv6-less kernel must keep the IPv4 verdict: ipv6=%v err=%v calls=%v", ipv6, err, calls)
+	}
+	socketProbeFamily = func(...string) error { return nil }
+	if ipv6, err = probeHelperSocketContext(); err != nil || !ipv6 {
+		t.Fatalf("dual-stack kernel must report IPv6 support: ipv6=%v err=%v", ipv6, err)
+	}
+	socketProbeFamily = func(networks ...string) error {
+		for _, network := range networks {
+			if network == "udp4" {
+				return errors.New("IPv4 socket isolation broken")
+			}
+		}
+		return nil
+	}
+	if _, err = probeHelperSocketContext(); err == nil {
+		t.Fatal("IPv4 socket capability failure must fail the verdict")
+	}
+}
+
 func TestPrivilegedDNSIsolatedSocketUID(t *testing.T) {
 	requireDNSNamespace(t)
 	kernelCommand(t, "ip", "link", "set", "lo", "up")
@@ -96,7 +132,7 @@ func TestPrivilegedDNSIsolatedSocketUID(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := probeHelperSocketContext(); err != nil {
+	if _, err := probeHelperSocketContext(); err != nil {
 		t.Fatal(err)
 	}
 	after, err := unix.SetfsgidRetGid(-1)

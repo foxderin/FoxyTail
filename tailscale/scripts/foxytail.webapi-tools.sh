@@ -26,7 +26,9 @@ cmd_traffic() {
       ;;
   esac
   if [ -n "${_tr_out}" ] && printf '%s' "${_tr_out}" | jqr -e . >/dev/null 2>&1; then
-    printf '%s' "${_tr_out}" | jqr -c '. + {ok:true}'
+    # Preserve an ok:false the helper emitted with a zero exit status; only
+    # wrap payloads that carry no verdict of their own.
+    printf '%s' "${_tr_out}" | jqr -c 'if type=="object" and .ok==false then . else . + {ok:true} end'
   else
     jerr "stats query failed (collector not running?)"
   fi
@@ -35,7 +37,7 @@ cmd_traffic() {
 cmd_traffic_uids() {
   _tu_out=$(_op_exec 60 "${TS_SCRIPTS_DIR}/foxytail.stats" query uids 100000 2>/dev/null) || jerr "UID stats query failed"
   printf '%s' "${_tu_out}" | jqr -e . >/dev/null 2>&1 || jerr "UID stats query returned invalid JSON"
-  printf '%s' "${_tu_out}" | jqr -c '. + {ok:true}'
+  printf '%s' "${_tu_out}" | jqr -c 'if type=="object" and .ok==false then . else . + {ok:true} end'
 }
 
 cmd_apps() {
@@ -195,7 +197,10 @@ cmd_diag() {
   _dg_outdir=/sdcard/Download
   [ "$_dg_mode" = local ] && _dg_outdir=
   _dg_out=$(_op_exec 120 "${TS_SCRIPTS_DIR}/foxytail.diag" collect "$_dg_outdir" "$_dg_mode" 2>/dev/null) || jerr 'diag collection failed or cancelled'
-  _dg_path=$(printf '%s\n' "${_dg_out}" | tail -n 1 | tr -d ' ')
+  # Strip CR/LF and trim only surrounding whitespace: a generated path may
+  # legitimately contain inner spaces.
+  _dg_path=$(printf '%s\n' "${_dg_out}" | tail -n 1 | tr -d '\r\n' |
+    sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
   if [ -n "${_dg_path}" ] && [ -f "${_dg_path}" ]; then
     _dg_artifact=$(_artifact_register diagnostic "${_dg_path}") || jerr 'diag: cannot retain private export artifact'
     jqr -n -c --arg p "${_dg_path}" --arg mode "$_dg_mode" --arg id "${_dg_artifact}" '{ok:true,path:$p,mode:$mode,artifactId:$id}'
@@ -206,9 +211,27 @@ cmd_diag() {
 
 # --- taildrop files ---------------------------------------------------------------
 
+# Code-point predicate shared by the batch and import name validators; it must
+# reject everything _file_name_valid rejects, including the Unicode format
+# characters enumerated there as UTF-8 byte sequences: U+061C (1564),
+# U+200B (8203), U+200E (8206), U+200F (8207), U+202A..U+202E (8234..8238),
+# U+2060..U+2064 (8288..8292), U+FEFF (65279).
+_file_name_codepoint_jq='. >= 32 and (. < 127 or . > 159) and . != 1564 and . != 8203 and . != 8206 and . != 8207 and (. < 8234 or . > 8238) and (. < 8288 or . > 8292) and . != 65279'
+
 _file_name_valid() {
   _fn_checked=$(jqr -n -e -r --arg n "$1" '$n | select(length > 0 and utf8bytelength <= 255 and . != "." and . != ".." and . != ".taildrop" and . != ".outgoing" and ((contains("/") or contains("\\")) | not) and all(explode[]; . >= 32 and (. < 127 or . > 159)))' 2>/dev/null) || return 1
-  [ "${_fn_checked}" = "$1" ]
+  [ "${_fn_checked}" = "$1" ] || return 1
+  # Unicode format characters (Cf) pass the C0/C1 range check above but let a
+  # sender spoof the visible name (bidi overrides, zero-width marks, BOM).
+  # POSIX case patterns operate on raw bytes, so match each UTF-8 sequence.
+  for _fn_seq in \
+    '\330\234' \
+    '\342\200\213' '\342\200\216' '\342\200\217' \
+    '\342\200\252' '\342\200\253' '\342\200\254' '\342\200\255' '\342\200\256' \
+    '\342\201\240' '\342\201\241' '\342\201\242' '\342\201\243' '\342\201\244' \
+    '\357\273\277'; do
+    case "$1" in *"$(printf '%b' "${_fn_seq}")"*) return 1 ;; esac
+  done
 }
 
 cmd_files_inbox() {
@@ -221,7 +244,7 @@ cmd_file_receive() {
   mkdir -p "${FILES_DIR}" || jerr 'file-receive: cannot create private inbox'
   _fr_out=$(_op_exec 60 "${TS_BIN_DIR}/foxyfiles" receive --source /sdcard --destination "${FILES_DIR}" 2>&1) ||
     jerr "file-receive failed: ${_fr_out:-cancelled}"
-  printf '%s' "${_fr_out}" | jqr -e '.ok==true and (.received|type=="number") and (.received>=0) and (.received==(.received|floor)) and ((.ignored // 0)|type=="number") and ((.ignored // 0)>=0) and ((.ignored // 0)==((.ignored // 0)|floor)) and (.files|type=="array") and (.received==(.files|length)) and all(.files[]; type=="string" and length>0 and utf8bytelength<=255 and .!=".taildrop" and .!=".outgoing" and .!="." and .!=".." and ((contains("/") or contains("\\"))|not) and all(explode[]; .>=32 and (. < 127 or . > 159)))' >/dev/null || jerr 'invalid Taildrop import response'
+  printf '%s' "${_fr_out}" | jqr -e '.ok==true and (.received|type=="number") and (.received>=0) and (.received==(.received|floor)) and ((.ignored // 0)|type=="number") and ((.ignored // 0)>=0) and ((.ignored // 0)==((.ignored // 0)|floor)) and (.files|type=="array") and (.received==(.files|length)) and all(.files[]; type=="string" and length>0 and utf8bytelength<=255 and .!=".taildrop" and .!=".outgoing" and .!="." and .!=".." and ((contains("/") or contains("\\"))|not) and all(explode[]; ('"${_file_name_codepoint_jq}"')))' >/dev/null || jerr 'invalid Taildrop import response'
   _fr_names=$(printf '%s' "${_fr_out}" | jqr -r '.files[]') || jerr 'invalid Taildrop import response'
   _fr_count=$(printf '%s' "${_fr_out}" | jqr -r '.received') || jerr 'invalid Taildrop import response'
   _fr_ignored=$(printf '%s' "${_fr_out}" | jqr -r '.ignored // 0') || jerr 'invalid Taildrop import response'
@@ -319,7 +342,7 @@ _file_batch() (
   _fb_names=$(printf '%s' "${_fb_json}" | jqr -e -r '
     select(type=="array" and length>=1 and length<=32) |
     select(length==(unique|length)) |
-    select(all(.[]; type=="string" and length>0 and utf8bytelength<=255 and .!="." and .!=".." and .!=".taildrop" and .!=".outgoing" and ((contains("/") or contains("\\"))|not) and all(explode[]; .>=32 and (. < 127 or . > 159)))) | .[]') || jerr 'invalid inbox file selection'
+    select(all(.[]; type=="string" and length>0 and utf8bytelength<=255 and .!="." and .!=".." and .!=".taildrop" and .!=".outgoing" and ((contains("/") or contains("\\"))|not) and all(explode[]; ('"${_file_name_codepoint_jq}"')))) | .[]') || jerr 'invalid inbox file selection'
   _fb_output=$(mktemp "${TS_RUN_DIR}/.file-batch.XXXXXX") || jerr 'cannot prepare inbox results'
   chmod 600 "${_fb_output}" || { rm -f "${_fb_output}"; jerr 'cannot protect inbox results'; }
   trap 'rm -f "${_fb_output}"' 0

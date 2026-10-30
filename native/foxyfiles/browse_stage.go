@@ -22,8 +22,14 @@ import (
 
 const maxSendSize int64 = 2 << 30
 
+// Format characters (bidi overrides, zero-width spaces, BOM) reorder or hide
+// filename text in every UI and shell consumer, so they fail like controls.
+func unsafeNameRune(r rune) bool {
+	return unicode.IsControl(r) || unicode.Is(unicode.Cf, r)
+}
+
 func plainName(name string) bool {
-	return name != "" && name != "." && name != ".." && len(name) <= 255 && utf8.ValidString(name) && !strings.ContainsAny(name, "/\\") && strings.IndexFunc(name, unicode.IsControl) < 0
+	return name != "" && name != "." && name != ".." && len(name) <= 255 && utf8.ValidString(name) && !strings.ContainsAny(name, "/\\") && strings.IndexFunc(name, unsafeNameRune) < 0
 }
 
 func relativeParts(path string) ([]string, error) {
@@ -197,8 +203,11 @@ type stageResult struct {
 
 func stageFile(rootPath, name string, expected int64, input io.Reader) (stageResult, error) {
 	result := stageResult{}
-	if !plainName(name) || name == ".lease" || name == ".data" || expected < -1 || expected > maxSendSize {
-		return result, errors.New("invalid stage name or size (maximum 2 GiB)")
+	if expected < -1 || expected > maxSendSize {
+		return result, errors.New("invalid stage size (maximum 2 GiB)")
+	}
+	if !taildropCompletedName(name) || name == ".lease" || name == ".data" {
+		return result, errors.New("invalid stage name; receivers drop .taildrop, .outgoing, *.partial and *.deleted")
 	}
 	store, err := openTransferStore(rootPath)
 	if err != nil {
@@ -311,7 +320,7 @@ func stagedParts(rootPath, path string) (string, string, bool) {
 		return "", "", false
 	}
 	parts := strings.Split(strings.TrimPrefix(path, prefix), "/")
-	if len(parts) != 2 || !validID(parts[0]) || !plainName(parts[1]) || parts[1] == ".lease" || parts[1] == ".data" {
+	if len(parts) != 2 || !validID(parts[0]) || !taildropCompletedName(parts[1]) || parts[1] == ".lease" || parts[1] == ".data" {
 		return "", "", false
 	}
 	return parts[0], parts[1], true

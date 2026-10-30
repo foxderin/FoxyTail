@@ -180,7 +180,7 @@ func extract(source, dest string) (sum string, err error) {
 			_ = parent.RemoveAll(leaf)
 		}
 	}()
-	destination, err := parent.OpenRoot(leaf)
+	destination, err := openChildRoot(parent, leaf)
 	if err != nil {
 		return "", err
 	}

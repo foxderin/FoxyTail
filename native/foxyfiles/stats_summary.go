@@ -5,7 +5,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"math"
 	"sort"
 	"strconv"
@@ -254,15 +253,38 @@ func (a *statsAccumulator) consume(body []byte) error {
 	clear(a.uidRows)
 	a.uidRows = a.uidRows[:0]
 	a.sample = statsSample{Peers: peers[:0]}
+	// A valid-JSON row that still cannot be decoded is skipped like torn JSON:
+	// one wrong-type row must never fail every row that follows it.
 	if err := json.Unmarshal(body, &a.sample); err != nil {
-		return fmt.Errorf("invalid statistics sample: %w", err)
+		return nil
 	}
 	if a.sample.UIDDirection.value == "tx" && len(a.sample.UIDs) != 0 {
 		if err := json.Unmarshal(a.sample.UIDs, &a.uidRows); err != nil {
-			return fmt.Errorf("invalid UID statistics: %w", err)
+			return nil
 		}
 	}
 	s := &a.sample
+	numeric := func(values ...statsNumber) bool {
+		for _, value := range values {
+			if value.kind != 0 && value.kind != 3 {
+				return false
+			}
+		}
+		return true
+	}
+	if s.Iface != nil && !numeric(s.Iface.RX, s.Iface.TX) {
+		return nil
+	}
+	for _, peer := range s.Peers {
+		if !numeric(peer.RX, peer.TX) {
+			return nil
+		}
+	}
+	for _, uid := range a.uidRows {
+		if !numeric(uid.RX, uid.TX) {
+			return nil
+		}
+	}
 	if s.Timestamp < -62135596800 || s.Timestamp > 253402300799 {
 		return errors.New("statistics timestamp is outside the supported calendar")
 	}

@@ -135,12 +135,26 @@ func dialHelperSocket(ctx context.Context, dialer net.Dialer, network, address s
 	}
 }
 
+// socketProbeFamily is replaceable in tests; production always uses
+// probeHelperSocketFamily.
+var socketProbeFamily = probeHelperSocketFamily
+
+// probeHelperSocketContext requires only the IPv4 protocols: IPv6-less
+// kernels still support full IPv4 interception. IPv6 is probed best-effort
+// and reported separately.
+func probeHelperSocketContext() (bool, error) {
+	if err := socketProbeFamily("udp4", "tcp4"); err != nil {
+		return false, err
+	}
+	return socketProbeFamily("udp6", "tcp6") == nil, nil
+}
+
 // Real loopback sockets prove INET_DIAG's UID is sk_uid after fchown, while the
 // socket's creation credentials use the private group needed by NFQUEUE/owner.
-func probeHelperSocketContext() error {
+func probeHelperSocketFamily(networks ...string) error {
 	var controlMu sync.Mutex
 	verified := 0
-	for _, network := range []string{"udp4", "tcp4", "udp6", "tcp6"} {
+	for _, network := range networks {
 		var listener net.Listener
 		host := "127.0.0.1"
 		if network[len(network)-1] == '6' {
@@ -195,8 +209,8 @@ func probeHelperSocketContext() error {
 			return fmt.Errorf("INET_DIAG cannot verify isolated socket UID: %v", identityErr)
 		}
 	}
-	if verified != 4 {
-		return errors.New("IPv4/IPv6 UDP/TCP socket isolation probe incomplete")
+	if verified != len(networks) {
+		return fmt.Errorf("UDP/TCP socket isolation probe incomplete for %v", networks)
 	}
 	return nil
 }

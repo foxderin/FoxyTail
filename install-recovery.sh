@@ -75,7 +75,21 @@ install_lock() {
       continue
     fi
     _il_ticket=$(readlink "$_il_file")
-    case "$_il_ticket" in ''|*[!0-9]*) rm -f "$_INSTALL_TICKET"; return 1 ;; esac
+    case "$_il_ticket" in
+      '')
+        # The ticket vanished between the directory scan and this read.
+        continue ;;
+      *[!0-9]*)
+        # A contender frozen between `ln -s choosing` and the numbered rename
+        # strands a non-numeric ticket. Re-verify the exact pid:starttime:boot
+        # owner before yielding: only a dead owner's ticket is reaped.
+        if install_owner_alive "$_il_owner"; then
+          rm -f "$_INSTALL_TICKET"
+          return 1
+        fi
+        rm -f "$_il_file" "$_il_file.next"
+        continue ;;
+    esac
     if [ "$_il_ticket" -lt "$_il_number" ] ||
        { [ "$_il_ticket" = "$_il_number" ] && [ "${_il_owner%%:*}" -lt "$_il_pid" ]; }; then
       rm -f "$_INSTALL_TICKET"

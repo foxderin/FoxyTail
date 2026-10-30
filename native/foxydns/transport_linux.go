@@ -55,6 +55,7 @@ type Interceptor struct {
 	mu              sync.Mutex
 	closed          bool
 	err             error
+	ipv6            bool
 	serial          uint64
 	flows           map[flowTuple]observedFlow
 	ifaces          map[int]interfaceState
@@ -81,12 +82,14 @@ func NewInterceptor(queue uint16, ownership *flowJournal) (*Interceptor, error) 
 	if _, err = i.getConntrack(probe); err != nil && !errors.Is(err, unix.ENOENT) {
 		return fail(fmt.Errorf("conntrack query capability: %w", err))
 	}
-	if err = probeRouteContext(); err != nil {
+	var routeIPv6, socketIPv6 bool
+	if routeIPv6, err = probeRouteContext(); err != nil {
 		return fail(err)
 	}
-	if err = probeHelperSocketContext(); err != nil {
+	if socketIPv6, err = probeHelperSocketContext(); err != nil {
 		return fail(err)
 	}
+	i.ipv6 = routeIPv6 && socketIPv6
 	// Subscribe before taking the initial snapshot, so interface removal and
 	// index reuse cannot disappear between a snapshot and subscription.
 	i.links, err = netlink.Dial(unix.NETLINK_ROUTE, &netlink.Config{Groups: unix.RTMGRP_LINK | unix.RTMGRP_IPV4_IFADDR | unix.RTMGRP_IPV6_IFADDR})
@@ -137,12 +140,15 @@ func queueRegistrationError(err error) error {
 	return fmt.Errorf("NFQUEUE bind/metadata flags: %w", err)
 }
 
-func ProbeCapabilities(queue uint16) error {
+// ProbeCapabilities proves the required IPv4 interception path and reports
+// whether optional IPv6 interception also works.
+func ProbeCapabilities(queue uint16) (bool, error) {
 	i, err := NewInterceptor(queue, nil)
 	if err != nil {
-		return err
+		return false, err
 	}
-	return i.Close()
+	ipv6 := i.ipv6
+	return ipv6, i.Close()
 }
 
 func (i *Interceptor) setError(err error) {
@@ -386,7 +392,11 @@ func (i *Interceptor) observe(a nfqueue.Attribute) (uint32, bool) {
 	}
 	if i.ownership != nil {
 		if err := i.ownership.record(tuple, ct.ID); err != nil {
-			i.err = fmt.Errorf("capture ownership journal: %w", err)
+			// i.mu is already held: apply setError's first-error-wins
+			// discipline inline rather than re-taking the lock.
+			if !i.closed && i.err == nil {
+				i.err = fmt.Errorf("capture ownership journal: %w", err)
+			}
 			return mark, false
 		}
 	}
@@ -459,7 +469,11 @@ func (i *Interceptor) Lookup(network string, local, remote net.Addr) (FlowContex
 		return FlowContext{}, fmt.Errorf("%w: original flow was not observed", ErrFlowContext)
 	}
 	out := flow.context
-	out.validate = func() error { return i.validateFlow(original, flow.token) }
+	// One kernel re-verification is shared by every fail-closed gate before
+	// the upstream dial; the write path forces a fresh check via revalidate.
+	verify := &flowVerify{validate: func() error { return i.validateFlow(original, flow.token) }}
+	out.validate = verify.cached
+	out.revalidate = verify.validate
 	out.checkSource = func(source netip.AddrPort) error {
 		if source.Addr().Unmap() != original.source.Addr().Unmap() {
 			return ErrFlowContext
@@ -657,7 +671,9 @@ type originalConnection struct {
 }
 
 func (c *originalConnection) Write(data []byte) (int, error) {
-	if err := c.flow.check(); err != nil {
+	// One fresh kernel re-verification per write; the dial-time result was
+	// proven before this socket existed and cannot be reused here.
+	if err := c.flow.recheck(); err != nil {
 		return 0, err
 	}
 	if err := c.flow.checkSource(c.source); err != nil {

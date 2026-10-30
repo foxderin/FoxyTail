@@ -592,6 +592,57 @@ cmd_status''').stdout)
         self.assertFalse((self.run / 'unexpected-cli').exists())
         self.assertEqual(self.snapshot(), before)
 
+    def dns_probe_fixture(self, body):
+        dns = self.scripts / 'foxytail.dns'
+        dns.write_text('#!/bin/sh\n' + body)
+        dns.chmod(0o755)
+        return 'load_conf; _op_exec() { shift; "$@"; }; cmd_dns_probe'
+
+    def test_dns_probe_reports_probe_failures_as_string_reasons(self):
+        # A probe failure used to feed raw text to --argjson, producing no
+        # response at all in the failure case the endpoint exists to report.
+        fixture = self.dns_probe_fixture('echo "owner match unavailable" >&2\nexit 1\n')
+        result = json.loads(self.shell(fixture).stdout)
+        self.assertEqual(result, {'ok': True, 'transparentAvailable': False,
+                                  'transparentUnavailableReason': 'owner match unavailable',
+                                  'hijackAvailable': False,
+                                  'hijackUnavailableReason': 'owner match unavailable'})
+
+    def test_dns_probe_reason_stays_a_string_even_when_it_looks_like_json(self):
+        fixture = self.dns_probe_fixture('printf %s \'{"nested":1}\' >&2\nexit 1\n')
+        result = json.loads(self.shell(fixture).stdout)
+        self.assertFalse(result['transparentAvailable'])
+        self.assertEqual(result['transparentUnavailableReason'], '{"nested":1}')
+        self.assertEqual(result['hijackUnavailableReason'], '{"nested":1}')
+
+    def test_dns_probe_uses_cached_capability_error_and_nulls_on_success(self):
+        (self.run / 'foxydns.capabilities.json').write_text('{"error":"kernel lacks TPROXY"}')
+        fixture = self.dns_probe_fixture('[ "$1" = probe-hijack ] || { echo fallback >&2; exit 1; }\n')
+        result = json.loads(self.shell(fixture).stdout)
+        self.assertEqual(result, {'ok': True, 'transparentAvailable': False,
+                                  'transparentUnavailableReason': 'kernel lacks TPROXY',
+                                  'hijackAvailable': True,
+                                  'hijackUnavailableReason': None})
+
+    def test_dns_probe_success_keeps_null_reasons(self):
+        fixture = self.dns_probe_fixture('exit 0\n')
+        result = json.loads(self.shell(fixture).stdout)
+        self.assertEqual(result, {'ok': True, 'transparentAvailable': True,
+                                  'transparentUnavailableReason': None,
+                                  'hijackAvailable': True,
+                                  'hijackUnavailableReason': None})
+
+    def test_exitnode_set_rejects_option_lookalikes_before_the_controller(self):
+        helper = self.scripts / 'foxytail.exitnode'
+        helper.write_text('#!/bin/sh\ntouch "$TS_DIR/unexpected-call"\n')
+        helper.chmod(0o755)
+        for target in ('--help', '-x', '--advertise-exit-node'):
+            with self.subTest(target=target):
+                result = self.shell('load_conf; cmd_exitnode_set ' + shlex.quote(target), ok=False)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertFalse(json.loads(result.stdout)['ok'])
+        self.assertFalse((self.base / 'unexpected-call').exists())
+
 
 
 if __name__ == '__main__':

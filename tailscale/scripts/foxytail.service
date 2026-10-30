@@ -79,7 +79,7 @@ update_mod_desc() {
     _umd_state="✘ tailscaled service is stopped"
   fi
   [ -f "${TS_MOD_PROP}" ] || return 0
-  sed -i "s/^description=\(\[.*][[:space:]]*\)\{0,1\}/description=[ ⏲ ${_umd_time} | ${_umd_state} ] /" "${TS_MOD_PROP}"
+  sed -i "s/^description=\(\[[^]]*\][[:space:]]*\)\{0,1\}/description=[ ⏲ ${_umd_time} | ${_umd_state} ] /" "${TS_MOD_PROP}"
 }
 
 # A stale socket inode is not readiness. Accept any answering backend state
@@ -146,6 +146,17 @@ start_service() {
   fi
   if is_running; then
     log Info "tailscaled is already running; reconciling companion layers."
+    # daemon_uptime reads the pid file's mtime: when an earlier failed launch
+    # removed it while the daemon lived on, publish the live pid again.
+    if [ -L "${PID_FILE}" ] || ! IFS= read -r _ss_live <"${PID_FILE}" 2>/dev/null; then
+      _ss_live=$(daemon_pids)
+      if [ -n "${_ss_live}" ]; then
+        [ -L "${PID_FILE}" ] && rm -f "${PID_FILE}"
+        # shellcheck disable=SC2086 # intentional: one PID per word
+        set -- ${_ss_live}
+        echo "$1" >"${PID_FILE}"
+      fi
+    fi
     restore_trial_preference || return 1
     load_runtime_conf || return 1
     reconcile_companions
@@ -208,8 +219,13 @@ start_service() {
 }
 
 restore_trial_preference() {
+  # An unconfirmed trial (rolled back, failed, or superseded by a stop or a
+  # newer runtime) must not leak the preference the module wrote during the
+  # trial. trial-restore only reverts while the live value still equals the
+  # journal's module-owned write; a user-changed preference is kept and the
+  # journal is dropped, so superseded is safe to treat like rolled-back.
   case "${_TRIAL_RESTORE:-0}:$(cat "${TS_DIR}/state/config-trial/status" 2>/dev/null)" in
-    1:*|*:rolled-back|*:rollback-failed)
+    1:*|*:rolled-back|*:rollback-failed|*:superseded)
       "${TS_SCRIPTS_DIR}/foxytail.exitnode" trial-restore "${TS_DIR}/state/config-trial" || return 1 ;;
   esac
 }
@@ -311,6 +327,10 @@ humanize_bytes() {
 
 status_service() {
   _ss_mode="${1:-summary}"
+  case "${_ss_mode}" in
+    summary|peer|exit-node|all) ;;
+    *) usage status; return 1 ;;
+  esac
   echo "${blue}Service Status Info${normal}"
   echo ""
   if ! is_running >/dev/null 2>&1; then
@@ -326,7 +346,10 @@ status_service() {
     return 1
   fi
   printf '%s\n' " | ${blue}Backend: ${green}${_ss_backend}${normal}"
-  printf '%s\n' " | ${blue}Mode: ${yellow}${TS_MODE}${normal}"
+  # Config enrichment is best-effort: a broken configuration must not stop
+  # status from reporting the daemon and backend state it just verified.
+  load_runtime_conf || :
+  printf '%s\n' " | ${blue}Mode: ${yellow}${TS_MODE:-unknown}${normal}"
   echo ""
 
   case "${_ss_mode}" in
@@ -358,7 +381,12 @@ status_service() {
       _ss_addr_count=$(echo "${_ss_status}" | jqr -r '.Self.Addrs | length')
       printf '%s\n' "    ↳ Endpoints ${orange}(${_ss_addr_count})${normal}:"
       echo "${_ss_status}" | jqr -r '.Self.Addrs[]?' | while IFS= read -r _ss_addr; do
-        _ss_ip=$(echo "${_ss_addr}" | sed 's/\[//g;s/\].*//g;s/:.*//g')
+        # Keep the complete address for the interface grep: matching only the
+        # first IPv6 hextet can name the wrong interface.
+        case "${_ss_addr}" in
+          \[*) _ss_ip=${_ss_addr#\[}; _ss_ip=${_ss_ip%%\]*} ;;
+          *) _ss_ip=${_ss_addr%%:*} ;;
+        esac
         _ss_iface=$(ip -o addr show 2>/dev/null | grep -F "${_ss_ip}" | awk '{print $2}' | head -1)
 
         if echo "${_ss_addr}" | grep -q '^\['; then
@@ -466,10 +494,10 @@ status_service() {
 log_service() {
   case "$1" in
     daemon)
-      busybox tail -F "${TS_LOG_FILE}"
+      busybox tail -F "${TS_LOG_FILE}" || tail -F "${TS_LOG_FILE}"
       ;;
     service)
-      busybox tail -F "${TS_RUN_LOG_FILE}"
+      busybox tail -F "${TS_RUN_LOG_FILE}" || tail -F "${TS_RUN_LOG_FILE}"
       ;;
     *)
       usage log
@@ -576,7 +604,7 @@ EOF
         if [ "${_h_show_all}" = "all" ]; then
           _h_desc="${_h_line#\# @desc }"
           _h_first=true
-          echo "${_h_desc}" | busybox fold -sw70 | while IFS= read -r _h_dline; do
+          echo "${_h_desc}" | { busybox fold -sw70 || fold -sw70; } | while IFS= read -r _h_dline; do
             if [ "${_h_first}" = true ]; then
               printf '    %s %s\n' "${yellow}↳${normal}" "${_h_dline}"
               _h_first=false
@@ -648,11 +676,21 @@ case "$1" in
   trial)
     _TRIAL_ID="$2"
     _SERVICE_CANDIDATE=$("${TS_SCRIPTS_DIR}/foxytail.trial" prepare "$2" "$3") || exit 1
-    "${TS_SCRIPTS_DIR}/start.sh" pause-residents || exit 1
+    "${TS_SCRIPTS_DIR}/start.sh" pause-residents || {
+      # A partial stop may already have parked some residents; resume them so
+      # the aborted trial cannot leave the helpers dead until the next action.
+      "${TS_SCRIPTS_DIR}/start.sh" resume-residents
+      exit 1
+    }
     # Candidate context holds must not strand rollback; user holds stay authoritative.
     rm -f "${TS_RUN_DIR}/context-stop"
     [ "$3" != previous ] || _TRIAL_RESTORE=1
-    restart_service || exit 1
+    restart_service || {
+      # Idempotent and gated on disable/manual-stop: bring the paused
+      # residents back before reporting the failed restart.
+      "${TS_SCRIPTS_DIR}/start.sh" resume-residents
+      exit 1
+    }
     "${TS_SCRIPTS_DIR}/start.sh" resume-residents
     ;;
   context)
@@ -696,7 +734,6 @@ case "$1" in
     restart_service
     ;;
   status)
-    load_runtime_conf || exit 1
     status_service "$2"
     ;;
   log)

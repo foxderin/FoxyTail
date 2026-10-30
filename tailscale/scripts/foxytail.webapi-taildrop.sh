@@ -72,6 +72,7 @@ cmd_file_send_history() {
 
 cmd_file_send_delete() {
   [ "$#" = 1 ] || jerr 'file-send-delete: expected transfer ID'
+  case "$1" in -*) jerr 'file-send-delete: invalid transfer ID' ;; esac
   _file_json_command 15 send-delete --root "${TS_DIR}" --id "$1"
 }
 
@@ -105,6 +106,7 @@ cmd_file_stage() (
 )
 
 cmd_file_stage_delete() {
+  case "$1" in -*) jerr 'file-stage-delete: invalid path' ;; esac
   _file_json_command 15 stage-delete --root "${TS_DIR}" --path "$1"
 }
 

@@ -68,6 +68,27 @@ run_hook() {
   fi
 }
 
+# Serialize start/stop across concurrent invocations: the pidfile is written
+# only after spawn, so two racing starts could otherwise both launch
+# hev-socks5-tunnel. Same owner-lock style as foxytail.service. Environments
+# without the shared lock module (e.g. minimal harnesses) run unserialized.
+tun_lock() {
+  command -v _owner_lock_acquire >/dev/null 2>&1 || return 0
+  _lock_identity || return 1
+  _TUN_LOCK_TOKEN=${_LOCK_TOKEN}
+  _owner_lock_acquire "${TS_RUN_DIR}/.tun-lock" "${_TUN_LOCK_TOKEN}" 100 0.1 || {
+    log Error "tunnel controller busy"; return 1;
+  }
+  trap 'tun_unlock' 0
+  trap 'exit 1' INT TERM HUP
+}
+
+tun_unlock() {
+  [ -n "${_TUN_LOCK_TOKEN:-}" ] || return 0
+  _owner_lock_release "${TS_RUN_DIR}/.tun-lock" "${_TUN_LOCK_TOKEN}"
+  _TUN_LOCK_TOKEN=
+}
+
 tun_start() {
   ensure_run_dirs
   load_runtime_conf || return 1
@@ -186,16 +207,18 @@ usage() {
 }
 
 case "$1" in
-  start)
-    tun_start
-    ;;
-  stop)
-    tun_stop
-    ;;
-  restart)
-    tun_stop || exit 1
-    sleep 1
-    tun_start
+  start|stop|restart)
+    ensure_run_dirs
+    tun_lock || exit 1
+    case "$1" in
+      start) tun_start ;;
+      stop) tun_stop ;;
+      restart)
+        tun_stop || exit 1
+        sleep 1
+        tun_start
+        ;;
+    esac
     ;;
   status)
     tun_status

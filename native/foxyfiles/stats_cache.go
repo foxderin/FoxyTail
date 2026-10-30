@@ -187,6 +187,41 @@ func saveStatsCache(ctx context.Context, root *os.Root, key statsCacheKey, resul
 	}
 }
 
+// Killed queries leave external-merge and cache temporaries behind; sweep them
+// by age like .write-* transfer leftovers. Best-effort: never fails a query.
+func sweepStatsTemp(root *os.Root) {
+	dir, err := root.Open(".")
+	if err != nil {
+		return
+	}
+	defer dir.Close()
+	for scanned := 0; scanned < 1024; {
+		entries, readErr := dir.ReadDir(256)
+		scanned += len(entries)
+		for _, entry := range entries {
+			name := entry.Name()
+			if !strings.HasPrefix(name, ".stats-order-") && !strings.HasPrefix(name, ".stats-cache-") {
+				continue
+			}
+			info, err := root.Lstat(name)
+			if err != nil || !olderThanDay(info) {
+				continue
+			}
+			if info.IsDir() {
+				root.RemoveAll(name)
+			} else {
+				root.Remove(name)
+			}
+		}
+		if errors.Is(readErr, io.EOF) {
+			break
+		}
+		if readErr != nil {
+			break
+		}
+	}
+}
+
 func statsLocation(zone string) (*time.Location, error) {
 	zone = strings.TrimPrefix(zone, ":")
 	if zone == "" {
@@ -221,6 +256,7 @@ func queryStats(ctx context.Context, temp, date, timezone, retention string, pat
 	if err := ctx.Err(); err != nil {
 		return statsSummary{}, err
 	}
+	sweepStatsTemp(root)
 	if result, ok := loadStatsCache(root, key); ok {
 		return result, ctx.Err()
 	}

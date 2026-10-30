@@ -10,7 +10,8 @@ import (
 	"sort"
 )
 
-const maxInboxFiles = 10000
+// The private inbox cap is a variable only so tests can exercise it small.
+var maxInboxFiles = 10000
 
 type inboxEntry struct {
 	Name  string `json:"name"`

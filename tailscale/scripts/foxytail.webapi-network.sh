@@ -186,7 +186,7 @@ cmd_derp_speedtest() {
 cmd_exitnode_set() {
   [ -n "$1" ] || jerr "exitnode-set: missing stable node ID or IP"
   case "$1" in
-    *[!A-Za-z0-9._:-]*) jerr "exitnode-set: invalid node identifier" ;;
+    -* | *[!A-Za-z0-9._:-]*) jerr "exitnode-set: invalid node identifier" ;;
   esac
   _es_out=$(_op_exec 90 "${TS_SCRIPTS_DIR}/foxytail.exitnode" set "$1")
   _es_rc=$?
@@ -266,28 +266,26 @@ cmd_dns_probe() {
   _cdp_rc=$?
   _op_cancelled && jerr 'DNS probe cancelled'
   if [ "${_cdp_rc}" = 0 ]; then
-    _cdp_ta=true; _cdp_ta_reason=null
+    _cdp_ta=true; _cdp_ta_reason=
   else
     _cdp_ta=false
     _cdp_ta_reason=$(jqr -r '.error // empty' "${TS_RUN_DIR}/foxydns.capabilities.json" 2>/dev/null)
     [ -n "${_cdp_ta_reason}" ] || _cdp_ta_reason="${_cdp_out:-probe failed}"
-    _cdp_ta_reason=$(jqr -n -r --arg r "${_cdp_ta_reason}" '$r')
   fi
   _cdp_out=$(_op_exec 20 "${TS_SCRIPTS_DIR}/foxytail.dns" probe-hijack 2>&1)
   _cdp_rc=$?
   _op_cancelled && jerr 'DNS probe cancelled'
   if [ "${_cdp_rc}" = 0 ]; then
-    _cdp_ha=true; _cdp_ha_reason=null
+    _cdp_ha=true; _cdp_ha_reason=
   else
     _cdp_ha=false
     _cdp_ha_reason=$(jqr -r '.error // empty' "${TS_RUN_DIR}/foxydns.hijack-capabilities.json" 2>/dev/null)
     [ -n "${_cdp_ha_reason}" ] || _cdp_ha_reason="${_cdp_out:-probe failed}"
-    _cdp_ha_reason=$(jqr -n -r --arg r "${_cdp_ha_reason}" '$r')
   fi
-  jqr -n -c --argjson ta "${_cdp_ta}" --argjson tr "${_cdp_ta_reason}" \
-    --argjson ha "${_cdp_ha}" --argjson hr "${_cdp_ha_reason}" \
-    '{ok:true,transparentAvailable:$ta,transparentUnavailableReason:$tr,
-      hijackAvailable:$ha,hijackUnavailableReason:$hr}'
+  jqr -n -c --argjson ta "${_cdp_ta}" --arg tr "${_cdp_ta_reason}" \
+    --argjson ha "${_cdp_ha}" --arg hr "${_cdp_ha_reason}" \
+    '{ok:true,transparentAvailable:$ta,transparentUnavailableReason:($tr|select(length>0) // null),
+      hijackAvailable:$ha,hijackUnavailableReason:($hr|select(length>0) // null)}'
 }
 
 # --- serve / funnel -----------------------------------------------------------

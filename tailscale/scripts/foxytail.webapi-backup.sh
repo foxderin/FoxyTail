@@ -105,7 +105,12 @@ _restore_stage() {
     "${TS_BIN_DIR}/foxyfiles" artifact-pin --root "${TS_DIR}" --id "${_rt_artifact}" 8<&8 || jerr 'restore: artifact is unsafe, expired or in use'
     set -- artifact-extract --root "${TS_DIR}" --id "${_rt_artifact}" --destination "${_rt_tmp}/unpack"
   else
-    set -- extract "$1" "${_rt_tmp}/unpack"
+    # Extract the resolved path, never the submitted name: shared storage is
+    # app-writable and the validated name could have been swapped for a link
+    # between the checks above and this use.
+    [ ! -L "$1" ] && [ ! -L "${_rt_path}" ] && [ -f "${_rt_path}" ] ||
+      jerr 'restore: archive changed during validation'
+    set -- extract "${_rt_path}" "${_rt_tmp}/unpack"
   fi
   _rt_sha=$(_op_exec 30 "${TS_BIN_DIR}/foxyfiles" "$@" 2>"${_rt_tmp}/error") || {
     _rt_error=$(tail -c 2048 "${_rt_tmp}/error" | _sanitize_text)

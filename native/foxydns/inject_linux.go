@@ -21,9 +21,11 @@ import (
 // This is the only mechanism needed because the kernel itself delivers the
 // packet; no connection state, mark or destination rewriting is involved.
 func injectUDP(src, dst netip.AddrPort, payload []byte) error {
+	// One bound covers both families: the IPv4 total-length field leaves
+	// 0xffff-20-8 payload bytes, stricter than IPv6's payload-length field.
 	if !src.IsValid() || !dst.IsValid() || src.Port() == 0 || dst.Port() == 0 ||
 		src.Addr().Is4() != dst.Addr().Is4() || src.Addr().Is4In6() != dst.Addr().Is4In6() ||
-		len(payload) == 0 || len(payload) > 0xffff-8 {
+		len(payload) == 0 || len(payload) > 0xffff-28 {
 		return errors.New("invalid injection endpoints")
 	}
 	if src.Addr().Is4() || src.Addr().Is4In6() {
@@ -66,8 +68,24 @@ func udp6Packet(src, dst netip.AddrPort, payload []byte) []byte {
 	return packet
 }
 
+// injectSocket opens a raw socket whose send cannot block the verdict path
+// indefinitely: a congested output queue gets a bounded 500 ms wait, matching
+// the queue's own write timeout discipline.
+func injectSocket(family int) (int, error) {
+	fd, err := unix.Socket(family, unix.SOCK_RAW, unix.IPPROTO_RAW)
+	if err != nil {
+		return -1, err
+	}
+	timeout := unix.Timeval{Usec: 500000}
+	if err = unix.SetsockoptTimeval(fd, unix.SOL_SOCKET, unix.SO_SNDTIMEO, &timeout); err != nil {
+		unix.Close(fd)
+		return -1, err
+	}
+	return fd, nil
+}
+
 func injectUDP4(src, dst netip.AddrPort, payload []byte) error {
-	fd, err := unix.Socket(unix.AF_INET, unix.SOCK_RAW, unix.IPPROTO_RAW)
+	fd, err := injectSocket(unix.AF_INET)
 	if err != nil {
 		return fmt.Errorf("raw IPv4 socket: %w", err)
 	}
@@ -78,7 +96,7 @@ func injectUDP4(src, dst netip.AddrPort, payload []byte) error {
 }
 
 func injectUDP6(src, dst netip.AddrPort, payload []byte) error {
-	fd, err := unix.Socket(unix.AF_INET6, unix.SOCK_RAW, unix.IPPROTO_RAW)
+	fd, err := injectSocket(unix.AF_INET6)
 	if err != nil {
 		return fmt.Errorf("raw IPv6 socket: %w", err)
 	}

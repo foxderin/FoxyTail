@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"errors"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -311,9 +312,9 @@ func TestTransferQueriesRejectInvalidSelectedRecord(t *testing.T) {
 			if invalid != "wrong-id" {
 				id = record.ID
 			}
+			outside := filepath.Join(t.TempDir(), "record")
 			path := filepath.Join(root, "state", "taildrop", id+".json")
 			if invalid == "symlink" {
-				outside := filepath.Join(t.TempDir(), "record")
 				if err := os.WriteFile(outside, data, 0600); err != nil {
 					t.Fatal(err)
 				}
@@ -323,13 +324,27 @@ func TestTransferQueriesRejectInvalidSelectedRecord(t *testing.T) {
 			} else if err := os.WriteFile(path, data, 0600); err != nil {
 				t.Fatal(err)
 			}
-			for _, command := range []string{"send-status", "send-cancel", "send-delete", "send-clear"} {
-				args := []string{command, "--root", root}
-				if command != "send-clear" {
-					args = append(args, "--id", id)
-				}
+			for _, command := range []string{"send-status", "send-cancel", "send-delete"} {
+				args := []string{command, "--root", root, "--id", id}
 				if output, err := exec.Command(os.Args[0], args...).CombinedOutput(); err == nil {
 					t.Fatalf("accepted %s record: %s", invalid, output)
+				}
+			}
+			// Mass operations tolerate and quarantine an unloadable record
+			// instead of letting it wedge the store.
+			output, err := exec.Command(os.Args[0], "send-clear", "--root", root).CombinedOutput()
+			if err != nil {
+				t.Fatalf("clear failed to tolerate %s record: %s %v", invalid, output, err)
+			}
+			if _, err := os.Lstat(path); !os.IsNotExist(err) {
+				t.Fatalf("%s record left in place: %v", invalid, err)
+			}
+			if _, err := os.Lstat(filepath.Join(root, "state", "taildrop", id+".corrupt")); err != nil {
+				t.Fatalf("%s record not quarantined: %v", invalid, err)
+			}
+			if invalid == "symlink" {
+				if body, err := os.ReadFile(outside); err != nil || string(body) != string(data) {
+					t.Fatal("quarantine followed record symlink", err)
 				}
 			}
 		})
@@ -438,7 +453,7 @@ func TestTransferHistoryRemovalPreservesActiveSourcesAndStages(t *testing.T) {
 
 func TestTransferHistoryRemovalRejectsUnsafeMetadata(t *testing.T) {
 	for _, command := range []string{"send-delete", "send-clear"} {
-		for _, invalid := range []string{"cancel-symlink", "unknown-status", "malformed-record"} {
+		for _, invalid := range []string{"cancel-symlink", "unknown-status"} {
 			t.Run(command+"/"+invalid, func(t *testing.T) {
 				root := t.TempDir()
 				shared, paths := testSendFiles(t, "keep")
@@ -459,8 +474,6 @@ func TestTransferHistoryRemovalRejectsUnsafeMetadata(t *testing.T) {
 					if err := os.Symlink(paths[0], filepath.Join(root, "state", "taildrop", record.ID+".cancel")); err != nil {
 						t.Fatal(err)
 					}
-				} else if invalid == "malformed-record" {
-					corruptOtherTransfer(t, root)
 				}
 				args := []string{command, "--root", root}
 				if command == "send-delete" {
@@ -539,5 +552,182 @@ func TestTransferHistoryRemovalWaitsForStateOwner(t *testing.T) {
 				t.Fatal("terminal metadata not removed", err)
 			}
 		})
+	}
+}
+
+type shortWriter struct{}
+
+func (shortWriter) Write(p []byte) (int, error) { return len(p) - 1, nil }
+
+func TestTransferSaveDetectsShortWrite(t *testing.T) {
+	var w shortWriter
+	if err := fullWrite(w, []byte("abc")); err == nil {
+		t.Fatal("short write accepted")
+	}
+	if err := fullWrite(io.Discard, []byte("abc")); err != nil {
+		t.Fatal("complete write rejected", err)
+	}
+}
+
+func TestCorruptRecordQuarantinedAndAuxSwept(t *testing.T) {
+	root := t.TempDir()
+	shared, paths := testSendFiles(t, "one")
+	store, err := openTransferStore(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	record := testTransferRecord(t, root, shared, "", paths)
+	record.Status, record.Files[0].Status = "completed", "completed"
+	if err := store.save(record); err != nil {
+		t.Fatal(err)
+	}
+	corruptOtherTransfer(t, root)
+	stateDir := filepath.Join(root, "state", "taildrop")
+	orphanID := strings.Repeat("b", 32)
+	old := time.Now().Add(-25 * time.Hour)
+	for name, stale := range map[string]bool{".write-stale": true, orphanID + ".cancel": true} {
+		path := filepath.Join(stateDir, name)
+		if err := os.WriteFile(path, []byte("x"), 0600); err != nil {
+			t.Fatal(err)
+		}
+		if stale {
+			if err := os.Chtimes(path, old, old); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	if err := store.requestCancel(record.ID); err != nil {
+		t.Fatal(err)
+	}
+	records, err := store.records()
+	if err != nil || len(records) != 1 || records[0].ID != record.ID {
+		t.Fatalf("corrupt record wedged listing: %d %v", len(records), err)
+	}
+	corruptPath := filepath.Join(stateDir, strings.Repeat("f", 32)+".corrupt")
+	if _, err := os.Lstat(filepath.Join(stateDir, strings.Repeat("f", 32)+".json")); !os.IsNotExist(err) {
+		t.Fatal("corrupt record left in place", err)
+	}
+	if _, err := os.Lstat(corruptPath); err != nil {
+		t.Fatal("corrupt record not quarantined", err)
+	}
+	guard, err := store.guard()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = store.maintain(); err != nil {
+		guard.Close()
+		t.Fatal(err)
+	}
+	guard.Close()
+	for _, name := range []string{".write-stale", orphanID + ".cancel"} {
+		if _, err := os.Lstat(filepath.Join(stateDir, name)); !os.IsNotExist(err) {
+			t.Fatal("stale aux retained", name, err)
+		}
+	}
+	if cancelled, err := store.cancelled(record.ID); err != nil || !cancelled {
+		t.Fatal("record cancellation swept", err)
+	}
+	if _, err := os.Lstat(corruptPath); err != nil {
+		t.Fatal("fresh quarantine swept early", err)
+	}
+	if err := os.Chtimes(corruptPath, old, old); err != nil {
+		t.Fatal(err)
+	}
+	guard, err = store.guard()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = store.maintain(); err != nil {
+		guard.Close()
+		t.Fatal(err)
+	}
+	guard.Close()
+	if _, err := os.Lstat(corruptPath); !os.IsNotExist(err) {
+		t.Fatal("aged quarantine retained", err)
+	}
+}
+
+func TestSendStopCancelsCorruptRecordIdentities(t *testing.T) {
+	root := t.TempDir()
+	shared, paths := testSendFiles(t, "one")
+	store, err := openTransferStore(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	record := testTransferRecord(t, root, shared, "", paths)
+	record.Status, record.Files[0].Status = "sending", "sending"
+	if err := store.save(record); err != nil {
+		t.Fatal(err)
+	}
+	corruptOtherTransfer(t, root)
+	if err := stopTransfers(store); err != nil {
+		t.Fatal(err)
+	}
+	stateDir := filepath.Join(root, "state", "taildrop")
+	if _, err := os.Lstat(filepath.Join(stateDir, strings.Repeat("f", 32)+".cancel")); err != nil {
+		t.Fatal("corrupt identity not cancelled", err)
+	}
+	loaded, err := store.load(record.ID)
+	if err != nil || loaded.Status != "interrupted" {
+		t.Fatalf("orphan not recovered: %+v %v", loaded, err)
+	}
+}
+
+func TestStaleWedgedStageForceCollected(t *testing.T) {
+	root := t.TempDir()
+	outgoing := filepath.Join(root, "files", ".outgoing")
+	old := time.Now().Add(-25 * time.Hour)
+	stagePath := filepath.Join(outgoing, strings.Repeat("a", 32))
+	if err := os.MkdirAll(filepath.Join(stagePath, "nested", "deep"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	for i := range 5 {
+		if err := os.WriteFile(filepath.Join(stagePath, strings.Repeat("c", i+1)), []byte("x"), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.Chtimes(stagePath, old, old); err != nil {
+		t.Fatal(err)
+	}
+	store, err := openTransferStore(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	guard, err := store.guard()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = store.maintain(); err != nil {
+		guard.Close()
+		t.Fatal(err)
+	}
+	guard.Close()
+	if _, err := os.Lstat(stagePath); !os.IsNotExist(err) {
+		t.Fatal("wedged stage retained", err)
+	}
+	// A fresh stage that violates the layout still enjoys the age policy.
+	freshPath := filepath.Join(outgoing, strings.Repeat("b", 32))
+	if err := os.MkdirAll(freshPath, 0700); err != nil {
+		t.Fatal(err)
+	}
+	for i := range 5 {
+		if err := os.WriteFile(filepath.Join(freshPath, strings.Repeat("d", i+1)), []byte("x"), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	guard, err = store.guard()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = store.maintain(); err != nil {
+		guard.Close()
+		t.Fatal(err)
+	}
+	guard.Close()
+	if _, err := os.Lstat(freshPath); err != nil {
+		t.Fatal("young stage collected", err)
 	}
 }

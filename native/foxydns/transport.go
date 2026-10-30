@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net"
 	"net/netip"
+	"sync"
 	"time"
 )
 
@@ -34,17 +35,60 @@ type FlowContext struct {
 	socketCookie        uint64
 	socketInode         uint32
 	validate            func() error
+	// revalidate is the uncached kernel check used once per write; contexts
+	// without it fall back to validate so the write gate never disappears.
+	revalidate func() error
 }
 
 func (f FlowContext) Valid() bool { return f.check() == nil }
 
+func (f FlowContext) intact() bool {
+	return f.Mark&captureMark == 0 && f.OutIfIndex > 0 &&
+		f.InterfaceName != "" && f.OriginalSource.IsValid() && f.OriginalDestination.IsValid() &&
+		f.OriginalDestination.Port() == 53 && (f.protocol == 6 || f.protocol == 17)
+}
+
 func (f FlowContext) check() error {
-	if f.validate == nil || f.Mark&captureMark != 0 || f.OutIfIndex <= 0 ||
-		f.InterfaceName == "" || !f.OriginalSource.IsValid() || !f.OriginalDestination.IsValid() ||
-		f.OriginalDestination.Port() != 53 || (f.protocol != 6 && f.protocol != 17) {
+	if f.validate == nil || !f.intact() {
 		return ErrFlowContext
 	}
 	return f.validate()
+}
+
+// recheck repeats the context invariants plus one fresh kernel verification.
+// Write uses it so a captured flow cannot rest on the validation performed
+// before its upstream socket existed.
+func (f FlowContext) recheck() error {
+	validate := f.revalidate
+	if validate == nil {
+		validate = f.validate
+	}
+	if validate == nil || !f.intact() {
+		return ErrFlowContext
+	}
+	return validate()
+}
+
+// flowVerify caches the first successful kernel re-verification of one flow.
+// Lookup issues a context whose fail-closed gates all share it, so a single
+// forwarded query pays for one validation instead of one per gate.
+type flowVerify struct {
+	mu       sync.Mutex
+	verified bool
+	validate func() error
+}
+
+func (v *flowVerify) cached() error {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	if v.verified {
+		return nil
+	}
+	if err := v.validate(); err != nil {
+		return err
+	}
+	v.verified = true
+	return nil
 }
 
 type flowTuple struct {

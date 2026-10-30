@@ -125,29 +125,41 @@ func routeInterface(messages []netlink.Message, tuple flowTuple, uid, mark uint3
 	return out, nil
 }
 
-func probeRouteContext() error {
+// routeProbeFamily is replaceable in tests; production always uses
+// probeRouteFamily.
+var routeProbeFamily = probeRouteFamily
+
+func probeRouteFamily(address string) error {
 	loopback, err := net.InterfaceByName("lo")
 	if err != nil {
 		return err
 	}
-	for _, address := range []string{"127.0.0.1", "::1"} {
-		addr := netip.MustParseAddr(address)
-		for _, protocol := range []uint8{17, 6} {
-			tuple := flowTuple{netip.AddrPortFrom(addr, 49152), netip.AddrPortFrom(addr, 53), protocol}
-			out, err := effectiveRoute(tuple, 65534, 0x1234, 0)
-			if err != nil || out != loopback.Index {
-				return fmt.Errorf("route UID/mark capability (%s/%d): %v", address, protocol, err)
-			}
-			request, err := routeRequest(tuple, 65534, 0, 0, true)
-			if err != nil {
-				return err
-			}
-			if _, err = executeRoute(request); !errors.Is(err, unix.EINVAL) && !errors.Is(err, unix.ERANGE) {
-				return fmt.Errorf("route query did not reject malformed UID (%s): %v", address, err)
-			}
+	addr := netip.MustParseAddr(address)
+	for _, protocol := range []uint8{17, 6} {
+		tuple := flowTuple{netip.AddrPortFrom(addr, 49152), netip.AddrPortFrom(addr, 53), protocol}
+		out, err := effectiveRoute(tuple, 65534, 0x1234, 0)
+		if err != nil || out != loopback.Index {
+			return fmt.Errorf("route UID/mark capability (%s/%d): %v", address, protocol, err)
+		}
+		request, err := routeRequest(tuple, 65534, 0, 0, true)
+		if err != nil {
+			return err
+		}
+		if _, err = executeRoute(request); !errors.Is(err, unix.EINVAL) && !errors.Is(err, unix.ERANGE) {
+			return fmt.Errorf("route query did not reject malformed UID (%s): %v", address, err)
 		}
 	}
 	return nil
+}
+
+// The capability verdict requires only IPv4 route queries: a kernel without
+// IPv6 still intercepts IPv4 DNS. The IPv6 family is probed best-effort and
+// reported separately so callers can skip v6 rules instead of the whole mode.
+func probeRouteContext() (bool, error) {
+	if err := routeProbeFamily("127.0.0.1"); err != nil {
+		return false, err
+	}
+	return routeProbeFamily("::1") == nil, nil
 }
 
 // Unreachable/removed paths are ordinary routing outcomes. A broken query API
