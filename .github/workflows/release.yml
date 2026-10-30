@@ -18,7 +18,25 @@ concurrency:
   group: release-${{ inputs.tag || github.ref_name }}
   cancel-in-progress: false
 jobs:
-  verify:
+  native-kernel:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag || github.sha }}
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: native/foxydns/go.mod
+          cache-dependency-path: |
+            native/*/go.mod
+            native/*/go.sum
+      - run: sudo apt-get update && sudo apt-get install -y iptables
+      - name: Verify real DNS paths in an isolated Linux network
+        env:
+          FOXYTAIL_REQUIRE_PRIVILEGED_TESTS: '1'
+        run: bash .github/tools/verify-native-linux.sh
+  release:
+    needs: [native-kernel]
     runs-on: ubuntu-latest
     env:
       RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
@@ -60,64 +78,9 @@ jobs:
         with:
           packages: platform-tools
       - run: sdkmanager 'platforms;android-37.0' 'build-tools;36.0.0'
-      - run: sudo apt-get update && sudo apt-get install -y shellcheck jq mksh
-      - run: bash .github/tools/verify.sh
-  native-kernel:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: ${{ inputs.tag || github.sha }}
-      - uses: actions/setup-go@v5
-        with:
-          go-version-file: native/foxydns/go.mod
-          cache-dependency-path: |
-            native/*/go.mod
-            native/*/go.sum
-      - run: sudo apt-get update && sudo apt-get install -y iptables
-      - name: Verify real DNS paths in an isolated Linux network
-        env:
-          FOXYTAIL_REQUIRE_PRIVILEGED_TESTS: '1'
-        run: bash .github/tools/verify-native-linux.sh
-  release:
-    needs: [verify, native-kernel]
-    runs-on: ubuntu-latest
-    env:
-      RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-          ref: ${{ inputs.tag || github.sha }}
-      - uses: actions/setup-go@v5
-        with:
-          go-version-file: native/foxydns/go.mod
-          cache-dependency-path: |
-            native/*/go.mod
-            native/*/go.sum
-      - uses: actions/setup-java@v4
-        with:
-          distribution: temurin
-          java-version: '21'
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '24'
-      - uses: pnpm/action-setup@v4
-        with:
-          package_json_file: webui/package.json
-      - name: Cache Gradle dependencies only
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.gradle/caches/modules-2
-            ~/.gradle/wrapper/dists
-          key: ${{ runner.os }}-java21-gradle-deps-${{ hashFiles('android/**/*.gradle', 'android/gradle/wrapper/gradle-wrapper.properties') }}
-          restore-keys: ${{ runner.os }}-java21-gradle-deps-
-      - uses: android-actions/setup-android@v3
-        with:
-          packages: platform-tools
-      - run: sdkmanager 'platforms;android-37.0' 'build-tools;36.0.0'
-      - run: sudo apt-get update && sudo apt-get install -y zip jq
+      - run: sudo apt-get update && sudo apt-get install -y shellcheck jq mksh zip
+      - name: Verify the tagged source
+        run: bash .github/tools/verify.sh
       - name: Build the module packages and companion APK
         env:
           FOXYTAIL_KEYSTORE_BASE64: ${{ secrets.FOXYTAIL_KEYSTORE_BASE64 }}
