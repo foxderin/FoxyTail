@@ -528,6 +528,23 @@ await scenario('status sheet mirrors the connection card without top-bar control
   assert(!window.document.querySelector('input[name="exit-node"]'), 'device inventory no longer embeds the exit workflow');
 });
 
+await scenario('untracked native busy lives in the status chip, not a page banner', async ({ fixture, nav, window, button, click }) => {
+  await nav('files');
+  fixture.publishControl({ busy: true, canWrite: false, canCancel: true, id: 'op-busy-1', message: 'Operation in progress: simulated' });
+  await flush();
+  assert(!window.document.querySelector('.root-banner'), 'untracked busy does not raise a page banner');
+  const chip = window.document.querySelector('.status-chip');
+  assert(chip?.querySelector('.circular-progress'), 'status chip spins while the backend is busy');
+  chip.click(); await flush();
+  const sheet = window.document.querySelector('[data-testid="status-sheet"]');
+  assert(sheet?.open && button('native_cancel_operation', sheet), 'busy operations remain cancellable from the status sheet');
+  click(button('native_cancel_operation', sheet)); await flush();
+  assert(fixture.log.some(r => r.action === 'control.cancel'), 'sheet cancel reaches the native channel');
+  fixture.publishControl({ busy: false, canWrite: true, canCancel: false, message: '' });
+  await flush();
+  assert(!chip.querySelector('.circular-progress'), 'chip settles once the backend is idle');
+});
+
 for (const state of ['empty', 'error', 'no-root', 'no-bridge', 'unknown']) {
   console.log('availability: ' + state);
   const h = await boot({ state });

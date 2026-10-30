@@ -1,7 +1,7 @@
 /* Responsive app shell. Navigation never waits for the native bridge. */
 import { createEffect, createSignal, For, on, onCleanup, onMount, Show, type Accessor, type Component, type JSX } from 'solid-js';
 import { Dynamic } from 'solid-js/web';
-import { hasRoot } from '../api';
+import { hasRoot, nativeControl } from '../api';
 import { RouteVisible } from '../schedule';
 import { t, tf, type I18nKey } from '../i18n';
 import { MdIcon, type IconName } from '../icons';
@@ -107,7 +107,7 @@ function StatusSheet(): JSX.Element {
     onCleanup(() => document.removeEventListener('pointerdown', dismiss));
   });
   const close = () => { sheet.open = false; sheet.querySelector('summary')?.focus(); };
-  const working = () => serviceBusy() !== null || serviceOperationRunning();
+  const working = () => serviceBusy() !== null || serviceOperationRunning() || nativeControl().busy;
   return <details class="status-sheet" ref={sheet} data-testid="status-sheet" onKeyDown={(event) => {
     if (event.key === 'Escape' && sheet.open) close();
   }}>
@@ -150,6 +150,9 @@ export function AppShell(props: {
   });
 
   const def = () => props.routes[props.route()] ?? props.routes.dashboard;
+  /* Transient backend-busy states live in the status chip/sheet; only issues
+   * that block the app warrant a page banner. */
+  const blockingIssue = () => { const issue = nativeIssue(); return issue && issue.kind !== 'busy' ? issue : null; };
   let main!: HTMLElement;
   let bottomNav!: HTMLElement;
   let header!: HTMLElement;
@@ -194,7 +197,7 @@ export function AppShell(props: {
         <Show when={!hasRoot}>
           <div class="root-banner" role="alert"><MdIcon name="info" size={20} /><span>{t('no_root_banner')}</span></div>
         </Show>
-        <Show when={hasRoot && props.route() !== 'dashboard' && nativeIssue()}>
+        <Show when={hasRoot && props.route() !== 'dashboard' && blockingIssue()}>
           {(issue) => (
             <div class="root-banner" role={issue().kind === 'busy' ? 'status' : 'alert'}>
               <MdIcon name={issue().kind === 'busy' ? 'info' : 'warning'} size={20} />
