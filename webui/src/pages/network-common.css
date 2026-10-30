@@ -68,6 +68,16 @@
 .network-health-copy .btn {
   margin-top: 14px;
 }
+.network-page .is-stale {
+  opacity: 0.55;
+  filter: grayscale(0.6);
+}
+.network-stale-label {
+  margin: 0 0 -10px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--md-sys-color-on-surface-variant);
+}
 .network-health-skeleton .skel-title {
   width: 160px;
   max-width: 100%;

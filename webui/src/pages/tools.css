@@ -430,3 +430,12 @@
 .tool-result pre.mono {
   white-space: pre-wrap;
 }
+.tool-copy-value {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+}
+.tool-copy-value code {
+  font-size: 13px;
+  white-space: nowrap;
+}

@@ -255,8 +255,8 @@ export default function Routing(): JSX.Element {
               </Show>
             </span>
             <Button variant="text" disabled={applyBusy()} onClick={async () => {
-              if (!dirty() || await confirmDialog(t('tools_draft_changed'))) await loadRoutes(true);
-            }}>{t('tools_retry')}</Button>
+              if (!dirty() || await confirmDialog(t('tools_discard_confirm'))) await loadRoutes(true);
+            }}>{t(dirty() ? 'tools_discard' : 'tools_refresh')}</Button>
             <Button
               busy={applyBusy()}
               disabled={locked() || !dirty() || (scope_() !== 'all' && !perAppSupported())}

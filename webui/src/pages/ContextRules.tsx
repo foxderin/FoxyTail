@@ -112,7 +112,7 @@ export default function ContextRules(props: { locked: boolean; onPending: () => 
     if (locked() || rules() === null || draft()) return;
     const submitted = rules()!;
     if (new TextEncoder().encode(submitted).length > 48 * 1024) { setError(t('tools_context_limit')); return; }
-    if (!await confirmDialog((conflict() ? t('tools_draft_conflict') + '\n\n' : '') + t('tools_network_warning'))) return;
+    if (conflict() && !await confirmDialog(t('tools_draft_conflict'))) return;
     if (locked() || rules() !== submitted) return;
     setBusy(true);
     setError('');
@@ -186,8 +186,8 @@ export default function ContextRules(props: { locked: boolean; onPending: () => 
           <Button variant="text" disabled={Boolean(draft())} onClick={() => setTextMode(!textMode())}>{t(textMode() ? 'context_visual' : 'context_text')}</Button>
           <Show when={rules() !== saved() || draft()}>
             <Button variant="text" disabled={busy() || rulesLoading()} onClick={async () => {
-              if (await confirmDialog(t('tools_draft_changed'))) await load(false);
-            }}>{t('tools_retry')}</Button>
+              if (await confirmDialog(t('tools_discard_confirm'))) await load(false);
+            }}>{t('tools_discard')}</Button>
           </Show>
         </div>
         <Show when={rules() !== saved() || draft()}><p role="status">{t(conflict() ? 'tools_draft_conflict' : 'tools_draft_changed')}</p></Show>

@@ -122,8 +122,7 @@ export default function Settings(): JSX.Element {
     const fresh = await loadSettings();
     if (fresh === undefined || locked() || drafts()[field.key] !== draft) return;
     const conflict = draft.baseline !== settings()?.[field.key];
-    if ((conflict || ['MAGIC_DNS', 'DNS_MODE', 'IPV6', 'SOCKS_PORT', 'DNS_PORT'].includes(field.key)) &&
-        !await confirmDialog((conflict ? t('tools_draft_conflict') + '\n\n' : '') + t('tools_network_warning'))) return;
+    if (conflict && !await confirmDialog(t('tools_draft_conflict'))) return;
     if (locked() || drafts()[field.key] !== draft) return;
     settingsLoad++;
     const res = await startTask('settings-save', 'settings-set', field.key, value).promise;
@@ -217,9 +216,9 @@ export default function Settings(): JSX.Element {
             <div class="tool-actions">
               <Button disabled={locked()} onClick={() => void saveKey(field)}>{t('save')}</Button>
               <Button variant="text" disabled={locked()} onClick={async () => {
-                if (!await confirmDialog(t('tools_draft_changed'))) return;
+                if (!await confirmDialog(t('tools_discard_confirm'))) return;
                 if (await loadSettings() !== undefined) setDrafts(old => { const next = { ...old }; delete next[field.key]; return next; });
-              }}>{t('tools_retry')}</Button>
+              }}>{t('tools_discard')}</Button>
             </div>
           </Show>
         </div>

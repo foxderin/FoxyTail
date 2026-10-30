@@ -8,11 +8,12 @@ import * as files from '../src/files';
 import * as backup from '../src/backup';
 import * as coexistence from '../src/coexistence';
 import * as serve from '../src/serve';
+import * as format from '../src/format';
 import { t } from '../src/i18n';
 import { applyTheme } from '../src/theme';
 import { setLang } from '../src/i18n';
 import { createRoot } from 'solid-js';
 import * as toolsRefresh from '../src/pages/tools-refresh';
 (window as unknown as Record<string, unknown>).__foxy = {
-  ROUTES, api, native, state, tasks, files, backup, coexistence, serve, t, applyTheme, setLang, createRoot, toolsRefresh,
+  ROUTES, api, native, state, tasks, files, backup, coexistence, serve, format, t, applyTheme, setLang, createRoot, toolsRefresh,
 };

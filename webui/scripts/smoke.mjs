@@ -220,7 +220,7 @@ await scenario('snapshot sequence and displayed cancellation ownership', async (
     'older refresh snapshot cannot overwrite newer read-only completion with unchanged mutation revision');
   fixture.publishControl({ id: 'displayed-operation', busy: true, canWrite: false, canCancel: true });
   fixture.holdNext.add('control.cancel');
-  click(button('cancel', window.document.querySelector('.root-banner')));
+  click(button('native_cancel_operation', window.document.querySelector('.root-banner')));
   const cancellation = fixture.held.find(r => r.key === 'control.cancel');
   fixture.publishControl({ id: 'replacement-operation', busy: true, canWrite: false, canCancel: true });
   assert(cancellation.request.args.id === 'displayed-operation' && cancellation.request.args.id !== fixture.control.id,
@@ -403,6 +403,23 @@ await scenario('native file preflight cancellation and repeated active cancellat
   const cancels = fixture.log.filter(r => r.action === 'files.cancel');
   assert(cancels.length === 3 && cancels[1].args.job === 'b1' && cancels[2].args.job === 'b1', 'manual cancellation retries target the current active job after send acceptance');
   assert(!button('files_cancel_send', sendSection).disabled && fixture.files.busy, 'requested cancellation is feedback, not a fabricated terminal transfer outcome');
+});
+
+await scenario('dashboard states expose one status and a direct recovery action', async ({ app, fixture, nav, window, button, click }) => {
+  const now = Date.UTC(2026, 9, 30);
+  assert(app.format.keyExpiry('0001-01-01T00:00:00Z', now) === null, 'disabled key expiry sentinel is not reported');
+  assert(app.format.keyExpiry(new Date(now + 30 * 864e5).toISOString(), now) === null, 'distant key expiry is not reported');
+  assert(app.format.keyExpiry(new Date(now + 2 * 864e5).toISOString(), now)?.expired === false, 'near key expiry is reported as expiring');
+  assert(app.format.keyExpiry(new Date(now - 864e5).toISOString(), now)?.expired === true, 'past key expiry is reported as expired');
+  fixture.data.status.daemon = 'stopped'; fixture.data.status.backend = 'NoState';
+  await app.state.refreshStatus(); await nav('dashboard');
+  assert(window.document.querySelector('.network-page .is-stale'), 'stopped dashboard marks last known data as stale');
+  click(button('dash_start_service')); await flush();
+  assert(fixture.log.some(r => r.action === 'control.mutate' && r.args.command === 'control' && r.args.arguments[0] === 'start'), 'stopped dashboard starts the service from its status card');
+  fixture.data.status.daemon = 'running'; fixture.data.status.backend = 'NeedsLogin';
+  await app.state.refreshStatus(); await flush();
+  const titles = [...window.document.querySelectorAll('.page-transition:not([hidden]) h2')].filter(h => h.textContent.includes(app.t('hero_login_title')));
+  assert(titles.length === 1, 'login state renders a single login status card');
 });
 
 for (const state of ['empty', 'error', 'no-root', 'no-bridge', 'unknown']) {

@@ -112,7 +112,7 @@ export default function Diag(): JSX.Element {
           </Button>
         </div>
       </Card>
-      <Card title={t('tools_diag_ready')} icon="folder">
+      <Card title={t(path() ? 'tools_diag_ready' : 'tools_diag_bundle')} icon="folder">
         <Show when={task()?.status === 'done' && !path()}><ErrorState text={t('diag_unknown')} /></Show>
         <Show
           when={task()?.status === 'done' && path()}

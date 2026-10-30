@@ -1,7 +1,7 @@
 /** Network overview. Status remains subscribed to the single shared poller. */
 import { createSignal, For, onMount, Show, type JSX } from 'solid-js';
-import { createApiScope } from '../api';
-import { t } from '../i18n';
+import { createApiScope, hasRoot, nativeControl } from '../api';
+import { t, tf } from '../i18n';
 import {
   connState,
   status,
@@ -10,7 +10,8 @@ import {
   refreshStatus,
   exitRoutingLabel,
 } from '../state';
-import { fmtUptime, fmtBytes } from '../format';
+import { getTask, startTask } from '../tasks';
+import { fmtUptime, fmtBytes, keyExpiry } from '../format';
 import { Card, KvRow, StatusDot, SkeletonCard } from '../components/Basics';
 import { LoginHero } from '../components/LoginHero';
 import { copyWithToast } from '../clipboard';
@@ -21,12 +22,9 @@ import './network.css';
 export default function Dashboard(): JSX.Element {
   const scope = createApiScope();
   const [compatWarnings, setCompatWarnings] = createSignal<string[]>([]);
-  const keyExpiring = () => {
-    const date = status()?.keyExpiry;
-    return date && Date.parse(date) - Date.now() < 7 * 24 * 60 * 60 * 1000
-      ? date
-      : null;
-  };
+  const keyExpiring = () => keyExpiry(status()?.keyExpiry);
+  const starting = () => getTask('service-control')?.status === 'running';
+  const canStart = () => hasRoot && nativeControl().canWrite && !nativeControl().busy && !starting();
 
   onMount(() => {
     void scope.api('compat').then((res) => {
@@ -68,10 +66,12 @@ export default function Dashboard(): JSX.Element {
   return (
     <div class="page-stack network-page">
       <Show when={keyExpiring()}>
-        <div class="banner warn">
-          <MdIcon name="warning" size={18} />
-          <span>{t('dash_key_expiring') + keyExpiring()}</span>
-        </div>
+        {(expiry) => (
+          <div class={'banner ' + (expiry().expired ? 'error' : 'warn')}>
+            <MdIcon name="warning" size={18} />
+            <span>{tf(expiry().expired ? 'dash_key_expired_on' : 'dash_key_expires_on', { date: expiry().date })}</span>
+          </div>
+        )}
       </Show>
       <For each={compatWarnings()}>
         {(warning) => (
@@ -138,6 +138,7 @@ export default function Dashboard(): JSX.Element {
         >
           {(s) => (
             <>
+              <Show when={connection() !== 'needs-login' || statusError()}>
               <section
                 class={
                   'panel network-health' +
@@ -170,12 +171,22 @@ export default function Dashboard(): JSX.Element {
                   <Show when={!connected() || statusError()}>
                     <p>{connectionHint()}</p>
                   </Show>
+                  <Show when={!statusError() && connection() === 'stopped'}>
+                    <Button busy={starting()} disabled={!canStart()} onClick={() => startTask('service-control', 'control', 'start')}>
+                      <MdIcon name="play_arrow" size={18} />
+                      {t('dash_start_service')}
+                    </Button>
+                  </Show>
                 </div>
               </section>
+              </Show>
 
               <LoginHero showStopped={false} />
 
-              <div class="metric-grid network-metrics network-dashboard-metrics">
+              <Show when={!connected() || statusError()}>
+                <p class="network-stale-label">{t('dash_stale_data')}</p>
+              </Show>
+              <div class="metric-grid network-metrics network-dashboard-metrics" classList={{ 'is-stale': !connected() || Boolean(statusError()) }}>
                 <div class="metric-card">
                   <div class="metric-label">
                     <MdIcon name="group" size={18} />
@@ -206,7 +217,7 @@ export default function Dashboard(): JSX.Element {
                 </div>
               </div>
 
-              <div class="content-grid network-detail-grid">
+              <div class="content-grid network-detail-grid" classList={{ 'is-stale': !connected() || Boolean(statusError()) }}>
                 <Card title={t('dash_self')} icon="person">
                   <Show
                     when={s().self}

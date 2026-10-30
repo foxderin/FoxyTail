@@ -27,6 +27,16 @@ export function fmtTime(epochSec: number | null | undefined): string {
   );
 }
 
+const KEY_EXPIRY_WARNING_MS = 7 * 24 * 60 * 60 * 1000;
+const KEY_EXPIRY_FLOOR = Date.UTC(2000, 0, 1);
+
+export function keyExpiry(value: string | null | undefined, now = Date.now()): { expired: boolean; date: string } | null {
+  if (!value) return null;
+  const at = Date.parse(value);
+  if (!Number.isFinite(at) || at < KEY_EXPIRY_FLOOR || at - now >= KEY_EXPIRY_WARNING_MS) return null;
+  return { expired: at <= now, date: fmtTime(Math.floor(at / 1000)) };
+}
+
 type LatClass = 'lat-good' | 'lat-mid' | 'lat-bad' | '';
 
 export function latClass(ms: number | null | undefined): LatClass {

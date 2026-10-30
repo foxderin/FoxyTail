@@ -14,7 +14,7 @@ import { ToastRoot } from './Toast';
 import { ConfirmHost } from './ConfirmDialog';
 import { ServiceControls } from './ServiceControls';
 
-import { IconButton } from './ui';
+import { Button } from './ui';
 import { toastApiError } from './Toast';
 export interface RouteDef {
   name: string;
@@ -46,7 +46,26 @@ const TASK_DESTINATIONS: Record<string, { route: string; label: I18nKey; icon: I
   'settings-save': { route: 'settings', label: 'set_title', icon: 'settings' },
   'service-control': { route: 'dashboard', label: 'shell_services', icon: 'sync' },
   'subnet-routes': { route: 'routing', label: 'tools_subnet_accept', icon: 'alt_route' },
+  'dns-probe': { route: 'settings', label: 'task_dns_probe', icon: 'dns' },
+  'coexist-info': { route: 'tunnel', label: 'task_coexist_info', icon: 'network_check' },
+  'coexist-check': { route: 'tunnel', label: 'task_coexist_check', icon: 'network_check' },
+  'socks-check': { route: 'tunnel', label: 'task_socks_check', icon: 'network_check' },
+  'trial-start': { route: 'settings', label: 'task_trial', icon: 'sync' },
+  'trial-confirm': { route: 'settings', label: 'task_trial', icon: 'sync' },
+  'trial-revert': { route: 'settings', label: 'task_trial', icon: 'sync' },
+  'routes-set': { route: 'routing', label: 'task_routes', icon: 'alt_route' },
+  'context-set': { route: 'settings', label: 'set_context', icon: 'sync' },
+  'exitnode-set': { route: 'peers', label: 'task_exit', icon: 'logout' },
+  'exitnode-clear': { route: 'peers', label: 'task_exit', icon: 'logout' },
+  'serve-set': { route: 'serve', label: 'serve_title', icon: 'dns' },
+  'serve-del': { route: 'serve', label: 'serve_title', icon: 'dns' },
+  'funnel-set': { route: 'serve', label: 'serve_title', icon: 'dns' },
+  'funnel-del': { route: 'serve', label: 'serve_title', icon: 'dns' },
+  switch: { route: 'account', label: 'task_account', icon: 'person' },
+  logout: { route: 'account', label: 'task_account', icon: 'person' },
+  'login-authkey': { route: 'account', label: 'task_account', icon: 'person' },
 };
+const SILENT_TASKS = new Set(['dns-probe', 'coexist-info']);
 
 function TaskMenu(): JSX.Element {
   let menu!: HTMLDetailsElement;
@@ -55,11 +74,12 @@ function TaskMenu(): JSX.Element {
     document.addEventListener('pointerdown', dismiss);
     onCleanup(() => document.removeEventListener('pointerdown', dismiss));
   });
-  const tasks = () => [...listTasks()].sort((a, b) => Number(b.status === 'running') - Number(a.status === 'running') || b.startedAt - a.startedAt).slice(0, 5);
+  const tasks = () => listTasks().filter(task => !SILENT_TASKS.has(task.cmd))
+    .sort((a, b) => Number(b.status === 'running') - Number(a.status === 'running') || b.startedAt - a.startedAt).slice(0, 5);
   const running = () => tasks().filter((task) => task.status === 'running').length;
   const destination = (task: Task) => task.cmd === 'peer-ping'
     ? { route: 'peers', label: 'net_peer_probe' as I18nKey, icon: 'network_check' as IconName }
-    : TASK_DESTINATIONS[task.key] ?? { route: 'more', label: 'shell_tasks' as I18nKey, icon: 'sync' as IconName };
+    : TASK_DESTINATIONS[task.key] ?? TASK_DESTINATIONS[task.cmd] ?? { route: task.cmd.startsWith('file') ? 'files' : 'dashboard', label: (task.cmd.startsWith('file') ? 'task_files' : 'task_generic') as I18nKey, icon: 'sync' as IconName };
   return <details class="task-menu" ref={menu} onKeyDown={(event) => {
     if (event.key === 'Escape' && menu.open) { menu.open = false; menu.querySelector('summary')?.focus(); }
   }}>
@@ -147,14 +167,16 @@ export function AppShell(props: {
         <Show when={hasRoot && (!nativeControl().compatible || nativeControl().busy || nativeControl().unknown)}>
           <div class="root-banner" role="status">
             <span>{nativeControl().unknown ? t('native_unknown') : nativeControl().checking ? t('native_checking') : nativeControl().message || t(nativeControl().busy ? 'shell_task_running' : 'native_incompatible')}</span>
-            <IconButton aria-label={t('native_recheck')} onClick={() => void refreshNativeControl()}><MdIcon name="refresh" size={18} /></IconButton>
-            <Show when={nativeControl().canCancel}><IconButton aria-label={t('cancel')} onClick={() => {
-              const id = nativeControl().id;
-              if (id) void requestNative('control.cancel', { id }).then(result => { if (!result.ok) toastApiError(t('op_failed'), result); });
-            }}><MdIcon name="close" size={18} /></IconButton></Show>
-            <Show when={nativeControl().unknown}><IconButton aria-label={t('native_acknowledge')} onClick={() => {
-              void requestNative('control.acknowledge').then(result => { if (!result.ok) toastApiError(t('op_failed'), result); });
-            }}><MdIcon name="check" size={18} /></IconButton></Show>
+            <div class="root-banner-actions">
+              <Button variant="text" onClick={() => void refreshNativeControl()}><MdIcon name="refresh" size={18} />{t('native_recheck')}</Button>
+              <Show when={nativeControl().canCancel}><Button variant="text" onClick={() => {
+                const id = nativeControl().id;
+                if (id) void requestNative('control.cancel', { id }).then(result => { if (!result.ok) toastApiError(t('op_failed'), result); });
+              }}><MdIcon name="close" size={18} />{t('native_cancel_operation')}</Button></Show>
+              <Show when={nativeControl().unknown}><Button variant="tonal" onClick={() => {
+                void requestNative('control.acknowledge').then(result => { if (!result.ok) toastApiError(t('op_failed'), result); });
+              }}><MdIcon name="check" size={18} />{t('native_unlock')}</Button></Show>
+            </div>
           </div>
         </Show>
         <For each={visited()}>{name => {

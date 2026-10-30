@@ -13,7 +13,6 @@ import { latClass } from '../format';
 import {
   Card,
   KvRow,
-  MetricCard,
   StatusBadge,
   EmptyState,
   SkeletonCard,
@@ -22,7 +21,7 @@ import {
 import { copyWithToast } from '../clipboard';
 import { TaskButton, TaskProgress } from '../components/TaskProgress';
 import { MdIcon } from '../icons';
-import { Button, LinearProgress } from '../components/ui';
+import { Button, IconButton, LinearProgress } from '../components/ui';
 import {
   dnsEndpoint,
   dnsStatusLabel,
@@ -152,16 +151,15 @@ export default function Tunnel(): JSX.Element {
             <Show when={tun()?.mode !== 'bridge'}>
               <p class="tool-hint">{modeDescription()}</p>
             </Show>
-            <div class="metric-grid">
-              <MetricCard
-                label={t('tun_iface')}
-                value={tun()!.ifaceUp ? t('tun_up') : t('tun_down')}
-                caption="tailscale0"
-                icon="router"
-                tone={tun()!.ifaceUp ? 'success' : 'neutral'}
-              />
-              <MetricCard label={t('tun_gateway')} value={tun()!.gateway || '—'} icon="alt_route" />
-            </div>
+            <KvRow
+              k={t('tun_iface')}
+              v={<StatusBadge tone={tun()!.ifaceUp ? 'success' : 'neutral'}>{tun()!.ifaceUp ? t('tun_up') : t('tun_down')}</StatusBadge>}
+            />
+            <KvRow
+              k={t('tun_gateway')}
+              v={<Show when={tun()!.gateway} fallback="—">{gateway => <span class="tool-copy-value"><code>{gateway()}</code>
+                <IconButton aria-label={t('net_copy_address') + ': ' + gateway()} onClick={() => copyWithToast(gateway())}><MdIcon name="content_copy" size={18} /></IconButton></span>}</Show>}
+            />
             <Show when={tun()!.mode === 'bridge'}>
               <KvRow
                 k={t('tun_hev')}

@@ -10,6 +10,7 @@ import { toolsZh, toolsEn } from './i18n-tools';
  */
 import { foundationZh, foundationEn } from './i18n-foundation';
 import { networkZh, networkEn } from './i18n-network';
+import { uxZh, uxEn } from './i18n-ux';
 import { createSignal } from 'solid-js';
 
 export type Lang = 'zh' | 'en';
@@ -20,6 +21,7 @@ const zh = {
   ...toolsZh,
   ...foundationZh,
   ...networkZh,
+  ...uxZh,
   no_root_banner: '应用连接不可用。请重新打开 FoxyTail。',
   nav_dashboard: '仪表盘', nav_peers: '节点', nav_exitnodes: '出口', nav_traffic: '流量', nav_more: '更多',
   loading: '加载中…', empty: '暂无数据', error: '出错了',
@@ -35,7 +37,7 @@ const zh = {
   dash_self: '本机', dash_magicdns: 'Tailnet MagicDNS',
   dash_exitnode: '出口节点', dash_traffic: '流量',
   dash_peers_online: '在线节点',
-  dash_key_expiring: '节点密钥即将到期：', dash_compat_warning: '共存告警',
+  dash_compat_warning: '共存告警',
   dash_action_done: '操作完成',
   dash_status_stale: '数据可能过期',
 
@@ -169,6 +171,7 @@ const en: Record<I18nKey, string> = {
   ...toolsEn,
   ...foundationEn,
   ...networkEn,
+  ...uxEn,
   no_root_banner: 'App connection unavailable. Reopen FoxyTail.',
   nav_dashboard: 'Dashboard', nav_peers: 'Peers', nav_exitnodes: 'Exit', nav_traffic: 'Traffic', nav_more: 'More',
   loading: 'Loading…', empty: 'No data', error: 'Something went wrong',
@@ -184,7 +187,7 @@ const en: Record<I18nKey, string> = {
   dash_self: 'Self', dash_magicdns: 'Tailnet MagicDNS',
   dash_exitnode: 'Exit node', dash_traffic: 'Traffic',
   dash_peers_online: 'Online peers',
-  dash_key_expiring: 'Node key expires soon: ', dash_compat_warning: 'Coexistence warnings',
+  dash_compat_warning: 'Coexistence warnings',
   dash_action_done: 'Done',
   dash_status_stale: 'Data may be out of date',
 
@@ -322,6 +325,10 @@ export { lang };
 
 export function t(key: I18nKey): string {
   return DICT[lang()][key] ?? key;
+}
+
+export function tf(key: I18nKey, values: Record<string, string | number>): string {
+  return t(key).replace(/\{(\w+)\}/g, (match, name: string) => String(values[name] ?? match));
 }
 
 export type LanguageMode = Lang | 'auto';

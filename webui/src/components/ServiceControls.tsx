@@ -292,13 +292,13 @@ export function ServiceControls(): JSX.Element {
             </Show>
           </IconButton>
         </div>
-        <Show when={nativeControl().canStop && !nativeControl().busy}>
-          <IconButton aria-label={t('native_stop')} onClick={async () => {
+        <Show when={nativeControl().canStop && !nativeControl().canWrite && !nativeControl().busy}>
+          <Button variant="outlined" class="danger" onClick={async () => {
             if (!await confirmDialog(t('net_stop_confirm'))) return;
             const result = await api('control', 'stop');
             if (!result.ok) toastApiError(t('op_failed'), result);
             await refreshStatus({ afterCurrent: true });
-          }}><MdIcon name="stop" size={20} /></IconButton>
+          }}><MdIcon name="stop" size={18} />{t('native_emergency_stop')}</Button>
         </Show>
       </div>
       <Show when={message()}>
