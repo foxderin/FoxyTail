@@ -20,6 +20,8 @@ export const filesZh = {
   ft_committing: '正在写入目标，无法取消', ft_exporting: '正在准备导出',
   ft_details: '传输详情', ft_saved: '已保存', ft_previous: '上一页', ft_next: '下一页',
   ft_page: '第 {page} / {total} 页', ft_shared: '共享存储', ft_size_unknown: '大小未知',
+  files_add: '添加文件', ft_pick_system: '系统选择器', ft_pick_shared: '共享存储',
+  files_step_peer: '第 1 步 · 选择设备', files_step_files: '第 2 步 · 添加文件', files_step_send: '第 3 步 · 发送',
 } as const;
 
 export const filesEn: Record<keyof typeof filesZh, string> = {
@@ -44,4 +46,6 @@ export const filesEn: Record<keyof typeof filesZh, string> = {
   ft_committing: 'Writing destination. Cancellation unavailable.', ft_exporting: 'Preparing export',
   ft_details: 'Transfer details', ft_saved: 'Saved', ft_previous: 'Previous page', ft_next: 'Next page',
   ft_page: 'Page {page} / {total}', ft_shared: 'Shared storage', ft_size_unknown: 'Unknown size',
+  files_add: 'Add files', ft_pick_system: 'System picker', ft_pick_shared: 'Shared storage',
+  files_step_peer: 'Step 1 · Choose device', files_step_files: 'Step 2 · Add files', files_step_send: 'Step 3 · Send',
 };

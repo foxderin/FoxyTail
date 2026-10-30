@@ -21,3 +21,25 @@
 .files-sort button[aria-pressed=true] { background: var(--md-sys-color-secondary-container); color: var(--md-sys-color-on-secondary-container); }
 .files-transfer > details > summary { min-height: 48px; display: flex; align-items: center; cursor: pointer; }
 .files-page section[id] { scroll-margin-top: 16px; }
+/* Inbox rows: tap opens, long-press starts multi-select, trailing overflow menu. */
+.files-inbox-row { display: flex; align-items: center; gap: 4px; }
+.files-inbox-row .list-row { flex: 1; min-width: 0; border-bottom: 0; }
+button.list-row { background: none; border: 0; font: inherit; color: inherit; text-align: start; cursor: pointer; }
+button.list-row:focus-visible { outline: 2px solid var(--ft-accent); outline-offset: -2px; border-radius: 8px; }
+.files-sort button.danger { color: var(--md-sys-color-error); }
+.files-selection-bar { border-radius: 12px; background: var(--ft-panel-inset); padding: 4px 8px; }
+.files-selection-bar > .tool-hint { flex: 1; }
+.files-card-summary { font-size: 12px; color: var(--ft-muted); }
+/* Send flow: numbered steps, peer option blocks, single add-file menu. */
+.files-step { font-size: 12px; font-weight: 600; color: var(--ft-muted); margin: 14px 0 8px; }
+.files-peer-options { display: grid; gap: 8px; }
+.files-peer-option { display: flex; align-items: center; gap: 12px; padding: 12px 14px; border: 1px solid var(--md-sys-color-outline-variant); border-radius: 12px; cursor: pointer; transition: border-color 140ms ease, background-color 140ms ease; }
+.files-peer-option.is-selected { border-color: var(--md-sys-color-primary); background: color-mix(in srgb, var(--md-sys-color-primary) 5%, var(--md-sys-color-surface)); box-shadow: inset 0 0 0 1px var(--md-sys-color-primary); }
+.files-peer-option.is-offline { cursor: default; }
+.files-peer-option input { accent-color: var(--md-sys-color-primary); width: 18px; height: 18px; margin: 0; flex: 0 0 18px; }
+.files-peer-option:focus-within { outline: 2px solid var(--md-sys-color-primary); outline-offset: 2px; }
+.files-peer-copy { flex: 1; min-width: 0; display: grid; gap: 2px; }
+.files-peer-copy strong { font-size: 14px; overflow-wrap: anywhere; }
+.files-peer-copy > span { font-size: 12px; color: var(--ft-muted); overflow-wrap: anywhere; }
+.files-labeled > summary { width: auto; min-height: 44px; padding: 0 16px; border-radius: 22px; display: inline-flex; gap: 8px; align-items: center; font-weight: 600; font-size: 14px; background: var(--md-sys-color-secondary-container); color: var(--md-sys-color-on-secondary-container); }
+.files-labeled > summary[aria-disabled] { opacity: .45; }

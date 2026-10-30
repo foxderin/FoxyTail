@@ -5,7 +5,7 @@ import { t } from '../i18n';
 import { MdIcon } from '../icons';
 import { Card, EmptyState, ErrorState, SkeletonRows } from '../components/Basics';
 import { confirmDialog } from '../components/ConfirmDialog';
-import { Button, Checkbox, IconButton, Select } from '../components/ui';
+import { Button, Checkbox, IconButton } from '../components/ui';
 import { onNativeEvent, requestNative } from '../native';
 import { nativeFilesSection } from '../navigation';
 import { appActive, RouteVisible } from '../schedule';
@@ -190,17 +190,25 @@ export default function FilesSend(props: {inboxSettled: boolean}): JSX.Element {
         }}><MdIcon name="check_circle" size={18} /></IconButton></div></Show>
         <Show when={filesSnapshot()?.preparing}><p role="status">{t('ft_preparing')}</p></Show>
         <Show when={filesSnapshot()?.busy}><IconButton aria-label={t('files_cancel_send')} disabled={cancelling()} onClick={() => void nativeAction('files.cancel', filesSnapshot()?.job ? {job: filesSnapshot()!.job} : {})}><MdIcon name="close" size={18} /></IconButton></Show>
+        <p class="files-step">{t('files_step_peer')}</p>
         <Show when={peerError()}><ErrorState text={peerError()} onRetry={() => void loadPeers()} /></Show>
         <Show when={peers() !== null} fallback={<Show when={!peerError()}><SkeletonRows rows={1} /></Show>}>
           <Show when={peers()?.length} fallback={<Show when={!peerError()}><EmptyState text={t('tools_no_peers')} icon="group" /></Show>}>
-            <Select label={t('files_peer')} aria-label={t('files_peer')} value={fileView().peer} disabled={locked()} onChange={event => updateFileView({peer: (event.target as HTMLSelectElement).value})}>
-              <For each={peers() ?? []}>{node => <option value={node.id}>{node.hostname} · {node.ips[0]}{node.online ? '' : ' (' + t('offline') + ')'}</option>}</For>
-            </Select>
+            <div class="files-peer-options" role="radiogroup" aria-label={t('files_peer')}>
+              <For each={peers() ?? []}>{node => <label class="files-peer-option" classList={{ 'is-selected': fileView().peer === node.id, 'is-offline': !node.online }}>
+                <input type="radio" name="files-peer" value={node.id} checked={fileView().peer === node.id} disabled={locked() || !node.online} onChange={() => updateFileView({peer: node.id})} />
+                <span class="files-peer-copy"><strong>{node.hostname}</strong><span><code>{node.ips[0]}</code>{node.online ? '' : ' · ' + t('offline')}</span></span>
+              </label>}</For>
+            </div>
           </Show>
         </Show>
+        <p class="files-step">{t('files_step_files')}</p>
         <div class="files-toolbar">
-          <Button variant="tonal" disabled={locked()} aria-expanded={fileView().opened} aria-controls="taildrop-browser" onClick={() => fileView().opened ? updateFileView({opened: false}) : void browse(fileView().directory)}><MdIcon name="folder" size={18} />{t(fileView().opened ? 'files_close_browser' : 'files_choose')}</Button>
-          <IconButton aria-label={t('ft_pick')} disabled={locked()} onClick={() => void nativeAction('files.pick')}><MdIcon name="add" size={18} /></IconButton>
+          <details class="files-sort files-labeled"><summary class="btn-like" aria-disabled={locked() || undefined} onClick={event => { if (locked()) event.preventDefault(); }}><MdIcon name="add" size={18} />{t('files_add')}</summary><div>
+            <button type="button" aria-label={t('ft_pick')} disabled={locked()} onClick={event => { event.currentTarget.closest('details')?.removeAttribute('open'); void nativeAction('files.pick'); }}>{t('ft_pick_system')}</button>
+            <button type="button" aria-label={t('files_choose')} disabled={locked()} onClick={event => { event.currentTarget.closest('details')?.removeAttribute('open'); void browse(fileView().directory); }}>{t('ft_pick_shared')}</button>
+          </div></details>
+          <Show when={fileView().opened}><Button variant="text" aria-controls="taildrop-browser" onClick={() => updateFileView({opened: false})}>{t('files_close_browser')}</Button></Show>
         </div>
         <Show when={fileView().opened}><section id="taildrop-browser" aria-label={t('files_choose')} aria-busy={browsing()}>
           <nav class="files-toolbar" aria-label={t('files_location')}>
@@ -224,6 +232,7 @@ export default function FilesSend(props: {inboxSettled: boolean}): JSX.Element {
             <Show when={truncated()}><p class="tool-hint" role="status">{t('files_truncated')}</p></Show>
           </Show>
         </section></Show>
+        <p class="files-step">{t('files_step_send')}</p>
         <Show when={filesSnapshot()}>
         <div class="files-toolbar"><p class="tool-hint" aria-live="polite">{t('files_selected')} {selection().length}/32 · {selection().some(file => file.size < 0) ? t('ft_size_unknown') : fmtBytes(selection().reduce((sum, file) => sum + file.size, 0))}</p>
           <Show when={selection().length}><IconButton aria-label={t('ft_clear_selection')} disabled={locked()} onClick={() => void nativeAction('files.clear')}><MdIcon name="deselect" size={18} /></IconButton></Show>

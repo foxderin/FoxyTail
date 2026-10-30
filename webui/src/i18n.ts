@@ -27,7 +27,7 @@ const zh = {
   loading: '加载中…', empty: '暂无数据', error: '出错了',
   save: '保存', cancel: '取消', confirm: '确认', delete: '删除', add: '添加',
   copy: '复制', copied: '已复制', open_browser: '浏览器打开',
-  offline: '离线', close: '关闭', cancelled: '已取消', retry: '重试',
+  offline: '离线', close: '关闭', cancelled: '已取消', retry: '重试', done: '完成', more: '更多操作',
   op_failed: '操作失败', confirm_title: '请确认',
   misc_missing: '（缺失）', misc_empty: '（空）', misc_unavailable: '（不可用）',
 
@@ -177,7 +177,7 @@ const en: Record<I18nKey, string> = {
   loading: 'Loading…', empty: 'No data', error: 'Something went wrong',
   save: 'Save', cancel: 'Cancel', confirm: 'Confirm', delete: 'Delete', add: 'Add',
   copy: 'Copy', copied: 'Copied', open_browser: 'Open in browser',
-  offline: 'Offline', close: 'Close', cancelled: 'Cancelled', retry: 'Retry',
+  offline: 'Offline', close: 'Close', cancelled: 'Cancelled', retry: 'Retry', done: 'Done', more: 'More actions',
   op_failed: 'Operation failed', confirm_title: 'Please confirm',
   misc_missing: '(missing)', misc_empty: '(empty)', misc_unavailable: '(unavailable)',
 
