@@ -25,6 +25,31 @@ _control_validate() {
   esac
 }
 
+# Only probes that do not change account/file/service configuration bypass
+# mutation admission. DNS capability probes write caches and touch kernel state,
+# so they remain conservative mutations here despite the UI read classification.
+# Staged restore/trial operations are mutations from acceptance, not only commit.
+_control_mutates() {
+  case "$1" in
+    peer-ping|speedtest-exitnodes|derp-speedtest|coexist-info|coexist-check|diag-check|socks-check) return 1 ;;
+    *) return 0 ;;
+  esac
+}
+
+# Called while holding the SAME registry lock used to allocate a durable job.
+# The receipt plus verified live process ownership is the reservation: checking
+# outside that lock would let the Android app and resident both pass the gate.
+_control_mutation_available() {
+  for _cma_dir in "${TS_RUN_DIR}/operations/"*; do
+    [ -d "${_cma_dir}" ] && [ ! -L "${_cma_dir}" ] && [ -f "${_cma_dir}/durable" ] || continue
+    [ ! -f "${_cma_dir}/result.json" ] || continue
+    _op_valid_id "${_cma_dir##*/}" || continue
+    _cma_command=$(cat "${_cma_dir}/command" 2>/dev/null) || return 1
+    if _control_mutates "${_cma_command}" && _control_alive "${_cma_dir}"; then return 1; fi
+  done
+  return 0
+}
+
 _control_lock() {
   _op_registry || jerr 'cannot open private operation registry'
   _lock_identity || jerr 'cannot identify operation controller'
@@ -187,6 +212,10 @@ cmd_operation_start() {
     [ "${_cs_existing}" = "$1" ] || jerr 'operation ID already belongs to another command or cancellation'
     _control_response "${_cs_dir}"
     return
+  fi
+  if _control_mutates "$1" && ! _control_mutation_available; then
+    _control_unlock
+    jerr 'another mutation is running; no work started; retry this operation ID after it completes'
   fi
   if ! _op_recent_id "${_cs_id}"; then
     _control_unlock

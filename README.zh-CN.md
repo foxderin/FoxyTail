@@ -150,6 +150,8 @@ App 区分 root 启动失败、授权不足、模块不可读、协议不兼容�
 
 所有标签页（包括文件页）都在同一个 `ControlActivity` 内切换到内置 WebView 文档；非敏感表单编辑经仅限本次会话的 `app.drafts` 在切页时保留，Activity 重建仅恢复页面和原生文件选择，不恢复未保存的表单编辑。系统分享、文件选择器结果与传输通知仍由该 Activity 接收，已保存配置、操作回执和已接受的传输不变。
 
+App 与常驻进程经 `operation-start` 提交的持久写操作共用串行准入；只读探测和状态读取保持独立，涉及内核及缓存的 DNS 能力探测保守地按写操作处理。此门禁不涵盖外部直接 CLI/daemon 命令；恢复文件时不要通过外部命令切换账号。
+
 模块入口仍为 `/data/adb/foxytail/scripts/foxytail.webapi.sh`：`backend-info` 返回协议与能力；`operation-start <id> <命令> [参数]` 接受受限后台操作；`operation-status <id>` 查询真实终态；`cancel <id>` 请求取消。参数不写回执，认证链接不进入持久任务。回执私有保存，最多 128 项/24 小时，每项结果最多 1 MiB；过期/中断绝不推断成功。
 
 协议仍为 `2`，App 同时要求 `exit-routing` 与 `context-status` 能力，请配套升级模块和 APK。`status` 返回轻量服务状态及 `peerList`；`exit-routing` 独立返回经核验的路由及 `selfId`，旧身份或旧修订响应不合并。`context-get` 返回可编辑规则，不等待 `context-status`。无配置依赖的列表/探测读取不等待配置写锁；依赖配置的读取和写操作保留原有锁与校验。

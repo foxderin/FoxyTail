@@ -1,5 +1,6 @@
 """Detached control protocol against real shell dispatch and process identities."""
 import base64
+import concurrent.futures
 import json
 import os
 import signal
@@ -59,6 +60,75 @@ class ControlOperationTests(ApiTestCase):
             time.sleep(0.02)
         self.assertTrue(path.exists(), name)
         return path
+
+    def test_app_and_receive_mutation_admission_is_atomic(self):
+        self.overrides.write_text('''cmd_file_receive() {
+  echo "$1" >>"$TS_DIR/receive-calls"
+  touch "$TS_DIR/entered"
+  while [ ! -f "$TS_DIR/release" ]; do sleep 0.03; done
+  echo '{"ok":true,"received":true,"sourceDeleted":true}'
+}
+cmd_diag_check() { echo '{"ok":true}'; }
+''')
+        requests = [self.request('app_receive'), self.request('auto_receive')]
+        def submit(request):
+            return subprocess.run(['sh', str(self.api), 'operation-start', request,
+                                   'file-receive', 'photo.txt', 'self-1'],
+                                  env=self.env, capture_output=True, text=True, timeout=15)
+        with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
+            responses = list(pool.map(submit, requests))
+        self.assertEqual(sorted(r.returncode for r in responses), [0, 1])
+        accepted = next(i for i, r in enumerate(responses) if r.returncode == 0)
+        rejected = 1 - accepted
+        self.assertIn('no work started', json.loads(responses[rejected].stdout)['error'])
+        self.assertFalse((self.run / 'operations' / requests[rejected]).exists())
+        self.await_path('entered')
+        self.assertEqual(self.entry('operation-start', requests[accepted], 'file-receive',
+                                    'photo.txt', 'self-1')['operation']['state'], 'running')
+        for suffix, args in [('switch', ('switch', 'profile')), ('clear', ('file-clear',)),
+                             ('logout', ('logout',)), ('dns', ('dns-probe',)), ('restore', ('restore', 'a', 'b', 'c'))]:
+            other = self.request('blocked_' + suffix)
+            self.assertIn('no work started', self.entry('operation-start', other, *args, ok=False)['error'])
+            self.assertFalse((self.run / 'operations' / other).exists())
+        # Queries and read-only diagnostic jobs remain independent.
+        self.assertEqual(self.entry('operation-status', requests[accepted])['operation']['state'], 'running')
+        probe = self.request('concurrent_probe')
+        self.entry('operation-start', probe, 'diag-check')
+        self.assertTrue(self.terminal(probe)['result']['ok'])
+        (self.base / 'release').touch()
+        self.terminal(requests[accepted])
+        self.entry('operation-start', requests[rejected], 'file-receive', 'photo.txt', 'self-1')
+        self.assertTrue(self.terminal(requests[rejected])['result']['ok'])
+        self.assertEqual(len((self.base / 'receive-calls').read_text().splitlines()), 2)
+
+    def test_live_read_probe_does_not_block_mutation_admission(self):
+        self.overrides.write_text('''cmd_diag_check() {
+  touch "$TS_DIR/entered"
+  while [ ! -f "$TS_DIR/release" ]; do sleep 0.03; done
+  echo '{"ok":true}'
+}
+cmd_file_clear() { echo '{"ok":true}'; }
+''')
+        probe = self.request('held_probe')
+        self.entry('operation-start', probe, 'diag-check')
+        self.await_path('entered')
+        mutation = self.request('beside_probe')
+        self.entry('operation-start', mutation, 'file-clear')
+        self.assertTrue(self.terminal(mutation)['result']['ok'])
+        self.assertEqual(self.entry('operation-status', probe)['operation']['state'], 'running')
+
+    def test_dead_mutation_receipt_does_not_permanently_block_admission(self):
+        stale = self.request('dead_mutation')
+        directory = self.run / 'operations' / stale
+        directory.mkdir(parents=True)
+        (directory / 'durable').touch()
+        (directory / 'command').write_text('file-receive')
+        (directory / 'supervisor').write_text('999999999 1 old-boot\n')
+        self.overrides.write_text("cmd_file_clear() { echo '{\"ok\":true}'; }\n")
+        request = self.request('after_dead')
+        self.entry('operation-start', request, 'file-clear')
+        self.assertTrue(self.terminal(request)['result']['ok'])
+        self.assertEqual(self.entry('operation-status', stale)['operation']['state'], 'interrupted')
 
     def test_taildrop_history_and_batch_durable_write_contracts(self):
         self.overrides.write_text('''
