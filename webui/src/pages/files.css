@@ -23,6 +23,18 @@ button.list-row:focus-visible { outline: 2px solid var(--ft-accent); outline-off
 .files-selection-bar { border-radius: 12px; background: var(--ft-panel-inset); padding: 4px 8px; }
 .files-selection-bar > .tool-hint { flex: 1; }
 .files-card-summary { font-size: 12px; color: var(--ft-muted); }
+/* Separate recipient choice, file sources and the final send action. */
+.files-send-card { display: flex; flex-direction: column; gap: 20px; }
+.files-send-card > .section-heading, .files-send-card > .tool-actions { margin: 0; }
+.files-recipient-group { min-width: 0; padding: 14px; border-radius: 14px; background: var(--ft-panel-inset); }
+.files-recipient-group > h3 { margin: 0 0 12px; font-size: 13px; font-weight: 600; color: var(--ft-muted); }
+.files-peer-option { background: var(--ft-surface); }
+.files-source-group { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+.files-source-actions { justify-content: space-between; gap: 12px; }
+.files-browser { padding: 12px; border: 1px solid var(--md-sys-color-outline-variant); border-radius: 12px; }
+.files-breadcrumbs { gap: 4px; margin-block: 4px 8px; }
+.files-browser-actions { display: flex; margin-inline-start: auto; }
+.files-selection-list { border-top: 1px solid var(--md-sys-color-outline-variant); }
 /* Send flow: peer option blocks, single add-file menu. */
 .files-peer-options { display: grid; gap: 8px; max-height: 268px; overflow: auto; overscroll-behavior: contain; }
 .files-selection-list { max-height: 300px; overflow: auto; overscroll-behavior: contain; }

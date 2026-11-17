@@ -293,6 +293,27 @@ await scenario('peer detail probes run from the address row and render a result 
   assert(!!panel && panel.textContent.includes('23 ms') && !!panel.querySelector('code'), 'probe result renders latency, path and endpoint in a panel');
 });
 
+await scenario('Files composer groups sources and keeps browser navigation available', async ({ fixture, nav, window, app, button, click }) => {
+  await nav('files');
+  const send = window.document.querySelector('#files-send');
+  assert(!!send.querySelector('.files-recipient-group h3') && !!send.querySelector('.files-recipient-group [role="radiogroup"]'), 'recipient choice has its own visible group');
+  const sources = send.querySelector('.files-source-group');
+  assert(!!sources.querySelector('.files-source-actions .files-labeled') && !sources.querySelector('.files-selection-list'), 'file sources have one action row without an empty selection list');
+  click(button('files_choose', sources)); await flush();
+  const browser = () => sources.querySelector('#taildrop-browser');
+  assert(!!browser() && !!button('files_close_browser', browser()), 'shared storage opens with its own close control');
+  click([...browser().querySelectorAll('button')].find(b => b.getAttribute('aria-label') === app.t('files_open_directory') + ' Download')); await flush();
+  assert(fixture.log.some(r => r.action === 'files.browse' && r.args.path === 'Download'), 'folder navigation remains available');
+  click(button('ft_shared', browser())); await flush();
+  assert(fixture.log.findLast(r => r.action === 'files.browse')?.args.path === '', 'root breadcrumb replaces the redundant parent action');
+  click(button('files_close_browser', browser())); await flush();
+  assert(!browser(), 'browser close does not remove the file-source toolbar');
+  fixture.publishFiles({ selection: [{ key: 'one', name: 'notes.txt', size: 120, source: 'uri' }] }); await flush();
+  assert(!!button('ft_clear_selection', sources.querySelector('.files-source-actions')) && !!sources.querySelector('.files-selection-list'), 'pending files and clear action share the source group');
+  click(button('ft_clear_selection', sources)); await flush();
+  assert(fixture.files.selection.length === 0 && !sources.querySelector('.files-selection-list'), 'clear still removes the pending selection');
+});
+
 await scenario('Files partial outcomes, native snapshots and selection limits', async ({ app, fixture, nav, window, button, click, confirm }) => {
   await nav('files');
   click(button('ft_matches')); await flush();
