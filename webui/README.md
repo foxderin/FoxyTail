@@ -21,7 +21,7 @@ smoke 使用当前 `FoxyTailNative` 请求/事件协议的隔离夹具，检查�
 
 开发时运行 `pnpm dev --host 127.0.0.1`，打开 `/dev/index.html?lang=zh&theme=light` 使用模拟数据预览。参数为 `lang=zh|en`、`theme=auto|light|dark`、`state=ready|empty|error|slow|login|starting|stopped|proxy|no-root|no-bridge|unknown`。入口 `dev/preview.ts` 与 smoke 共用 `dev/native-fixture.mjs`；预览明确标注模拟数据，系统选择器、真实文件、外链及账号写入不可用。生产只构建根 `index.html`，不包含模拟桥或数据。
 
-主题和语言由原生偏好决定，在 bootstrap 后绘制；不使用 Web 存储覆盖原生设置。服务/任务状态以原生快照为准，设备与出口读取按账号和修订号隔离。普通设置先进入全局待应用变更集，统一审阅后一次应用，默认经配置试用自动回退；非敏感表单通过 `app.drafts` 保留，密钥和来源 URI 不进入草稿。
+主题和语言由原生偏好决定，在 bootstrap 后绘制；不使用 Web 存储覆盖原生设置。服务/任务状态以原生快照为准，设备与出口读取按账号和修订号隔离。普通设置先进入全局待应用变更集，统一审阅后一次应用，默认经配置试用自动回退；非敏感表单通过仅存在于当前 Activity 内存的 `app.drafts` 在切页时保留，不写入 Bundle 或磁盘，旋转或进程重建后不恢复。密钥和来源 URI 不进入该会话状态；已保存配置、持久操作回执和原生文件选择不受影响。
 
 文件页的收件、发送和历史共享保留页面并独立刷新。原生 `files.browse` 发放来源句柄，SAF 和外部分享仅保存原生 URI 授权；`files.send`/`files.retry` 由前台服务接管模块任务。JavaScript 不传递文件字节，不伪造进度。离页不停止传输；取消、接管、未知确认和历史删除是独立操作。
 

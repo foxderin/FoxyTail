@@ -118,7 +118,7 @@ export function installFixture(window, { state = 'ready', lang = 'en', theme = '
   }
   function action(name, args) {
     switch (name) {
-      case 'app.bootstrap': return { ok: true, appearance, page, control, files, drafts };
+      case 'app.bootstrap': return { ok: true, appearance, page, control, files };
       case 'app.navigate': page = args.page; return { ok: true };
       case 'app.appearance': Object.assign(appearance, args); emit('appearance', { appearance }); return { ok: true, appearance };
       case 'app.drafts': if (Object.hasOwn(args, 'value')) drafts[args.key] = clone(args.value); return { ok: true, value: drafts[args.key] ?? null };

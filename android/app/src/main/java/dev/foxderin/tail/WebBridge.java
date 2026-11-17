@@ -158,7 +158,7 @@ final class WebBridge {
             case "app.bootstrap":
                 keys(args);
                 reply.accept(object("ok", true, "appearance", AppPreferences.appearance(activity), "page", activity.page(),
-                        "drafts", activity.drafts(), "section", activity.section(), "active", active, "control", control.snapshot(), "files", files.snapshot()));
+                        "section", activity.section(), "active", active, "control", control.snapshot(), "files", files.snapshot()));
                 control.refreshAvailability();
                 main.post(activity::deliverNavigation);
                 return;

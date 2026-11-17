@@ -33,7 +33,7 @@ await scenario('routes, appearance and retained Files UI', async ({ app, nav, wi
   await nav('peers'); await nav('files');
   assert(window.document.querySelector('.files-page') === original, 'Files keeps its actual mounted UI across routes');
   assert(window.document.querySelector('.files-toolbar input')?.value === 'network', 'Files search survives navigation');
-  assert(fixture.drafts.files?.filter === 'network', 'Files draft goes to native recreation storage');
+  assert(fixture.drafts.files?.filter === 'network', 'Files view state stays in the current native session');
 });
 
 await scenario('native envelopes, read disposal and accepted-write continuation', async ({ app, fixture, window, nav }) => {
@@ -291,7 +291,7 @@ await scenario('account transfer preflight, secret disposal and trial recovery',
   input(window.document.querySelector('input[type="password"]'), 'SIMULATED-NOT-A-CREDENTIAL');
   fixture.emit('lifecycle', { active: false }); await flush();
   assert(window.document.querySelector('input[type="password"]')?.value === '', 'backgrounding clears account secrets');
-  assert(!JSON.stringify(fixture.drafts).includes('SIMULATED-NOT-A-CREDENTIAL'), 'auth input never enters persisted drafts');
+  assert(!JSON.stringify(fixture.drafts).includes('SIMULATED-NOT-A-CREDENTIAL'), 'auth input never enters session drafts');
   fixture.emit('lifecycle', { active: true });
   fixture.data['trial-status'] = { ok: true, trial: { status: 'running' } };
   await nav('settings');

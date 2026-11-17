@@ -68,7 +68,6 @@ function createRouter() {
   return route;
 }
 
-export let bootstrapDrafts: Record<string, unknown> = {};
 async function mountApp(target: HTMLElement): Promise<void> {
   initTheme();
   const bootstrap = await requestNative('app.bootstrap');
@@ -78,7 +77,6 @@ async function mountApp(target: HTMLElement): Promise<void> {
       installLanguage(bootstrap.appearance as Record<string, unknown>);
     }
     if (bootstrap.control) publishNativeControl(bootstrap.control as NativeResult);
-    if (bootstrap.drafts && typeof bootstrap.drafts === 'object') bootstrapDrafts = bootstrap.drafts as Record<string, unknown>;
     if (typeof bootstrap.page === 'string' && ROUTES[bootstrap.page]) history.replaceState(null, '', '#/' + bootstrap.page);
     if (bootstrap.section) acceptNativeNavigation({ section: bootstrap.section });
   } else {

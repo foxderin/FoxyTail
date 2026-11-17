@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- 移除跨 Activity 重建的未保存表单草稿恢复：旋转或进程重建后重新读取已保存配置；当前会话内切页的编辑状态、显式保存/应用、文件选择及已接受的操作不变。移除 Bundle 草稿序列化和未使用的 bootstrap 草稿副本，并更新重建回归测试。
+
 ## v1.11.0 — 2026-10-30 — 文件直存
 
 - 文件机制改为直存：`files-inbox`/`file-read`/`file-delete`/`file-clear` 直接操作 `/sdcard/Download/Taildrop`，接收文件落盘即在列表中，不再经过私有收件箱与"导入/导出"步骤；WebUI 移除导入、导出、另存为与批量导出入口，收件卡片更名为"已接收"并 5 秒轮询自动刷新（遵循全局自动刷新开关）；Android 移除 `files.import`（TransferService IMPORT）与 `files.save`。

@@ -32,7 +32,8 @@ final class WebViewChecks {
         activity = (ControlActivity) instrumentation.startActivitySync(new Intent(instrumentation.getTargetContext(), ControlActivity.class)
                 .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK).putExtra(ControlActivity.DESTINATION, "dashboard"));
         loaded();
-        require(request("app.bootstrap", new JSONObject()).getBoolean("ok"), "Bundled document reaches the actual native listener");
+        JSONObject bootstrap = request("app.bootstrap", new JSONObject());
+        require(bootstrap.getBoolean("ok") && !bootstrap.has("drafts"), "Bundled document reaches the listener without obsolete bootstrap draft state");
         reject("exec", new JSONObject().put("command", "id"));
         reject("control.query", new JSONObject().put("command", "sh").put("arguments", new org.json.JSONArray().put("-c").put("id")));
         reject("control.query", new JSONObject().put("command", "status").put("arguments", new org.json.JSONArray().put(";id")));
@@ -74,6 +75,13 @@ final class WebViewChecks {
         instrumentation.runOnMainSync(activity::onBackPressed);
         waitFor("!document.querySelector('.task-menu').open && location.hash === '#/logs'", "Back closes the menu before navigating");
 
+        String large = String.join("", java.util.Collections.nCopies(80 * 1024, "x"));
+        require(request("app.drafts", new JSONObject().put("key", "context").put("value", new JSONObject().put("rules", large))).getBoolean("ok"), "Large in-session edits remain accepted");
+        android.os.Bundle savedState = new android.os.Bundle();
+        instrumentation.runOnMainSync(() -> activity.onSaveInstanceState(savedState));
+        require(!savedState.containsKey("webDrafts"), "Unsaved form edits never enter Activity saved state");
+        require(large.equals(request("app.drafts", new JSONObject().put("key", "context")).getJSONObject("value").getString("rules")), "Saving lifecycle state does not discard active edits");
+
         Instrumentation.ActivityMonitor monitor = instrumentation.addMonitor(ControlActivity.class.getName(), null, false);
         try {
             instrumentation.runOnMainSync(activity::recreate);
@@ -82,8 +90,8 @@ final class WebViewChecks {
             activity = recreated;
         } finally { instrumentation.removeMonitor(monitor); }
         loaded();
-        waitFor("location.hash === '#/logs' && document.querySelector('.tool-log-controls input')?.value === 'instrumentation draft'", "Recreation restores actual bundled Logs draft and route");
-        require("instrumentation draft".equals(request("app.drafts", new JSONObject().put("key", "logs")).getJSONObject("value").getString("query")), "Recreated draft remains available through the listener");
+        waitFor("location.hash === '#/logs' && document.querySelector('.tool-log-controls input')?.value === ''", "Recreation restores the route but not unsaved form edits");
+        require(request("app.drafts", new JSONObject().put("key", "context")).isNull("value"), "Recreation starts a fresh session even for large edits");
 
         for (String url : new String[]{"https://example.invalid/", "file:///data/local/tmp/private", "content://example.invalid/private", WebBridge.ORIGIN + "/assets/not-index.html"}) {
             evaluate("location.href=" + JSONObject.quote(url));

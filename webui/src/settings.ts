@@ -39,7 +39,7 @@ export const BACKGROUND: Field[] = [
   { key: 'LOG_MAX_KB', label: 'tools_log_limit', range: [64, 10240] },
 ];
 
-/** Bundle-backed non-secret drafts survive Activity recreation, not app restarts. */
+/** Nonsecret session state survives page remounts, never Activity recreation. */
 export function bindNativeDraft(
   key: 'settings' | 'routes' | 'context' | 'serve' | 'logs' | 'coexist' | 'trial' | 'exit',
   snapshot: () => Record<string, unknown>,

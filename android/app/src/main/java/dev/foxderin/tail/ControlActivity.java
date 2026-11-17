@@ -45,6 +45,7 @@ public class ControlActivity extends Activity {
     private WebBridge bridge;
     private FileActions files;
     private FrameLayout content;
+    // Session-only form state: preserves tab navigation, never Activity recreation.
     private JSONObject drafts = new JSONObject();
     private String destination = "dashboard", section;
     private android.window.OnBackInvokedCallback backCallback;
@@ -64,9 +65,6 @@ public class ControlActivity extends Activity {
         destination = controlDestination(getIntent().getStringExtra(DESTINATION));
         if (saved != null) {
             destination = controlDestination(saved.getString("page", destination));
-            byte[] savedDrafts = saved.getByteArray("webDrafts");
-            try { if (savedDrafts != null) drafts = new JSONObject(new String(savedDrafts, StandardCharsets.UTF_8)); }
-            catch (org.json.JSONException ignored) { drafts = new JSONObject(); }
         }
         WindowCompat.setDecorFitsSystemWindows(getWindow(), false);
         content = new FrameLayout(this);
@@ -169,7 +167,6 @@ public class ControlActivity extends Activity {
     boolean trustedDocument() { return web != null && WebBridge.trustedDocument(Uri.parse(web.getUrl() == null ? "" : web.getUrl())); }
     String page() { return destination; }
     String section() { return section; }
-    JSONObject drafts() { return drafts; }
     static String controlDestination(String value) {
         if ("overview".equals(value)) return "dashboard";
         if ("diagnostics".equals(value)) return "diag";
@@ -252,17 +249,9 @@ public class ControlActivity extends Activity {
         if (bridge != null) bridge.pause(); if (files != null) files.pause(); if (web != null) web.onPause(); super.onPause();
     }
     @Override protected void onSaveInstanceState(Bundle saved) {
-        // Binder transactions are ~1 MiB shared; drafts total up to 512 KiB, so skip anything
-        // larger than 64 KiB (worst case ~8 keys) instead of crashing recreation.
-        try {
-            JSONObject bundleable = new JSONObject();
-            for (Iterator<String> keys = drafts.keys(); keys.hasNext(); ) {
-                String key = keys.next();
-                byte[] encoded = drafts.optJSONObject(key).toString().getBytes(StandardCharsets.UTF_8);
-                if (encoded.length <= 64 * 1024) bundleable.put(key, drafts.optJSONObject(key));
-            }
-            saved.putString("page", destination); saved.putByteArray("webDrafts", bundleable.toString().getBytes(StandardCharsets.UTF_8));
-        } catch (org.json.JSONException impossible) { throw new AssertionError(impossible); }
+        // Restore navigation and native file-selection ownership only. Unsaved
+        // form edits intentionally belong to this Activity, not its saved state.
+        saved.putString("page", destination);
         if (files != null) files.save(saved); super.onSaveInstanceState(saved);
     }
     @Override protected void onDestroy() {
