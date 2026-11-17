@@ -14,10 +14,11 @@ import { viewPollInterval } from '../state';
 import { acceptSnapshot, count, fileName, filesSnapshot, fileText, fileView, initializeFiles, MAX_FILES, record, resultError, snapshotError, updateFileView, type ExportState } from '../files';
 import type { InboxFile } from '../types';
 import FilesSend from './FilesSend';
+import FilesReceivePreferences from './FilesReceivePreferences';
 import './tools.css';
 import './files.css';
 
-type ReceiveState = { mode: 'direct' | 'buffered' | 'unavailable'; selfId: string; pending: { name: string; size: number }[]; error?: string };
+type ReceiveState = { mode: 'direct' | 'buffered' | 'unavailable'; selfId: string; pending: { name: string; size: number }[]; error?: string; automatic?: { enabled: boolean; state: 'idle' | 'running' | 'blocked'; error?: string; operationId?: string } };
 
 export default function Files(): JSX.Element {
   const scope = createApiScope();
@@ -62,7 +63,10 @@ export default function Files(): JSX.Element {
     setReceive(record(incoming) && typeof incoming.mode === 'string' && ['direct', 'buffered', 'unavailable'].includes(incoming.mode) &&
       typeof incoming.selfId === 'string' && Array.isArray(incoming.pending) &&
       incoming.pending.every(item => record(item) && fileName(item.name) && count(item.size))
-      ? incoming as ReceiveState : null);
+      ? { ...incoming, automatic: record(incoming.automatic) && typeof incoming.automatic.enabled === 'boolean' &&
+          ['idle', 'running', 'blocked'].includes(String(incoming.automatic.state)) &&
+          (incoming.automatic.error === undefined || typeof incoming.automatic.error === 'string')
+          ? incoming.automatic : undefined } as ReceiveState : null);
     const loaded = result.files as InboxFile[];
     setFiles(loaded); setLoadError(''); setInboxFresh(true);
     const retained = selected().filter(name => loaded.some(file => file.name === name));
@@ -190,9 +194,14 @@ export default function Files(): JSX.Element {
           <button type="button" aria-label={t('files_clear')} class="danger" disabled={!canWrite() || !files()?.length} onClick={event => menuAction(event, () => void mutate('file-clear'))}>{t('files_clear')}</button>
         </div></details>
       </>}>
+      <FilesReceivePreferences />
       <Show when={receive()}>{state => <div class="files-receive-status" data-testid="receive-status">
         <Show when={state().mode !== 'direct'}><p class="tool-hint">{t(state().mode === 'buffered' ? 'ft_receive_buffered' : 'ft_receive_unavailable')}</p></Show>
-        <Show when={state().error}><ErrorState text={state().error!} /></Show>
+        <Show when={state().automatic?.state === 'blocked'}>
+          <p class="tool-hint" role="status">{t('ft_auto_receive_blocked')}</p>
+          <Show when={state().automatic?.error}><ErrorState text={state().automatic!.error!} /></Show>
+        </Show>
+        <Show when={state().error && (state().automatic?.state !== 'blocked' || state().error !== state().automatic?.error)}><ErrorState text={state().error!} /></Show>
         <Show when={state().pending.length}>
           <h3>{t('ft_pending_receive')}</h3>
           <For each={state().pending}>{file => <div class="list-row">

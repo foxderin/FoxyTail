@@ -1,4 +1,9 @@
 export const filesZh = {
+  ft_auto_receive: '自动接收后台暂存文件',
+  ft_auto_receive_blocked: '自动接收暂时受阻，仍可在下方手动接收文件。',
+  ft_auto_receive_hint: '保存后约 15 秒内生效，无需重启。关闭不影响后台直接收件。',
+  ft_receive_notifications: '收件通知',
+  ft_receive_notifications_blocked: '系统未允许通知。可在系统设置中开启；这不表示收件失败。',
   ft_receive_buffered: '文件暂存在后台收件区，尚未写入下载目录。可在下方接收。',
   ft_receive_unavailable: '暂时无法检查后台收件；下方仍显示下载目录中的文件。',
   ft_pending_receive: '后台待接收', ft_receive_file: '接收到下载目录',
@@ -28,6 +33,11 @@ export const filesZh = {
  } as const;
 
 export const filesEn: Record<keyof typeof filesZh, string> = {
+  ft_auto_receive: 'Automatically receive buffered files',
+  ft_auto_receive_blocked: 'Automatic receipt is blocked. You can still receive files manually below.',
+  ft_auto_receive_hint: 'Takes effect within about 15 seconds, without restart. Turning this off does not stop direct receipt.',
+  ft_receive_notifications: 'Incoming file notifications',
+  ft_receive_notifications_blocked: 'Notifications are blocked by system settings. This does not mean receiving failed.',
   ft_receive_buffered: 'Files are waiting in the daemon inbox, not yet in Downloads. Receive them below.',
   ft_receive_unavailable: 'The daemon inbox cannot be checked right now. Downloaded files remain available below.',
   ft_pending_receive: 'Pending receipt', ft_receive_file: 'Receive to Downloads',

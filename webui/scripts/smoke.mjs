@@ -293,6 +293,68 @@ await scenario('peer detail probes run from the address row and render a result 
   assert(!!panel && panel.textContent.includes('23 ms') && !!panel.querySelector('code'), 'probe result renders latency, path and endpoint in a panel');
 });
 
+await scenario('Blocked automatic receipt preserves manual recovery', async ({ fixture, nav, window, app }) => {
+  fixture.data['files-inbox'].receive = { mode: 'buffered', selfId: 'preview-self', pending: [{ name: 'pending.txt', size: 12 }],
+    automatic: { enabled: true, state: 'blocked', error: 'Simulated storage unavailable' } };
+  await nav('files');
+  const status = window.document.querySelector('[data-testid="receive-status"]');
+  assert(status.textContent.includes('Simulated storage unavailable') && status.textContent.includes(app.t('ft_auto_receive_blocked')), 'blocked automatic status names the error and manual alternative');
+  const receive = [...status.querySelectorAll('button')].find(b => b.textContent.trim() === app.t('ft_receive_file'));
+  assert(receive && !receive.disabled, 'blocked automatic recovery leaves the manual receive action available');
+});
+
+await scenario('Incoming notifications report preference separately from system permission', async ({ fixture, nav, window, app }) => {
+  await nav('files');
+  const control = () => [...window.document.querySelectorAll('input[role="switch"]')].find(input => input.getAttribute('aria-label') === app.t('ft_receive_notifications'));
+  assert(!control().checked && !control().disabled, 'incoming notifications default to opt-out');
+  fixture.overrides.set('files.receiveNotifications', { ok: true, enabled: true, allowed: false });
+  fixture.holdNext.add('files.receiveNotifications');
+  control().click(); await flush();
+  assert(!control().checked && control().disabled, 'preference is not optimistically enabled while native confirmation is pending');
+  fixture.held.findLast(r => r.key === 'files.receiveNotifications').finish(); await flush();
+  assert(control().checked && window.document.querySelector('#files-notifications-hint')?.textContent === app.t('ft_receive_notifications_blocked'), 'denied permission retains opt-in and explains the system restriction');
+  assert(!window.document.querySelector('.files-receive-preferences [role="alert"]'), 'permission denial is not reported as a receive failure');
+  fixture.overrides.delete('files.receiveNotifications');
+  fixture.publishFiles({ receiveNotifications: { ok: true, enabled: true, allowed: true } }); await flush();
+  assert(control().checked && !window.document.querySelector('#files-notifications-hint'), 'permission callback snapshot updates the visible status');
+  fixture.emit('lifecycle', { active: false }); await flush();
+  fixture.files.receiveNotifications.allowed = false;
+  fixture.emit('lifecycle', { active: true }); await flush();
+  assert(!!window.document.querySelector('#files-notifications-hint'), 'resume rechecks system notification permission');
+  control().click(); await flush();
+  assert(!control().checked && !fixture.files.receiveNotifications.enabled, 'turning notifications off stores only the notification preference');
+});
+
+await scenario('Automatic buffered receipt writes one fresh setting without restart', async ({ fixture, nav, window, app, button, click }) => {
+  await nav('files');
+  const control = () => [...window.document.querySelectorAll('input[role="switch"]')].find(input => input.getAttribute('aria-label') === app.t('ft_auto_receive'));
+  assert(!control().checked && !control().disabled, 'automatic buffered receipt defaults off');
+  const before = JSON.stringify(fixture.settings);
+  fixture.holdNext.add('settings-get');
+  fixture.holdNext.add('settings-set');
+  control().click(); await flush();
+  assert(!control().checked && control().disabled && !fixture.log.some(r => r.action === 'control.mutate' && r.args.command === 'settings-set'), 'automatic receipt waits for a fresh baseline before writing');
+  fixture.held.findLast(r => r.key === 'settings-get').finish(); await flush();
+  assert(!control().checked && control().disabled, 'accepted setting is not shown as enabled before its receipt and readback');
+  fixture.held.findLast(r => r.key === 'settings-set').finish(); await flush();
+  const writes = fixture.log.filter(r => r.action === 'control.mutate' && r.args.command === 'settings-set');
+  assert(control().checked && writes.length === 1 && JSON.stringify(writes[0].args.arguments) === JSON.stringify(['TAILDROP_AUTO_RECEIVE', '1']), 'automatic receipt saves and confirms only its own setting');
+  const expected = JSON.parse(before); expected.TAILDROP_AUTO_RECEIVE = '1';
+  assert(JSON.stringify(fixture.settings) === JSON.stringify(expected), 'other saved settings are unchanged');
+  assert(!fixture.log.some(r => r.action === 'control.mutate' && ['control', 'trial-start'].includes(r.args.command)), 'hot receipt preference does not restart the daemon or start a trial');
+  fixture.holdNext.add('settings-set');
+  control().click(); await flush();
+  fixture.overrides.set('settings-get', { ok: false, cancelled: true });
+  fixture.held.findLast(r => r.key === 'settings-set').finish(); await flush();
+  assert(control().disabled && control().indeterminate, 'cancelled post-save readback does not present the prior value as current');
+  fixture.overrides.delete('settings-get');
+  click(button('retry', window.document.querySelector('.files-receive-preferences'))); await flush();
+  assert(!control().checked && !control().disabled, 'readback retry restores the confirmed value without another write');
+  fixture.overrides.set('settings-set', { ok: false, unknown: true, error: 'Pending receipt' });
+  control().click(); await flush();
+  assert(control().disabled && control().indeterminate && window.document.querySelector('.files-receive-preferences')?.textContent.includes(app.t('ft_unknown')), 'an unknown save stays indeterminate rather than claiming the requested value');
+});
+
 await scenario('Files composer groups sources and keeps browser navigation available', async ({ fixture, nav, window, app, button, click }) => {
   await nav('files');
   const send = window.document.querySelector('#files-send');

@@ -8,7 +8,7 @@ export function installFixture(window, { state = 'ready', lang = 'en', theme = '
     { id: 'nas', hostname: 'home-server', ip: '100.80.42.16', ips: ['100.80.42.16'], os: 'linux', relay: '', online: true, rxBytes: 3496221452, txBytes: 2102323420, exitNodeOption: true },
     { id: 'tablet', hostname: 'travel-ipad', ip: '100.66.14.7', ips: ['100.66.14.7'], os: 'iOS', relay: '', online: false, rxBytes: 46183473, txBytes: 13282742, exitNodeOption: false },
   ];
-  const settings = { TS_MODE: 'tun', SOCKS_PORT: '1099', DNS_PORT: '1053', DNS_MODE: 'local', MAGIC_DNS: 'on', IPV6: 'off', POWER_SAVE: 'off', WATCHDOG: 'on', WATCHDOG_PROBE: 'on', STATS: 'on', CONTEXT: 'on', WEBUI_AUTO_REFRESH: 'on', WATCHDOG_INTERVAL: '30', STATS_INTERVAL: '60', LOG_MAX_KB: '512', ROUTE_TABLE: '1052', FWMARK: '0x40000000', FWMARK_MASK: '0x40000000' };
+  const settings = { TAILDROP_AUTO_RECEIVE: '0', TS_MODE: 'tun', SOCKS_PORT: '1099', DNS_PORT: '1053', DNS_MODE: 'local', MAGIC_DNS: 'on', IPV6: 'off', POWER_SAVE: 'off', WATCHDOG: 'on', WATCHDOG_PROBE: 'on', STATS: 'on', CONTEXT: 'on', WEBUI_AUTO_REFRESH: 'on', WATCHDOG_INTERVAL: '30', STATS_INTERVAL: '60', LOG_MAX_KB: '512', ROUTE_TABLE: '1052', FWMARK: '0x40000000', FWMARK_MASK: '0x40000000' };
   const token = 'art-' + 'a'.repeat(32);
   const transfer = { id: 'a1', peerId: 'nas', peerName: 'home-server', peerIp: '100.80.42.16', selfId: 'preview-self', status: 'failed', startedAt: 1788912000, updatedAt: 1788912060, files: [
     { id: 'a2', name: 'notes.txt', path: '/sdcard/Download/notes.txt', size: 120, sentBytes: 120, progressKnown: true, bytesPerSecond: 0, status: 'completed' },
@@ -45,7 +45,7 @@ export function installFixture(window, { state = 'ready', lang = 'en', theme = '
     'backup-list': { ok: true, backups: [{ name: 'foxytail-backup-preview.tar.gz', path: '/sdcard/Download/foxytail-backup-preview.tar.gz', size: 500, mtime: 1788912000 }] },
   };
   let control = { ok: true, compatible: true, canWrite: true, canStop: true, busy: false, ownsMutation: false, unknown: false, canCancel: false, id: null, command: '', label: '', message: '', sequence: 0, revision: 0, accountRevision: 0, result: null, tasks: [], checking: false };
-  let files = { ok: true, selection: [], busy: false, preparing: false, unknown: false, job: null, message: '', transfer: null };
+  let files = { ok: true, selection: [], busy: false, preparing: false, unknown: false, job: null, message: '', transfer: null, receiveNotifications: { ok: true, enabled: false, allowed: true } };
   const drafts = {}, log = [], held = [], holdNext = new Set(), overrides = new Map(), unsupported = [];
   const appearance = { theme, language: lang };
   let sequence = 0;
@@ -73,6 +73,7 @@ export function installFixture(window, { state = 'ready', lang = 'en', theme = '
       case 'settings-set': {
         if (args.length !== 2 || !Object.hasOwn(settings, args[0]) || args[0] === 'TS_MODE') return fail('invalid setting');
         settings[args[0]] = args[1];
+        if (args[0] === 'TAILDROP_AUTO_RECEIVE') return { ok: true, saved: true, applied: true, restartRequired: false };
         data['settings-get'].restartRequired = true;
         return { ok: true, saved: true, applied: false, restartRequired: true };
       }
@@ -139,6 +140,9 @@ export function installFixture(window, { state = 'ready', lang = 'en', theme = '
       case 'control.cancelRead': return { ok: true, cancelled: true };
       case 'control.cancel': if (args.id !== control.id) return fail('operation identity mismatch'); return { ok: true, requested: true };
       case 'control.acknowledge': publishControl({ unknown: false, busy: false, canWrite: true, canCancel: false }); return { ok: true };
+      case 'files.receiveNotifications':
+        if (typeof args.enabled === 'boolean') publishFiles({ receiveNotifications: { ...files.receiveNotifications, enabled: args.enabled } });
+        return clone(files.receiveNotifications);
       case 'files.snapshot': return clone(files);
       case 'files.clear': publishFiles({ selection: [] }); return { ok: true };
       case 'files.remove': publishFiles({ selection: files.selection.filter(f => f.key !== args.key) }); return { ok: true };
