@@ -155,6 +155,46 @@ await scenario('settings drafts survive navigation and conflicts require consent
   assert([...window.document.querySelectorAll('textarea')].some(e => e.value === raw), 'context draft retains comments, Unicode and unknown lines verbatim');
 });
 
+await scenario('Select owns disabled state and dismissal', async ({ fixture, nav, window, app }) => {
+  await nav('settings');
+  const field = [...window.document.querySelectorAll('.select-field')].find(f => f.querySelector('summary')?.getAttribute('aria-label') === app.t('trial_candidate'));
+  const popup = field.querySelector('.select-pop');
+  const open = async () => { popup.open = true; popup.dispatchEvent(new window.Event('toggle')); await flush(); };
+  await open();
+  const staleOption = [...popup.querySelectorAll('[role="option"]')].find(option => option.textContent === 'proxy');
+  fixture.publishControl({ busy: true, canWrite: false }); await flush();
+  assert(!popup.open && field.querySelector('select').disabled, 'becoming disabled dismisses an open selection');
+  staleOption.click(); await flush();
+  assert(field.querySelector('select').value === 'saved', 'a stale option cannot change a disabled selection');
+  fixture.publishControl({ busy: false, canWrite: true }); await flush();
+  await open();
+  popup.querySelector('summary').dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+  assert(!popup.open && window.document.activeElement === popup.querySelector('summary'), 'Escape dismisses selection and restores trigger focus');
+  await open();
+  window.document.body.dispatchEvent(new window.Event('pointerdown', { bubbles: true }));
+  assert(!popup.open, 'outside interaction dismisses selection');
+  await open();
+  const option = [...popup.querySelectorAll('[role="option"]')].find(item => item.textContent === 'proxy');
+  field.querySelector('option[value="proxy"]').disabled = true;
+  option.click(); await flush();
+  assert(field.querySelector('select').value === 'saved', 'changed option availability is respected before the observer runs');
+});
+
+await scenario('Back closes active popup before disclosure and parent links unwind history', async ({ fixture, nav, window }) => {
+  await nav('settings');
+  const advanced = window.document.querySelector('.page-transition:not([hidden]) details.tool-disclosure');
+  advanced.open = true; advanced.dispatchEvent(new window.Event('toggle')); await flush();
+  const popup = window.document.querySelector('#restore-backup').closest('label').querySelector('details');
+  popup.open = true; popup.dispatchEvent(new window.Event('toggle')); await flush();
+  fixture.emit('back', {}); await flush();
+  assert(!popup.open && advanced.open, 'Back closes the active popup without collapsing an unrelated disclosure');
+  await nav('network'); await nav('routing');
+  window.document.querySelector('.page-transition:not([hidden]) .back-link').click(); await flush();
+  assert(window.location.hash === '#/network', 'visible parent link returns to the named hub');
+  fixture.emit('back', {}); await flush();
+  assert(window.location.hash === '#/settings', 'Android Back continues earlier history instead of reopening the detail just left');
+});
+
 await scenario('popup selects open option lists and dispatch native change events', async ({ nav, window, fixture, click }) => {
   await nav('settings');
   const field = name => [...window.document.querySelectorAll('.select-field')]

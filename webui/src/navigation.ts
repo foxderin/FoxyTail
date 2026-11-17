@@ -76,13 +76,38 @@ export function recordNavigation(previous: string, next: string): void {
   if (!goingBack && previous !== next) backStack.push(previous);
   goingBack = false;
 }
+/** A parent-link is a backwards transition, not a new visit to that hub. */
+export function returnToParent(route: string): void {
+  const index = backStack.lastIndexOf(route);
+  if (index >= 0) backStack.splice(index);
+  goingBack = true;
+  location.hash = '#/' + route;
+}
+
+const menuSelector = 'details.menu-pop[open], details.task-menu[open], details.status-sheet[open]';
+const menuOrder = new WeakMap<HTMLDetailsElement, number>();
+let lastMenu = 0;
+if (typeof document !== 'undefined') document.addEventListener('toggle', event => {
+  const menu = event.target;
+  if (!(menu instanceof HTMLDetailsElement) || !menu.matches('.menu-pop, .task-menu, .status-sheet')) return;
+  if (menu.open) menuOrder.set(menu, ++lastMenu);
+}, true);
+function visible(element: Element): boolean {
+  if (!element.isConnected || element.closest('[hidden]')) return false;
+  for (let parent = element.parentElement; parent; parent = parent.parentElement) {
+    if (parent instanceof HTMLDetailsElement && !parent.open) return false;
+  }
+  return true;
+}
 export function handleBack(): void {
-  const dialogs = [...document.querySelectorAll<HTMLDialogElement>('dialog[open]')].filter(dialog => !dialog.closest('[hidden]'));
+  const dialogs = [...document.querySelectorAll<HTMLDialogElement>('dialog[open]')].filter(visible);
   if (dialogs.length) {
     dialogs[dialogs.length - 1].dispatchEvent(new Event('cancel', { cancelable: true }));
     return;
   }
-  const menu = [...document.querySelectorAll<HTMLDetailsElement>('details[open]')].find(details => !details.closest('[hidden]'));
+  const menu = [...document.querySelectorAll<HTMLDetailsElement>(menuSelector)].filter(visible)
+    .sort((a, b) => (menuOrder.get(b) ?? 0) - (menuOrder.get(a) ?? 0))[0]
+    ?? [...document.querySelectorAll<HTMLDetailsElement>('details[open]')].find(visible);
   if (menu) { menu.open = false; menu.querySelector('summary')?.focus(); return; }
   const route = location.hash.slice(2);
   const previous = backStack.pop();

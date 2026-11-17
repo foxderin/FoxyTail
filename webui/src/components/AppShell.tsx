@@ -7,7 +7,7 @@ import { t, tf, type I18nKey } from '../i18n';
 import { MdIcon, type IconName } from '../icons';
 import { startStatusPolling } from '../state';
 import { listTasks, type Task } from '../tasks';
-import { NAV_GROUPS, PRIMARY_NAV, parentRoute, primaryRoute } from '../navigation';
+import { NAV_GROUPS, PRIMARY_NAV, parentRoute, primaryRoute, returnToParent } from '../navigation';
 import { settingsDraftCount, restartRequired, setSettingsDrafts, setApplyRequested } from '../pending';
 import { PageHeader } from './Basics';
 import { ToastRoot } from './Toast';
@@ -212,7 +212,7 @@ export function AppShell(props: {
             <RouteVisible.Provider value={visible}>
               <Show when={parentRoute(name)}>
                 {(parent) => (
-                  <a class="back-link" href={'#/' + parent().route}><MdIcon name="chevron_right" size={18} />{t('shell_back')} · {t(parent().labelKey)}</a>
+                  <a class="back-link" href={'#/' + parent().route} onClick={event => { event.preventDefault(); returnToParent(parent().route); }}><MdIcon name="chevron_right" size={18} />{t('shell_back')} · {t(parent().labelKey)}</a>
                 )}
               </Show>
               <PageHeader id={'app-title-' + name} title={t(routeDef.titleKey)} />

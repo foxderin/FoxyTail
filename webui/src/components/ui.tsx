@@ -172,11 +172,27 @@ export function Select(props: ParentProps<{
 }>): JSX.Element {
   let selectEl!: HTMLSelectElement;
   let menuEl!: HTMLDivElement;
+  let popup!: HTMLDetailsElement;
+  const closeMenu = (restoreFocus = false) => {
+    popup.open = false;
+    if (restoreFocus) popup.querySelector('summary')?.focus();
+  };
+  createEffect(() => {
+    if (props.disabled && popup?.open) closeMenu(popup.contains(document.activeElement));
+  });
   const [rev, bump] = createSignal(0);
   onMount(() => {
-    const mo = new MutationObserver(() => bump(v => v + 1));
-    mo.observe(selectEl, { childList: true, subtree: true, characterData: true });
-    onCleanup(() => mo.disconnect());
+    const mo = new MutationObserver(() => {
+      bump(v => v + 1);
+      // An open menu is a snapshot of the options; dismiss it when they change.
+      if (popup.open) closeMenu(popup.contains(document.activeElement));
+    });
+    mo.observe(selectEl, { childList: true, subtree: true, characterData: true, attributes: true, attributeFilter: ['disabled', 'value', 'label'] });
+    const dismiss = (event: PointerEvent) => {
+      if (popup.open && event.target instanceof Node && !popup.contains(event.target)) closeMenu();
+    };
+    document.addEventListener('pointerdown', dismiss);
+    onCleanup(() => { mo.disconnect(); document.removeEventListener('pointerdown', dismiss); });
     bump(v => v + 1); // options render before onMount, so re-read once for the initial label
   });
   const options = () => (rev(), Array.from(selectEl?.options ?? []));
@@ -193,9 +209,10 @@ export function Select(props: ParentProps<{
       item.disabled = opt.disabled;
       item.textContent = opt.text;
       item.onclick = () => {
+        if (!popup.open || props.disabled || selectEl.disabled || opt.disabled || !selectEl.contains(opt)) return;
         selectEl.value = opt.value;
         selectEl.dispatchEvent(new Event('change', { bubbles: true }));
-        menuEl.closest('details')?.removeAttribute('open');
+        closeMenu(true);
       };
       return item;
     }));
@@ -206,7 +223,13 @@ export function Select(props: ParentProps<{
         {props.label}
       </span>
       <MdIcon name="unfold_more" size={18} class="select-caret" />
-      <details class="menu-pop select-pop" onToggle={(e) => { if (e.currentTarget.open) syncMenu(); }}>
+      <details ref={popup} class="menu-pop select-pop"
+        onToggle={() => { if (popup.open) { if (props.disabled) closeMenu(); else syncMenu(); } }}
+        onKeyDown={event => {
+          if (event.key === 'Escape' && popup.open) {
+            event.preventDefault(); event.stopPropagation(); closeMenu(true);
+          }
+        }}>
         <summary
           aria-label={props['aria-label'] || props.label}
           aria-haspopup="listbox"
