@@ -234,5 +234,52 @@ restore_trial_preference
                     self.assertFalse(called.exists())
 
 
+class ModDescTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.dir = Path(self.tmp.name).resolve()
+
+    def test_mod_desc_replaces_only_the_first_bracketed_prefix(self):
+        svc = (ROOT / 'tailscale/scripts/foxytail.service').read_text()
+        funcs = svc[svc.index('update_mod_desc() {'):svc.index('# A stale socket inode')]
+        prop = self.dir / 'module.prop'
+        ksud = self.dir / 'ksud'
+        # Relocate only the fixed manager binary; never invoke a real manager.
+        funcs = funcs.replace('/data/adb/ksud', str(ksud))
+        for mode in ('absent', 'supported', 'unsupported'):
+            with self.subTest(manager=mode):
+                prop.write_text('name=FoxyTail\ndescription=[old state] keep [this] tail\nversion=v\n')
+                if mode != 'absent':
+                    ksud.write_text('#!/bin/sh\nprintf "%s\\n" "$KSU_MODULE" "$@" >"$PWD/ksud.args"\nexit ' +
+                                    ('0' if mode == 'supported' else '1') + '\n')
+                    ksud.chmod(0o755)
+                script = funcs + '''
+TS_MOD_PROP="$PWD/module.prop"
+# Check the bounded invocation contract without requiring GNU timeout on macOS.
+timeout() {
+  [ "$1:$2:$3" = '-k:1:2' ] || return 99
+  shift 3
+  "$@"
+}
+# Emulate GNU sed -i on hosts whose sed lacks it.
+sed() {
+  case "$1" in
+    -i) shift; _f=$2; command sed "$1" "$_f" >"$_f.$$" && cat "$_f.$$" >"$_f"; rm -f "$_f.$$" ;;
+    *) command sed "$@" ;;
+  esac
+}
+update_mod_desc stopped
+'''
+                run_sh(script, self.dir)
+                lines = prop.read_text().splitlines()
+                self.assertTrue(lines[1].startswith('description=[ '), lines[1])
+                self.assertIn('keep [this] tail', lines[1])
+                self.assertEqual([lines[0], lines[2]], ['name=FoxyTail', 'version=v'])
+                if mode != 'absent':
+                    self.assertEqual((self.dir / 'ksud.args').read_text().splitlines(),
+                                     ['foxytail', 'module', 'config', 'set', '--temp',
+                                      'override.description', lines[1].removeprefix('description=')])
+
 if __name__ == '__main__':
     unittest.main()

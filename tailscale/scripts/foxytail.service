@@ -80,6 +80,17 @@ update_mod_desc() {
   fi
   [ -f "${TS_MOD_PROP}" ] || return 0
   sed -i "s/^description=\(\[[^]]*\][[:space:]]*\)\{0,1\}/description=[ ⏲ ${_umd_time} | ${_umd_state} ] /" "${TS_MOD_PROP}"
+  # Modern KernelSU gives temporary config precedence over module.prop. Keep
+  # the existing fallback for Magisk/older managers; never gate service success
+  # on this optional UI update, or run it without a bounded timeout.
+  if [ -x /data/adb/ksud ] && command -v timeout >/dev/null 2>&1; then
+    _umd_desc=$(sed -n 's/^description=//p' "${TS_MOD_PROP}" | head -n 1)
+    [ -z "${_umd_desc}" ] || (
+      export KSU_MODULE=foxytail
+      timeout -k 1 2 /data/adb/ksud module config set --temp override.description "${_umd_desc}"
+    ) >/dev/null 2>&1 || :
+  fi
+  return 0
 }
 
 # A stale socket inode is not readiness. Accept any answering backend state
