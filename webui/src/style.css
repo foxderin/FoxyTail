@@ -202,7 +202,7 @@ button:disabled { cursor: not-allowed; }
 .text-field.is-disabled { background: var(--ft-panel-inset); }.text-field.no-label { min-height: 46px; }.text-field.no-label .text-field-input { padding: 11px 0; height: 44px; }
 .text-field:has([aria-invalid='true']) { border-color: var(--md-sys-color-error); }
 .text-field-leading { position: absolute; left: 13px; top: 50%; transform: translateY(-50%); color: var(--ft-muted); line-height: 0; }.text-field:has(.text-field-leading) .text-field-input { padding-left: 32px; }.text-field:has(.text-field-leading) .text-field-label { left: 45px; }
-textarea.text-field-input { height: auto; min-height: 96px; resize: vertical; line-height: 1.7; }.select-field { padding-right: 36px; }.select-caret { position: absolute; right: 11px; top: 50%; transform: translateY(-50%) rotate(90deg); color: var(--ft-muted); pointer-events: none; }select.text-field-input { appearance: none; -webkit-appearance: none; cursor: pointer; }option { background: var(--ft-surface); color: var(--ft-text); }
+textarea.text-field-input { height: auto; min-height: 96px; resize: vertical; line-height: 1.7; }select.text-field-input { appearance: none; -webkit-appearance: none; cursor: pointer; }option { background: var(--ft-surface); color: var(--ft-text); }
 .switch { display: inline-flex; flex: none; position: relative; align-items: center; justify-content: center; width: 52px; min-height: 44px; cursor: pointer; }.switch-input, .checkbox-input { position: absolute; opacity: 0; width: 1px; height: 1px; margin: 0; }
 .switch-track { width: 44px; height: 26px; border-radius: 13px; background: var(--md-sys-color-surface-container-highest); border: 1px solid var(--md-sys-color-outline); position: relative; transition: background-color 140ms, border-color 140ms; }.switch-thumb { position: absolute; top: 3px; left: 3px; width: 18px; height: 18px; border-radius: 50%; background: var(--md-sys-color-outline); transition: transform 140ms, background-color 140ms; }.switch-input:checked + .switch-track { background: var(--md-sys-color-primary); border-color: var(--md-sys-color-primary); }.switch-input:checked + .switch-track .switch-thumb { transform: translateX(18px); background: var(--md-sys-color-on-primary); }.switch-input:disabled + .switch-track { opacity: .45; }
 .checkbox { display: inline-flex; position: relative; align-items: center; justify-content: center; cursor: pointer; width: 44px; height: 44px; flex: none; }.checkbox-box { display: flex; align-items: center; justify-content: center; width: 20px; height: 20px; border-radius: 5px; border: 1.5px solid var(--md-sys-color-outline); color: transparent; transition: background-color 140ms, border-color 140ms, color 140ms; }.checkbox-input:checked + .checkbox-box { background: var(--md-sys-color-primary); border-color: var(--md-sys-color-primary); color: var(--md-sys-color-on-primary); }.checkbox-input:disabled + .checkbox-box { opacity: .45; }.checkbox-box .md-icon { width: 14px; height: 14px; }.switch-input:focus-visible + .switch-track, .checkbox-input:focus-visible + .checkbox-box { outline: 3px solid var(--md-sys-color-primary); outline-offset: 4px; }.switch:has(:disabled), .checkbox:has(:disabled) { cursor: not-allowed; }
@@ -274,10 +274,15 @@ canvas.chart, canvas.topo { width: 100%; display: block; touch-action: pan-y; }
 .menu-pop button:disabled { opacity: .45; cursor: default; }
 .menu-pop .menu-label { padding: 8px 12px 2px; font-size: 11px; font-weight: 600; color: var(--ft-muted); }
 /* Select renders as a menu-pop listbox over a hidden native select. */
+/* The label has its own row; the selected value and indicator share a row.
+   Both texts may wrap without moving the indicator into the label's space. */
+.select-field { min-width: 0; }
 .select-pop { display: block; }
-.select-pop > summary { display: block; width: 100%; min-height: 0; padding: 0; border-radius: 0; cursor: pointer; }
-.select-pop > summary .select-value { display: block; min-height: 56px; padding: 23px 0 7px; font-size: 13px; color: var(--ft-text); }
-.select-field.no-label .select-pop > summary .select-value { min-height: 44px; padding: 11px 0; }
+.select-pop > summary { display: grid; grid-template-columns: minmax(0, 1fr) 18px; column-gap: 10px; row-gap: 2px; align-items: center; justify-items: stretch; width: 100%; min-height: 56px; padding: 8px 0; border-radius: 0; cursor: pointer; }
+.select-pop > summary .text-field-label { position: static; grid-column: 1 / -1; overflow-wrap: anywhere; }
+.select-pop > summary .select-value { min-width: 0; grid-column: 1; font-size: 13px; line-height: 20px; color: var(--ft-text); overflow-wrap: anywhere; }
+.select-pop > summary .select-caret { grid-column: 2; color: var(--ft-muted); pointer-events: none; }
+.select-field.no-label .select-pop > summary { min-height: 44px; }
 .select-pop > summary[aria-disabled] { opacity: .55; cursor: default; }
-.select-pop > div { left: -13px; right: -36px; max-height: 300px; }
+.select-pop > div { left: -13px; right: -13px; max-height: 300px; overflow-wrap: anywhere; }
 .menu-pop [role='option'][aria-selected='true'] { background: var(--md-sys-color-secondary-container); color: var(--md-sys-color-on-secondary-container); }

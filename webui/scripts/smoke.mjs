@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 // pnpm smoke builds the real app once; fixtures exercise native envelopes only.
+import { readFileSync } from 'node:fs';
 import { boot, assert, checks, failures, flush, copy } from './smoke-fixture.mjs';
 
 async function scenario(name, run) {
@@ -217,6 +218,27 @@ await scenario('settings drafts survive navigation and conflicts require consent
   assert([...window.document.querySelectorAll('textarea')].some(e => e.value === raw), 'context draft retains comments, Unicode and unknown lines verbatim');
 });
 
+await scenario('Select keeps the value and indicator in one accessible row', async ({ nav, window, app }) => {
+  await nav('diag');
+  const field = [...window.document.querySelectorAll('.select-field')].find(f => f.querySelector('summary')?.getAttribute('aria-label') === app.t('diag_bundle_mode'));
+  const summary = field.querySelector('summary'), label = summary.querySelector('.text-field-label');
+  const value = summary.querySelector('.select-value'), caret = summary.querySelector('.select-caret');
+  assert(label && value && caret && caret.parentElement === value.parentElement, 'label, value and indicator belong to the same dropdown trigger');
+  assert(window.document.getElementById(summary.getAttribute('aria-describedby')) === value, 'selected value is exposed alongside the dropdown accessible label');
+  const style = window.document.createElement('style');
+  style.textContent = readFileSync(new URL('../src/style.css', import.meta.url), 'utf8'); window.document.head.append(style);
+  const computed = element => window.getComputedStyle(element);
+  assert(computed(summary).display === 'grid' && computed(label).position === 'static' && computed(label).gridColumn === '1 / -1', 'label occupies its own wrapping row, not an absolute overlay');
+  assert(computed(value).gridColumn === '1' && computed(caret).gridColumn === '2' && computed(summary).alignItems === 'center', 'value and indicator share a vertically centered grid row');
+  const longText = 'VeryLongDiagnosticBundleContentWithoutBreaks'.repeat(4);
+  const selected = field.querySelector('select').selectedOptions[0]; selected.textContent = longText; await flush();
+  label.textContent = longText;
+  assert(value.textContent === longText && computed(value).overflowWrap === 'anywhere' && computed(label).overflowWrap === 'anywhere', 'long label and selected option stay complete and wrap without covering the indicator');
+  await nav('settings');
+  const unlabeled = window.document.querySelector('.select-field.no-label summary');
+  assert(unlabeled && !unlabeled.querySelector('.text-field-label') && computed(unlabeled).minHeight === '44px', 'unlabeled dropdowns retain a compact centered touch target');
+});
+
 await scenario('Select owns disabled state and dismissal', async ({ fixture, nav, window, app }) => {
   await nav('settings');
   const field = [...window.document.querySelectorAll('.select-field')].find(f => f.querySelector('summary')?.getAttribute('aria-label') === app.t('trial_candidate'));
@@ -246,7 +268,7 @@ await scenario('Back closes active popup before disclosure and parent links unwi
   await nav('settings');
   const advanced = window.document.querySelector('.page-transition:not([hidden]) details.tool-disclosure');
   advanced.open = true; advanced.dispatchEvent(new window.Event('toggle')); await flush();
-  const popup = window.document.querySelector('#restore-backup').closest('label').querySelector('details');
+  const popup = window.document.querySelector('#restore-backup').closest('.select-field').querySelector('details');
   popup.open = true; popup.dispatchEvent(new window.Event('toggle')); await flush();
   fixture.emit('back', {}); await flush();
   assert(!popup.open && advanced.open, 'Back closes the active popup without collapsing an unrelated disclosure');

@@ -171,6 +171,7 @@ export function Select(props: ParentProps<{
   class?: string;
   onChange?: (e: Event) => void;
 }>): JSX.Element {
+  const valueId = createUniqueId();
   let selectEl!: HTMLSelectElement;
   let menuEl!: HTMLDivElement;
   let popup!: HTMLDetailsElement;
@@ -219,11 +220,7 @@ export function Select(props: ParentProps<{
     }));
   };
   return (
-    <label class={'text-field select-field' + (props.disabled ? ' is-disabled' : '') + (!props.label ? ' no-label' : '') + (props.class ? ' ' + props.class : '')} style={props.style}>
-      <span class={'text-field-label' + (String(props.value ?? '').length > 0 ? ' floating' : '')}>
-        {props.label}
-      </span>
-      <MdIcon name="unfold_more" size={18} class="select-caret" />
+    <div class={'text-field select-field' + (props.disabled ? ' is-disabled' : '') + (!props.label ? ' no-label' : '') + (props.class ? ' ' + props.class : '')} style={props.style}>
       <details ref={popup} class="menu-pop select-pop"
         onToggle={() => { if (popup.open) { if (props.disabled) closeMenu(); else syncMenu(); } }}
         onKeyDown={event => {
@@ -233,11 +230,14 @@ export function Select(props: ParentProps<{
         }}>
         <summary
           aria-label={props['aria-label'] || props.label}
+          aria-describedby={props.label || props['aria-label'] ? valueId : undefined}
           aria-haspopup="listbox"
           aria-disabled={props.disabled || undefined}
           onClick={(e) => { if (props.disabled) e.preventDefault(); }}
         >
-          <span class="select-value">{currentText()}</span>
+          <Show when={props.label}><span class="text-field-label">{props.label}</span></Show>
+          <span id={valueId} class="select-value">{currentText()}</span>
+          <MdIcon name="unfold_more" size={18} class="select-caret" />
         </summary>
         <div ref={menuEl} role="listbox" aria-label={props['aria-label'] || props.label} />
       </details>
@@ -252,7 +252,7 @@ export function Select(props: ParentProps<{
       >
         {props.children}
       </select>
-    </label>
+    </div>
   );
 }
 
