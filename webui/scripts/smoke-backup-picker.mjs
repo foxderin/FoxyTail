@@ -14,6 +14,10 @@ export async function runBackupPickerSmoke() {
       assert(h.fixture.log.some(r => r.action === 'backup.import'), 'explicit local action reaches native document picker');
       assert(h.window.document.querySelector('[data-testid="restore-diff"]'), 'selected local artifact is previewed even when list is empty or failed');
       assert(!h.fixture.log.some(r => r.action === 'control.mutate' && r.args.command === 'restore'), 'choosing local file never restores without confirmation');
+      h.fixture.overrides.set('backup-list', {ok:false,error:'Discovery unavailable after import'});
+      h.click(h.button('backup_refresh')); await flush();
+      assert(select.value === h.fixture.token && h.window.document.querySelector('[data-testid="restore-diff"]'), 'discovery failure cannot discard an imported local selection or preview');
+
       assert(h.fixture.unsupported.length === 0, 'local picker regression uses supported native actions');
     } finally {h.close();}
   }

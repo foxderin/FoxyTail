@@ -66,7 +66,9 @@ export default function SettingsBackup(props: {
     (res) => {
       if (!res.ok || !validBackups(res.backups)) {
         setError(res.error || t('backup_invalid_response'));
-        setBackups([]); setSelected(''); setPreview(null);
+        setBackups([]);
+        // Local picker artifacts do not depend on discovery in Download.
+        if (!/^art-[a-f0-9]{32}$/.test(selected())) { setSelected(''); setPreview(null); }
         return;
       }
       setBackups(res.backups);
