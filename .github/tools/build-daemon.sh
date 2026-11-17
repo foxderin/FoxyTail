@@ -8,7 +8,11 @@ source native/tailscaled/SOURCE
 mkdir -p "$1"
 out=$(cd "$1" && pwd)
 ndk="${ANDROID_NDK_HOME:-${ANDROID_HOME:?ANDROID_HOME required}/ndk/$DAEMON_NDK}"
-test "$(sed -n 's/^Pkg.Revision[[:space:]]*=[[:space:]]*//p' "$ndk/source.properties")" = "$DAEMON_NDK"
+actual_ndk=$(sed -n 's/^Pkg.Revision[[:space:]]*=[[:space:]]*//p' "$ndk/source.properties")
+if [ "$actual_ndk" != "$DAEMON_NDK" ]; then
+  echo "error: daemon requires NDK $DAEMON_NDK; selected $ndk ($actual_ndk)" >&2
+  exit 1
+fi
 cc="$ndk/toolchains/llvm/prebuilt/linux-x86_64/bin"
 test -x "$cc/aarch64-linux-android21-clang"
 work=$(mktemp -d)

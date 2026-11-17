@@ -8,6 +8,18 @@ import unittest
 HELPER = Path(__file__).resolve().parents[1] / '.github/tools/release-source.sh'
 
 class ReleaseSourceTests(unittest.TestCase):
+    def test_release_selects_pinned_ndk_over_runner_default(self):
+        repo = HELPER.parents[2]
+        workflow = (repo / '.github/workflows/release.yml').read_text()
+        start = workflow.index('          source native/tailscaled/SOURCE')
+        end = workflow.index('          export FOXYTAIL_KEYSTORE_PATH=', start)
+        setup = workflow[start:end]
+        result = subprocess.run(['bash', '-c', setup + '\nprintf "%s" "$ANDROID_NDK_HOME"'],
+                                cwd=repo, text=True, capture_output=True,
+                                env=dict(os.environ, ANDROID_HOME='/sdk', ANDROID_NDK_HOME='/sdk/ndk/28'))
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout, '/sdk/ndk/27.2.12479018')
+
     def test_exact_source_and_tag_collision(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

@@ -161,6 +161,9 @@ jobs:
           FOXYTAIL_KEY_ALIAS: ${{ secrets.FOXYTAIL_KEY_ALIAS }}
           FOXYTAIL_KEY_PASSWORD: ${{ secrets.FOXYTAIL_KEY_PASSWORD }}
         run: |
+          # Hosted runners may export ANDROID_NDK_HOME for another installed NDK.
+          source native/tailscaled/SOURCE
+          export ANDROID_NDK_HOME="$ANDROID_HOME/ndk/$DAEMON_NDK"
           export FOXYTAIL_KEYSTORE_PATH="$RUNNER_TEMP/foxytail-companion.p12"
           trap 'rm -f "$FOXYTAIL_KEYSTORE_PATH"' EXIT
           test -n "$FOXYTAIL_KEYSTORE_BASE64"
