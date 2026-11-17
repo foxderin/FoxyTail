@@ -4,6 +4,7 @@ import { createApiScope, type ApiResult } from '../api';
 import { t, type I18nKey } from '../i18n';
 import { Card, KvRow, ErrorState } from '../components/Basics';
 import { MdIcon } from '../icons';
+import { TaskProgress } from '../components/TaskProgress';
 import { Button } from '../components/ui';
 import { DNS_REASONS, type DnsInfo } from './tunnel-dns';
 import { RouteVisible } from '../schedule';
@@ -54,6 +55,7 @@ function DiagnosticDetails(props: { locked: boolean }): JSX.Element {
   }
   return <>
     <Card title={t('dns_title')} icon="dns">
+      <TaskProgress taskKey="dns-probe" />
       <div class="tool-actions"><Button disabled={props.locked || loading() || probing()} busy={loading() || probing()} onClick={() => void probe()}>{t('dns_check')}</Button></div>
       <Show when={probeError()}><ErrorState text={probeError()} /></Show>
       <Show when={dns()?.error}><ErrorState text={String(dns()?.error)} /></Show>

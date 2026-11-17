@@ -38,7 +38,7 @@ const TASK_DESTINATIONS: Record<string, { route: string; label: I18nKey; icon: I
   'settings-save': { route: 'settings', label: 'set_title', icon: 'settings' },
   'service-control': { route: 'dashboard', label: 'shell_services', icon: 'sync' },
   'subnet-routes': { route: 'routing', label: 'tools_subnet_accept', icon: 'alt_route' },
-  'dns-probe': { route: 'settings', label: 'task_dns_probe', icon: 'dns' },
+  'dns-probe': { route: 'diag', label: 'task_dns_probe', icon: 'dns' },
   'coexist-info': { route: 'tunnel', label: 'task_coexist_info', icon: 'network_check' },
   'coexist-check': { route: 'tunnel', label: 'task_coexist_check', icon: 'network_check' },
   'socks-check': { route: 'tunnel', label: 'task_socks_check', icon: 'network_check' },
@@ -98,7 +98,7 @@ function TaskMenu(): JSX.Element {
 
 /* The header chip mirrors the shared connection state machine; the sheet it
  * opens exposes the same actions as the dashboard connection card. */
-function StatusSheet(): JSX.Element {
+function StatusSheet(props: { ref: (element: HTMLDetailsElement) => void }): JSX.Element {
   let sheet!: HTMLDetailsElement;
   onMount(() => {
     const dismiss = (event: PointerEvent) => { if (sheet.open && event.target instanceof Node && !sheet.contains(event.target)) sheet.open = false; };
@@ -106,8 +106,8 @@ function StatusSheet(): JSX.Element {
     onCleanup(() => document.removeEventListener('pointerdown', dismiss));
   });
   const close = () => { sheet.open = false; sheet.querySelector('summary')?.focus(); };
-  const working = () => serviceBusy() !== null || serviceOperationRunning() || nativeControl().busy;
-  return <details class="status-sheet" ref={sheet} data-testid="status-sheet" onKeyDown={(event) => {
+  const working = () => serviceBusy() !== null || serviceOperationRunning() || nativeControl().busy || nativeControl().checking;
+  return <details class="status-sheet" ref={element => { sheet = element; props.ref(element); }} data-testid="status-sheet" onKeyDown={(event) => {
     if (event.key === 'Escape' && sheet.open) close();
   }}>
     <summary class={'status-chip tone-' + connectionChip().tone} aria-label={t('shell_open_status')}>
@@ -117,7 +117,7 @@ function StatusSheet(): JSX.Element {
       <span class="status-chip-label">{t(connectionChip().label)}</span>
     </summary>
     <button type="button" class="status-sheet-scrim" aria-label={t('close')} onClick={close} tabIndex={-1} />
-    <section class="status-sheet-panel" aria-label={t('shell_status_title')}>
+    <section id="service-status-details" class="status-sheet-panel" aria-label={t('shell_status_title')}>
       <header class="status-sheet-head">
         <strong>{t('shell_status_title')}</strong>
         <IconButton aria-label={t('close')} onClick={close}><MdIcon name="close" size={18} /></IconButton>
@@ -149,9 +149,17 @@ export function AppShell(props: {
   });
 
   const def = () => props.routes[props.route()] ?? props.routes.dashboard;
-  /* Transient backend-busy states live in the status chip/sheet; only issues
-   * that block the app warrant a page banner. */
-  const blockingIssue = () => { const issue = nativeIssue(); return issue && issue.kind !== 'busy' ? issue : null; };
+  let statusSheet!: HTMLDetailsElement;
+  const persistentIssue = () => {
+    if (!hasRoot) return 'shell_access_unavailable' as const;
+    const issue = nativeIssue();
+    return issue?.kind === 'unknown' ? 'shell_result_unconfirmed' as const
+      : issue?.kind === 'incompatible' ? 'shell_access_unavailable' as const : null;
+  };
+  const openStatus = () => {
+    statusSheet.open = true;
+    statusSheet.querySelector<HTMLButtonElement>('.status-sheet-head button')?.focus();
+  };
   let main!: HTMLElement;
   let bottomNav!: HTMLElement;
   let header!: HTMLElement;
@@ -190,21 +198,17 @@ export function AppShell(props: {
       <header id="app-header" ref={header}>
         <div class="mobile-brand"><Brand /></div>
         <div class="desktop-context"><span>{t('shell_workspace')}</span><MdIcon name="chevron_right" size={16} /><strong>{t(def().titleKey)}</strong></div>
-        <div class="header-actions"><TaskMenu /><StatusSheet /></div>
+        <div class="header-actions"><TaskMenu /><StatusSheet ref={element => { statusSheet = element; }} /></div>
       </header>
       <main id="view" ref={main} tabIndex={-1}>
-        <Show when={!hasRoot}>
-          <div class="root-banner" role="alert"><MdIcon name="info" size={20} /><span>{t('no_root_banner')}</span></div>
-        </Show>
-        <Show when={hasRoot && props.route() !== 'dashboard' && blockingIssue()}>
-          {(issue) => (
-            <div class="root-banner" role={issue().kind === 'busy' ? 'status' : 'alert'}>
-              <MdIcon name={issue().kind === 'busy' ? 'info' : 'warning'} size={20} />
-              <span>{issue().message}</span>
-              <NativeIssueActions />
-            </div>
-          )}
-        </Show>
+        <Show when={persistentIssue()}>{issue =>
+          <div class="status-notice" role="alert">
+            <button type="button" aria-controls="service-status-details" onClick={openStatus}>
+              <MdIcon name="warning" size={18} /><span>{t(issue())}</span>
+              <span class="status-notice-action">{t('shell_view_status')}</span><MdIcon name="chevron_right" size={18} />
+            </button>
+          </div>
+        }</Show>
         <For each={visited()}>{name => {
           const routeDef = props.routes[name] ?? props.routes.dashboard;
           const visible = () => props.route() === name;

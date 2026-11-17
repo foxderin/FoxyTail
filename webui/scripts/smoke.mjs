@@ -565,7 +565,8 @@ await scenario('snapshot sequence and displayed cancellation ownership', async (
     'older refresh snapshot cannot overwrite newer read-only completion with unchanged mutation revision');
   fixture.publishControl({ id: 'displayed-operation', busy: true, canWrite: false, canCancel: true });
   fixture.holdNext.add('control.cancel');
-  click(button('native_cancel_operation', window.document.querySelector('.conn-card')));
+  click(window.document.querySelector('.status-chip')); await flush();
+  click(button('native_cancel_operation', window.document.querySelector('[data-testid="status-sheet"]')));
   const cancellation = fixture.held.find(r => r.key === 'control.cancel');
   fixture.publishControl({ id: 'replacement-operation', busy: true, canWrite: false, canCancel: true });
   assert(cancellation.request.args.id === 'displayed-operation' && cancellation.request.args.id !== fixture.control.id,
@@ -839,6 +840,39 @@ await scenario('status sheet mirrors the connection card without top-bar control
   assert(!window.document.querySelector('input[name="exit-node"]'), 'device inventory no longer embeds the exit workflow');
 });
 
+await scenario('manual DNS checks own their local progress and cancellation', async ({ fixture, nav, window, button, click }) => {
+  await nav('diag');
+  const details = window.document.querySelector('[data-testid="diagnostic-details"]');
+  details.open = true; details.dispatchEvent(new window.Event('toggle')); await flush();
+  fixture.holdNext.add('dns-probe');
+  click(button('dns_check', details)); await flush();
+  const progress = details.querySelector('[data-task-key="dns-probe"]');
+  assert(progress && !window.document.querySelector('.status-notice'), 'explicit probe progress stays beside the requested diagnostics');
+  click(progress.querySelector('button')); await flush();
+  assert(fixture.log.some(r => r.action === 'control.cancel' && r.args.id === fixture.control.id), 'local probe cancel targets the active durable operation');
+  fixture.held.findLast(r => r.key === 'dns-probe').finish({ ok: false, cancelled: true }); await flush();
+  assert(!details.querySelector('[data-task-key="dns-probe"]'), 'terminal cancelled probe removes local progress');
+});
+
+await scenario('critical feedback is compact and uses availability errors, not task messages', async ({ fixture, nav, window, button, click }) => {
+  await nav('settings');
+  fixture.publishControl({ checking: true, compatible: true, busy: false, unknown: false }); await flush();
+  assert(!window.document.querySelector('.status-notice') && !window.document.querySelector('.root-banner'), 'background access check does not create a page warning');
+  assert(!!window.document.querySelector('.status-chip .circular-progress'), 'background check uses the existing compact status indicator');
+  fixture.publishControl({ checking: false, compatible: false, canWrite: false, busy: true, ownsMutation: false, command: 'dns-probe', id: 'probe', error: 'Module version is incompatible', message: 'Running dns-probe' }); await flush();
+  const notice = window.document.querySelector('.status-notice');
+  assert(notice && notice.querySelectorAll('button').length === 1 && !notice.querySelector('.native-issue-actions'), 'critical failure retains one compact details entry instead of a second action row');
+  click(notice.querySelector('button')); await flush();
+  const sheet = window.document.querySelector('[data-testid="status-sheet"]');
+  assert(sheet.open && sheet.textContent.includes('Module version is incompatible') && !sheet.textContent.includes('Running dns-probe'), 'availability failure cannot display an unrelated task progress message');
+  assert(!!button('native_recheck', sheet), 'retry remains discoverable in the existing status sheet');
+  fixture.publishControl({ compatible: true, unknown: true, canWrite: false, canCancel: true, error: '', command: 'settings-set' }); await flush();
+  assert(window.document.querySelector('.status-notice')?.textContent.includes('unconfirmed'), 'unknown outcome remains a persistent visible warning');
+  assert(!!button('native_unlock', sheet) && !!button('native_cancel_operation', sheet), 'unknown confirmation and available cancellation remain accessible');
+  fixture.publishControl({ unknown: false, busy: false, compatible: true, canWrite: true, canCancel: false }); await flush();
+  assert(!window.document.querySelector('.status-notice'), 'resolved state removes the compact warning');
+});
+
 await scenario('untracked native busy lives in the status chip, not a page banner', async ({ fixture, nav, window, button, click }) => {
   await nav('files');
   fixture.publishControl({ busy: true, canWrite: false, canCancel: true, id: 'op-busy-1', message: 'Operation in progress: simulated' });
@@ -857,13 +891,17 @@ await scenario('untracked native busy lives in the status chip, not a page banne
 });
 
 await import('./smoke-read-recovery.mjs');
+await (await import('./smoke-dns-capability.mjs')).runDnsCapabilitySmoke();
 
 for (const state of ['empty', 'error', 'no-root', 'no-bridge', 'unknown']) {
   console.log('availability: ' + state);
   const h = await boot({ state });
   try {
     assert(!!h.window.document.querySelector('#view'), state + ' renders shell');
-    if (state === 'no-root' || state === 'no-bridge') assert(!h.app.api.nativeControl().canWrite, state + ' cannot enable mutations');
+    if (state === 'no-root' || state === 'no-bridge') {
+      assert(!h.app.api.nativeControl().canWrite, state + ' cannot enable mutations');
+      assert(!!h.window.document.querySelector('.status-notice'), state + ' access problem remains visibly discoverable');
+    }
     if (state === 'empty') assert(h.app.state.peers()?.length === 0, 'empty peers are not a load failure');
     if (state === 'error') assert(!!h.app.state.statusError(), 'failed read stays explicit failure');
     if (state === 'unknown') {

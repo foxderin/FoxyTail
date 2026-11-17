@@ -75,7 +75,7 @@ export function ServiceActions(): JSX.Element {
 
 export function NativeIssueActions(): JSX.Element {
   return (
-    <div class="root-banner-actions">
+    <div class="native-issue-actions">
       <Button variant="text" onClick={recheckNative}><MdIcon name="refresh" size={18} />{t('native_recheck')}</Button>
       <Show when={nativeControl().canCancel}>
         <Button variant="text" onClick={cancelNativeOperation}><MdIcon name="close" size={18} />{t('native_cancel_operation')}</Button>

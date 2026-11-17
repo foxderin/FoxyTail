@@ -7,7 +7,7 @@ import { status, statusError, statusLoading } from '../state';
 import { fmtUptime, fmtBytes, keyExpiry } from '../format';
 import { SkeletonCard } from '../components/Basics';
 import { LoginActions } from '../components/LoginHero';
-import { NativeIssueActions, ServiceActions } from '../components/ServiceControls';
+import { ServiceActions } from '../components/ServiceControls';
 import { copyWithToast } from '../clipboard';
 import { MdIcon, type IconName } from '../icons';
 import { IconButton } from '../components/ui';
@@ -15,7 +15,6 @@ import {
   connectionCopy,
   connectionView,
   exitNodeLabel,
-  nativeIssue,
   serviceModeLabel,
   serviceRunning,
 } from '../service';
@@ -138,9 +137,6 @@ export default function Dashboard(): JSX.Element {
             </Show>
             <Show when={!['login', 'issue'].includes(view())}>
               <ServiceActions />
-            </Show>
-            <Show when={nativeIssue()}>
-              <NativeIssueActions />
             </Show>
           </div>
         </section>

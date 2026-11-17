@@ -1,4 +1,7 @@
 export const uxZh = {
+  shell_access_unavailable: '无法访问本机服务',
+  shell_result_unconfirmed: '上次操作结果未确认',
+  shell_view_status: '查看',
   dash_key_expires_on: '节点密钥将于 {date} 到期，请及时在管理控制台续期。',
   dash_key_expired_on: '节点密钥已于 {date} 过期，需要重新登录或在管理控制台续期。',
   dash_stale_data: '上次数据',
@@ -54,6 +57,9 @@ export const uxZh = {
 } as const;
 
 export const uxEn: Record<keyof typeof uxZh, string> = {
+  shell_access_unavailable: 'Service access unavailable',
+  shell_result_unconfirmed: 'Previous operation is unconfirmed',
+  shell_view_status: 'View',
   dash_key_expires_on: 'The node key expires on {date}. Renew it in the admin console.',
   dash_key_expired_on: 'The node key expired on {date}. Log in again or renew it in the admin console.',
   dash_stale_data: 'Last known data',

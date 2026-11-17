@@ -166,7 +166,7 @@ export function nativeIssue(): NativeIssue | null {
   if (!hasRoot) return null;
   if (control.unknown) return { kind: 'unknown', message: t('native_unknown') };
   if (control.checking) return { kind: 'checking', message: t('native_checking') };
-  if (!control.compatible) return { kind: 'incompatible', message: control.message || t('native_incompatible') };
+  if (!control.compatible) return { kind: 'incompatible', message: control.error || t('native_incompatible') };
   if (control.busy && !serviceOperationRunning()) return { kind: 'busy', message: control.message || t('shell_task_running') };
   return null;
 }
@@ -174,7 +174,7 @@ export type ConnectionView = 'loading' | 'unavailable' | 'issue' | 'error' | 'st
 export function connectionView(): ConnectionView {
   if (!hasRoot) return 'unavailable';
   const issue = nativeIssue();
-  if (issue && issue.kind !== 'busy') return 'issue';
+  if (issue && issue.kind !== 'busy' && issue.kind !== 'checking') return 'issue';
   if (statusLoading() && !status()) return 'loading';
   if (statusError() || !status()) return 'error';
   const state = connState(status());
@@ -197,7 +197,7 @@ export function connectionCopy() {
   const issue = view === 'issue' ? nativeIssue() : null;
   return {
     view, icon: copy.icon, tone: copy.tone,
-    title: issue?.kind === 'unknown' ? t('shell_task_unknown') : issue?.kind === 'checking' ? t('native_checking') : t(copy.title),
+    title: issue?.kind === 'unknown' ? t('shell_task_unknown') : t(copy.title),
     hint: issue ? issue.message : view === 'error' && statusError() ? statusError()! : t(copy.hint),
   };
 }
