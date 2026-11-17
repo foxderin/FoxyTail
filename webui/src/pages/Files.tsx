@@ -14,6 +14,7 @@ import { viewPollInterval } from '../state';
 import { acceptSnapshot, count, fileName, filesSnapshot, fileText, fileView, initializeFiles, MAX_FILES, record, resultError, snapshotError, updateFileView, type ExportState } from '../files';
 import type { InboxFile } from '../types';
 import FilesSend from './FilesSend';
+import { nativeFilesSection } from '../navigation';
 import FilesReceivePreferences from './FilesReceivePreferences';
 import './tools.css';
 import './files.css';
@@ -33,6 +34,9 @@ export default function Files(): JSX.Element {
   const [notice, setNotice] = createSignal('');
   const [exportState, setExportState] = createSignal<ExportState | null>(null);
   const [page, setPage] = createSignal(0);
+  const [inboxRequested, setInboxRequested] = createSignal(false);
+  let inboxSection!: HTMLElement;
+  let inboxFrame: number | undefined;
   let inboxDirty = false, inboxRevision = 0, observedReceipt = '';
   const visible = () => appActive() && routeVisible() && document.visibilityState !== 'hidden';
   const selected = () => fileView().selected;
@@ -166,12 +170,31 @@ export default function Files(): JSX.Element {
     }),
     onNativeEvent('export', value => setExportState(value as unknown as ExportState)),
     onNativeEvent('lifecycle', value => { if (!value.active) scope.cancelAll(); }),
-    onNativeEvent('navigate', value => { if (value.page === 'files') requestAnimationFrame(() => { if (inboxDirty || files() === null) void loadInbox(); }); }),
+    onNativeEvent('navigate', value => {
+      if (value.page !== 'files') return;
+      if (inboxFrame !== undefined) cancelAnimationFrame(inboxFrame);
+      setInboxRequested(value.section === 'inbox');
+      if (value.section === 'inbox') { inboxRevision++; inboxDirty = true; }
+      requestAnimationFrame(() => { if (inboxDirty || files() === null) void loadInbox(); });
+    }),
   ];
-  onCleanup(() => subscriptions.forEach(stop => stop()));
+  onCleanup(() => { subscriptions.forEach(stop => stop()); if (inboxFrame !== undefined) cancelAnimationFrame(inboxFrame); });
   // Refresh shared files and daemon-held pending deliveries while visible.
   pollWhileVisible(loadInbox, () => viewPollInterval(5000));
-  onMount(async () => { await initializeFiles(); setExportState(filesSnapshot()?.export ?? null); void loadInbox(); });
+  onMount(async () => {
+    await initializeFiles(); setExportState(filesSnapshot()?.export ?? null);
+    setInboxRequested(nativeFilesSection() === 'inbox'); void loadInbox();
+  });
+  createEffect(() => {
+    if (!inboxRequested() || !visible() || loading() || files() === null && !loadError()) return;
+    setInboxRequested(false);
+    inboxFrame = requestAnimationFrame(() => {
+      inboxFrame = undefined;
+      if (!visible()) return;
+      inboxSection.scrollIntoView({ block: 'start' });
+      inboxSection.focus({ preventScroll: true });
+    });
+  });
   createEffect(on(() => nativeControl().compatible, compatible => { if (compatible && files() === null) void loadInbox(); }));
   createEffect(on(() => routeVisible() && appActive(), shown => {
     if (!shown) { scope.cancelAll(); return; }
@@ -185,6 +208,7 @@ export default function Files(): JSX.Element {
       <IconButton aria-label={t('cancel')} disabled={exportState()?.committing} onClick={() => void requestNative('files.cancelExport').then(result => { if (!result.ok) setNotice(resultError(result)); })}><MdIcon name="close" size={18} /></IconButton>
     </div></Show>
     <Show when={exportState()?.error}><ErrorState text={exportState()!.error!} /></Show>
+    <section ref={inboxSection} id="files-inbox" tabIndex={-1} aria-label={t('files_inbox')}>
     <Card title={t('files_inbox')} icon="folder"
       description={files() !== null ? files()!.length + ' ' + t('tools_file_count') + ' · ' + fmtBytes(files()!.reduce((sum, file) => sum + file.size, 0)) : undefined}
       actions={<>
@@ -250,6 +274,7 @@ export default function Files(): JSX.Element {
         </Show>
       </Show>
     </Card>
+    </section>
     <FilesSend inboxSettled={!loading() && (files() !== null || !!loadError())} />
   </div>;
 }

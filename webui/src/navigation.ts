@@ -62,10 +62,10 @@ export function parentRoute(name: string): { route: string; labelKey: I18nKey } 
   return parent ? { route: parent, labelKey: ROUTE_META[parent].titleKey } : null;
 }
 
-const [nativeFilesSection, setNativeFilesSection] = createSignal<'send' | 'history'>();
+const [nativeFilesSection, setNativeFilesSection] = createSignal<'inbox' | 'send' | 'history'>();
 export { nativeFilesSection };
 export function acceptNativeNavigation(event: Record<string, unknown>): void {
-  if (event.section === 'send' || event.section === 'history') setNativeFilesSection(event.section);
+  if (event.section === 'inbox' || event.section === 'send' || event.section === 'history') setNativeFilesSection(event.section);
   if (typeof event.page === 'string' && event.page in ROUTE_META) location.hash = '#/' + event.page;
 }
 onNativeEvent('navigate', acceptNativeNavigation);

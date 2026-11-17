@@ -35,6 +35,7 @@ export default function FilesSend(props: {inboxSettled: boolean}): JSX.Element {
   const [cancelling, setCancelling] = createSignal(false);
   const [cancelRequested, setCancelRequested] = createSignal('');
   let sendSection!: HTMLElement, historySection!: HTMLElement;
+  let sectionFrame: number | undefined;
   let browseGeneration = 0, historyRevision = 0, ready = false, lastTransfer = '', deletedIds = new Set<string>();
   const selection = () => filesSnapshot()?.selection ?? [];
   const current = createMemo(() => history()?.find(active));
@@ -150,7 +151,9 @@ export default function FilesSend(props: {inboxSettled: boolean}): JSX.Element {
     if (!result.unknown) void loadHistory();
   }
   function focusSection(section: unknown) {
-    if (section === 'send' || section === 'history') setRequestedSection(section);
+    if (section !== 'inbox' && section !== 'send' && section !== 'history') return;
+    if (sectionFrame !== undefined) cancelAnimationFrame(sectionFrame);
+    setRequestedSection(section === 'inbox' ? '' : section);
   }
   const subscriptions = [
     onNativeEvent('control', value => {
@@ -159,7 +162,7 @@ export default function FilesSend(props: {inboxSettled: boolean}): JSX.Element {
     onNativeEvent('navigate', value => { if (value.page === 'files') { focusSection(value.section); requestAnimationFrame(() => { void loadPeers(); void loadHistory(); }); } }),
     onNativeEvent('lifecycle', value => { if (!value.active) scope.cancelAll(); }),
   ];
-  onCleanup(() => { subscriptions.forEach(stop => stop()); browseGeneration++; });
+  onCleanup(() => { subscriptions.forEach(stop => stop()); browseGeneration++; if (sectionFrame !== undefined) cancelAnimationFrame(sectionFrame); });
   createEffect(() => {
     const job = filesSnapshot()?.transfer;
     if (job && transfer(job)) { const serialized = JSON.stringify(job); if (serialized !== lastTransfer) { lastTransfer = serialized; accept(job); } }
@@ -178,7 +181,10 @@ export default function FilesSend(props: {inboxSettled: boolean}): JSX.Element {
     if (!section || !visible() || !props.inboxSettled || peerLoading() || historyLoading() ||
       peers() === null && !peerError() || !historyReady() && !historyError()) return;
     setRequestedSection('');
-    requestAnimationFrame(() => (section === 'send' ? sendSection : historySection)?.scrollIntoView({block: 'start'}));
+    sectionFrame = requestAnimationFrame(() => {
+      sectionFrame = undefined;
+      if (visible()) (section === 'send' ? sendSection : historySection)?.scrollIntoView({block: 'start'});
+    });
   });
   onMount(async () => { await initializeFiles(); ready = true; void loadPeers(); void loadHistory(); if (fileView().opened) void browse(fileView().directory); focusSection(nativeFilesSection()); });
   return <>

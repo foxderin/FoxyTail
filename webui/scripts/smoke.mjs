@@ -293,6 +293,31 @@ await scenario('peer detail probes run from the address row and render a result 
   assert(!!panel && panel.textContent.includes('23 ms') && !!panel.querySelector('code'), 'probe result renders latency, path and endpoint in a panel');
 });
 
+await scenario('Incoming notification targets retained inbox and supersedes pending history focus', async ({ fixture, nav, window, app }) => {
+  fixture.emit('navigate', { page: 'files', section: 'inbox' }); await flush();
+  assert(window.document.activeElement?.id === 'files-inbox', 'incoming intent before Files mounts is restored after initialization');
+  const page = window.document.querySelector('.files-page');
+  fixture.publishFiles({ selection: [{ key: 'one', name: 'notes.txt', size: 120, source: 'uri' }] });
+  app.files.updateFileView({ peer: 'nas', filter: 'network' }); await flush();
+  const scrolled = [];
+  window.Element.prototype.scrollIntoView = function () { scrolled.push(this.id); };
+  fixture.holdNext.add('file-send-history');
+  fixture.emit('navigate', { page: 'files', section: 'history' }); await flush();
+  const history = fixture.held.findLast(r => r.key === 'file-send-history');
+  assert(!!history, 'history refresh is pending when the newer inbox intent arrives');
+  const reads = fixture.log.filter(r => r.action === 'control.query' && r.args.command === 'files-inbox').length;
+  scrolled.length = 0;
+  fixture.emit('navigate', { page: 'files', section: 'inbox' }); await flush();
+  history.finish(); await flush();
+  assert(scrolled.at(-1) === 'files-inbox' && !scrolled.includes('files-history'), 'incoming inbox intent supersedes the delayed history scroll');
+  assert(window.document.activeElement?.id === 'files-inbox', 'incoming navigation focuses the inbox destination');
+  assert(fixture.log.filter(r => r.action === 'control.query' && r.args.command === 'files-inbox').length > reads, 'incoming notification refreshes an already retained inbox');
+  assert(window.document.querySelector('.files-page') === page && app.files.fileView().peer === 'nas' && app.files.fileView().filter === 'network' && fixture.files.selection.length === 1, 'section navigation retains files page, filters and pending send data');
+  await nav('settings');
+  fixture.emit('navigate', { page: 'files', section: 'inbox' }); await flush();
+  assert(window.location.hash === '#/files' && scrolled.at(-1) === 'files-inbox' && window.document.activeElement?.id === 'files-inbox', 'notification from another route also lands at the retained inbox');
+});
+
 await scenario('Blocked automatic receipt preserves manual recovery', async ({ fixture, nav, window, app }) => {
   fixture.data['files-inbox'].receive = { mode: 'buffered', selfId: 'preview-self', pending: [{ name: 'pending.txt', size: 12 }],
     automatic: { enabled: true, state: 'blocked', error: 'Simulated storage unavailable' } };
