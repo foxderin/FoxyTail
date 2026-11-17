@@ -200,7 +200,7 @@ cmd_restore() (
 
 # Only ordinary backups created in Download are offered by the picker.
 _backup_selected_path() {
-  case "$1" in /sdcard/Download/foxytail-backup-*.tar.gz) ;; *) return 1 ;; esac
+  case "$1" in /sdcard/Download/foxytail-backup.tar.gz|/sdcard/Download/foxytail-backup-*.tar.gz) ;; *) return 1 ;; esac
   _bsp_name=${1##*/}
   case "${_bsp_name}" in *[!A-Za-z0-9._-]*) return 1 ;; esac
   [ -f "$1" ] && [ ! -L "$1" ] || return 1
@@ -210,7 +210,7 @@ _backup_selected_path() {
 }
 
 cmd_backup_list() {
-  for _bl_path in /sdcard/Download/foxytail-backup-*.tar.gz; do
+  for _bl_path in /sdcard/Download/foxytail-backup.tar.gz /sdcard/Download/foxytail-backup-*.tar.gz; do
     _backup_selected_path "${_bl_path}" || continue
     _bl_size=$(wc -c <"${_bl_path}") || continue
     _bl_mtime=$(stat -c %Y "${_bl_path}" 2>/dev/null) || _bl_mtime=0

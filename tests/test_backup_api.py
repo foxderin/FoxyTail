@@ -32,6 +32,16 @@ class BackupApiTests(ApiTestCase):
         result = self.shell('cmd_restore_preview ' + shlex.quote(str(outside)), ok=False)
         self.assertNotEqual(result.returncode, 0)
 
+    def test_legacy_default_export_is_listed_and_previewable_without_changes(self):
+        legacy = self.sdcard / 'Download/foxytail-backup.tar.gz'
+        self.archive({'conf/foxytail.conf': 'SOCKS_PORT=1200\n'}).replace(legacy)
+        before = self.snapshot()
+        result = json.loads(self.shell('cmd_backup_list').stdout)
+        self.assertEqual([item['path'] for item in result['backups']], [str(legacy)])
+        preview = json.loads(self.shell('cmd_restore_preview ' + shlex.quote(str(legacy))).stdout)
+        self.assertEqual(preview['sha256'], hashlib.sha256(legacy.read_bytes()).hexdigest())
+        self.assertEqual(self.snapshot(), before)
+
     def test_preview_is_read_only_and_shows_validated_config_diff_and_hook_names(self):
         before = self.snapshot()
         archive = self.selected_archive({'conf/foxytail.conf': 'SOCKS_PORT=1200\n',

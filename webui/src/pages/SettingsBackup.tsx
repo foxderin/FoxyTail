@@ -2,7 +2,7 @@ import { createEffect, createSignal, For, Show, untrack, onMount, onCleanup, typ
 import { createApiScope, nativeControl } from '../api';
 import { t } from '../i18n';
 import { getTask } from '../tasks';
-import { BACKUP_TASK, RESTORE_TASK, backupPath, backupToken, artifactExport, createBackup, restoreBackup, validBackups, validRestorePreview, type BackupFile, type RestorePreview } from '../backup';
+import { BACKUP_TASK, RESTORE_TASK, backupExportName, backupPath, backupToken, artifactExport, createBackup, restoreBackup, validBackups, validRestorePreview, type BackupFile, type RestorePreview } from '../backup';
 import { savedConfigRevision } from '../config';
 import { Card, ErrorState } from '../components/Basics';
 import { copyWithToast } from '../clipboard';
@@ -51,7 +51,7 @@ export default function SettingsBackup(props: {
     if (!token || exportBusy()) return;
     if (share && !await confirmDialog({ title: t('confirm_share_title'), body: t('tools_backup_sensitive'), confirmLabel: t('tools_share') })) return;
     setExportBusy(true);
-    const result = await requestNative(share ? 'artifact.share' : 'artifact.save', { token, name: 'foxytail-backup.tar.gz' });
+    const result = await requestNative(share ? 'artifact.share' : 'artifact.save', { token, name: backupExportName() });
     setExportBusy(false);
     if (!result.ok && !result.cancelled) toastApiError(t('op_failed'), result);
   }
@@ -130,7 +130,10 @@ export default function SettingsBackup(props: {
       <TaskProgress taskKey={RESTORE_TASK} />
       <Show when={restoreTask()?.status === 'error'}><ErrorState text={restoreTask()?.result?.error || t('op_failed')} /></Show>
       <Show when={error()}><ErrorState text={error()} onRetry={() => void load()} /></Show>
-      <Select id="restore-backup" aria-label={t('backup_select')} value={selected()} disabled={props.locked || previewBusy() || restoreBusy()}
+      <div class="tool-actions">
+        <Button disabled={props.locked || importBusy()} busy={importBusy()} onClick={() => void importBackup()}><MdIcon name="upload_file" size={18} />{t('backup_choose_local')}</Button>
+      </div>
+      <Select id="restore-backup" label={t('backup_select')} value={selected()} disabled={props.locked || previewBusy() || restoreBusy()}
         onChange={e => { setSelected((e.target as HTMLSelectElement).value); setPreview(null); }}>
         <option value="">{t('backup_select')}</option>
         <Show when={/^art-[a-f0-9]{32}$/.test(selected())}><option value={selected()}>{t('tools_imported_archive')}</option></Show>
@@ -138,7 +141,6 @@ export default function SettingsBackup(props: {
       </Select>
       <div class="tool-actions">
         <Button variant="text" busy={loading()} disabled={loading() || props.locked} onClick={() => void load()}>{t('backup_refresh')}</Button>
-        <Button disabled={props.locked || importBusy()} busy={importBusy()} onClick={() => void importBackup()}><MdIcon name="upload_file" size={18} />{t('tools_import')}</Button>
         <Button class="restore-preview" busy={previewBusy()} disabled={!selected() || props.locked || previewBusy() || restoreBusy()} onClick={() => void inspect()}>{t('backup_preview')}</Button>
       </div>
       <Show when={imported()}>

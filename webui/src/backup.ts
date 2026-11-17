@@ -52,6 +52,11 @@ export async function createBackup(): Promise<void> {
   } else toastApiError(t('tools_backup_failed'), result);
 }
 
+/** Match the module's discoverable backup name without guessing a SAF path. */
+export function backupExportName(): string {
+  return 'foxytail-backup-' + new Date().toISOString().replace(/[:.]/g, '-') + '.tar.gz';
+}
+
 export type BackupFile = { name: string; path: string; size: number; mtime: number };
 export type RestorePreview = {
   path: string; sha256: string; baselineSha256: string;
@@ -62,14 +67,14 @@ export type RestorePreview = {
 export function validBackups(value: unknown): value is BackupFile[] {
   return Array.isArray(value) && value.every(item => item &&
     typeof item.name === 'string' && typeof item.path === 'string' &&
-    /^\/sdcard\/Download\/foxytail-backup-[A-Za-z0-9._-]+\.tar\.gz$/.test(item.path) &&
+    /^\/sdcard\/Download\/foxytail-backup(?:-[A-Za-z0-9._-]+)?\.tar\.gz$/.test(item.path) &&
     Number.isSafeInteger(item.size) && item.size >= 0 && Number.isSafeInteger(item.mtime) && item.mtime >= 0);
 }
 
 export function validRestorePreview(value: unknown): value is RestorePreview {
   if (!value || typeof value !== 'object') return false;
   const preview = value as Partial<RestorePreview>;
-  return typeof preview.path === 'string' && /^(?:art-[a-f0-9]{32}|\/sdcard\/Download\/foxytail-backup-[A-Za-z0-9._-]+\.tar\.gz)$/.test(preview.path) &&
+  return typeof preview.path === 'string' && /^(?:art-[a-f0-9]{32}|\/sdcard\/Download\/foxytail-backup(?:-[A-Za-z0-9._-]+)?\.tar\.gz)$/.test(preview.path) &&
     typeof preview.sha256 === 'string' && /^[a-f0-9]{64}$/.test(preview.sha256) &&
     typeof preview.baselineSha256 === 'string' && /^[a-f0-9]{64}$/.test(preview.baselineSha256) &&
     Array.isArray(preview.changes) && preview.changes.every(change => change &&

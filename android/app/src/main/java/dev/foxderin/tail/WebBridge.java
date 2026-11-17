@@ -375,7 +375,7 @@ final class WebBridge {
         pattern(value, "[0-9]{1,10}");
         long parsed = Long.parseLong(value); if (parsed < min || parsed > max) throw new IOException("Number is out of range");
     }
-    private static boolean backupPath(String value) { return value.matches("/sdcard/Download/foxytail-backup-[A-Za-z0-9._-]+\\.tar\\.gz"); }
+    private static boolean backupPath(String value) { return value.matches("/sdcard/Download/foxytail-backup(?:-[A-Za-z0-9._-]+)?\\.tar\\.gz"); }
     private void backup(String value) throws IOException {
         if (!value.matches("art-[a-f0-9]{32}") && !(backupPath(value) && backups.contains(value))) throw new IOException("Select a listed backup or imported artifact");
     }

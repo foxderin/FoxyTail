@@ -898,6 +898,7 @@ await scenario('untracked native busy lives in the status chip, not a page banne
   assert(!chip.querySelector('.circular-progress'), 'chip settles once the backend is idle');
 });
 
+await (await import('./smoke-backup-picker.mjs')).runBackupPickerSmoke();
 await (await import('./smoke-account-identity.mjs')).runAccountIdentitySmoke();
 await (await import('./smoke-account-details.mjs')).runAccountDetailsSmoke();
 await (await import('./smoke-toast-dedup.mjs')).runToastDedupSmoke();
