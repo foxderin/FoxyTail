@@ -61,4 +61,3 @@ export async function runAccountIdentitySmoke() {
     assert(!fresh.button('acc_identity_rollback_save'), 'fresh restore never offers a nonexistent rollback file');
   } finally {fresh.close();}
 }
-
