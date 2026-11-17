@@ -17,6 +17,50 @@ async function openContext({ nav, window }) {
   return window.document.querySelector('[data-testid="context-rules"]');
 }
 
+await scenario('Files gates stale destructive actions and reflects locked rows', async ({ fixture, nav, window, button, click, confirm }) => {
+  await nav('files');
+  const card = window.document.querySelector('.files-page .card');
+  const clear = () => button('files_clear', card);
+  const deletion = () => button('files_delete', card);
+  const row = () => card.querySelector('.files-row-main');
+  const refresh = () => click(button('tools_refresh', card));
+  const mutations = () => fixture.log.filter(r => r.action === 'control.mutate' && ['file-clear', 'file-delete', 'file-delete-many'].includes(r.args.command)).length;
+  assert(!clear().disabled && !deletion().disabled, 'fresh inbox permits confirmed deletion');
+  click(button('ft_matches', card)); await flush();
+  fixture.holdNext.add('files-inbox'); refresh(); await flush();
+  assert(button('ft_batch_delete', card).disabled && row().disabled, 'pending refresh also disables batch deletion and selection rows');
+  assert(clear().disabled && deletion().disabled, 'pending refresh gates clear and individual deletion');
+  fixture.held.findLast(r => r.key === 'files-inbox').finish(); await flush();
+  click(button('ft_deselect', card)); await flush();
+  click(clear()); await flush();
+  fixture.overrides.set('files-inbox', { ok: false, error: 'Inbox refresh failed' });
+  refresh(); await flush();
+  assert(clear().disabled && deletion().disabled && button('ft_matches', card).disabled, 'failed refresh gates all destructive and selection entry points');
+  assert(card.textContent.includes('Inbox refresh failed') && card.querySelectorAll('.files-inbox-row').length === 2, 'failed refresh preserves cached rows with visible error');
+  await confirm(true);
+  assert(mutations() === 0, 'confirmation rechecks freshness before submitting clear');
+  clear().click(); deletion().click(); await flush();
+  assert(mutations() === 0 && !window.document.querySelector('dialog[open]'), 'disabled stale actions cannot open confirmation or submit');
+  fixture.overrides.delete('files-inbox'); refresh(); await flush();
+  assert(!clear().disabled && !deletion().disabled, 'successful refresh restores destructive controls');
+  fixture.holdNext.add('files-inbox'); refresh(); await flush();
+  const cancelled = fixture.held.findLast(r => r.key === 'files-inbox');
+  fixture.emit('lifecycle', { active: false }); await flush();
+  cancelled.finish(); await flush();
+  assert(clear().disabled && deletion().disabled, 'cancelled refresh cannot restore freshness from its late response');
+  fixture.emit('lifecycle', { active: true }); await flush();
+  assert(!clear().disabled, 'resume refreshes the cancelled inbox before re-enabling deletion');
+  fixture.publishControl({ id: 'read-probe', command: 'dns-probe', busy: true, ownsMutation: false, canWrite: true, unknown: false, canCancel: true }); await flush();
+  const opens = fixture.log.filter(r => r.action === 'files.open').length;
+  assert(row().disabled, 'busy native read visibly disables otherwise inert file row');
+  row().click(); await flush();
+  assert(fixture.log.filter(r => r.action === 'files.open').length === opens, 'disabled row does not issue a native open');
+  fixture.publishControl({ busy: false, canCancel: false }); await flush();
+  assert(!row().disabled, 'file row re-enables when native operation settles');
+  click(row()); await flush();
+  assert(fixture.log.filter(r => r.action === 'files.open').length === opens + 1, 'settled file row opens normally');
+});
+
 await scenario('routes, appearance and retained Files UI', async ({ app, nav, window, fixture, input }) => {
   for (const route of Object.keys(app.ROUTES)) {
     await nav(route);

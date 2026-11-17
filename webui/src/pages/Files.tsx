@@ -23,6 +23,7 @@ export default function Files(): JSX.Element {
   const [files, setFiles] = createSignal<InboxFile[] | null>(null);
   const [loadError, setLoadError] = createSignal('');
   const [loading, setLoading] = createSignal(false);
+  const [inboxFresh, setInboxFresh] = createSignal(false);
   const [selectMode, setSelectMode] = createSignal(false);
   const [working, setWorking] = createSignal(false);
   const [notice, setNotice] = createSignal('');
@@ -32,8 +33,8 @@ export default function Files(): JSX.Element {
   const visible = () => appActive() && routeVisible() && document.visibilityState !== 'hidden';
   const selected = () => fileView().selected;
   const locked = () => working() || !!exportState()?.busy || nativeControl().busy;
-  const canWrite = () => nativeControl().canWrite && !locked();
-  const canSelect = () => files() !== null && !loading() && !loadError() && !locked();
+  const canWrite = () => inboxFresh() && nativeControl().canWrite && !locked();
+  const canSelect = () => inboxFresh() && !locked();
   const order = createMemo(() => fileView().sort);
   const query = createMemo(() => fileView().filter.toLocaleLowerCase());
   const ordered = createMemo(() => [...(files() ?? [])].sort((a, b) =>
@@ -43,6 +44,7 @@ export default function Files(): JSX.Element {
   const currentPage = () => Math.min(page(), pages() - 1);
   async function loadInbox() {
     if (loading()) return;
+    setInboxFresh(false);
     if (!visible()) { inboxDirty = true; return; }
     setLoading(true); inboxDirty = false;
     const revision = inboxRevision;
@@ -54,7 +56,7 @@ export default function Files(): JSX.Element {
       setLoadError(result.error || t('files_invalid_response')); return;
     }
     const loaded = result.files as InboxFile[];
-    setFiles(loaded); setLoadError('');
+    setFiles(loaded); setLoadError(''); setInboxFresh(true);
     const retained = selected().filter(name => loaded.some(file => file.name === name));
     if (retained.length !== selected().length) updateFileView({selected: retained});
   }
@@ -79,7 +81,8 @@ export default function Files(): JSX.Element {
   let pressTimer: number | undefined, longPressed = false;
   const startPress = (name: string) => {
     longPressed = false;
-    pressTimer = window.setTimeout(() => { longPressed = true; setSelectMode(true); toggle(name); }, 500);
+    if (!canSelect()) return;
+    pressTimer = window.setTimeout(() => { if (!canSelect()) return; longPressed = true; setSelectMode(true); toggle(name); }, 500);
   };
   const endPress = () => { if (pressTimer !== undefined) { clearTimeout(pressTimer); pressTimer = undefined; } };
   function tapRow(name: string) {
@@ -186,7 +189,7 @@ export default function Files(): JSX.Element {
         </Show>
         <Show when={filtered().length} fallback={<Show when={!loadError()}><EmptyState text={fileView().filter ? t('empty') : t('files_empty')} icon="folder" /></Show>}>
           <div class="files-list"><For each={filtered().slice(currentPage() * 100, (currentPage() + 1) * 100)}>{file => <div class="files-inbox-row">
-            <button type="button" class="list-row files-row-main"
+            <button type="button" class="list-row files-row-main" disabled={selectMode() ? !canSelect() : locked()}
               aria-label={t(selectMode() ? 'files_select' : 'ft_open') + ' ' + file.name}
               onPointerDown={() => startPress(file.name)}
               onPointerUp={endPress} onPointerLeave={endPress} onPointerCancel={endPress}

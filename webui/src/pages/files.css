@@ -36,3 +36,5 @@ button.list-row:focus-visible { outline: 2px solid var(--ft-accent); outline-off
 .files-peer-copy > span { font-size: 12px; color: var(--ft-muted); overflow-wrap: anywhere; }
 .files-labeled > summary { width: auto; min-height: 44px; padding: 0 16px; border-radius: 22px; display: inline-flex; gap: 8px; align-items: center; font-weight: 600; font-size: 14px; background: var(--md-sys-color-secondary-container); color: var(--md-sys-color-on-secondary-container); }
 .files-labeled > summary[aria-disabled] { opacity: .45; }
+
+.files-row-main:disabled { opacity: .45; cursor: not-allowed; }
