@@ -1,5 +1,5 @@
 /* Settings separate appearance, runtime configuration and recovery operations. */
-import { createEffect, createSignal, For, on, onCleanup, onMount, Show, type JSX } from 'solid-js';
+import { createEffect, createSignal, For, on, onCleanup, Show, useContext, type JSX } from 'solid-js';
 import { createApiScope, hasRoot, nativeControl } from '../api';
 import { t, tf, languageMode, setLang, type Lang } from '../i18n';
 import { NETWORK, BACKGROUND, type Field } from '../settings';
@@ -17,7 +17,8 @@ import { confirmDialog } from '../components/ConfirmDialog';
 import { MdIcon } from '../icons';
 import { Button, Checkbox, Dialog, Select, Switch, TextField } from '../components/ui';
 import './tools.css';
-import { pollWhileVisible } from '../schedule';
+import { pollWhileVisible, RouteVisible } from '../schedule';
+import { createGuardedLoad } from './tools-refresh';
 import { viewPollInterval } from '../state';
 
 export default function Settings(): JSX.Element {
@@ -74,34 +75,24 @@ export default function Settings(): JSX.Element {
     setRestartRequired(pending);
     return pending;
   }
-  async function loadTransparentCapability() {
-    const res = await scope.api('dns');
-    if (res.cancelled || disposed) return;
-    if (res.ok) {
-      const available = res.transparentAvailable;
-      const hijackCapable = res.hijackAvailable;
-      if (available === true || available === false) {
-        setTransparentAvailable(available);
-        setTransparentReason(typeof res.transparentUnavailableReason === 'string' ? res.transparentUnavailableReason : null);
-      }
-      if (hijackCapable === true || hijackCapable === false) {
-        setHijackAvailable(hijackCapable);
-        setHijackReason(typeof res.hijackUnavailableReason === 'string' ? res.hijackUnavailableReason : null);
-      }
-      if ((available === true || available === false) && (hijackCapable === true || hijackCapable === false)) return;
-    }
-    // No cached verdict: run the kernel probes once so the choices reflect the
-    // actual device rather than a stale or absent cache. Probes are fast and
-    // idempotent; failures still record verdicts in the backend caches.
-    const probe = await scope.api('dns-probe');
-    if (probe.cancelled || disposed) return;
-    if (probe.ok) {
-      setTransparentAvailable(probe.transparentAvailable === true);
-      setTransparentReason(typeof probe.transparentUnavailableReason === 'string' ? probe.transparentUnavailableReason : null);
-      setHijackAvailable(probe.hijackAvailable === true);
-      setHijackReason(typeof probe.hijackUnavailableReason === 'string' ? probe.hijackUnavailableReason : null);
-    }
-  }
+  // Reading settings never runs a kernel probe. Unknown capability remains a
+  // selectable choice; Diagnostics owns the explicit probe and its feedback.
+  const loadDnsCapability = createGuardedLoad(() => scope.api('dns'), res => {
+    setTransparentAvailable(res.ok && typeof res.transparentAvailable === 'boolean' ? res.transparentAvailable : null);
+    setTransparentReason(res.ok && typeof res.transparentUnavailableReason === 'string' ? res.transparentUnavailableReason : null);
+    setHijackAvailable(res.ok && typeof res.hijackAvailable === 'boolean' ? res.hijackAvailable : null);
+    setHijackReason(res.ok && typeof res.hijackUnavailableReason === 'string' ? res.hijackUnavailableReason : null);
+  }, () => {});
+  const routeVisible = useContext(RouteVisible);
+  createEffect(on(
+    () => [routeVisible(), nativeControl().revision, nativeControl().accountRevision],
+    () => {
+      if (!routeVisible()) return;
+      setTransparentAvailable(null); setTransparentReason(null);
+      setHijackAvailable(null); setHijackReason(null);
+      void loadDnsCapability();
+    },
+  ));
   const allFields = () => [...NETWORK, ...BACKGROUND];
   const draftEntries = () =>
     Object.entries(drafts())
@@ -219,9 +210,6 @@ export default function Settings(): JSX.Element {
       setReviewOpen(true);
     }
   });
-  onMount(() => {
-    void loadTransparentCapability();
-  });
   pollWhileVisible(() => saving() ? undefined : loadSettings(), () => viewPollInterval(10000));
   function fieldRow(field: Field): JSX.Element {
     const value = () => drafts()[field.key]?.value ?? settings()?.[field.key] ?? field.defaultValue ?? '';
@@ -260,6 +248,9 @@ export default function Settings(): JSX.Element {
             <span class="tool-hint" role="status">
               {t('tools_saving')}
             </span>
+          </Show>
+          <Show when={field.key === 'DNS_MODE' && (transparentAvailable() === null || hijackAvailable() === null)}>
+            <span class="tool-hint" data-testid="dns-capability-unknown">{t('tools_dns_capability_unknown')} <a class="tool-text-link" href="#/diag">{t('diag_title')}</a></span>
           </Show>
           <Show when={field.key === 'DNS_MODE' && transparentAvailable() === false && transparentReason()}>
             <span class="tool-hint" data-testid="dns-transparent-unavailable">{transparentReason()}</span>
