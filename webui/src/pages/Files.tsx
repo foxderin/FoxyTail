@@ -7,7 +7,7 @@ import { confirmDialog } from '../components/ConfirmDialog';
 import { copyWithToast } from '../clipboard';
 import { showToast } from '../components/Toast';
 import { MdIcon } from '../icons';
-import { Checkbox, IconButton, TextField } from '../components/ui';
+import { Button, Checkbox, IconButton, TextField } from '../components/ui';
 import { onNativeEvent, requestNative } from '../native';
 import { appActive, pollWhileVisible, RouteVisible } from '../schedule';
 import { viewPollInterval } from '../state';
@@ -17,10 +17,13 @@ import FilesSend from './FilesSend';
 import './tools.css';
 import './files.css';
 
+type ReceiveState = { mode: 'direct' | 'buffered' | 'unavailable'; selfId: string; pending: { name: string; size: number }[]; error?: string };
+
 export default function Files(): JSX.Element {
   const scope = createApiScope();
   const routeVisible = useContext(RouteVisible);
   const [files, setFiles] = createSignal<InboxFile[] | null>(null);
+  const [receive, setReceive] = createSignal<ReceiveState | null>(null);
   const [loadError, setLoadError] = createSignal('');
   const [loading, setLoading] = createSignal(false);
   const [inboxFresh, setInboxFresh] = createSignal(false);
@@ -55,10 +58,27 @@ export default function Files(): JSX.Element {
       new Set(result.files.map(file => file.name)).size !== result.files.length || (result.ignored !== undefined && !count(result.ignored))) {
       setLoadError(result.error || t('files_invalid_response')); return;
     }
+    const incoming = result.receive;
+    setReceive(record(incoming) && typeof incoming.mode === 'string' && ['direct', 'buffered', 'unavailable'].includes(incoming.mode) &&
+      typeof incoming.selfId === 'string' && Array.isArray(incoming.pending) &&
+      incoming.pending.every(item => record(item) && fileName(item.name) && count(item.size))
+      ? incoming as ReceiveState : null);
     const loaded = result.files as InboxFile[];
     setFiles(loaded); setLoadError(''); setInboxFresh(true);
     const retained = selected().filter(name => loaded.some(file => file.name === name));
     if (retained.length !== selected().length) updateFileView({selected: retained});
+  }
+  async function receiveFile(name: string) {
+    const state = receive();
+    if (!canWrite() || !state?.selfId || !state.pending.some(item => item.name === name)) return;
+    setWorking(true); setNotice('');
+    const result = await api('file-receive', name, state.selfId);
+    setWorking(false);
+    if (!result.ok) setNotice(resultError(result));
+    else if (result.name !== name || result.received !== true || typeof result.sourceDeleted !== 'boolean') setNotice(t('files_invalid_response'));
+    else setNotice(result.sourceDeleted ? t('ft_received_downloads') : result.error || t('ft_receive_source_retained'));
+    inboxRevision++;
+    if (!result.unknown) void loadInbox();
   }
   function toggle(name: string) {
     if (!canSelect()) return;
@@ -145,8 +165,7 @@ export default function Files(): JSX.Element {
     onNativeEvent('navigate', value => { if (value.page === 'files') requestAnimationFrame(() => { if (inboxDirty || files() === null) void loadInbox(); }); }),
   ];
   onCleanup(() => subscriptions.forEach(stop => stop()));
-  // Received files land in Download/Taildrop as they arrive; poll so new
-  // deliveries appear without a manual import or refresh.
+  // Refresh shared files and daemon-held pending deliveries while visible.
   pollWhileVisible(loadInbox, () => viewPollInterval(5000));
   onMount(async () => { await initializeFiles(); setExportState(filesSnapshot()?.export ?? null); void loadInbox(); });
   createEffect(on(() => nativeControl().compatible, compatible => { if (compatible && files() === null) void loadInbox(); }));
@@ -171,6 +190,17 @@ export default function Files(): JSX.Element {
           <button type="button" aria-label={t('files_clear')} class="danger" disabled={!canWrite() || !files()?.length} onClick={event => menuAction(event, () => void mutate('file-clear'))}>{t('files_clear')}</button>
         </div></details>
       </>}>
+      <Show when={receive()}>{state => <div class="files-receive-status" data-testid="receive-status">
+        <Show when={state().mode !== 'direct'}><p class="tool-hint">{t(state().mode === 'buffered' ? 'ft_receive_buffered' : 'ft_receive_unavailable')}</p></Show>
+        <Show when={state().error}><ErrorState text={state().error!} /></Show>
+        <Show when={state().pending.length}>
+          <h3>{t('ft_pending_receive')}</h3>
+          <For each={state().pending}>{file => <div class="list-row">
+            <div class="main"><div class="title">{file.name}</div><div class="sub">{fmtBytes(file.size)}</div></div>
+            <Button variant="tonal" disabled={!canWrite() || !state().selfId} onClick={() => void receiveFile(file.name)}>{t('ft_receive_file')}</Button>
+          </div>}</For>
+        </Show>
+      </div>}</Show>
       <Show when={loadError()}><ErrorState text={loadError()} onRetry={() => void loadInbox()} /></Show>
       <Show when={files() !== null} fallback={<Show when={!loadError()}><SkeletonRows rows={3} /></Show>}>
         <div class="files-toolbar">

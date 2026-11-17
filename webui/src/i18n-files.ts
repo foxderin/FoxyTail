@@ -1,4 +1,10 @@
 export const filesZh = {
+  ft_receive_buffered: '文件暂存在后台收件区，尚未写入下载目录。可在下方接收。',
+  ft_receive_unavailable: '暂时无法检查后台收件；下方仍显示下载目录中的文件。',
+  ft_pending_receive: '后台待接收', ft_receive_file: '接收到下载目录',
+  ft_received_downloads: '文件已接收到 Download/Taildrop。',
+  ft_receive_source_retained: '文件已保存，但后台副本尚未清理。请刷新后重试接收。',
+
   ft_open: '打开', ft_share: '分享', ft_pick: '选择文件', ft_sort: '排序',
   ft_newest: '最新优先', ft_oldest: '最早优先', ft_name: '名称', ft_size: '大小',
   ft_matches: '选择筛选结果', ft_deselect: '取消选择', ft_clear_selection: '清空待发列表',
@@ -22,6 +28,12 @@ export const filesZh = {
  } as const;
 
 export const filesEn: Record<keyof typeof filesZh, string> = {
+  ft_receive_buffered: 'Files are waiting in the daemon inbox, not yet in Downloads. Receive them below.',
+  ft_receive_unavailable: 'The daemon inbox cannot be checked right now. Downloaded files remain available below.',
+  ft_pending_receive: 'Pending receipt', ft_receive_file: 'Receive to Downloads',
+  ft_received_downloads: 'File received into Download/Taildrop.',
+  ft_receive_source_retained: 'File saved, but the daemon copy remains. Refresh and retry receiving.',
+
   ft_open: 'Open', ft_share: 'Share', ft_pick: 'Choose files', ft_sort: 'Sort',
   ft_newest: 'Newest first', ft_oldest: 'Oldest first', ft_name: 'Name', ft_size: 'Size',
   ft_matches: 'Select matches', ft_deselect: 'Deselect', ft_clear_selection: 'Clear pending files',

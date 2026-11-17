@@ -61,6 +61,24 @@ await scenario('Files gates stale destructive actions and reflects locked rows',
   assert(fixture.log.filter(r => r.action === 'files.open').length === opens + 1, 'settled file row opens normally');
 });
 
+await scenario('Files exposes daemon-held deliveries and recovers without hiding failures', async ({ fixture, nav, window, button, click }) => {
+  fixture.data['files-inbox'].receive = { mode: 'buffered', selfId: 'preview-self', pending: [{ name: 'incoming.txt', size: 23 }] };
+  await nav('files');
+  const received = () => window.document.querySelector('[data-testid="receive-status"]');
+  assert(received()?.textContent.includes('incoming.txt') && received()?.textContent.includes('daemon inbox'), 'daemon-held files are shown separately from downloaded files');
+  fixture.overrides.set('file-receive', { ok: false, error: 'Destination conflict; source retained' });
+  click(button('ft_receive_file', received())); await flush();
+  assert(window.document.querySelector('.files-notice')?.textContent.includes('source retained') && received()?.textContent.includes('incoming.txt'), 'failed recovery keeps pending delivery visible and reports the error');
+  fixture.overrides.delete('file-receive');
+  click(button('ft_receive_file', received())); await flush();
+  assert(!received()?.textContent.includes('incoming.txt') && fixture.data['files-inbox'].files.some(file => file.name === 'incoming.txt'), 'successful recovery refreshes pending and downloaded lists');
+  const submitted = fixture.log.findLast(r => r.action === 'control.mutate' && r.args.command === 'file-receive');
+  assert(submitted?.args.arguments[0] === 'incoming.txt' && submitted?.args.arguments[1] === 'preview-self', 'recovery binds the named file to the observed account');
+  fixture.data['files-inbox'].receive = { mode: 'unavailable', selfId: '', pending: [], error: 'Daemon offline' };
+  click(button('tools_refresh', window.document.querySelector('.files-page .card'))); await flush();
+  assert(received()?.textContent.includes('Daemon offline') && window.document.querySelector('.files-page').textContent.includes('incoming.txt'), 'unavailable daemon reports receive failure without hiding downloaded files');
+});
+
 await scenario('routes, appearance and retained Files UI', async ({ app, nav, window, fixture, input }) => {
   for (const route of Object.keys(app.ROUTES)) {
     await nav(route);

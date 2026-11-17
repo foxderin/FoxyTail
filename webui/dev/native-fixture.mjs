@@ -38,7 +38,7 @@ export function installFixture(window, { state = 'ready', lang = 'en', theme = '
     'socks-check': { ok: true, success: true, httpCode: '200', elapsedMs: 18 },
     'dns-probe': { ok: true, transparentAvailable: true, hijackAvailable: true },
     logs: { ok: true, lines: ['2026-10-22 [Info] Simulated tunnel ready', '2026-10-22 [Warning] Simulated peer offline'] },
-    'files-inbox': { ok: true, files: [{ name: 'network-notes.pdf', size: 248928, mtime: 1788912000 }, { name: 'camera-roll.zip', size: 15687204, mtime: 1788896200 }], ignored: 0 },
+    'files-inbox': { ok: true, receive: { mode: 'direct', selfId: 'preview-self', pending: [] }, files: [{ name: 'network-notes.pdf', size: 248928, mtime: 1788912000 }, { name: 'camera-roll.zip', size: 15687204, mtime: 1788896200 }], ignored: 0 },
     'taildrop-targets': { ok: true, peers: peers.map(({ id, hostname, ips, online }) => ({ id, hostname, ips, online })) },
     'file-send-history': { ok: true, transfers: [transfer] },
     'trial-status': { ok: true, trial: null },
@@ -99,6 +99,15 @@ export function installFixture(window, { state = 'ready', lang = 'en', theme = '
       case 'diag': case 'backup': return { ok: true, path: '/data/adb/foxytail/exports/preview.tar.gz', artifactId: token, mode: args[0] || 'share' };
       case 'restore-preview': return { ok: true, path: args[0], sha256: 'b'.repeat(64), baselineSha256: 'c'.repeat(64), changes: [{ file: 'foxytail.conf', key: 'SOCKS_PORT', before: '1099', after: '1100' }], hooks: ['foxytail.tun.up'] };
       case 'restore': return { ok: true, saved: true, applied: false, restartRequired: true, previous: '/data/adb/foxytail/conf.bak-preview', note: null };
+      case 'file-receive': {
+        const inbox = data['files-inbox'];
+        const pending = inbox.receive?.pending.find(item => item.name === args[0]);
+        if (!pending || args[1] !== inbox.receive.selfId) return fail('Pending file or account changed');
+        if (inbox.files.some(item => item.name === pending.name)) return fail('Destination already exists');
+        inbox.files.push({ name: pending.name, size: pending.size, mtime: 1788912000 });
+        inbox.receive.pending = inbox.receive.pending.filter(item => item.name !== pending.name);
+        return { ok: true, name: pending.name, received: true, sourceDeleted: true };
+      }
       case 'file-delete-many': {
         const names = JSON.parse(args[0]);
         const results = names.map((name, i) => i === 0 ? { name, ok: true } : { name, ok: false, error: 'Simulated file busy' });
