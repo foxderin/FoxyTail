@@ -51,8 +51,8 @@ final class WebViewChecks {
 
         click("#bottom-nav a[href='#/files']");
         waitFor("location.hash === '#/files' && !!document.querySelector('.files-page')", "Files page opens without root");
-        click("#bottom-nav a[href='#/more']");
-        waitFor("location.hash === '#/more'", "More page opens");
+        click("#bottom-nav a[href='#/settings']");
+        waitFor("location.hash === '#/settings'", "Settings page opens");
         click("#view a[href='#/logs']");
         waitFor("location.hash === '#/logs' && !!document.querySelector('.tool-log-controls input')", "Logs filters remain editable without backend access");
         require(request("app.drafts", new JSONObject().put("key", "logs")).getBoolean("ok"), "Initial draft hydration reaches the native reply queue before editing");
@@ -65,8 +65,8 @@ final class WebViewChecks {
             SystemClock.sleep(50);
         }
         require(saved, "Editing the bundled Logs input updates native nonsecret drafts");
-        click("#bottom-nav a[href='#/more']");
-        waitFor("location.hash === '#/more'", "Primary navigation responds");
+        click("#bottom-nav a[href='#/settings']");
+        waitFor("location.hash === '#/settings'", "Primary navigation responds");
         instrumentation.runOnMainSync(activity::onBackPressed);
         waitFor("location.hash === '#/logs' && document.querySelector('.tool-log-controls input')?.value === 'instrumentation draft'", "Native Back restores the prior page and current input");
         click(".task-menu summary");

@@ -169,6 +169,19 @@ class ContractDrift(unittest.TestCase):
         self.assertEqual(self.reads - self.queries, set(),
                          'api.ts READ_COMMANDS names rejected by validateQuery')
 
+    def test_instrumentation_bottom_navigation_matches_current_routes(self):
+        # Instrumentation is assembled, not executed, in the host gate. Catch
+        # stale literal navigation targets there before a device run is needed.
+        navigation = (ROOT / 'webui/src/navigation.ts').read_text()
+        primary = re.search(r"titleKey: 'shell_nav_main', names: \[(.*?)\]", navigation, re.S)
+        self.assertIsNotNone(primary, 'primary-navigation parser drifted')
+        routes = set(re.findall(r"'([a-z-]+)'", primary.group(1)))
+        checks = (ROOT / 'android/app/src/androidTest/java/dev/foxderin/tail/WebViewChecks.java').read_text()
+        targets = set(re.findall(r"#bottom-nav a\[href='#/([a-z-]+)'\]", checks))
+        self.assertTrue(routes and targets, 'navigation contract extraction found no routes')
+        self.assertEqual(targets - routes, set(),
+                         'instrumentation clicks a removed primary navigation route')
+
     def test_no_uncovered_commands(self):
         # Informational: dispatched commands reachable from nowhere get flagged.
         covered = self.queries | self.mutations | self.reads | self.callers | KNOWN_DEAD
