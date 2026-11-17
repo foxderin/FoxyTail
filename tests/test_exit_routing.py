@@ -213,6 +213,46 @@ PY
         self.assertEqual((self.root / 'writes').read_text(), before)
         self.assertTrue(journal.exists())
 
+    def test_reverse_path_observation_is_read_only_and_not_an_exit_verdict(self):
+        proc = self.root / 'proc-conf'
+        helper = self.root / 'scripts/foxytail.exitnode'
+        helper.write_text(helper.read_text().replace('/proc/sys/net/ipv4/conf', str(proc)))
+        self.daemon['prefs']['ExitNodeID'] = 'node-a'
+        self.daemon['status']['ExitNodeStatus'] = {'ID': 'node-a', 'Online': True}
+        self.save()
+        self.config(mode='tun')
+        cases = [
+            ({'all': '0', 'eth0': '1'}, True),
+            ({'all': '1', 'eth0': '0'}, True),
+            ({'all': '1', 'eth0': '2'}, False),
+            ({'all': '2', 'eth0': '1'}, False),
+            ({'all': '0', 'eth0': '0', 'lo': '1', 'tailscale0': '1', 'default': '1'}, False),
+            ({'all': '0', 'eth0': 'bad'}, None),
+            ({'eth0': '1'}, None),
+            ({'all': '0'}, None),
+            ({'all': '0', 'eth0': '1', 'wlan0': 'bad'}, True),
+        ]
+        for values, expected in cases:
+            with self.subTest(values=values):
+                if proc.exists(): shutil.rmtree(proc)
+                for interface, value in values.items():
+                    (proc / interface).mkdir(parents=True)
+                    (proc / interface / 'rp_filter').write_text(value + '\n')
+                before = {str(p): p.read_bytes() for p in proc.rglob('rp_filter')}
+                result = self.run_exit('status')
+                self.assertIs(result['strictReversePath'], expected)
+                self.assertEqual(result['effective'], 'daemon-owned')
+                self.assertEqual(result['warning'], 'daemon-owned-unverified')
+                self.assertEqual(before, {str(p): p.read_bytes() for p in proc.rglob('rp_filter')})
+                self.assertFalse((self.root / 'writes').exists())
+        self.config(mode='proxy')
+        self.assertIsNone(self.run_exit('status')['strictReversePath'])
+        self.config(mode='bridge')
+        self.daemon['prefs']['ExitNodeID'] = ''
+        self.daemon['status']['ExitNodeStatus'] = None
+        self.save()
+        self.assertIsNone(self.run_exit('status')['strictReversePath'])
+
 
 if __name__ == '__main__':
     unittest.main()

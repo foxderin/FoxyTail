@@ -47,6 +47,26 @@ exit_unknown() {
   echo '{"known":false,"selected":null,"effective":"unknown","ipv4":false,"ipv6":false,"warning":"preference-unavailable"}' | exit_output
 }
 
+# Read-only compatibility observation, not a routing verdict. Linux uses
+# max(conf/all/rp_filter, conf/<interface>/rp_filter); 2 is loose, not strict.
+exit_reverse_path() (
+  _rp_all=$(cat "$1/all/rp_filter" 2>/dev/null)
+  case "$_rp_all" in 0|1|2) ;; *) echo null; return ;; esac
+  _rp_seen=false
+  _rp_unknown=false
+  for _rp_path in "$1"/*/rp_filter; do
+    _rp_name=${_rp_path%/rp_filter}
+    _rp_name=${_rp_name##*/}
+    case "$_rp_name" in all|default|lo|"${TUN_IFACE:-tailscale0}") continue ;; esac
+    _rp_seen=true
+    _rp_value=$(cat "$_rp_path" 2>/dev/null)
+    case "$_rp_value" in 0|1|2) ;; *) _rp_unknown=true; continue ;; esac
+    [ "$_rp_all" -le "$_rp_value" ] || _rp_value=$_rp_all
+    if [ "$_rp_value" = 1 ]; then echo true; return; fi
+  done
+  if [ "$_rp_seen" = false ] || [ "$_rp_unknown" = true ]; then echo null; else echo false; fi
+)
+
 exit_status() {
   exit_snapshot_read || { exit_unknown; return 0; }
   _es_snapshot=${EXIT_SNAPSHOT}
@@ -55,18 +75,24 @@ exit_status() {
   if [ "${TS_MODE}" = bridge ]; then
     printf '%s\n' "${_es_snapshot}" | "${TS_SCRIPTS_DIR}/foxytail.route" check-snapshot "${_es_config}" >/dev/null 2>&1 && _es_policy=true
   fi
+  _es_reverse=null
+  case "$TS_MODE" in bridge|tun)
+    if printf '%s' "$_es_snapshot" | jqr -e '.pref | .id!="" or .ip!="" or .auto!=""' >/dev/null; then
+      _es_reverse=$(exit_reverse_path /proc/sys/net/ipv4/conf)
+    fi ;;
+  esac
   # Reuse only within this read; an external profile/preference change invalidates it.
   if [ "$(exit_snapshot)" != "${_es_snapshot}" ] || ! load_runtime_conf ||
      [ "$(exit_config_fingerprint)" != "${_es_config}" ]; then
     _xs_status=; exit_unknown; return 0
   fi
-  printf '%s' "${_es_snapshot}" | jqr -c --arg mode "${TS_MODE}" --arg scope "${ROUTE_SCOPE}" --arg uids "${UID_LIST}" --arg ipv6 "${IPV6}" --argjson policy "${_es_policy}" '
+  printf '%s' "${_es_snapshot}" | jqr -c --arg mode "${TS_MODE}" --arg scope "${ROUTE_SCOPE}" --arg uids "${UID_LIST}" --arg ipv6 "${IPV6}" --argjson policy "${_es_policy}" --argjson reverse "$_es_reverse" '
     (.pref.id!="" or .pref.ip!="" or .pref.auto!="") as $selected |
     (.backend=="Running" and .actual!=null and .actual.Online==true and
       ((.pref.id!="" and .actual.ID==.pref.id) or
        (.pref.id=="" and .pref.ip!="" and ((.actual.TailscaleIPs // []) | index(.pref.ip))!=null))) as $online |
     ($scope!="selected" or ($uids|split(" ")|map(select(length>0 and .!="0"))|length)>0) as $covered |
-    {known:true,selected:(if $selected then .pref else null end),profile:.profile,
+    {known:true,strictReversePath:$reverse,selected:(if $selected then .pref else null end),profile:.profile,
       scope:$scope,uids:($uids|split(" ")|map(select(length>0))),
       effective:(if ($selected|not) and ($mode!="bridge" or $policy) then "none" elif $selected|not then "not-effective" elif $online|not then "not-effective" elif $mode=="proxy" then "explicit-proxy" elif $mode=="tun" then "daemon-owned" elif $policy and $covered then "bridge-policy" else "not-effective" end),
       ipv4:($selected and $mode=="bridge" and $policy and $online and $covered),
