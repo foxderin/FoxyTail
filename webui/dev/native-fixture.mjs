@@ -131,6 +131,7 @@ export function installFixture(window, { state = 'ready', lang = 'en', theme = '
       case 'app.bootstrap': return { ok: true, appearance, page, control, files };
       case 'app.navigate': page = args.page; return { ok: true };
       case 'app.appearance': Object.assign(appearance, args); emit('appearance', { appearance }); return { ok: true, appearance };
+      case 'app.backState': return typeof args.canHandle === 'boolean' ? { ok: true } : fail('Invalid back state');
       case 'app.close': return { ok: true };
       case 'app.copy': return { ok: true, simulated: true };
       case 'app.openUrl': return fail('external navigation disabled in preview');

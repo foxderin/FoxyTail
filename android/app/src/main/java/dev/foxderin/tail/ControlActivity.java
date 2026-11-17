@@ -43,9 +43,10 @@ public class ControlActivity extends Activity {
     private WebBridge bridge;
     private FileActions files;
     private FrameLayout content;
-    // Session-only form state: preserves tab navigation, never Activity recreation.
+    // Navigation destination; unsaved forms stay within the WebView session.
     private String destination = "dashboard", section;
     private android.window.OnBackInvokedCallback backCallback;
+    private boolean backRegistered, webHandlesBack = true;
 
     @Override protected void attachBaseContext(Context base) { super.attachBaseContext(AppPreferences.localized(base)); }
 
@@ -147,7 +148,7 @@ public class ControlActivity extends Activity {
         } catch (Exception error) { startupFailure(RootApi.message(error)); }
         if (Build.VERSION.SDK_INT >= 33) {
             backCallback = this::webBack;
-            getOnBackInvokedDispatcher().registerOnBackInvokedCallback(android.window.OnBackInvokedDispatcher.PRIORITY_DEFAULT, backCallback);
+            updateBackCallback();
         }
         ViewCompat.requestApplyInsets(content);
     }
@@ -177,11 +178,13 @@ public class ControlActivity extends Activity {
         if (intent == null) return;
         boolean send = Intent.ACTION_SEND.equals(intent.getAction()) || Intent.ACTION_SEND_MULTIPLE.equals(intent.getAction());
         if (send || intent.getBooleanExtra("history", false) || intent.getBooleanExtra("inbox", false)) {
+            setWebHandlesBack(true);
             destination = "files"; section = send ? "send" : intent.getBooleanExtra("inbox", false) ? "inbox" : "history";
             files.acceptIntent(intent);
             if (bridge != null) bridge.emit("navigate", WebBridge.object("ok", true, "page", "files", "section", section));
         } else if (intent.hasExtra(DESTINATION)) {
             destination = controlDestination(intent.getStringExtra(DESTINATION));
+            if (!"dashboard".equals(destination)) setWebHandlesBack(true);
             if (bridge != null) bridge.emit("navigate", WebBridge.object("ok", true, "page", destination));
         }
     }
@@ -201,6 +204,19 @@ public class ControlActivity extends Activity {
         WindowCompat.getInsetsController(getWindow(), content).setAppearanceLightStatusBars(!dark);
         WindowCompat.getInsetsController(getWindow(), content).setAppearanceLightNavigationBars(!dark);
     }
+    // The WebView must declare interception before a gesture begins. At its
+    // root, leave Back to Android so the launcher/task preview is system-owned.
+    void setWebHandlesBack(boolean handles) {
+        webHandlesBack = handles;
+        updateBackCallback();
+    }
+    private void updateBackCallback() {
+        if (Build.VERSION.SDK_INT < 33 || backCallback == null || backRegistered == webHandlesBack) return;
+        if (webHandlesBack) getOnBackInvokedDispatcher().registerOnBackInvokedCallback(
+                android.window.OnBackInvokedDispatcher.PRIORITY_DEFAULT, backCallback);
+        else getOnBackInvokedDispatcher().unregisterOnBackInvokedCallback(backCallback);
+        backRegistered = webHandlesBack;
+    }
     private void webBack() { if (bridge != null && bridge.ready() && trustedDocument()) bridge.emit("back", WebBridge.object("ok", true)); else finish(); }
     @Override public void onBackPressed() { webBack(); }
     @Override protected void onNewIntent(Intent intent) { super.onNewIntent(intent); setIntent(intent); acceptIntent(intent); }
@@ -218,8 +234,9 @@ public class ControlActivity extends Activity {
         if (files != null) files.save(saved); super.onSaveInstanceState(saved);
     }
     @Override protected void onDestroy() {
-        if (Build.VERSION.SDK_INT >= 33 && backCallback != null) getOnBackInvokedDispatcher().unregisterOnBackInvokedCallback(backCallback);
         if (bridge != null) bridge.destroy(); if (files != null) files.destroy();
+        if (Build.VERSION.SDK_INT >= 33 && backCallback != null && backRegistered) getOnBackInvokedDispatcher().unregisterOnBackInvokedCallback(backCallback);
+        backRegistered = false; backCallback = null;
         if (web != null) { content.removeView(web); web.destroy(); web = null; }
         super.onDestroy();
     }

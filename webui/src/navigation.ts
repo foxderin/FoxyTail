@@ -63,7 +63,11 @@ const [nativeFilesSection, setNativeFilesSection] = createSignal<'inbox' | 'send
 export { nativeFilesSection };
 export function acceptNativeNavigation(event: Record<string, unknown>): void {
   if (event.section === 'inbox' || event.section === 'send' || event.section === 'history') setNativeFilesSection(event.section);
-  if (typeof event.page === 'string' && event.page in ROUTE_META) location.hash = '#/' + event.page;
+  const next = typeof event.page === 'string' && event.page in ROUTE_META ? '#/' + event.page : location.hash;
+  const changed = next !== location.hash;
+  lastBackState = undefined;
+  if (changed) location.hash = next;
+  else queueMicrotask(publishBackState); // Changed routes publish after recordNavigation.
 }
 onNativeEvent('navigate', acceptNativeNavigation);
 
@@ -72,6 +76,7 @@ let goingBack = false;
 export function recordNavigation(previous: string, next: string): void {
   if (!goingBack && previous !== next) backStack.push(previous);
   goingBack = false;
+  queueMicrotask(publishBackState);
 }
 /** A parent-link is a backwards transition, not a new visit to that hub. */
 export function returnToParent(route: string): void {
@@ -115,3 +120,35 @@ export function handleBack(): void {
   } else void requestNative('app.close');
 }
 onNativeEvent('back', handleBack);
+
+// Publish only after bootstrap/render. Unknown startup and document reloads
+// retain native interception; no gesture progress changes navigation or forms.
+let backStateInstalled = false;
+let lastBackState: boolean | undefined;
+function publishBackState(): void {
+  if (!backStateInstalled || typeof document === 'undefined') return;
+  const overlay = [...document.querySelectorAll('dialog[open], details[open]')].some(visible);
+  const match = /^#\/([a-z-]+)/.exec(location.hash || '');
+  const route = match && match[1] in ROUTE_META ? match[1] : 'dashboard';
+  const canHandle = overlay || backStack.length > 0 || route !== 'dashboard';
+  if (lastBackState === canHandle) return;
+  lastBackState = canHandle;
+  void requestNative('app.backState', { canHandle }).then(result => {
+    if (!result.ok && lastBackState === canHandle) lastBackState = undefined;
+  });
+}
+export function installBackState(): void {
+  if (backStateInstalled) return;
+  backStateInstalled = true;
+  const relevant = (node: Node) => node instanceof Element &&
+    (node.matches('dialog, details') || !!node.querySelector('dialog, details'));
+  new MutationObserver(records => {
+    if (records.some(record => record.type === 'attributes' ||
+      [...record.addedNodes, ...record.removedNodes].some(relevant))) publishBackState();
+  }).observe(document.body, { subtree: true, childList: true, attributes: true, attributeFilter: ['open', 'hidden'] });
+  publishBackState();
+}
+
+onNativeEvent('lifecycle', event => {
+  if (event.active === true) { lastBackState = undefined; publishBackState(); }
+});

@@ -136,6 +136,7 @@ final class WebBridge {
     }
 
     void resetDocument() {
+        activity.setWebHandlesBack(true); // A new document must hydrate before surrendering Back.
         generation++; channel = null; pending.clear();
         cancelReads();
     }
@@ -171,6 +172,11 @@ final class WebBridge {
                 return;
             case "app.navigate":
                 keys(args, "page"); activity.navigate(text(args, "page", 32)); reply.accept(object("ok", true)); return;
+            case "app.backState":
+                keys(args, "canHandle");
+                if (!(args.opt("canHandle") instanceof Boolean)) throw new IOException("Invalid back state");
+                activity.setWebHandlesBack(args.getBoolean("canHandle"));
+                reply.accept(object("ok", true)); return;
             case "app.close":
                 keys(args); reply.accept(object("ok", true)); main.post(activity::finish); return;
             case "app.openUrl":

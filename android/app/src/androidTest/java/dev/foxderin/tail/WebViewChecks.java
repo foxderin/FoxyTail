@@ -44,6 +44,16 @@ final class WebViewChecks {
         reject("app.openUrl", new JSONObject().put("url", "https://user:password@example.invalid/"));
         reject("app.navigate", new JSONObject().put("page", "unknown"));
         reject("app.drafts", new JSONObject().put("key", "logs")); // Removed native state-copy API.
+        reject("app.backState", new JSONObject().put("canHandle", "false"));
+        reject("app.backState", new JSONObject().put("canHandle", false).put("extra", true));
+        require(request("app.backState", new JSONObject().put("canHandle", true)).getBoolean("ok"), "Explicit boolean back state accepted");
+        if (android.os.Build.VERSION.SDK_INT >= 33) {
+            Field registration = ControlActivity.class.getDeclaredField("backRegistered");
+            registration.setAccessible(true);
+            require(registration.getBoolean(activity), "In-app Back registers modern callback");
+            require(request("app.backState", new JSONObject().put("canHandle", false)).getBoolean("ok"), "Root back state accepted");
+            require(!registration.getBoolean(activity), "Root unregisters callback for system predictive Back");
+        }
         rejectedOrigins();
         incomingShare();
 
