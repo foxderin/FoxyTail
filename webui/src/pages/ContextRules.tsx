@@ -230,7 +230,7 @@ export default function ContextRules(props: { locked: boolean; onPending: () => 
             <p class="tool-hint">{t('set_context_hint')}</p>
             <textarea class="tool-editor" rows={8} aria-label={t('set_context')} value={rules()!} disabled={locked()} onInput={event => setRules(event.currentTarget.value)} />
           </Show>
-          <Show when={draft()}>{rule => <form class="tool-form" data-testid="context-editor" onSubmit={applyDraft}>
+          <Show when={draft()}>{rule => <form class="tool-form tool-form-section" data-testid="context-editor" onSubmit={applyDraft}>
             <Select label={t('context_network')} value={rule().trigger} disabled={locked()} onChange={event => updateDraft({ trigger: (event.target as HTMLSelectElement).value as Rule['trigger'] })}>
               <option value="ssid">{t('context_wifi')}</option><option value="cellular">{t('context_cellular')}</option>
             </Select>

@@ -680,6 +680,24 @@ await scenario('failed context baseline cannot enable replacement editing', asyn
   assert(fixture.data['context-get'].rules === original, 'read failure and recovery retain saved rules verbatim');
 });
 
+await scenario('context Add separates the editor and can cancel and reopen', async h => {
+  const { fixture, button, click } = h;
+  const context = await openContext(h);
+  const original = fixture.data['context-get'].rules;
+  click(button('context_add', context)); await flush();
+  const editor = () => context.querySelector('[data-testid="context-editor"]');
+  assert(editor()?.classList.contains('tool-form-section'), 'new rule editor uses explicit section spacing after Add');
+  assert(button('context_add', context).disabled, 'open editor still prevents duplicate drafts');
+  click(button('cancel', editor())); await flush();
+  assert(!editor() && !button('context_add', context).disabled, 'cancel removes editor and unlocks Add immediately');
+  click(button('context_add', context)); await flush();
+  assert(editor()?.classList.contains('tool-form-section'), 'reopened editor retains section spacing');
+  assert(fixture.data['context-get'].rules === original, 'layout and repeated editor actions never save rules');
+  const css = readFileSync(new URL('../src/pages/tools.css', import.meta.url), 'utf8');
+  assert(/\.tool-form-section\s*\{\s*margin-block-start:\s*16px;/.test(css), 'section forms define external spacing, not only grid gap');
+  assert(/\.tool-form > \.tool-actions\s*\{\s*margin-top:\s*0;/.test(css), 'form action rows use grid gap without duplicate top margin');
+});
+
 await scenario('open visual context draft retains original rule baseline', async h => {
   const { fixture, window, input, button, click } = h;
   const original = fixture.data['context-get'].rules;

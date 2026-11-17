@@ -215,7 +215,7 @@ export default function Account(): JSX.Element {
               </For>
         </LoadGate>
         <Show when={currentAccount()}>
-          <div class="tool-form">
+          <div class="tool-form tool-form-section">
             <TextField label={t('acc_nickname')} value={nickname()} disabled={actionBusy()}
               onInput={event => setNickname((event.target as HTMLInputElement).value)} />
             <p class="tool-hint">{t('acc_rename_hint')}</p>
