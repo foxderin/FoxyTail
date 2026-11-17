@@ -16,6 +16,7 @@ import { showToast, toastApiError } from '../components/Toast';
 import { MdIcon } from '../icons';
 import type { AccountEntry } from '../types';
 import { Button, LinearProgress, TextField } from '../components/ui';
+import AccountDetails from './AccountDetails';
 import { requestNative, onNativeEvent } from '../native';
 
 export default function Account(): JSX.Element {
@@ -101,7 +102,8 @@ export default function Account(): JSX.Element {
     () => scope.api('accounts'),
     (res) => {
       if (res.ok && Array.isArray(res.accounts) && res.accounts.every(account => account &&
-          typeof account.name === 'string' && typeof account.current === 'boolean')) {
+          typeof account.name === 'string' && typeof account.current === 'boolean' &&
+          (account.id === undefined || typeof account.id === 'string') && (account.tailnet === undefined || typeof account.tailnet === 'string'))) {
         setAccounts((res.accounts as AccountEntry[]) || []);
         setAccountsError(null);
       } else {
@@ -148,6 +150,7 @@ export default function Account(): JSX.Element {
 
   return (
     <div class="tools-page">
+      <AccountDetails />
       <Card
         title={t('acc_accounts')}
         icon="person"
@@ -175,6 +178,8 @@ export default function Account(): JSX.Element {
                     </span>
                     <div class="main">
                       <div class="title">{account.label || account.name}</div>
+                      <div class="account-profile-facts">{t('acc_profile_id')}: <code>{account.id || account.name}</code></div>
+                      <Show when={account.tailnet}><div class="account-profile-facts">{t('acc_tailnet')}: {account.tailnet}</div></Show>
                       <Show when={account.current}>
                         <StatusBadge tone="success">{t('acc_current_badge')}</StatusBadge>
                       </Show>

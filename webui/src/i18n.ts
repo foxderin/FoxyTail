@@ -68,6 +68,9 @@ const zh = {
   acc_logout: '退出登录', acc_logout_confirm: '确定退出登录？需要重新授权才能使用。',
   acc_switched: '已切换账号', acc_logged_out: '已退出登录', acc_logged_in: '登录成功',
   acc_not_logged_in: '未登录',
+  acc_device_details: '当前设备信息', acc_device_details_hint: '来自当前设备状态，不包含登录密钥或设备私钥。',
+  acc_backend: '连接状态', acc_device_name: '设备名称', acc_device_id: '设备 ID', acc_addresses: '网络地址',
+  acc_key_expiry: '设备密钥到期时间', acc_not_reported: '未报告', acc_profile_id: '账号配置 ID', acc_tailnet: '所属网络',
 
   tun_title: '隧道', tun_iface: 'tailscale0 接口', tun_up: '已启用', tun_down: '未启用',
   tun_gateway: '网关', tun_hev: 'hev-socks5-tunnel',
@@ -216,6 +219,9 @@ const en: Record<I18nKey, string> = {
   acc_logout: 'Log out', acc_logout_confirm: 'Log out? You will need to authorize again.',
   acc_switched: 'Account switched', acc_logged_out: 'Logged out', acc_logged_in: 'Logged in',
   acc_not_logged_in: 'Not logged in',
+  acc_device_details: 'Current device', acc_device_details_hint: 'Reported device status; no login keys or device private keys are included.',
+  acc_backend: 'Connection state', acc_device_name: 'Device name', acc_device_id: 'Device ID', acc_addresses: 'Network addresses',
+  acc_key_expiry: 'Device key expiry', acc_not_reported: 'Not reported', acc_profile_id: 'Profile ID', acc_tailnet: 'Tailnet',
 
   tun_title: 'Tunnel', tun_iface: 'tailscale0 interface', tun_up: 'Up', tun_down: 'Down',
   tun_gateway: 'Gateway', tun_hev: 'hev-socks5-tunnel',

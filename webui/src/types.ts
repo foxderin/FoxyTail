@@ -84,6 +84,8 @@ export interface Transfer {
 
 export interface AccountEntry {
   name: string;
+  id?: string;
+  tailnet?: string;
   label?: string;
   current: boolean;
 }

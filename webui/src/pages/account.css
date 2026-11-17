@@ -1,0 +1,9 @@
+.account-facts { margin: 0; display: grid; gap: 0; }
+.account-facts > div { display: grid; grid-template-columns: minmax(100px, .7fr) minmax(0, 1.3fr); gap: 12px; padding: 10px 0; border-bottom: 1px solid var(--ft-border); }
+.account-facts > div:last-child { border-bottom: 0; }
+.account-facts dt { color: var(--ft-muted); }
+.account-facts dd { margin: 0; min-width: 0; overflow-wrap: anywhere; }
+.account-address { display: flex; align-items: center; gap: 8px; }
+.account-address code { min-width: 0; flex: 1; overflow-wrap: anywhere; }
+.account-profile-facts { margin-top: 6px; color: var(--ft-muted); font-size: 12px; overflow-wrap: anywhere; }
+@media (max-width: 380px) { .account-facts > div { grid-template-columns: minmax(0, 1fr); gap: 4px; } }
