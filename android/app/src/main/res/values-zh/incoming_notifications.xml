@@ -1,0 +1,7 @@
+<resources>
+    <string name="incoming_channel">收到文件</string>
+    <string name="incoming_title">FoxyTail 收到文件</string>
+    <plurals name="incoming_completed">
+        <item quantity="other">%d 个文件已保存至收件箱</item>
+    </plurals>
+</resources>

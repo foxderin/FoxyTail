@@ -15,7 +15,7 @@ import java.util.function.*;
 
 /** Native ownership of sources, URI grants and binary exports; the document sees handles only. */
 final class FileActions {
-    static final int PICK = 10, SAVE = 11, NOTIFY = 12, PICK_BACKUP = 50, SAVE_ARTIFACT = 51;
+    static final int PICK = 10, SAVE = 11, NOTIFY = 12, NOTIFY_INCOMING = 13, PICK_BACKUP = 50, SAVE_ARTIFACT = 51;
     private static final ExecutorService EXPORTS = Executors.newSingleThreadExecutor();
     private static final Handler MAIN = new Handler(Looper.getMainLooper());
     private static ExportJob export;
@@ -88,7 +88,8 @@ final class FileActions {
         return object("ok", true, "selection", selected, "busy", transferBusy(), "preparing", !resolving.isEmpty() || state.getBoolean("preparing", false),
                 "job", preflight ? null : state.getString("job", null), "unknown", state.getBoolean("unknown", false), "message", message.isEmpty() ? state.getString("message", "") : message, "transfer", transfer,
                 "export", export == null ? object("busy", false, "committing", false, "bytes", 0, "message", "") : export.snapshot(),
-                "backup", object("busy", backup.busy(), "token", backup.token(), "error", backup.error()));
+                "backup", object("busy", backup.busy(), "token", backup.token(), "error", backup.error()),
+                "receiveNotifications", ReceiveNotificationReceiver.snapshot(activity));
     }
     static void fields(JSONObject args, String... allowed) throws JSONException {
         Set<String> keys = new HashSet<>(Arrays.asList(allowed));
@@ -111,6 +112,18 @@ final class FileActions {
         if (!action.startsWith("files.") && !action.startsWith("artifact.") && !action.equals("backup.import")) return false;
         try {
             switch (action) {
+                case "files.receiveNotifications": {
+                    fields(args, "enabled");
+                    if (args.has("enabled")) {
+                        Object enabled = args.get("enabled");
+                        if (!(enabled instanceof Boolean)) throw new JSONException("Expected notification preference boolean");
+                        ReceiveNotificationReceiver.setEnabled(activity, (Boolean) enabled);
+                        if ((Boolean) enabled && Build.VERSION.SDK_INT >= 33 && activity.checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED)
+                            activity.requestPermissions(new String[]{Manifest.permission.POST_NOTIFICATIONS}, NOTIFY_INCOMING);
+                        publish();
+                    }
+                    respond(reply, ReceiveNotificationReceiver.snapshot(activity)); break;
+                }
                 case "files.snapshot": fields(args); respond(reply, snapshot()); break;
                 case "files.acknowledge": fields(args); acknowledgeUnknown(); respond(reply, snapshot()); break;
                 case "files.pick": fields(args); editable(); beginPicker(PICK, new Intent(Intent.ACTION_OPEN_DOCUMENT).setType("*/*").addCategory(Intent.CATEGORY_OPENABLE).putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true), reply); break;
@@ -345,6 +358,7 @@ final class FileActions {
         if (Build.VERSION.SDK_INT >= 33 && activity.checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) activity.requestPermissions(new String[]{Manifest.permission.POST_NOTIFICATIONS}, NOTIFY);
     }
     void onRequestPermissionsResult(int request, String[] permissions, int[] results) {
+        if (request == NOTIFY_INCOMING) { publish(); return; }
         if (request == NOTIFY && (results.length == 0 || results[0] != PackageManager.PERMISSION_GRANTED)) { message = s(R.string.notifications_hint); publish(); }
     }
     private void deliverImport() {

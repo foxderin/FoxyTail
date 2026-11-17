@@ -179,8 +179,8 @@ public class ControlActivity extends Activity {
     private void acceptIntent(Intent intent) {
         if (intent == null) return;
         boolean send = Intent.ACTION_SEND.equals(intent.getAction()) || Intent.ACTION_SEND_MULTIPLE.equals(intent.getAction());
-        if (send || intent.getBooleanExtra("history", false)) {
-            destination = "files"; section = send ? "send" : "history";
+        if (send || intent.getBooleanExtra("history", false) || intent.getBooleanExtra("inbox", false)) {
+            destination = "files"; section = send ? "send" : intent.getBooleanExtra("inbox", false) ? "inbox" : "history";
             files.acceptIntent(intent);
             if (bridge != null) bridge.emit("navigate", WebBridge.object("ok", true, "page", "files", "section", section));
         } else if (intent.hasExtra(DESTINATION)) {

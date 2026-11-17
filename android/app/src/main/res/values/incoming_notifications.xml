@@ -1,0 +1,8 @@
+<resources>
+    <string name="incoming_channel">Received files</string>
+    <string name="incoming_title">FoxyTail received files</string>
+    <plurals name="incoming_completed">
+        <item quantity="one">%d file is ready in your inbox</item>
+        <item quantity="other">%d files are ready in your inbox</item>
+    </plurals>
+</resources>

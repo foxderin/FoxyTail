@@ -67,6 +67,8 @@ run_checks() {
   pnpm --dir webui run smoke
   javac -d "$build_dir/settings-check" android/app/src/main/java/dev/foxderin/tail/SettingsRules.java android/app/src/test/java/dev/foxderin/tail/SettingsRulesTest.java
   java -cp "$build_dir/settings-check" dev.foxderin.tail.SettingsRulesTest
+  javac -d "$build_dir/notification-check" android/app/src/main/java/dev/foxderin/tail/IncomingNotificationReceipt.java android/app/src/test/java/dev/foxderin/tail/IncomingNotificationReceiptTest.java
+  java -cp "$build_dir/notification-check" dev.foxderin.tail.IncomingNotificationReceiptTest
   for pid in "${helper_pids[@]}"; do wait "$pid"; done
   python3 .github/tools/check-metadata.py
 }

@@ -15,6 +15,7 @@ public final class BridgeInstrumentation extends Instrumentation {
         try {
             check("'a'\\'';$(id)'".equals(RootApi.quote("a';$(id)")), "Shell argument quoting");
             Context context = getTargetContext();
+            IncomingNotificationChecks.run(context);
             int[] starts = {0};
             String command = "literal command containing ' quotes and $()";
             Process denied = RootApi.startRoot(context, command, builder -> {
