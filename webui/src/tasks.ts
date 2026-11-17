@@ -45,7 +45,6 @@ function recoveredCall(entry: NativeTask): ApiCall {
     get cancelled() { return terminal()?.result?.cancelled === true; },
     get cancellation() { return terminal()?.cancellation === 'requested' ? 'requested' : terminal()?.cancellation === 'failed' ? 'failed' : 'idle'; },
     get cancellationError() { return terminal()?.cancellation === 'failed' ? terminal()?.detail ?? null : null; },
-    timedOut: false,
     cancel: () => nativeControl().id === entry.id ? requestNative('control.cancel', { id: entry.id }) : Promise.resolve({ ok: true, completed: true }),
   };
   recoveredCalls.set(entry.id, call);

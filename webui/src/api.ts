@@ -56,7 +56,6 @@ export interface ApiCall {
   readonly promise: Promise<ApiResult>; readonly requestId: string;
   readonly cancelled: boolean; readonly cancellable: boolean;
   readonly cancellation: CancellationState; readonly cancellationError: string | null;
-  readonly timedOut: boolean;
   cancel(): Promise<ApiResult>;
 }
 export function apiCall(command: string, ...args: (string | number)[]): ApiCall {
@@ -93,7 +92,6 @@ export function apiCall(command: string, ...args: (string | number)[]): ApiCall 
       const native = nativeControl().tasks.find(task => task.id === operationId);
       return native?.cancellation === 'failed' ? native.detail ?? null : cancellationError();
     },
-    get timedOut() { return false; },
     cancel() {
       if (done) return Promise.resolve({ ok: true, completed: true });
       if (!read && !operationId) return Promise.resolve({ ok: false, error: 'Operation identity is not available' });

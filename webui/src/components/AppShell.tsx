@@ -88,7 +88,6 @@ function TaskMenu(): JSX.Element {
             ? task.call.cancellation === 'requested' ? 'task_cancel_pending'
               : task.call.cancellation === 'failed' ? 'task_cancel_failed' : 'shell_task_running'
             : ('shell_task_' + task.status) as I18nKey)}</span>
-            <Show when={task.status === 'running' && task.call.timedOut}><span>{t('task_timeout_running')}</span></Show>
           </span>
           <span class={'dot ' + (task.status === 'done' ? 'on' : task.status === 'running' ? 'warn' : 'off')} aria-hidden="true" />
         </a>}</For>

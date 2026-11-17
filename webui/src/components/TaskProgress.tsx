@@ -13,8 +13,8 @@ export function TaskProgress(props: { taskKey: string; cancellable?: boolean }):
   const cancelling = () => task()?.call.cancellation === 'requested';
   return (
     <Show when={running()}>
-      <div class="task-progress" role="status" data-task-key={props.taskKey} data-cancellation={task()?.call.cancellation} data-timed-out={task()?.call.timedOut || undefined}>
-        <div class="task-progress-heading"><span class="task-progress-icon"><MdIcon name="sync" size={18} /></span><span><strong>{t(task()?.status === 'unknown' ? 'native_unknown' : task()?.call.timedOut ? 'task_timeout_running' : 'shell_task_running')}</strong><span class="task-progress-hint">{t(cancelling() ? 'task_cancel_pending' : task()?.call.cancellation === 'failed' ? 'task_cancel_failed' : 'shell_task_keep_running')}</span></span></div>
+      <div class="task-progress" role="status" data-task-key={props.taskKey} data-cancellation={task()?.call.cancellation}>
+        <div class="task-progress-heading"><span class="task-progress-icon"><MdIcon name="sync" size={18} /></span><span><strong>{t(task()?.status === 'unknown' ? 'native_unknown' : 'shell_task_running')}</strong><span class="task-progress-hint">{t(cancelling() ? 'task_cancel_pending' : task()?.call.cancellation === 'failed' ? 'task_cancel_failed' : 'shell_task_keep_running')}</span></span></div>
         <Show when={task()?.call.cancellationError}><p class="tool-hint">{task()?.call.cancellationError}</p></Show>
         <div class="progress-row">
         <LinearProgress indeterminate aria-label={t('shell_task_running')} />

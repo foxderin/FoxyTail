@@ -6,7 +6,6 @@ export const foundationZh = {
   shell_task_keep_running: '可切换页面，任务会继续运行。',
   task_cancel_pending: '正在等待后台确认取消。',
   task_cancel_failed: '取消尚未确认，任务可能仍在运行。可重试取消。',
-  task_timeout_running: '操作耗时较长，仍在等待后台的实际结果。',
 } as const;
 
 export const foundationEn: Record<keyof typeof foundationZh, string> = {
@@ -17,5 +16,4 @@ export const foundationEn: Record<keyof typeof foundationZh, string> = {
   shell_task_keep_running: 'You can switch pages while this task continues.',
   task_cancel_pending: 'Waiting for the backend to acknowledge cancellation.',
   task_cancel_failed: 'Cancellation is unconfirmed; the task may still be running. You can retry cancellation.',
-  task_timeout_running: 'This operation is taking longer; still waiting for the actual backend result.'
 };

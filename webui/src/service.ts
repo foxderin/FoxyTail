@@ -151,8 +151,7 @@ export async function emergencyStop(): Promise<void> {
 }
 
 export const serviceMessage = (): string =>
-  serviceOperationRunning() && serviceTask()?.call.timedOut ? t('task_timeout_running')
-    : serviceOperationRunning() && !busy() ? t('net_working')
+  serviceOperationRunning() && !busy() ? t('net_working')
       : phase() === 'confirm' ? t('net_controls_awaiting_confirm')
         : phase() === 'verify' ? t('net_controls_verifying')
           : phase() === 'run' ? t('net_working')
