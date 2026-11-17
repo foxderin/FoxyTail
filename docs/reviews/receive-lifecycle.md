@@ -18,9 +18,9 @@ A successful copied file whose source cleanup still needs retry can be retried a
 
 ## Notification contract and limitations
 
-The producer diffs native final, regular inbox entries by name/size/mtime under the current self identity. It ignores `.partial`/`.deleted`, and native enumeration excludes unsafe names and symlinks. First start, each resident restart, and account changes baseline existing files without broadcasting history. Failed/unavailable/locked scans preserve prior observations.
+The producer observes new names in native final, regular inbox entries under the current self identity, and new/changed daemon-buffered pending entries by name/size. Pending arrivals are observed even when automatic recovery is off and the final inbox directory does not exist. Pending notices explicitly mean awaiting receipt; they never claim completion. It ignores `.partial`/`.deleted`, and native enumeration excludes unsafe names and symlinks. First start, each resident restart, and account changes baseline existing files without broadcasting history. Failed/unavailable/locked scans preserve prior observations.
 
-An observation is persisted atomically under root-private runtime state **before** its broadcast. Delivery is best-effort, at-most-once from this producer: there is no retry queue. Thus process crashes, app force-stop, disabled notifications, Android restrictions, and the baseline after downtime can lose notifications; later opt-in does not replay old notices. These notices describe newly observed completed inbox entries, not cryptographic proof that a network transfer occurred. A local edit changing file metadata can also be observed as a change. A file arriving and disappearing between polls may not be observed.
+An observation is persisted atomically under root-private runtime state **before** its broadcast. Delivery is best-effort, at-most-once from this producer: there is no retry queue. Thus process crashes, app force-stop, disabled notifications, Android restrictions, and the baseline after downtime can lose notifications; later opt-in does not replay old notices. These notices describe newly observed completed inbox entries, not cryptographic proof that a network transfer occurred. Edits to metadata of an existing completed filename do not notify. A locally created new file can still look like an arrival, and same-name replacements between polls are not detected. A file arriving and disappearing between polls may not be observed.
 
 Wire format:
 
@@ -28,10 +28,11 @@ Wire format:
 am broadcast --user 0 --exclude-stopped-packages \
   -n dev.foxderin.tail/.ReceiveNotificationReceiver \
   -a dev.foxderin.tail.RECEIVED \
-  --es event_id <deterministic SHA256, 64 lowercase hex> --ei count <1..10000>
+  --es event_id <SHA256, 64 lowercase hex> --ei count <1..10000> \
+  --es kind <pending|completed>
 ```
 
-No filename, sender, contents, or path crosses the broadcast. The receiver is protected by `android.permission.DUMP`, additionally checks app preference/notification availability and deduplicates event IDs. Never include stopped packages. Broadcast success/acknowledgment does not prove a visible notification or file delivery.
+The hash includes the event kind and a persisted observation generation so a later same-name/same-size arrival after disappearance is distinct. No filename, sender, contents, or path crosses the broadcast. The receiver is protected by `android.permission.DUMP`, additionally checks app preference/notification availability and deduplicates event IDs. Never include stopped packages. Broadcast success/acknowledgment does not prove a visible notification or file delivery.
 
 ## Verification scope
 

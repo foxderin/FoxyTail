@@ -30,34 +30,54 @@ receive_round() {
   if [ "${_rr_auto}" = 1 ]; then
     taildrop_prepare_direct || return 0
   else
-    taildrop_inbox_dir >/dev/null || return 0
+    # A missing final inbox must not hide daemon-buffered arrivals. Validate
+    # accessible shared parent and reject symlinks without creating anything.
+    if ! taildrop_inbox_dir >/dev/null; then
+      [ -d /sdcard/Download ] && [ ! -L /sdcard/Download ] &&
+        [ ! -e /sdcard/Download/Taildrop ] && [ ! -L /sdcard/Download/Taildrop ] || return 0
+      _rr_storage=$(realpath /sdcard 2>/dev/null) || return 0
+      [ "$(realpath /sdcard/Download 2>/dev/null)" = "${_rr_storage}/Download" ] || return 0
+    fi
   fi
   _rr_snapshot=$(tmo 20 "${TS_BIN_DIR}/foxyfiles" inbox-list --root /sdcard/Download/Taildrop --socket "${TS_SOCKET}" 2>/dev/null) || return 1
   _rr_view=$(printf '%s' "${_rr_snapshot}" | jqr -ce '
     select(.ok==true and (.receive.selfId|type)=="string" and (.receive.selfId|length)>0
       and (.receive.mode=="direct" or .receive.mode=="buffered") and (.files|type)=="array")
     | {self:.receive.selfId,files:(.files|map(select((.name|type)=="string" and (.size|type)=="number" and (.mtime|type)=="number"
-      and (.name|endswith(".partial")|not) and (.name|endswith(".deleted")|not)))|sort_by(.name))}' 2>/dev/null) || return 1
+      and (.name|endswith(".partial")|not) and (.name|endswith(".deleted")|not)))|sort_by(.name)),
+      pending:(.receive.pending|map(select((.name|type)=="string" and (.size|type)=="number"
+        and (.name|endswith(".partial")|not) and (.name|endswith(".deleted")|not)))|sort_by(.name))}' 2>/dev/null) || return 1
   _rr_self=$(printf '%s' "${_rr_view}" | jqr -r .self) || return 1
-  if [ "${_RECEIVE_BASELINE:-0}" = 1 ] || ! jqr -e 'type=="object" and (.self|type)=="string" and (.files|type)=="array"' "${RECEIVE_STATE}" >/dev/null 2>&1; then
+  if [ "${_RECEIVE_BASELINE:-0}" = 1 ] || ! jqr -e 'type=="object" and (.self|type)=="string" and (.files|type)=="array" and (.pending|type)=="array"' "${RECEIVE_STATE}" >/dev/null 2>&1; then
     printf 'null\n' | receive_save "${RECEIVE_STATE}" || return 1
   fi
-  _rr_diff=$(printf '%s' "${_rr_view}" | jqr -c --slurpfile prior "${RECEIVE_STATE}" '
-    $prior[0] as $old | if $old==null or .self!=$old.self then []
-    else ($old.files | map({key:.name,value:.}) | from_entries) as $byname
-      | [.files[] | select(.!=$byname[.name])] end') || return 1
-  printf '%s\n' "${_rr_view}" | receive_save "${RECEIVE_STATE}" || return 1
+  _rr_changes=$(printf '%s' "${_rr_view}" | jqr -c --slurpfile prior "${RECEIVE_STATE}" '
+    $prior[0] as $old |
+    def changes($current;$before): ($before | map({key:.name,value:.}) | from_entries) as $byname
+      | [$current[] | select(.!=$byname[.name])];
+    {generation:(($old.generation // 0)+1),
+      pending:(if $old==null or .self!=$old.self then [] else changes(.pending;$old.pending) end),
+      completed:(if $old==null or .self!=$old.self then [] else
+        ($old.files | map({key:.name,value:true}) | from_entries) as $names
+        | [.files[] | select($names[.name]!=true)] end)}') || return 1
+  _rr_generation=$(printf '%s' "${_rr_changes}" | jqr .generation) || return 1
+  printf '%s' "${_rr_view}" | jqr -c --argjson generation "${_rr_generation}" '.+{generation:$generation}' |
+    receive_save "${RECEIVE_STATE}" || return 1
   _RECEIVE_BASELINE=0
-  _rr_count=$(printf '%s' "${_rr_diff}" | jqr 'length') || return 1
-  if [ "${_rr_count}" -gt 0 ] && [ "${_rr_count}" -le 10000 ]; then
-    _rr_event=$(printf '%s\n%s\n' "${_rr_self}" "${_rr_diff}" | sha256sum) || return 1
-    _rr_event=${_rr_event%% *}
-    # Android receiver owns app opt-in, notification permission, and dedupe.
-    # Exclude stopped packages preserves force-stop. Exit zero is NOT delivery.
-    tmo 10 am broadcast --user 0 --exclude-stopped-packages \
-      -n dev.foxderin.tail/.ReceiveNotificationReceiver -a dev.foxderin.tail.RECEIVED \
-      --es event_id "${_rr_event}" --ei count "${_rr_count}" >/dev/null 2>&1 || :
-  fi
+  for _rr_kind in pending completed; do
+    _rr_diff=$(printf '%s' "${_rr_changes}" | jqr -c --arg kind "${_rr_kind}" '.[$kind]') || return 1
+    _rr_count=$(printf '%s' "${_rr_diff}" | jqr 'length') || return 1
+    if [ "${_rr_count}" -gt 0 ] && [ "${_rr_count}" -le 10000 ]; then
+      # Persisted generation distinguishes repeated arrivals of identical
+      # names/sizes after disappearance; kind separates waiting vs published.
+      _rr_event=$(printf '%s\n%s\n%s\n%s\n' "${_rr_self}" "${_rr_generation}" "${_rr_kind}" "${_rr_diff}" | sha256sum) || return 1
+      _rr_event=${_rr_event%% *}
+      # Receiver owns opt-in and permission. No retries after disabled/stopped.
+      tmo 10 am broadcast --user 0 --exclude-stopped-packages \
+        -n dev.foxderin.tail/.ReceiveNotificationReceiver -a dev.foxderin.tail.RECEIVED \
+        --es event_id "${_rr_event}" --ei count "${_rr_count}" --es kind "${_rr_kind}" >/dev/null 2>&1 || :
+    fi
+  done
   receive_recover
 }
 

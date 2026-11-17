@@ -9,6 +9,7 @@ class ReceiveMonitorTests(ApiTestCase):
         super().setUp()
         (self.sdcard / 'Download/Taildrop').mkdir()
         source = (ROOT / 'tailscale/scripts/foxytail.receive').read_text()
+        source = source.replace('/sdcard', str(self.sdcard))
         functions = source[source.index('# Atomic private state'):source.index('case "${1:-}" in')]
         self.lib.write_text(self.lib.read_text() + '\n' + functions + '''
 RECEIVE_STATE="$TS_RUN_DIR/receive-monitor.json"
@@ -67,7 +68,7 @@ receive_api() {
         self.assertEqual(len(calls), 1)
         self.assertIn('--exclude-stopped-packages', calls[0])
         self.assertNotIn('--include-stopped-packages', calls[0])
-        self.assertRegex(calls[0], r'--es event_id [0-9a-f]{64} --ei count 1$')
+        self.assertRegex(calls[0], r'--es event_id [0-9a-f]{64} --ei count 1 --es kind completed$')
         self.assertNotIn('quote', calls[0])
         self.assertEqual((self.run / 'receive-monitor.json').stat().st_mode & 0o777, 0o600)
 
@@ -165,3 +166,44 @@ receive_api() {
         self.shell('receive_round')
         self.assertFalse((self.run / 'receive-job.json').exists())
         self.assertEqual(json.loads((self.run / 'receive-status.json').read_text())['state'],'idle')
+
+    def test_pending_arrivals_notify_with_auto_off_and_missing_inbox(self):
+        (self.sdcard / 'Download/Taildrop').rmdir()
+        self.snapshot_file([], mode='buffered')
+        self.shell('receive_round')
+        self.snapshot_file([], mode='buffered', pending=[dict(name='wait.txt',size=3)])
+        self.shell('receive_round; receive_round')
+        self.assertEqual(len(self.broadcasts()),1)
+        self.assertTrue(self.broadcasts()[0].endswith('--es kind pending'))
+        self.assertFalse((self.run / 'operations-log').exists())
+
+    def test_pending_and_completed_distinct_and_repeated_arrival_unique(self):
+        self.snapshot_file([], mode='buffered')
+        self.shell('receive_round')
+        self.snapshot_file([], mode='buffered',pending=[dict(name='a',size=3)])
+        self.shell('receive_round')
+        self.snapshot_file([self.entry('a')], mode='buffered')
+        self.shell('receive_round')
+        self.snapshot_file([self.entry('a')], mode='buffered',pending=[dict(name='a',size=3)])
+        self.shell('receive_round')
+        calls = self.broadcasts()
+        self.assertEqual(len(calls),3)
+        self.assertTrue(calls[0].endswith('--es kind pending'))
+        self.assertTrue(calls[1].endswith('--es kind completed'))
+        self.assertTrue(calls[2].endswith('--es kind pending'))
+        self.assertNotEqual(calls[0],calls[2])
+
+    def test_completed_metadata_edit_is_not_a_new_arrival(self):
+        self.snapshot_file([self.entry('a',1,1)])
+        self.shell('receive_round')
+        self.snapshot_file([self.entry('a',2,2)])
+        self.shell('receive_round')
+        self.assertEqual(self.broadcasts(),[])
+
+    def test_first_pending_snapshot_is_baseline_not_old_notification(self):
+        self.snapshot_file([],mode='buffered',pending=[dict(name='old',size=4)])
+        self.shell('receive_round')
+        self.snapshot_file([],mode='buffered',pending=[dict(name='old',size=4),dict(name='new',size=1)])
+        self.shell('receive_round')
+        self.assertEqual(len(self.broadcasts()),1)
+        self.assertIn('--ei count 1 --es kind pending', self.broadcasts()[0])
