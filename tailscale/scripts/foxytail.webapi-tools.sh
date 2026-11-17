@@ -235,7 +235,20 @@ _file_name_valid() {
 }
 
 cmd_files_inbox() {
-  _file_json_command 15 inbox-list --root /sdcard/Download/Taildrop --socket "${TS_SOCKET}"
+  _fi_snapshot=$(_file_json_command 15 inbox-list --root /sdcard/Download/Taildrop --socket "${TS_SOCKET}") || { printf '%s\n' "${_fi_snapshot}"; return 1; }
+  _fi_auto=$(_conf_parse_file "${TS_CONF_DIR}/foxytail.conf" | sed -n 's/^TAILDROP_AUTO_RECEIVE=//p')
+  [ "${_fi_auto}" = 1 ] && _fi_enabled=true || _fi_enabled=false
+  # Only a small fixed-shape root-owned status crosses the bridge. No journal
+  # filename, file contents, socket paths, or unbounded state is exposed.
+  _fi_monitor=$(head -c 4096 "${TS_RUN_DIR}/receive-status.json" 2>/dev/null | jqr -ce '
+    select(.state=="idle" or .state=="running" or .state=="blocked")
+    | {state} + (if (.error|type)=="string" then {error:(.error|.[0:256])} else {} end)
+      + (if (.operationId|type)=="string" then {operationId:(.operationId|.[0:96])} else {} end)' 2>/dev/null) || _fi_monitor='{"state":"idle"}'
+  if [ "${_fi_enabled}" = true ] && ! daemon_pid_alive foxytail.receive; then
+    _fi_monitor='{"state":"blocked","error":"Receive monitor is not running; start FoxyTail before automatic recovery"}'
+  fi
+  printf '%s' "${_fi_snapshot}" | jqr -c --argjson enabled "${_fi_enabled}" --argjson monitor "${_fi_monitor}" \
+    '.receive.automatic=($monitor+{enabled:$enabled})'
 }
 
 cmd_file_receive() {

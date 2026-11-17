@@ -458,7 +458,7 @@ quiesce_installed() {
       kill -TERM "$_qi_pid" 2>/dev/null
     fi
   done
-  for _qi_name in foxytail.watchdog foxytail.context foxytail.stats foxytail.logd; do
+  for _qi_name in foxytail.watchdog foxytail.context foxytail.stats foxytail.logd foxytail.receive; do
     [ ! -x "${TS_SCRIPTS_DIR}/${_qi_name}" ] ||
       "${TS_SCRIPTS_DIR}/${_qi_name}" stop || return 1
   done

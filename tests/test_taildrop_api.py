@@ -142,7 +142,9 @@ cmd_files_inbox
         self.assertTrue(listing['ok'])
         self.assertEqual(len(listing['files']), 501)
         self.assertEqual(calls.read_text().splitlines(), ['inbox-list'])
-        self.assertEqual(jq_calls.read_text().splitlines(), ['jq'])
+        # Three constant JSON passes: native response validation, bounded worker
+        # status validation, response enrichment. Never per-file helpers.
+        self.assertEqual(jq_calls.read_text().splitlines(), ['jq'] * 3)
 
     def test_inbox_listing_rejects_symlink_directory_without_following_it(self):
         self.inbox.rmdir()

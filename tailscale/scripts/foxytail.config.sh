@@ -8,7 +8,7 @@
 _conf_has_key() {
   case "$1:$2" in
     foxytail.conf:TS_MODE | foxytail.conf:SOCKS_PORT | foxytail.conf:DNS_PORT | foxytail.conf:MAGIC_DNS | foxytail.conf:IPV6 | foxytail.conf:ROUTE_TABLE | foxytail.conf:FWMARK | foxytail.conf:FWMARK_MASK | foxytail.conf:WATCHDOG | foxytail.conf:WATCHDOG_INTERVAL | foxytail.conf:STATS_INTERVAL | foxytail.conf:LOG_MAX_KB | routes.conf:ROUTE_SCOPE | routes.conf:UID_LIST | routes.conf:ROUTE_SUBNETS) return 0 ;;
-    foxytail.conf:DNS_MODE) return 0 ;;
+    foxytail.conf:DNS_MODE | foxytail.conf:TAILDROP_AUTO_RECEIVE) return 0 ;;
     foxytail.conf:POWER_SAVE | foxytail.conf:STATS | foxytail.conf:CONTEXT | foxytail.conf:WATCHDOG_PROBE | foxytail.conf:WEBUI_AUTO_REFRESH) return 0 ;;
     # Advanced resident knobs; edited in foxytail.conf, never returned by
     # cmd_settings_get so the WebUI schema stays unchanged.
@@ -107,6 +107,7 @@ normalize_cidrs() {
 
 _conf_value_error() {
   case "$1:$2" in
+    TAILDROP_AUTO_RECEIVE:0 | TAILDROP_AUTO_RECEIVE:1) return 0 ;;
     TS_MODE:bridge | TS_MODE:tun | TS_MODE:proxy | ROUTE_SCOPE:all | ROUTE_SCOPE:selected | ROUTE_SCOPE:bypass) return 0 ;;
     MAGIC_DNS:on | MAGIC_DNS:off | IPV6:on | IPV6:off | WATCHDOG:on | WATCHDOG:off) return 0 ;;
     POWER_SAVE:on | POWER_SAVE:off | STATS:on | STATS:off | CONTEXT:on | CONTEXT:off | WATCHDOG_PROBE:on | WATCHDOG_PROBE:off | WEBUI_AUTO_REFRESH:on | WEBUI_AUTO_REFRESH:off) return 0 ;;
@@ -248,6 +249,7 @@ conf_mark_pending() {
 _conf_assign() {
   TS_MODE=bridge ROUTE_TABLE=1052 FWMARK=0x40000000 FWMARK_MASK=0x40000000
   MAGIC_DNS=off DNS_MODE=legacy IPV6=off WATCHDOG=on WATCHDOG_INTERVAL=30 STATS_INTERVAL=60
+  TAILDROP_AUTO_RECEIVE=0
   POWER_SAVE=off STATS=on CONTEXT=on WATCHDOG_PROBE=on WEBUI_AUTO_REFRESH=on
   CONTEXT_INTERVAL=20 STATS_RETENTION_DAYS=7 WATCHDOG_RESTART_LIMIT=5
   WATCHDOG_RESTART_WINDOW=600 WATCHDOG_COOLDOWN=300 WATCHDOG_BACKEND_BAD_LIMIT=3
@@ -472,5 +474,7 @@ conf_write_key() (
   ' "${_cw_source}" >"${_cw_tmp}" || exit 1
   _conf_parse_file "${_cw_tmp}" "${_cw_file}" >/dev/null || exit 1
   chmod 0600 "${_cw_tmp}" || exit 1
-  mv "${_cw_tmp}" "${TS_CONF_DIR}/${_cw_file}" && conf_mark_pending
+  mv "${_cw_tmp}" "${TS_CONF_DIR}/${_cw_file}" || exit 1
+  # Independent hot preference: no daemon restart, no unrelated pending promotion.
+  [ "${_cw_key}" = TAILDROP_AUTO_RECEIVE ] || conf_mark_pending
 )

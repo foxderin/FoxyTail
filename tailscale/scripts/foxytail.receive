@@ -1,0 +1,163 @@
+#!/system/bin/sh
+# Observe completed inbox publications and optionally recover daemon-buffered files.
+# Never restart tailscaled: Android direct mode is selected when its backend starts.
+DIR=$(dirname "$(realpath "$0")")
+. "$DIR/../settings.sh"
+umask 077
+RECEIVE_STATE="${TS_RUN_DIR}/receive-monitor.json"
+RECEIVE_JOB="${TS_RUN_DIR}/receive-job.json"
+
+# Atomic private state; JSON is data and never sourced. The resident's PID claim
+# serializes writers. Persist observation BEFORE broadcasting (at-most-once,
+# best effort delivery: a crash here can lose a notification, not replay it).
+receive_save() {
+  _rs_target=$1
+  cat >"${_rs_target}.$$" && chmod 0600 "${_rs_target}.$$" &&
+    mv -f "${_rs_target}.$$" "${_rs_target}"
+}
+
+receive_api() { tmo 25 "${TS_SCRIPTS_DIR}/foxytail.webapi.sh" "$@"; }
+
+receive_round() {
+  [ ! -f "${TS_DIR}/.installing" ] && [ ! -f "${TS_MOD_DIR}/disable" ] &&
+    [ ! -f "${TS_RUN_DIR}/manual-stop" ] && [ ! -f "${TS_RUN_DIR}/context-stop" ] || return 0
+  load_runtime_conf || return 1
+  # This one preference is hot-applied from saved config. Never promote other
+  # pending settings or restart the daemon to change the recovery policy.
+  _rr_auto=$(_conf_parse_file "${TS_CONF_DIR}/foxytail.conf" | sed -n 's/^TAILDROP_AUTO_RECEIVE=//p')
+  [ "${_rr_auto}" = 1 ] || _rr_auto=0
+  # Shared storage missing/locked is not an empty successful observation.
+  if [ "${_rr_auto}" = 1 ]; then
+    taildrop_prepare_direct || return 0
+  else
+    taildrop_inbox_dir >/dev/null || return 0
+  fi
+  _rr_snapshot=$(tmo 20 "${TS_BIN_DIR}/foxyfiles" inbox-list --root /sdcard/Download/Taildrop --socket "${TS_SOCKET}" 2>/dev/null) || return 1
+  _rr_view=$(printf '%s' "${_rr_snapshot}" | jqr -ce '
+    select(.ok==true and (.receive.selfId|type)=="string" and (.receive.selfId|length)>0
+      and (.receive.mode=="direct" or .receive.mode=="buffered") and (.files|type)=="array")
+    | {self:.receive.selfId,files:(.files|map(select((.name|type)=="string" and (.size|type)=="number" and (.mtime|type)=="number"
+      and (.name|endswith(".partial")|not) and (.name|endswith(".deleted")|not)))|sort_by(.name))}' 2>/dev/null) || return 1
+  _rr_self=$(printf '%s' "${_rr_view}" | jqr -r .self) || return 1
+  if [ "${_RECEIVE_BASELINE:-0}" = 1 ] || ! jqr -e 'type=="object" and (.self|type)=="string" and (.files|type)=="array"' "${RECEIVE_STATE}" >/dev/null 2>&1; then
+    printf 'null\n' | receive_save "${RECEIVE_STATE}" || return 1
+  fi
+  _rr_diff=$(printf '%s' "${_rr_view}" | jqr -c --slurpfile prior "${RECEIVE_STATE}" '
+    $prior[0] as $old | if $old==null or .self!=$old.self then []
+    else ($old.files | map({key:.name,value:.}) | from_entries) as $byname
+      | [.files[] | select(.!=$byname[.name])] end') || return 1
+  printf '%s\n' "${_rr_view}" | receive_save "${RECEIVE_STATE}" || return 1
+  _RECEIVE_BASELINE=0
+  _rr_count=$(printf '%s' "${_rr_diff}" | jqr 'length') || return 1
+  if [ "${_rr_count}" -gt 0 ] && [ "${_rr_count}" -le 10000 ]; then
+    _rr_event=$(printf '%s\n%s\n' "${_rr_self}" "${_rr_diff}" | sha256sum) || return 1
+    _rr_event=${_rr_event%% *}
+    # Android receiver owns app opt-in, notification permission, and dedupe.
+    # Exclude stopped packages preserves force-stop. Exit zero is NOT delivery.
+    tmo 10 am broadcast --user 0 --exclude-stopped-packages \
+      -n dev.foxderin.tail/.ReceiveNotificationReceiver -a dev.foxderin.tail.RECEIVED \
+      --es event_id "${_rr_event}" --ei count "${_rr_count}" >/dev/null 2>&1 || :
+  fi
+  receive_recover
+}
+
+receive_status() {
+  jqr -nc --arg state "$1" --arg error "${2:-}" --arg id "${_rr_id:-}" \
+    '{state:$state} + (if $error=="" then {} else {error:$error} end) + (if $id=="" then {} else {operationId:$id} end)' |
+    receive_save "${TS_RUN_DIR}/receive-status.json"
+}
+
+receive_recover() {
+  _rr_id=
+  if [ -f "${RECEIVE_JOB}" ]; then
+    _rr_job=$(jqr -ce 'select((.id|type)=="string" and (.id|test("^[0-9]+_receive_[a-f0-9]+$"))
+      and (.name|type)=="string" and (.self|type)=="string")' "${RECEIVE_JOB}" 2>/dev/null) || {
+      receive_status blocked 'Invalid recovery journal; inspect private module state'; return 1;
+    }
+    _rr_id=$(printf '%s' "${_rr_job}" | jqr -r .id)
+    _rr_jobself=$(printf '%s' "${_rr_job}" | jqr -r .self)
+    _rr_name=$(printf '%s' "${_rr_job}" | jqr -r .name)
+    _rr_status=$(receive_api operation-status "${_rr_id}" 2>/dev/null) || _rr_status=
+    # Manual recovery can resolve a blocked journal without deleting private
+    # receipts: same account, destination observed, no longer pending. Never
+    # infer this while its original operation is still running.
+    if [ "${_rr_jobself}" = "${_rr_self}" ] &&
+       ! printf '%s' "${_rr_status}" | jqr -e '.operation.state=="running"' >/dev/null 2>&1 &&
+       printf '%s' "${_rr_snapshot}" | jqr -e --arg name "${_rr_name}" '
+         .receive.mode=="buffered" and any(.files[]; .name==$name) and all(.receive.pending[]; .name!=$name)' >/dev/null; then
+      rm -f "${RECEIVE_JOB}" || return 1
+      _rr_id=
+      receive_status idle
+      return 0
+    fi
+    _rr_phase=$(printf '%s' "${_rr_status}" | jqr -er '.operation.state // empty' 2>/dev/null) || _rr_phase=
+    if [ -z "${_rr_phase}" ]; then
+      # Close the journal-before-start crash gap using ONLY the same ID/args.
+      # The operation controller atomically deduplicates existing receipts and
+      # rejects absent IDs older than 900s. Never invent a replacement ID.
+      _rr_epoch=${_rr_id%%_*} _rr_now=$(date +%s)
+      if [ "${_rr_auto}" = 1 ] && [ "${_rr_jobself}" = "${_rr_self}" ] &&
+         [ "${_rr_epoch}" -ge $((_rr_now - 900)) ] && [ "${_rr_epoch}" -le $((_rr_now + 30)) ]; then
+        receive_api operation-start "${_rr_id}" file-receive "${_rr_name}" "${_rr_jobself}" >/dev/null 2>&1 || :
+      fi
+      receive_status blocked 'Recovery receipt unavailable; inspect the operation before retrying manually'
+      return 1
+    fi
+    case "${_rr_phase}" in
+      running) receive_status running; return 0 ;;
+      completed)
+        if ! printf '%s' "${_rr_status}" | jqr -e '.operation.result.ok==true and .operation.result.received==true' >/dev/null; then
+          receive_status blocked 'Recovery did not confirm completion; inspect the pending file and retry manually'
+          return 1
+        fi ;;
+      *) receive_status blocked 'Recovery was interrupted or cancelled; inspect its outcome before retrying manually'; return 1 ;;
+    esac
+    rm -f "${RECEIVE_JOB}" || return 1
+    # Rotate only confirmed copies; deletion may need a later idempotent retry.
+    _RECEIVE_LAST_NAME=${_rr_name}
+    _RECEIVE_RETRY_AT=$(( $(date +%s) + 60 ))
+    _rr_id=
+    receive_status idle
+    return 0
+  fi
+  receive_status idle || return 1
+  [ "${_rr_auto}" = 1 ] || return 0
+  [ "$(date +%s)" -ge "${_RECEIVE_RETRY_AT:-0}" ] || return 0
+  # Skip entries that cannot be received automatically, rather than letting an
+  # oversized/partial first entry starve later valid files. The UI retains them.
+  _rr_name=$(printf '%s' "${_rr_snapshot}" | jqr -er --arg last "${_RECEIVE_LAST_NAME:-}" '
+    select(.receive.mode=="buffered") | [.receive.pending[]
+      | select((.name|type)=="string" and (.size|type)=="number" and .size>=0 and .size<=2147483648
+        and (.name|endswith(".partial")|not) and (.name|endswith(".deleted")|not))]
+      | sort_by(.name==$last) | .[0].name | select(type=="string" and length>0)') || return 0
+  _rr_token=$(printf '%s\n%s\n%s\n' "${_rr_self}" "${_rr_name}" "$$" | sha256sum) || return 1
+  _rr_id="$(date +%s)_receive_${_rr_token%% *}"
+  jqr -nc --arg id "${_rr_id}" --arg name "${_rr_name}" --arg self "${_rr_self}" '{id:$id,name:$name,self:$self}' |
+    receive_save "${RECEIVE_JOB}" || return 1
+  receive_status running
+  receive_api operation-start "${_rr_id}" file-receive "${_rr_name}" "${_rr_self}" >/dev/null 2>&1
+}
+
+receive_start() {
+  ensure_run_dirs || return 1
+  daemon_claim_pidfile foxytail.receive || { [ "$?" = 2 ] && return 0; return 1; }
+  # Only the claimed resident cleans stale atomic-write scratch files.
+  for _receive_tmp in "${RECEIVE_STATE}".* "${RECEIVE_JOB}".* "${TS_RUN_DIR}/receive-status.json".*; do
+    case "${_receive_tmp##*.}" in ''|*[!0-9]*) continue ;; esac
+    rm -f "${_receive_tmp}"
+  done
+  trap 'daemon_release_pidfile foxytail.receive; rm -f "${RECEIVE_STATE}.$$" "${RECEIVE_JOB}.$$" "${TS_RUN_DIR}/receive-status.json.$$"' 0
+  _receive_running=1
+  _RECEIVE_BASELINE=1
+  trap '_receive_running=0' TERM INT
+  while [ "${_receive_running}" = 1 ]; do
+    receive_round
+    isleep "$(effective_interval 15 5 60 180)"
+  done
+}
+
+case "${1:-}" in
+  start) receive_start ;;
+  stop) daemon_stop_pidfile foxytail.receive ;;
+  *) echo 'usage: foxytail.receive {start|stop}' >&2; exit 1 ;;
+esac

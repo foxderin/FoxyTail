@@ -199,6 +199,7 @@ cmd_settings_get() {
     --arg WATCHDOG "$WATCHDOG" --arg WATCHDOG_INTERVAL "$WATCHDOG_INTERVAL" \
     --arg POWER_SAVE "$POWER_SAVE" --arg STATS "$STATS" --arg CONTEXT "$CONTEXT" \
     --arg WATCHDOG_PROBE "$WATCHDOG_PROBE" --arg WEBUI_AUTO_REFRESH "$WEBUI_AUTO_REFRESH" \
+    --arg TAILDROP_AUTO_RECEIVE "$TAILDROP_AUTO_RECEIVE" \
     --arg STATS_INTERVAL "$STATS_INTERVAL" --arg LOG_MAX_KB "$LOG_MAX_KB" \
     --argjson pending "${_sg_pending}" \
     '{ok:true,settings:($ARGS.named|del(.pending)),restartRequired:$pending}'
@@ -208,6 +209,10 @@ cmd_settings_set() {
   [ -n "$1" ] || jerr 'settings-set: missing key'
   [ "$1" != TS_MODE ] || jerr 'TS_MODE must be changed with mode-set'
   _sk_why=$(conf_write_key foxytail.conf "$1" "$2" 2>&1) || jerr "settings-set: ${_sk_why}"
+  if [ "$1" = TAILDROP_AUTO_RECEIVE ]; then
+    jqr -n -c --arg k "$1" --arg v "$2" '{ok:true,key:$k,value:$v,saved:true,applied:true,restartRequired:false,requiresRestart:false}'
+    return
+  fi
   jqr -n -c --arg k "$1" --arg v "$2" '{ok:true,key:$k,value:$v,saved:true,applied:false,restartRequired:true,requiresRestart:true}'
 }
 

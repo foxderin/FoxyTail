@@ -56,7 +56,7 @@ start_inotifyd() (
 
 stop_residents() {
   _sr_failed=0
-  for _sr_name in foxytail.watchdog foxytail.context foxytail.stats foxytail.logd; do
+  for _sr_name in foxytail.watchdog foxytail.context foxytail.stats foxytail.logd foxytail.receive; do
     [ -x "${TS_SCRIPTS_DIR}/${_sr_name}" ] || continue
     "${TS_SCRIPTS_DIR}/${_sr_name}" stop || _sr_failed=1
   done
@@ -66,7 +66,7 @@ stop_residents() {
 start_residents() {
   load_runtime_conf || return 1
   _sr_failed=0
-  for _sr_name in foxytail.stats foxytail.watchdog foxytail.context foxytail.logd; do
+  for _sr_name in foxytail.stats foxytail.watchdog foxytail.context foxytail.logd foxytail.receive; do
     [ -x "${TS_SCRIPTS_DIR}/${_sr_name}" ] || continue
     nohup "${TS_SCRIPTS_DIR}/${_sr_name}" start \
       >>"${TS_RUN_DIR}/${_sr_name}.log" 2>&1 &
