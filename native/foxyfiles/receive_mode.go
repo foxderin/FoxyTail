@@ -2,14 +2,10 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
-	"flag"
 	"io"
 	"net/http"
-	"os"
 	"strings"
-	"time"
 )
 
 func (api *localAPI) receiveDirect(ctx context.Context) (bool, error) {
@@ -42,37 +38,4 @@ func (api *localAPI) receiveDirect(ctx context.Context) (bool, error) {
 		}
 	}
 	return false, errors.New("daemon receive mode unavailable or unrecognized")
-}
-
-func (api *localAPI) directReceiveMode(ctx context.Context) error {
-	direct, err := api.receiveDirect(ctx)
-	if err != nil {
-		return err
-	}
-	if !direct {
-		return errors.New("daemon has not confirmed direct receive mode; unlock shared storage and restart FoxyTail")
-	}
-	return nil
-}
-
-func runReceiveMode(args []string) error {
-	flags := flag.NewFlagSet("receive-mode", flag.ContinueOnError)
-	socket := flags.String("socket", "", "tailscaled LocalAPI socket")
-	if err := flags.Parse(args); err != nil {
-		return err
-	}
-	if flags.NArg() != 0 {
-		return errors.New("unexpected receive-mode arguments")
-	}
-	api, err := newLocalAPI(*socket)
-	if err != nil {
-		return err
-	}
-	defer api.Close()
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	if err = api.directReceiveMode(ctx); err != nil {
-		return err
-	}
-	return json.NewEncoder(os.Stdout).Encode(map[string]any{"ok": true, "direct": true})
 }

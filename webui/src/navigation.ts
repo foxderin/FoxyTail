@@ -51,9 +51,6 @@ const PARENT: Partial<Record<RouteName, RouteName>> = {
 export const PRIMARY_NAV: NavItem[] = PRIMARY.map(meta);
 export const NAV_GROUPS: { titleKey: I18nKey; items: NavItem[] }[] =
   GROUPS.map((group) => ({ titleKey: group.titleKey, items: group.names.map(meta) }));
-export function routeIcon(name: RouteName): IconName {
-  return ROUTE_META[name].icon;
-}
 export function primaryRoute(name: string): string {
   return PARENT[name as RouteName] ?? (PRIMARY.includes(name as RouteName) ? name : 'dashboard');
 }

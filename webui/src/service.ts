@@ -158,7 +158,6 @@ export const serviceMessage = (): string =>
             : feedback()?.unconfirmed ? t(!serviceKnown() ? 'net_controls_result_unknown' : serviceRunning() ? 'net_controls_response_running' : 'net_controls_response_stopped')
               : feedback() ? t(feedback()!.key)
                 : !serviceKnown() && !statusLoading() ? t('net_controls_unknown') : '';
-export const serviceNeedsVerify = () => !busy() && !serviceOperationRunning() && Boolean(pending() || !serviceKnown() || feedback()?.unconfirmed);
 export const serviceWarning = () => feedback()?.tone === 'warning' || !serviceKnown();
 
 export type NativeIssue = { kind: 'unknown' | 'busy' | 'checking' | 'incompatible'; message: string };

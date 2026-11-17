@@ -54,11 +54,6 @@ export interface TaildropTarget {
   online: boolean;
 }
 
-export interface BrowseEntry extends InboxFile {
-  path: string;
-  directory: boolean;
-}
-
 export type TransferFileStatus = 'queued' | 'sending' | 'completed' | 'failed' | 'cancelled';
 export type TransferStatus = TransferFileStatus | 'interrupted';
 

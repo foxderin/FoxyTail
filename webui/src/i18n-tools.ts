@@ -18,5 +18,3 @@ export const toolsEn: Record<keyof typeof toolsZh, string> = {
   ...toolsDnsEn,
   ...toolsRoutingEn,
 };
-
-export type ToolsKey = keyof typeof toolsZh;

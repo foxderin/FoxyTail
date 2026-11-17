@@ -2,7 +2,7 @@
  * No shadow DOM, no Lit, no runtime webcomponent upgrades — just plain
  * <button>/<input>/<select>/<dialog> styled with the existing MD3 tokens.
  */
-import { createEffect, createSignal, createUniqueId, For, onCleanup, onMount, Show, useContext, type JSX, type ParentProps } from 'solid-js';
+import { createEffect, createSignal, createUniqueId, onCleanup, onMount, Show, useContext, type JSX, type ParentProps } from 'solid-js';
 import { MdIcon } from '../icons';
 import { RouteVisible } from '../schedule';
 
@@ -98,11 +98,9 @@ export function TextField(props: {
   ref?: (el: HTMLInputElement | HTMLTextAreaElement) => void;
 }): JSX.Element {
   const isArea = () => props.rows !== undefined && props.rows > 0;
-  const [hasValue, setHasValue] = createSignal(String(props.value ?? '').length > 0);
-  createEffect(() => setHasValue(String(props.value ?? '').length > 0));
   return (
     <label class={'text-field' + (props.disabled ? ' is-disabled' : '') + (!props.label ? ' no-label' : '') + (props.class ? ' ' + props.class : '')} style={props.style}>
-      <Show when={props.label}><span class={'text-field-label' + (hasValue() ? ' floating' : '')}>{props.label}</span></Show>
+      <Show when={props.label}><span class="text-field-label">{props.label}</span></Show>
       {props['leading-icon'] ? <span class="text-field-leading">{props['leading-icon']}</span> : null}
       {isArea() ? (
         <textarea
@@ -119,10 +117,7 @@ export function TextField(props: {
           placeholder={props.placeholder}
           value={props.value ?? ''}
           disabled={props.disabled || false}
-          onInput={(e) => {
-            setHasValue(String(e.currentTarget.value).length > 0);
-            props.onInput?.(e);
-          }}
+          onInput={event => props.onInput?.(event)}
           onChange={props.onChange}
         />
       ) : (
@@ -145,10 +140,7 @@ export function TextField(props: {
           placeholder={props.placeholder}
           value={props.value ?? ''}
           disabled={props.disabled || false}
-          onInput={(e) => {
-            setHasValue(String(e.currentTarget.value).length > 0);
-            props.onInput?.(e);
-          }}
+          onInput={event => props.onInput?.(event)}
           onChange={props.onChange}
         />
       )}
@@ -310,43 +302,6 @@ export function Checkbox(props: {
         <MdIcon name="check" size={16} />
       </span>
     </label>
-  );
-}
-
-export function Tabs(props: {
-  labels: string[];
-  active: number;
-  onChange: (index: number) => void;
-}): JSX.Element {
-  return (
-    <div class="tabs" role="tablist">
-      <For each={props.labels}>
-        {(label, i) => (
-          <button
-            type="button"
-            class={'tab' + (i() === props.active ? ' active' : '')}
-            role="tab"
-            aria-selected={i() === props.active}
-            tabIndex={i() === props.active ? 0 : -1}
-            onKeyDown={(event) => {
-              const buttons = Array.from(event.currentTarget.parentElement?.querySelectorAll<HTMLButtonElement>('[role="tab"]') ?? []);
-              let next = i();
-              if (event.key === 'ArrowRight') next = (i() + 1) % buttons.length;
-              else if (event.key === 'ArrowLeft') next = (i() + buttons.length - 1) % buttons.length;
-              else if (event.key === 'Home') next = 0;
-              else if (event.key === 'End') next = buttons.length - 1;
-              else return;
-              event.preventDefault();
-              buttons[next]?.focus();
-              props.onChange(next);
-            }}
-            onClick={() => props.onChange(i())}
-          >
-            {label}
-          </button>
-        )}
-      </For>
-    </div>
   );
 }
 

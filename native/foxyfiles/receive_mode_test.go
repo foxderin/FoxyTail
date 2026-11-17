@@ -8,19 +8,20 @@ import (
 	"testing"
 )
 
-func TestDirectReceiveRequiresExactDaemonRejection(t *testing.T) {
+func TestReceiveModeDistinguishesBufferedFromUnavailable(t *testing.T) {
 	for _, tc := range []struct {
-		label  string
-		status int
-		body   string
-		ok     bool
+		label     string
+		status    int
+		body      string
+		direct    bool
+		wantError bool
 	}{
-		{"direct", 500, "opens not allowed in direct mode\n", true},
-		{"buffered-absent", 500, "open file: no such file or directory", false},
-		{"permission", 403, "file access denied", false},
-		{"unavailable", 500, "Taildrop not available", false},
-		{"file-response", 200, "opens not allowed in direct mode", false},
-		{"unexpected-suffix", 500, "opens not allowed in direct mode extra", false},
+		{"direct", 500, "opens not allowed in direct mode\n", true, false},
+		{"buffered-absent", 500, "open file: no such file or directory", false, false},
+		{"permission", 403, "file access denied", false, true},
+		{"unavailable", 500, "Taildrop not available", false, true},
+		{"file-response", 200, "opens not allowed in direct mode", false, true},
+		{"unexpected-suffix", 500, "opens not allowed in direct mode extra", false, true},
 	} {
 		t.Run(tc.label, func(t *testing.T) {
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -34,8 +35,9 @@ func TestDirectReceiveRequiresExactDaemonRejection(t *testing.T) {
 			client := server.Client()
 			client.Transport = rewriteProbeHost{client.Transport, strings.TrimPrefix(server.URL, "http://")}
 			api := &localAPI{client: client}
-			if err := api.directReceiveMode(context.Background()); (err == nil) != tc.ok {
-				t.Fatalf("mode confirmed=%v, error=%v", tc.ok, err)
+			direct, err := api.receiveDirect(context.Background())
+			if direct != tc.direct || (err != nil) != tc.wantError {
+				t.Fatalf("direct=%v error=%v; want direct=%v error=%v", direct, err, tc.direct, tc.wantError)
 			}
 		})
 	}

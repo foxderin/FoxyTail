@@ -26,17 +26,6 @@ function SectionHeading(props: {
   </div>;
 }
 
-export function MetricCard(props: ParentProps<{
-  label: string; value: JSX.Element; caption?: JSX.Element; icon?: IconName; tone?: StatusTone;
-}>): JSX.Element {
-  return <div class={'metric-card tone-' + (props.tone ?? 'neutral')}>
-    <div class="metric-label"><span>{props.label}</span><Show when={props.icon}><MdIcon name={props.icon!} size={18} /></Show></div>
-    <div class="metric-value">{props.value}</div>
-    <Show when={props.caption}><div class="metric-caption">{props.caption}</div></Show>
-    {props.children}
-  </div>;
-}
-
 export function StatusBadge(props: ParentProps<{
   tone?: StatusTone; label?: string; state?: 'on' | 'warn' | 'off';
 }>): JSX.Element {

@@ -115,4 +115,3 @@ function launch(key: string, command: string, args: (string | number)[], validat
   return call;
 }
 export function cancelTask(key: string): Promise<ApiResult> { return getTask(key)?.call.cancel() ?? Promise.resolve({ ok: true }); }
-export function acknowledgeTask(): Promise<ApiResult> { return requestNative('control.acknowledge'); }
