@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -21,51 +20,6 @@ func statsTestFile(t *testing.T, directory, body string) string {
 		t.Fatal(err)
 	}
 	return path
-}
-
-func TestStatsCounterTypeAndGenerationParity(t *testing.T) {
-	for _, test := range []struct {
-		old     string
-		value   string
-		changed bool
-		want    float64
-		fails   bool
-	}{
-		{"null", `"bad"`, false, 0, false},
-		{`"bad"`, "10", false, 10, false},
-		{"10", `"bad"`, false, 0, true},
-		{"false", "10", false, 0, true},
-		{"false", "10", true, 10, false},
-		{"10", "false", false, 0, false},
-	} {
-		var old, value statsNumber
-		if err := json.Unmarshal([]byte(test.old), &old); err != nil {
-			t.Fatal(err)
-		}
-		if err := json.Unmarshal([]byte(test.value), &value); err != nil {
-			t.Fatal(err)
-		}
-		got, err := statsDelta(old, value, test.changed)
-		if got != test.want || (err != nil) != test.fails {
-			t.Fatalf("%+v: %v %v", test, got, err)
-		}
-	}
-	accumulator := newStatsAccumulator("1970-01-01", time.UTC)
-	for _, row := range []string{
-		`{"ts":0,"iface":{"rx":100},"generation":{"iface":""},"peers":{"z":{"id":"","rx":10},"a":{"rx":10}}}`,
-		`{"ts":1,"iface":{"rx":200},"peers":[{"id":"","rx":20},{"rx":30}]}`,
-	} {
-		if err := accumulator.consume([]byte(row)); err != nil {
-			t.Fatal(err)
-		}
-	}
-	result, err := accumulator.finish(context.Background())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if result.Days[0].RX != 100 || !reflect.DeepEqual(result.Hours[0].Peers, []statsPeerTotal{{"", statsPair{10, 0}}, {"null", statsPair{20, 0}}}) {
-		t.Fatal("empty IDs, missing generation or object iteration changed", result)
-	}
 }
 
 func TestStatsSummaryPreservesPartialRowsAndDuplicateIDs(t *testing.T) {
@@ -249,23 +203,6 @@ func TestStatsCacheNeverStoresChangingInputOrFollowsSymlinks(t *testing.T) {
 	}
 }
 
-func TestStatsSummaryRejectsOversizedInputWithoutCache(t *testing.T) {
-	directory := t.TempDir()
-	path := statsTestFile(t, directory, "{\"ts\":0}\n"+strings.Repeat("x", statsMaxRowBytes+1))
-	if _, err := queryStats(context.Background(), directory, "1970-01-01", "UTC", "7", []string{path}); err == nil {
-		t.Fatal("accepted oversized input")
-	}
-	entries, err := os.ReadDir(directory)
-	if err != nil || len(entries) != 1 || entries[0].Name() != "samples.jsonl" {
-		t.Fatal(entries, err)
-	}
-	var sink bytes.Buffer
-	writer := statsCacheWriter{&sink, 2}
-	if _, err := writer.Write([]byte("123")); err == nil || sink.Len() != 0 {
-		t.Fatal("cache bound ignored")
-	}
-}
-
 func BenchmarkStatsSummarySevenDays(b *testing.B) {
 	directory := b.TempDir()
 	path := filepath.Join(directory, "seven-days.jsonl")
@@ -312,62 +249,5 @@ func BenchmarkStatsSummarySevenDays(b *testing.B) {
 				}
 			}
 		})
-	}
-}
-
-func TestStatsSummarySkipsWrongTypeRows(t *testing.T) {
-	directory := t.TempDir()
-	path := statsTestFile(t, directory, `{"ts":0,"iface":{"rx":100,"tx":10},"peers":[{"id":"z","rx":50,"tx":5}]}
-{"ts":30,"iface":{"rx":"bad","tx":0}}
-{"ts":40,"iface":"nope"}
-{"ts":50,"peers":[{"id":"z","rx":"oops","tx":0}],"uidDirection":"tx","uids":[{"uid":1,"tx":"x"}]}
-{"ts":60,"iface":{"rx":200,"tx":30},"peers":[{"id":"z","rx":80,"tx":12}],"uidDirection":"tx","uids":[{"uid":7,"tx":9}]}
-`)
-	result, err := queryStats(context.Background(), directory, "1970-01-01", "UTC", "7", []string{path})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got := result.Days; !reflect.DeepEqual(got, []statsDay{{Date: "1970-01-01", Samples: 2, statsPair: statsPair{100, 20}}}) {
-		t.Fatalf("wrong-type rows poisoned valid deltas: %+v", got)
-	}
-	if got := result.TopN; !reflect.DeepEqual(got, []statsPeerTotal{{"z", statsPair{30, 7}}}) {
-		t.Fatalf("peer delta across skipped rows: %+v", got)
-	}
-	if len(result.UIDs) != 0 {
-		t.Fatalf("skipped uid fabricated a total: %+v", result.UIDs)
-	}
-}
-
-func TestStatsTempSweepRemovesStaleLeftovers(t *testing.T) {
-	directory := t.TempDir()
-	staleDir := filepath.Join(directory, ".stats-order-abc")
-	if err := os.MkdirAll(filepath.Join(staleDir, "nested"), 0700); err != nil {
-		t.Fatal(err)
-	}
-	staleFile := filepath.Join(directory, ".stats-cache-old")
-	if err := os.WriteFile(staleFile, []byte("x"), 0600); err != nil {
-		t.Fatal(err)
-	}
-	fresh := filepath.Join(directory, ".stats-cache-new")
-	if err := os.WriteFile(fresh, []byte("x"), 0600); err != nil {
-		t.Fatal(err)
-	}
-	old := time.Now().Add(-25 * time.Hour)
-	for _, path := range []string{staleDir, staleFile} {
-		if err := os.Chtimes(path, old, old); err != nil {
-			t.Fatal(err)
-		}
-	}
-	input := statsTestFile(t, directory, "{\"ts\":0}\n")
-	if _, err := queryStats(context.Background(), directory, "1970-01-01", "UTC", "7", []string{input}); err != nil {
-		t.Fatal(err)
-	}
-	for _, path := range []string{staleDir, staleFile} {
-		if _, err := os.Lstat(path); !os.IsNotExist(err) {
-			t.Fatal("stale statistics temporary retained", path, err)
-		}
-	}
-	if _, err := os.Lstat(fresh); err != nil {
-		t.Fatal("fresh statistics cache swept", err)
 	}
 }

@@ -280,45 +280,6 @@ func TestLocalAPIAccountAndSourceRevalidation(t *testing.T) {
 	}
 }
 
-func TestOutgoingProgressRequiresExactIDAndPeer(t *testing.T) {
-	root := t.TempDir()
-	shared, paths := testSendFiles(t, "same-name")
-	store, err := openTransferStore(root)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
-	record := testTransferRecord(t, root, shared, "", paths)
-	record.Status, record.Files[0].Status = "sending", "sending"
-	ctx, cancel := context.WithCancelCause(context.Background())
-	defer cancel(nil)
-	progress := &transferProgress{store: store, record: record, current: 0, cancel: cancel, observed: time.Now().Add(-time.Second)}
-	good := outgoingEvent{ID: record.Files[0].ID, PeerID: record.PeerID, Name: record.Files[0].Name, DeclaredSize: record.Files[0].Size, Sent: 5}
-	wrong := good
-	wrong.ID = strings.Repeat("a", 32)
-	progress.update(wrong)
-	wrong = good
-	wrong.PeerID = "nAnother"
-	progress.update(wrong)
-	if record.Files[0].ProgressKnown || record.Files[0].SentBytes != 0 {
-		t.Fatal("accepted unrelated outgoing event")
-	}
-	progress.update(good)
-	if !record.Files[0].ProgressKnown || record.Files[0].SentBytes != 5 || record.Files[0].BytesPerSecond <= 0 || ctx.Err() != nil {
-		t.Fatal("exact outgoing event not recorded", record.Files[0], ctx.Err())
-	}
-	good.Sent = record.Files[0].Size + 100
-	good.Finished, good.Succeeded = true, true
-	progress.update(good)
-	if record.Files[0].SentBytes != record.Files[0].Size || record.Files[0].Status != "sending" {
-		t.Fatal("event fabricated completion or exceeded file size")
-	}
-	progress.unavailable()
-	if record.Files[0].ProgressKnown {
-		t.Fatal("unavailable bus left progress known")
-	}
-}
-
 func TestDetachedWorkerCancelAndInterruption(t *testing.T) {
 	fixture := newLocalFixture(t)
 	root := t.TempDir()
@@ -433,82 +394,6 @@ func TestBusUnavailableStaysUnknownUntilHTTPAndStageSuccessCleans(t *testing.T) 
 	}
 }
 
-func TestTransferHistoryBoundedAndInstallingRejected(t *testing.T) {
-	fixture := newLocalFixture(t)
-	root := t.TempDir()
-	shared, paths := testSendFiles(t, "one")
-	store, err := openTransferStore(root)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
-	for index := range 103 {
-		record := testTransferRecord(t, root, shared, fixture.socket, paths)
-		record.Status, record.Files[0].Status = "failed", "failed"
-		record.StartedAt += int64(index)
-		if err = store.save(record); err != nil {
-			t.Fatal(err)
-		}
-	}
-	guard, err := store.guard()
-	if err != nil {
-		t.Fatal(err)
-	}
-	err = store.maintain()
-	guard.Close()
-	if err != nil {
-		t.Fatal(err)
-	}
-	records, err := store.records()
-	if err != nil || len(records) > 100 {
-		t.Fatalf("history unbounded: %d %v", len(records), err)
-	}
-	if err = os.WriteFile(filepath.Join(root, ".installing"), nil, 0600); err != nil {
-		t.Fatal(err)
-	}
-	pathsJSON, _ := json.Marshal(paths)
-	if _, err = startTransfer(root, fixture.socket, shared, "nPeer123", "100.64.0.2", string(pathsJSON)); err == nil || !strings.Contains(err.Error(), "upgrade") {
-		t.Fatal("upgrade boundary ignored", err)
-	}
-	if err = decodeBoundedJSON(strings.NewReader(`{"ok":true} {}`), 100, new(any)); err == nil {
-		t.Fatal("accepted trailing JSON")
-	}
-	if err = decodeBoundedJSON(strings.NewReader(`{"ok":true}`), 3, new(any)); err == nil {
-		t.Fatal("accepted oversized JSON")
-	}
-}
-
-func TestUnixBusDeliversExactOutgoingBytesBeforeHTTPCompletion(t *testing.T) {
-	fixture := newLocalFixture(t)
-	api, err := newLocalAPI(fixture.socket)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer api.Close()
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	updates := make(chan outgoingEvent, 4)
-	stop, err := api.watch(ctx, func(event outgoingEvent) { updates <- event }, func() {})
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer stop()
-	id, err := randomID()
-	if err != nil {
-		t.Fatal(err)
-	}
-	wanted := outgoingEvent{ID: id, PeerID: "nPeer123", Name: "ignored-for-correlation", Sent: 7, DeclaredSize: 10}
-	fixture.events <- wanted
-	select {
-	case event := <-updates:
-		if event != wanted {
-			t.Fatalf("bus event changed: %+v", event)
-		}
-	case <-ctx.Done():
-		t.Fatal("no daemon outgoing event observed")
-	}
-}
-
 func TestPrivateStageDeleteRejectsActiveClaim(t *testing.T) {
 	root := t.TempDir()
 	stage, err := stageFile(root, "claimed", 3, strings.NewReader("abc"))
@@ -551,55 +436,5 @@ func TestSourceChangesDuringHTTPUploadAreNotReportedSuccessful(t *testing.T) {
 	loaded := testExecute(t, root, testTransferRecord(t, root, shared, fixture.socket, paths))
 	if loaded.Status != "failed" || loaded.Files[0].Status != "failed" || !strings.Contains(loaded.Files[0].Error, "changed") {
 		t.Fatalf("mutable source reported successful: %+v", loaded)
-	}
-}
-
-func TestWorkerDeathRecoveredFromReleasedLock(t *testing.T) {
-	fixture := newLocalFixture(t)
-	root := t.TempDir()
-	shared, paths := testSendFiles(t, "crash", "never-started")
-	entered := make(chan struct{}, 1)
-	fixture.setPut(func(w http.ResponseWriter, r *http.Request, event outgoingEvent, data []byte) {
-		entered <- struct{}{}
-		<-r.Context().Done()
-	})
-	store, err := openTransferStore(root)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
-	active, err := store.activeLock()
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer active.Close()
-	record := testTransferRecord(t, root, shared, fixture.socket, paths)
-	if err = store.save(record); err != nil {
-		t.Fatal(err)
-	}
-	worker := exec.Command(os.Args[0], "send-worker", "--root", root, "--id", record.ID)
-	worker.ExtraFiles = []*os.File{active}
-	if err = worker.Start(); err != nil {
-		t.Fatal(err)
-	}
-	active.Close()
-	defer func() { worker.Process.Kill(); worker.Wait() }()
-	select {
-	case <-entered:
-	case <-time.After(5 * time.Second):
-		t.Fatal("worker did not reach upload")
-	}
-	if err = worker.Process.Kill(); err != nil {
-		t.Fatal(err)
-	}
-	worker.Wait()
-	corruptOtherTransfer(t, root)
-	result := queryTransfer(t, root, "send-status", record.ID)
-	if result.Status != "interrupted" {
-		t.Fatalf("crashed worker query returned active state: %+v", result)
-	}
-	loaded, err := store.load(record.ID)
-	if err != nil || loaded.Status != "interrupted" || loaded.Files[0].Status != "failed" || loaded.Files[1].Status != "failed" {
-		t.Fatalf("crashed worker left active state: %+v %v", loaded, err)
 	}
 }

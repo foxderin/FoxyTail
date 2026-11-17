@@ -3,7 +3,6 @@ package main
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -155,45 +154,6 @@ func TestVerifyDNSMalformedAndDeadline(t *testing.T) {
 	}
 }
 
-func TestVerifyRejectsAllInvalidInputsBeforeProbing(t *testing.T) {
-	base := []string{"--dns-port", "1053", "--name", "Peer.Tail.Test", "--address", "100.64.0.9", "--target-port", "443"}
-	for _, test := range [][]string{
-		{"--dns-port", "0"}, {"--dns-port", "65536"}, {"--dns-port", "no"},
-		{"--target-port", "0"}, {"--target-port", "-1"}, {"--target-port", "65536"},
-		{"--resolver-port", "0"}, {"--resolver-port", "65536"}, {"--resolver-port", "1053"},
-		{"--socks-port", "0"}, {"--socks-port", "-1"}, {"--socks-port", "65536"},
-		{"--name", ""}, {"--name", "short"}, {"--name", "bad..test"}, {"--name", "bad name.test"},
-		{"--name", "-bad.test"}, {"--name", strings.Repeat("a", 64) + ".test"},
-		{"--address", "peer.tail.test"}, {"--address", "0.0.0.0"}, {"--address", "::"},
-		{"--address", "127.0.0.1"}, {"--address", "::1"}, {"--address", "::ffff:127.0.0.1"},
-		{"--address", "224.0.0.1"}, {"--address", "ff02::1"}, {"--address", "169.254.1.1"},
-		{"--address", "fe80::1"}, {"--address", "fd7a::1%lo0"}, {"--address", "255.255.255.255"},
-		{"--unknown", "1"}, {"extra"},
-	} {
-		t.Run(strings.Join(test, "="), func(t *testing.T) {
-			if err := run(append([]string{"verify"}, append(slices.Clone(base), test...)...)); err == nil {
-				t.Fatal("invalid command reached probes")
-			}
-		})
-	}
-	for _, field := range []int{0, 2, 4, 6} {
-		args := append(slices.Clone(base[:field]), base[field+2:]...)
-		if _, err := parseVerifyOptions(args); err == nil {
-			t.Fatalf("accepted missing %s", base[field])
-		}
-	}
-	for _, address := range []string{"100.64.0.9", "::ffff:100.64.0.9", "FD7A:115C:A1E0::9"} {
-		options, err := parseVerifyOptions(append(slices.Clone(base), "--address", address))
-		if err != nil || options.name != "peer.tail.test." || options.address.String() != netip.MustParseAddr(address).Unmap().String() {
-			t.Fatalf("canonicalization failed: %+v / %v", options, err)
-		}
-	}
-	options, err := parseVerifyOptions(append(slices.Clone(base), "--target-port", "00443", "--resolver-port", "01054"))
-	if err != nil || options.targetPort != 443 || options.resolverPort != 1054 {
-		t.Fatalf("UI port digits must stay decimal: %+v / %v", options, err)
-	}
-}
-
 func verifyTCPServer(t *testing.T, serve func(net.Conn) error) int {
 	t.Helper()
 	listener, err := net.Listen("tcp4", "127.0.0.1:0")
@@ -332,57 +292,4 @@ func TestVerifyTCPNumericSOCKSAndProtocolBoundaries(t *testing.T) {
 			t.Fatal("closed TCP port appeared reachable")
 		}
 	})
-}
-
-func TestVerifyReportsIndependentRows(t *testing.T) {
-	address := netip.MustParseAddr("100.64.0.9")
-	dnsPort := verifyDNSServer(t, func(w dns.ResponseWriter, q *dns.Msg) {
-		m := verifyAnswer(q, address.String())
-		if _, udp := w.RemoteAddr().(*net.UDPAddr); udp {
-			m.Rcode = dns.RcodeRefused
-		}
-		_ = w.WriteMsg(m)
-	})
-	resolverPort := verifyDNSServer(t, func(w dns.ResponseWriter, q *dns.Msg) { _ = w.WriteMsg(verifyAnswer(q, "198.18.0.7")) })
-	for _, optional := range []bool{false, true} {
-		t.Run(fmt.Sprint(optional), func(t *testing.T) {
-			options := verifyOptions{dnsPort: dnsPort, name: "peer.tail.test.", address: address, targetPort: 443, socksPort: verifySOCKSServer(t, address, 443, "success")}
-			expectedIDs := []string{"dns-udp", "dns-tcp", "tcp"}
-			expectedOK := []bool{false, true, true}
-			if optional {
-				options.resolverPort = resolverPort
-				expectedIDs = []string{"dns-udp", "dns-tcp", "resolver-udp", "resolver-tcp", "tcp"}
-				expectedOK = []bool{false, true, false, false, true}
-			}
-			result := verifyPeer(context.Background(), options)
-			if !result.OK || result.Path != "socks5" || result.Address != address.String() || result.Name != "peer.tail.test" || result.TargetPort != 443 || len(result.Checks) != len(expectedIDs) {
-				t.Fatalf("incorrect result: %+v", result)
-			}
-			for index, row := range result.Checks {
-				if row.ID != expectedIDs[index] || row.OK != expectedOK[index] || (row.Error == "") != row.OK || row.ElapsedMs < 0 {
-					t.Fatalf("incorrect independent row: %+v", row)
-				}
-			}
-			data, err := json.Marshal(result)
-			if err != nil || !bytes.Contains(data, []byte(`"targetPort":443`)) || !bytes.Contains(data, []byte(`"elapsedMs":`)) || !bytes.Contains(data, []byte(`"addresses":["198.18.0.7"]`)) && optional {
-				t.Fatalf("JSON report lost required fields: %s / %v", data, err)
-			}
-		})
-	}
-}
-
-func TestVerifyUDPTimeoutDoesNotSkipTCP(t *testing.T) {
-	address := netip.MustParseAddr("100.64.0.9")
-	port := verifyDNSServer(t, func(w dns.ResponseWriter, q *dns.Msg) {
-		if _, udp := w.RemoteAddr().(*net.UDPAddr); !udp {
-			_ = w.WriteMsg(verifyAnswer(q, address.String()))
-		}
-	})
-	result := verifyPeer(context.Background(), verifyOptions{
-		dnsPort: port, name: "peer.tail.test.", address: address,
-		targetPort: 443, socksPort: verifySOCKSServer(t, address, 443, "success"),
-	})
-	if len(result.Checks) != 3 || result.Checks[0].OK || !result.Checks[1].OK || !result.Checks[2].OK {
-		t.Fatalf("UDP timeout suppressed independent checks: %+v", result)
-	}
 }

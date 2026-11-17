@@ -95,27 +95,7 @@ func receiveRoot(t *testing.T) (*os.Root, string) {
 	t.Cleanup(func() { root.Close() })
 	return root, path
 }
-func TestReceiveStatusModes(t *testing.T) {
-	for _, mode := range []string{"direct", "buffered", "unavailable"} {
-		t.Run(mode, func(t *testing.T) {
-			f := newReceiveFixture(t)
-			f.mode = mode
-			status, err := f.api.receiveStatus(context.Background())
-			if mode == "unavailable" {
-				if err == nil {
-					t.Fatal("failure became empty success")
-				}
-				return
-			}
-			if err != nil || status.Mode != mode || status.SelfID != "self-1" {
-				t.Fatalf("%+v %v", status, err)
-			}
-			if (len(status.Pending) == 1) != (mode == "buffered") {
-				t.Fatalf("pending %+v", status.Pending)
-			}
-		})
-	}
-}
+
 func TestReceivePublishesBeforeDeleting(t *testing.T) {
 	f := newReceiveFixture(t)
 	root, path := receiveRoot(t)

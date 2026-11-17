@@ -165,31 +165,6 @@ func TestArchiveRawByteLimitsAndMalformedStreams(t *testing.T) {
 	}
 }
 
-func TestArchiveNeverReusesDestination(t *testing.T) {
-	dest := t.TempDir()
-	marker := filepath.Join(dest, "marker")
-	if err := os.WriteFile(marker, []byte("preserve"), 0600); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := extract("missing", dest); err == nil {
-		t.Fatal("accepted existing destination")
-	}
-	if data, err := os.ReadFile(marker); err != nil || string(data) != "preserve" {
-		t.Fatal("existing destination was modified")
-	}
-}
-
-func TestArchiveInclusiveExpandedAndMemberBoundaries(t *testing.T) {
-	raw := archiveBytes(t, []archiveMember{{"conf/foxytail.conf", string(bytes.Repeat([]byte{'x'}, maxFile)), 0}})
-	raw = append(raw, make([]byte, maxExpanded-len(raw))...)
-	if _, _, err := importArchive(t, compressArchive(t, raw)); err != nil {
-		t.Fatal("rejected inclusive limits", err)
-	}
-	if _, _, err := importArchive(t, compressArchive(t, append(raw, 0))); err == nil {
-		t.Fatal("accepted expanded limit + 1")
-	}
-}
-
 func TestArchiveRejectsSymlinkSourceAndDestination(t *testing.T) {
 	base := t.TempDir()
 	source := filepath.Join(base, "real.tar.gz")

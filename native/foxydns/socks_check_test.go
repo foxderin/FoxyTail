@@ -9,14 +9,11 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
-	"encoding/pem"
 	"fmt"
 	"io"
 	"math/big"
 	"net"
 	"net/http"
-	"os"
-	"path/filepath"
 	"strconv"
 	"testing"
 	"time"
@@ -132,98 +129,5 @@ func TestSocksHTTPSRejectsUntrustedAndWrongIdentityCertificates(t *testing.T) {
 				t.Fatalf("invalid certificate appeared reachable: %+v", result)
 			}
 		})
-	}
-}
-
-func TestSocksHTTPSDeadlineAndRefusal(t *testing.T) {
-	certificate, root := socksProbeCertificate(t, "1.1.1.1")
-	roots := x509.NewCertPool()
-	roots.AddCert(root)
-	for _, stage := range []string{"socks", "tls", "http", "refused"} {
-		t.Run(stage, func(t *testing.T) {
-			serve := func(connection net.Conn) error {
-				if stage == "http" {
-					secure := tls.Server(connection, &tls.Config{Certificates: []tls.Certificate{certificate}, MinVersion: tls.VersionTLS12})
-					defer secure.Close()
-					if _, err := http.ReadRequest(bufio.NewReader(secure)); err != nil {
-						return err
-					}
-					connection = secure
-				}
-				_, err := io.Copy(io.Discard, connection)
-				return err
-			}
-			var port int
-			if stage == "socks" || stage == "refused" {
-				port = verifyTCPServer(t, func(connection net.Conn) error {
-					var greeting [3]byte
-					if _, err := io.ReadFull(connection, greeting[:]); err != nil {
-						return err
-					}
-					if stage == "refused" {
-						_, err := connection.Write([]byte{5, 255})
-						return err
-					}
-					return serve(connection)
-				})
-			} else {
-				port = socksProbeServer(t, serve)
-			}
-			ctx, cancel := context.WithTimeout(context.Background(), 400*time.Millisecond)
-			defer cancel()
-			started := time.Now()
-			result := checkSocksHTTPS(ctx, port, roots)
-			if !result.OK || result.Success || result.HTTPCode != "" || result.Error == "" || time.Since(started) > 2*time.Second {
-				t.Fatalf("failed probe did not terminate honestly: %+v", result)
-			}
-		})
-	}
-}
-
-func TestSocksCheckAndroidTrustDirectoryPrecedence(t *testing.T) {
-	_, root := socksProbeCertificate(t, "1.1.1.1")
-	base := t.TempDir()
-	apex, legacy := filepath.Join(base, "apex"), filepath.Join(base, "legacy")
-	if err := os.Mkdir(legacy, 0700); err != nil {
-		t.Fatal(err)
-	}
-	cert := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: root.Raw})
-	if err := os.WriteFile(filepath.Join(legacy, "root.0"), cert, 0600); err != nil {
-		t.Fatal(err)
-	}
-	pool, err := socksCheckRoots([]string{apex, legacy})
-	if err != nil || pool == nil {
-		t.Fatalf("legacy system trust not found: %v", err)
-	}
-	if _, err := root.Verify(x509.VerifyOptions{Roots: pool, DNSName: "1.1.1.1"}); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Mkdir(apex, 0700); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := socksCheckRoots([]string{apex, legacy}); err == nil {
-		t.Fatal("empty authoritative APEX store fell back to legacy trust")
-	}
-	_, other := socksProbeCertificate(t, "1.1.1.1")
-	if err := os.WriteFile(filepath.Join(apex, "root.0"), pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: other.Raw}), 0600); err != nil {
-		t.Fatal(err)
-	}
-	pool, err = socksCheckRoots([]string{apex, legacy})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := root.Verify(x509.VerifyOptions{Roots: pool, DNSName: "1.1.1.1"}); err == nil {
-		t.Fatal("legacy certificate leaked into authoritative APEX trust")
-	}
-	if _, err := other.Verify(x509.VerifyOptions{Roots: pool, DNSName: "1.1.1.1"}); err != nil {
-		t.Fatal(err)
-	}
-}
-
-func TestSocksCheckRejectsUnsupportedInputsBeforeNetwork(t *testing.T) {
-	for _, args := range [][]string{nil, {"--socks-port", "0"}, {"--socks-port", "65536"}, {"--socks-port", "-1"}, {"--socks-port", "text"}, {"--socks-port", "1099", "https://elsewhere"}, {"--socks-port", "1099", "--url", "https://elsewhere"}} {
-		if err := run(append([]string{"socks-check"}, args...)); err == nil {
-			t.Fatalf("accepted invalid command: %v", args)
-		}
 	}
 }

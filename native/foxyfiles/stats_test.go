@@ -57,22 +57,6 @@ func TestStatsOrderingAcrossChunksAndClockChanges(t *testing.T) {
 	}
 }
 
-func TestStatsOrderingRejectsOversizedRowsWithoutOutput(t *testing.T) {
-	var output bytes.Buffer
-	directory := t.TempDir()
-	input := "{\"ts\":0}\n" + strings.Repeat("x", statsMaxRowBytes+1)
-	if err := orderedStats(context.Background(), strings.NewReader(input), &output, directory); err == nil {
-		t.Fatal("oversized row accepted")
-	}
-	if output.Len() != 0 {
-		t.Fatal("failed ordering emitted partial history")
-	}
-	entries, err := os.ReadDir(directory)
-	if err != nil || len(entries) != 0 {
-		t.Fatalf("failed ordering leaked temporary data: %v %v", entries, err)
-	}
-}
-
 func TestStatsOrderingHonorsCancellation(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()

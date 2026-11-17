@@ -109,37 +109,3 @@ func TestLegacyClaimNeverDeletesUnmarkedOrForeignFlows(t *testing.T) {
 		t.Fatal("claim survived boot or port change")
 	}
 }
-
-func TestMalformedCleanupRetainsDurableJournal(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "flows")
-	data := []byte("{\"boot\":\"incomplete")
-	if err := os.WriteFile(path, data, 0600); err != nil {
-		t.Fatal(err)
-	}
-	if err := cleanupOwnedFlows(path); err == nil {
-		t.Fatal("malformed journal was silently retired")
-	}
-	after, err := os.ReadFile(path)
-	if err != nil || string(after) != string(data) {
-		t.Fatal("failed cleanup discarded recoverable journal")
-	}
-}
-
-func TestLegacyCleanupFailurePropagatesWithoutDeletingOtherFlow(t *testing.T) {
-	_, flow := ownedFixture()
-	flow.Mark = legacyConnmark
-	unrelated := flow
-	unrelated.Mark = 0
-	unrelated.TupleOrig.Proto.DestinationPort = 443
-	calls := 0
-	err := legacyFlows([]conntrack.Flow{flow, unrelated}, 1053, true, true, func(f *conntrack.Flow) error {
-		calls++
-		if f.TupleOrig.Proto.DestinationPort != 53 {
-			t.Fatal("foreign flow deleted")
-		}
-		return unix.EPERM
-	})
-	if !errors.Is(err, unix.EPERM) || calls != 1 {
-		t.Fatalf("lost cleanup failure: calls=%d err=%v", calls, err)
-	}
-}

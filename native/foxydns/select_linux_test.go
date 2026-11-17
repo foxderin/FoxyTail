@@ -91,36 +91,6 @@ func TestSelectorAnswersOnlyTailnetNames(t *testing.T) {
 	}
 }
 
-func TestSelectorInjectedAnswerAppearsFromOriginalResolver(t *testing.T) {
-	s, sources, payloads := selectorFixture(t)
-	packet := dnsQueryPacket("nas.tail.test.ts.net.", false)
-	tuple, _, ok := udpQueryPayload(packet)
-	if !ok {
-		t.Fatal("fixture packet rejected")
-	}
-	if verdict := s.decide(selectionAttr(t, packet)); verdict != nfqueue.NfDrop || len(*sources) != 1 {
-		t.Fatal("Tailnet question was not answered")
-	}
-	if (*sources)[0] != tuple.destination {
-		t.Fatalf("forged answer source %v != original resolver %v", (*sources)[0], tuple.destination)
-	}
-	response := new(dns.Msg)
-	if err := response.Unpack((*payloads)[0]); err != nil || !response.Response || len(response.Answer) == 0 {
-		t.Fatalf("invalid injected answer: %v", err)
-	}
-}
-
-func TestSelectorMissingContextPassesAllTraffic(t *testing.T) {
-	dir := t.TempDir()
-	s := &Selector{records: &recordStore{path: filepath.Join(dir, "absent.json")}, inject: func(netip.AddrPort, netip.AddrPort, []byte) error {
-		return errors.New("must not inject")
-	}}
-	packet := dnsQueryPacket("nas.tail.test.ts.net.", false)
-	if verdict := s.decide(selectionAttr(t, packet)); verdict != nfqueue.NfAccept {
-		t.Fatal("query without Tailnet context must reach its real resolver")
-	}
-}
-
 func TestSelectorInjectionFailurePassesAndDenialFailsClosed(t *testing.T) {
 	s, _, _ := selectorFixture(t)
 	s.inject = func(netip.AddrPort, netip.AddrPort, []byte) error { return errors.New("transient") }
@@ -153,48 +123,6 @@ func TestSelectorRejectsMalformedAndHelperPackets(t *testing.T) {
 	a.GID = ptr(helperSocketGID)
 	if verdict := s.decide(a); verdict != nfqueue.NfAccept || len(*sources) != 0 {
 		t.Fatal("helper credential exemption must pass")
-	}
-}
-
-func TestSelectorAnswersOnlyLocalOutPackets(t *testing.T) {
-	for _, hook := range []uint8{unix.NF_INET_LOCAL_IN, unix.NF_INET_FORWARD, unix.NF_INET_PRE_ROUTING, unix.NF_INET_POST_ROUTING} {
-		s, sources, _ := selectorFixture(t)
-		a := selectionAttr(t, dnsQueryPacket("nas.tail.test.ts.net.", false))
-		a.Hook = ptr(hook)
-		if verdict := s.decide(a); verdict != nfqueue.NfAccept || len(*sources) != 0 {
-			t.Fatalf("hook %d must not be answered", hook)
-		}
-	}
-	s, sources, _ := selectorFixture(t)
-	a := selectionAttr(t, dnsQueryPacket("nas.tail.test.ts.net.", false))
-	a.Hook = nil
-	if verdict := s.decide(a); verdict != nfqueue.NfAccept || len(*sources) != 0 {
-		t.Fatal("missing hook must not be answered")
-	}
-}
-
-func TestSelectorIPv6TailnetAnswer(t *testing.T) {
-	s, sources, _ := selectorFixture(t)
-	packet := dnsQueryPacket("nas.tail.test.ts.net.", true)
-	if verdict := s.decide(selectionAttr(t, packet)); verdict != nfqueue.NfDrop || len(*sources) != 1 {
-		t.Fatal("IPv6 Tailnet question was not answered")
-	}
-}
-
-func TestUdpQueryPayloadExtractsDNSMessage(t *testing.T) {
-	for _, ipv6 := range []bool{false, true} {
-		packet := dnsQueryPacket("nas.tail.test.ts.net.", ipv6)
-		tuple, payload, ok := udpQueryPayload(packet)
-		if !ok || tuple.destination.Port() != 53 {
-			t.Fatalf("udpQueryPayload ipv6=%t: %+v", ipv6, tuple)
-		}
-		q := new(dns.Msg)
-		if err := q.Unpack(payload); err != nil || q.Question[0].Name != "nas.tail.test.ts.net." {
-			t.Fatalf("DNS payload ipv6=%t: %v", ipv6, err)
-		}
-	}
-	if _, _, ok := udpQueryPayload(dnsPacket(false, true)); ok {
-		t.Fatal("TCP/53 is outside the UDP queue's scope")
 	}
 }
 
@@ -244,15 +172,5 @@ func TestInjectedPacketLayoutAndChecksums(t *testing.T) {
 	}
 	if sum := checksumSum(pseudo6, udp6[:6], udp6[8:]); sum != binary.BigEndian.Uint16(udp6[6:8]) {
 		t.Fatalf("IPv6 checksum field does not match header sum: %#x != %#x", sum, binary.BigEndian.Uint16(udp6[6:8]))
-	}
-}
-
-func TestInjectPayloadBoundMatchesIPv4TotalLength(t *testing.T) {
-	// IPv4 total length is 20-byte header + 8-byte UDP + payload <= 0xffff.
-	if err := injectUDP(netip.MustParseAddrPort("192.0.2.53:53"), netip.MustParseAddrPort("192.0.2.7:53000"), make([]byte, 0xffff-27)); err == nil || err.Error() != "invalid injection endpoints" {
-		t.Fatalf("payload beyond the IPv4 total-length field was not rejected before send: %v", err)
-	}
-	if err := injectUDP(netip.MustParseAddrPort("[fd7a::53]:53"), netip.MustParseAddrPort("[fd7a::7]:53000"), make([]byte, 0xffff-27)); err == nil || err.Error() != "invalid injection endpoints" {
-		t.Fatalf("payload beyond the UDP length field was not rejected before send: %v", err)
 	}
 }

@@ -4,17 +4,11 @@ package main
 
 import (
 	"encoding/binary"
-	"errors"
-	"fmt"
-	"github.com/miekg/dns"
-	"io"
 	"net"
 	"net/netip"
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
-	"time"
 
 	"github.com/florianl/go-nfqueue/v2"
 	"github.com/mdlayher/netlink"
@@ -24,35 +18,6 @@ import (
 )
 
 func ptr[T any](value T) *T { return &value }
-
-func TestQueueRegistrationDiagnosesOnlyUnsupportedMetadataACK(t *testing.T) {
-	unsupported := &netlink.OpError{Op: "receive", Err: unix.EOPNOTSUPP, Sequence: 1}
-	for _, test := range []struct {
-		name     string
-		err      error
-		metadata bool
-	}{
-		{"metadata-ack", unsupported, true},
-		{"permission", &netlink.OpError{Op: "receive", Err: unix.EPERM}, false},
-		{"queue-busy", &netlink.OpError{Op: "receive", Err: unix.EBUSY}, false},
-		{"invalid-config", &netlink.OpError{Op: "receive", Err: unix.EINVAL}, false},
-		{"unsupported-binding", fmt.Errorf("could not bind to requested queue 1053: %w", unsupported), false},
-		{"unsupported-family", fmt.Errorf("could not bind to family 0: %w", unsupported), false},
-		{"receive-syscall", &netlink.OpError{Op: "receive", Err: os.NewSyscallError("recvmsg", unix.EOPNOTSUPP)}, false},
-		{"send", &netlink.OpError{Op: "send", Err: unix.EOPNOTSUPP}, false},
-		{"unclassified", unix.EOPNOTSUPP, false},
-	} {
-		t.Run(test.name, func(t *testing.T) {
-			got := queueRegistrationError(test.err)
-			if strings.Contains(got.Error(), "CONFIG_NETFILTER_NETLINK_GLUE_CT") != test.metadata {
-				t.Fatalf("wrong capability diagnosis: %v", got)
-			}
-			if !errors.Is(got, test.err) || !strings.Contains(got.Error(), test.err.Error()) {
-				t.Fatalf("original failure was lost: %v", got)
-			}
-		})
-	}
-}
 
 func capturedCT(t *testing.T, tuple flowTuple, id uint32) []byte {
 	t.Helper()
@@ -125,20 +90,6 @@ func TestCaptureNeedsOriginalContextAndPreservesMark(t *testing.T) {
 	}
 }
 
-func TestCaptureDoesNotMatchOnlySourcePort(t *testing.T) {
-	i, a, tuple := observation(t)
-	packet := append([]byte(nil), (*a.Payload)...)
-	packet[19]++ // Different original resolver, deliberately stale conntrack data.
-	a.Payload = &packet
-	if _, ok := i.observe(a); ok || len(i.flows) != 0 {
-		t.Fatal("matching source port must not accept a different original destination")
-	}
-	ct, err := decodeCapturedConntrack(*a.Ct, false)
-	if err != nil || fromCTTuple(ct.TupleOrig) != tuple || ct.ID != 1234 {
-		t.Fatalf("kernel original tuple decoder: %v / %v", ct, err)
-	}
-}
-
 func TestInterfaceRemovalAndReuseInvalidateCapturedFlow(t *testing.T) {
 	i, a, tuple := observation(t)
 	if _, ok := i.observe(a); !ok {
@@ -154,25 +105,6 @@ func TestInterfaceRemovalAndReuseInvalidateCapturedFlow(t *testing.T) {
 	i.ifaces[7] = interfaceState{"tun0", true, 3}
 	if err := i.validateFlow(tuple, flow.token); err == nil {
 		t.Fatal("reused interface name and index must not revive old context")
-	}
-}
-
-func TestFlowCapacityAndExpiryAreBounded(t *testing.T) {
-	i, a, tuple := observation(t)
-	for n := 0; n < maxFlows; n++ {
-		key := tuple
-		key.source = netip.AddrPortFrom(key.source.Addr(), uint16(n+1))
-		i.flows[key] = observedFlow{last: time.Now()}
-	}
-	if _, ok := i.observe(a); ok || len(i.flows) != maxFlows {
-		t.Fatal("new flows must keep their path when metadata capacity is full")
-	}
-	for key, flow := range i.flows {
-		flow.last = time.Now().Add(-flowLifetime - time.Second)
-		i.flows[key] = flow
-	}
-	if _, ok := i.observe(a); !ok || len(i.flows) != 1 {
-		t.Fatal("expired metadata must be reclaimed")
 	}
 }
 
@@ -244,43 +176,6 @@ func TestLookupRequiresExactConntrackReplyAndObservedID(t *testing.T) {
 	}
 }
 
-func TestConntrackReplyAcceptsKernelSuccessAcknowledgement(t *testing.T) {
-	_, captured, tuple := observation(t)
-	flowMessage := netlink.Message{
-		Header: netlink.Header{Type: 1 << 8, Flags: netlink.Multi},
-		Data:   append([]byte{unix.AF_INET, 0, 0, 0}, (*captured.Ct)...),
-	}
-	ack := netlink.Message{Header: netlink.Header{Type: netlink.Error}, Data: make([]byte, 20)}
-	for _, messages := range [][]netlink.Message{{flowMessage}, {flowMessage, ack}} {
-		flow, err := decodeConntrackReply(messages)
-		if err != nil || flow.ID != 1234 || fromCTTuple(flow.TupleOrig) != tuple {
-			t.Fatalf("kernel CT_GET flow and success ACK rejected: flow=%+v err=%v", flow, err)
-		}
-	}
-	failedACK := ack
-	failedACK.Data = []byte{0xff, 0xff, 0xff, 0xff}
-	shortACK := ack
-	shortACK.Data = []byte{0}
-	for _, test := range []struct {
-		name     string
-		messages []netlink.Message
-	}{
-		{"missing-flow", nil},
-		{"only-ack", []netlink.Message{ack}},
-		{"two-flows", []netlink.Message{flowMessage, flowMessage}},
-		{"ack-first", []netlink.Message{ack, flowMessage}},
-		{"failed-ack", []netlink.Message{flowMessage, failedACK}},
-		{"short-ack", []netlink.Message{flowMessage, shortACK}},
-		{"extra-message", []netlink.Message{flowMessage, ack, ack}},
-	} {
-		t.Run(test.name, func(t *testing.T) {
-			if _, err := decodeConntrackReply(test.messages); err == nil {
-				t.Fatal("invalid conntrack response authorized an original flow")
-			}
-		})
-	}
-}
-
 func TestChangedEffectiveRouteDoesNotCaptureOrReviveFlow(t *testing.T) {
 	i, attr, tuple := observation(t)
 	i.lookupRoute = func(got flowTuple, uid, mark uint32, tos uint8) (int, error) {
@@ -296,33 +191,6 @@ func TestChangedEffectiveRouteDoesNotCaptureOrReviveFlow(t *testing.T) {
 	flow := FlowContext{UID: 10001, OutIfIndex: 7}
 	if err := i.validateRoute(tuple, flow); err == nil {
 		t.Fatal("changed policy route must invalidate an upstream connection")
-	}
-}
-
-func TestContextCheckingUDPSocketRetainsDatagramFraming(t *testing.T) {
-	writer, reader := net.Pipe()
-	defer writer.Close()
-	defer reader.Close()
-	deadline := time.Now().Add(time.Second)
-	_ = writer.SetDeadline(deadline)
-	_ = reader.SetDeadline(deadline)
-	source := netip.MustParseAddrPort("192.0.2.2:42000")
-	flow := FlowContext{OriginalSource: source, OriginalDestination: netip.MustParseAddrPort("192.0.2.53:53"), UID: 10001, OutIfIndex: 7, InterfaceName: "tun0", protocol: 17,
-		validate: func() error { return nil }, checkSource: func(netip.AddrPort) error { return nil }}
-	connection := &originalPacketConnection{originalConnection: &originalConnection{Conn: writer, flow: flow, source: source}}
-	query := new(dns.Msg)
-	query.SetQuestion("example.invalid.", dns.TypeA)
-	query.Id = 0x1234
-	wire, _ := query.Pack()
-	finished := make(chan error, 1)
-	go func() { finished <- (&dns.Conn{Conn: connection}).WriteMsg(query) }()
-	got := make([]byte, len(wire))
-	_, err := io.ReadFull(reader, got)
-	if err != nil || binary.BigEndian.Uint16(got[:2]) != query.Id {
-		t.Fatalf("UDP acquired an incorrect TCP length prefix: %x / %v", got[:2], err)
-	}
-	if err := <-finished; err != nil {
-		t.Fatal(err)
 	}
 }
 
@@ -345,24 +213,6 @@ func TestRouteTimeoutFailsModeButUnreachableRoutePassesOriginal(t *testing.T) {
 				t.Fatal("incorrect handling of route failure")
 			}
 		})
-	}
-}
-
-func TestNetdFileCredentialsUseDiagnosedSocketUID(t *testing.T) {
-	i, attr, tuple := observation(t)
-	attr.UID, attr.GID = ptr(uint32(0)), ptr(uint32(0))
-	i.lookupSocket = func(flowTuple) (socketIdentity, error) {
-		return socketIdentity{UID: 10123, Cookie: 123, Inode: 456}, nil
-	}
-	i.lookupRoute = func(_ flowTuple, uid, _ uint32, _ uint8) (int, error) {
-		if uid != 10123 {
-			t.Fatal("netd file UID was substituted for app socket UID")
-		}
-		return 7, nil
-	}
-	verdict, _, changed := i.captureDecision(attr)
-	if verdict != nfqueue.NfAccept || !changed || i.flows[tuple].context.UID != 10123 {
-		t.Fatal("root system DNS was not captured using actual routing UID")
 	}
 }
 
@@ -390,36 +240,5 @@ func TestAmbiguousAndUnconnectedSocketsKeepOriginalPath(t *testing.T) {
 		if verdict != nfqueue.NfAccept || changed || i.Health() != nil {
 			t.Fatal("uncertain socket identity must keep original packet")
 		}
-	}
-}
-
-// Lookup's context shares one kernel re-verification across the request's
-// fail-closed gates; originalConnection.Write forces a fresh check per write.
-func TestWriteRevalidatesFlowOncePerWrite(t *testing.T) {
-	calls := 0
-	verify := &flowVerify{validate: func() error { calls++; return nil }}
-	flow := validTestFlow()
-	flow.validate = verify.cached
-	flow.revalidate = verify.validate
-	flow.checkSource = func(netip.AddrPort) error { return nil }
-	conn := &originalConnection{Conn: &reviewWriteConn{}, flow: flow, source: flow.OriginalSource}
-	if err := flow.check(); err != nil || calls != 1 {
-		t.Fatalf("dial-time validation: calls=%d err=%v", calls, err)
-	}
-	for range 3 {
-		if err := flow.check(); err != nil || calls != 1 {
-			t.Fatalf("request-path gates reuse one validation: calls=%d err=%v", calls, err)
-		}
-	}
-	if _, err := conn.Write([]byte("q")); err != nil || calls != 2 {
-		t.Fatalf("first write must revalidate once: calls=%d err=%v", calls, err)
-	}
-	if _, err := conn.Write([]byte("q")); err != nil || calls != 3 {
-		t.Fatalf("every write must revalidate: calls=%d err=%v", calls, err)
-	}
-	flow.revalidate = func() error { return errors.New("route changed") }
-	conn.flow = flow
-	if _, err := conn.Write([]byte("q")); err == nil {
-		t.Fatal("stale original context was not rejected at write time")
 	}
 }

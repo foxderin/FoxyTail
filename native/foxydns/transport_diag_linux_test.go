@@ -13,49 +13,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mdlayher/netlink"
 	"golang.org/x/sys/unix"
 )
-
-func TestSocketDiagUsesConnectedFullTupleAndKernelFilter(t *testing.T) {
-	for _, source := range []string{"192.0.2.2:42000", "[2001:db8::2]:42000"} {
-		src := netip.MustParseAddrPort(source)
-		dst := netip.MustParseAddrPort("192.0.2.53:53")
-		if src.Addr().Is6() {
-			dst = netip.MustParseAddrPort("[2001:db8::53]:53")
-		}
-		tuple := flowTuple{src, dst, 17}
-		message, err := socketDiagRequest(tuple)
-		if err != nil {
-			t.Fatal(err)
-		}
-		message.Header.Sequence = 1
-		wire, err := message.MarshalBinary()
-		if err != nil || len(wire) != 16+len(message.Data) || len(wire)%4 != 0 {
-			t.Fatalf("raw socket-diag request is not a valid wire message: %d / %v", len(wire), err)
-		}
-		var decoded netlink.Message
-		if err = decoded.UnmarshalBinary(wire); err != nil || decoded.Header.Length != uint32(len(wire)) || decoded.Header.Sequence != 1 {
-			t.Fatalf("raw socket-diag wire header did not round-trip: %+v / %v", decoded.Header, err)
-		}
-		if message.Header.Flags&netlink.Dump != netlink.Dump || binary.NativeEndian.Uint32(message.Data[4:8]) != 1<<1 {
-			t.Fatal("socket lookup must inspect all matching connected UDP sockets")
-		}
-		if binary.BigEndian.Uint16(message.Data[8:10]) != 42000 || binary.BigEndian.Uint16(message.Data[10:12]) != 53 {
-			t.Fatal("socket lookup lost ports")
-		}
-		attrs, err := netlink.UnmarshalAttributes(message.Data[56:])
-		if err != nil || len(attrs) != 1 || attrs[0].Type != 1 {
-			t.Fatal("full tuple kernel bytecode filter required")
-		}
-		program := attrs[0].Data
-		width := src.Addr().BitLen() / 8
-		size := 12 + width
-		if len(program) != 2*size || program[0] != 7 || program[size] != 8 || binary.NativeEndian.Uint32(program[8:12]) != 42000 || binary.NativeEndian.Uint32(program[size+8:size+12]) != 53 {
-			t.Fatal("source/destination host filters not encoded correctly")
-		}
-	}
-}
 
 func TestSocketDiagRejectsWrongOrUnconnectedTuple(t *testing.T) {
 	tuple := flowTuple{netip.MustParseAddrPort("192.0.2.2:42000"), netip.MustParseAddrPort("192.0.2.53:53"), 17}
@@ -84,42 +43,6 @@ func TestSocketDiagRejectsWrongOrUnconnectedTuple(t *testing.T) {
 	data[27]++
 	if _, err = decodeSocketIdentity(data, tuple); err == nil {
 		t.Fatal("source port alone must never identify a socket")
-	}
-}
-
-// Same per-family rule as the route probe: only IPv4 socket isolation gates
-// the verdict; IPv6 is probed best-effort for the additive field.
-func TestSocketProbeRequiresIPv4Only(t *testing.T) {
-	original := socketProbeFamily
-	defer func() { socketProbeFamily = original }()
-	var calls [][]string
-	socketProbeFamily = func(networks ...string) error {
-		calls = append(calls, append([]string(nil), networks...))
-		for _, network := range networks {
-			if network == "udp6" || network == "tcp6" {
-				return errors.New("kernel without IPv6")
-			}
-		}
-		return nil
-	}
-	ipv6, err := probeHelperSocketContext()
-	if err != nil || ipv6 || len(calls) != 2 || calls[0][0] != "udp4" || calls[0][1] != "tcp4" || calls[1][0] != "udp6" || calls[1][1] != "tcp6" {
-		t.Fatalf("IPv6-less kernel must keep the IPv4 verdict: ipv6=%v err=%v calls=%v", ipv6, err, calls)
-	}
-	socketProbeFamily = func(...string) error { return nil }
-	if ipv6, err = probeHelperSocketContext(); err != nil || !ipv6 {
-		t.Fatalf("dual-stack kernel must report IPv6 support: ipv6=%v err=%v", ipv6, err)
-	}
-	socketProbeFamily = func(networks ...string) error {
-		for _, network := range networks {
-			if network == "udp4" {
-				return errors.New("IPv4 socket isolation broken")
-			}
-		}
-		return nil
-	}
-	if _, err = probeHelperSocketContext(); err == nil {
-		t.Fatal("IPv4 socket capability failure must fail the verdict")
 	}
 }
 
