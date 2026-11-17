@@ -172,6 +172,14 @@ await scenario('settings apply owns the confirmed batch during preflight', async
   const field = () => window.document.querySelector('[data-setting="SOCKS_PORT"] input');
   input(field(), '1100'); await flush();
   click(button('set_apply_all')); await flush();
+  const safe = window.document.querySelector('#settings-safe-apply');
+  const safeLabel = window.document.querySelector('label[for="settings-safe-apply"]');
+  const initiallySafe = safe.checked;
+  assert(!window.document.querySelector('.pending-review-safe label label'), 'safe-apply labels are not nested');
+  click(safeLabel); await flush();
+  assert(safe.checked !== initiallySafe, 'safe-apply text toggles its checkbox exactly once');
+  click(safeLabel); await flush();
+  assert(safe.checked === initiallySafe, 'safe-apply text restores the original choice');
   fixture.holdNext.add('settings-get');
   await confirm(true);
   const preflight = fixture.held.find(r => r.key === 'settings-get');
@@ -890,6 +898,7 @@ await scenario('untracked native busy lives in the status chip, not a page banne
   assert(!chip.querySelector('.circular-progress'), 'chip settles once the backend is idle');
 });
 
+await (await import('./smoke-status-modal.mjs')).runStatusModalSmoke();
 await (await import('./smoke-motion.mjs')).runMotionSmoke();
 await (await import('./smoke-back-state.mjs')).runBackStateSmoke();
 await import('./smoke-read-recovery.mjs');

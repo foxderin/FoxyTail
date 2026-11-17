@@ -98,16 +98,24 @@ function TaskMenu(): JSX.Element {
 
 /* The header chip mirrors the shared connection state machine; the sheet it
  * opens exposes the same actions as the dashboard connection card. */
-function StatusSheet(props: { ref: (element: HTMLDetailsElement) => void }): JSX.Element {
+function StatusSheet(props: { ref: (element: HTMLDetailsElement) => void; route: Accessor<string> }): JSX.Element {
   let sheet!: HTMLDetailsElement;
-  onMount(() => {
-    const dismiss = (event: PointerEvent) => { if (sheet.open && event.target instanceof Node && !sheet.contains(event.target)) sheet.open = false; };
-    document.addEventListener('pointerdown', dismiss);
-    onCleanup(() => document.removeEventListener('pointerdown', dismiss));
-  });
-  const close = () => { sheet.open = false; sheet.querySelector('summary')?.focus(); };
+  let panel!: HTMLDialogElement;
+  const close = (restoreFocus = true) => {
+    sheet.open = false;
+    if (panel.open) panel.close();
+    if (restoreFocus) sheet.querySelector('summary')?.focus();
+  };
+  const syncOpen = () => {
+    if (sheet.open && !panel.open) {
+      panel.showModal();
+      panel.querySelector<HTMLButtonElement>('.status-sheet-head button')?.focus();
+    } else if (!sheet.open && panel.open) panel.close();
+  };
+  createEffect(on(props.route, () => close(false), { defer: true }));
+  onCleanup(() => { if (panel?.open) panel.close(); });
   const working = () => serviceBusy() !== null || serviceOperationRunning() || nativeControl().busy || nativeControl().checking;
-  return <details class="status-sheet" ref={element => { sheet = element; props.ref(element); }} data-testid="status-sheet" onKeyDown={(event) => {
+  return <details class="status-sheet" ref={element => { sheet = element; props.ref(element); }} data-testid="status-sheet" onToggle={syncOpen} onKeyDown={(event) => {
     if (event.key === 'Escape' && sheet.open) close();
   }}>
     <summary class={'status-chip tone-' + connectionChip().tone} aria-label={t('shell_open_status')}>
@@ -116,11 +124,17 @@ function StatusSheet(props: { ref: (element: HTMLDetailsElement) => void }): JSX
       </Show>
       <span class="status-chip-label">{t(connectionChip().label)}</span>
     </summary>
-    <button type="button" class="status-sheet-scrim" aria-label={t('close')} onClick={close} tabIndex={-1} />
-    <section id="service-status-details" class="status-sheet-panel" aria-label={t('shell_status_title')}>
+    <dialog ref={panel} id="service-status-details" class="status-sheet-panel" aria-label={t('shell_status_title')}
+      onCancel={event => { event.preventDefault(); close(); }}
+      onClose={() => { if (!panel.open) sheet.open = false; }}
+      onClick={event => {
+        if (event.target !== panel) return;
+        const bounds = panel.getBoundingClientRect();
+        if (event.clientX < bounds.left || event.clientX > bounds.right || event.clientY < bounds.top || event.clientY > bounds.bottom) close();
+      }}>
       <header class="status-sheet-head">
         <strong>{t('shell_status_title')}</strong>
-        <IconButton aria-label={t('close')} onClick={close}><MdIcon name="close" size={18} /></IconButton>
+        <IconButton aria-label={t('close')} onClick={() => close()}><MdIcon name="close" size={18} /></IconButton>
       </header>
       <div class="status-sheet-state">
         <MdIcon name={connectionCopy().icon} size={22} />
@@ -128,12 +142,12 @@ function StatusSheet(props: { ref: (element: HTMLDetailsElement) => void }): JSX
       </div>
       <ServiceActions />
       <Show when={nativeIssue()}><NativeIssueActions /></Show>
-      <a class="status-sheet-row" href="#/network" onClick={close}>
+      <a class="status-sheet-row" href="#/network" onClick={() => close()}>
         <span>{t('dash_mode')}</span>
         <strong>{serviceModeLabel() ? t(serviceModeLabel()!) : '—'}</strong>
         <MdIcon name="chevron_right" size={18} />
       </a>
-    </section>
+    </dialog>
   </details>;
 }
 
@@ -198,7 +212,7 @@ export function AppShell(props: {
       <header id="app-header" ref={header}>
         <div class="mobile-brand"><Brand /></div>
         <div class="desktop-context"><span>{t('shell_workspace')}</span><MdIcon name="chevron_right" size={16} /><strong>{t(def().titleKey)}</strong></div>
-        <div class="header-actions"><TaskMenu /><StatusSheet ref={element => { statusSheet = element; }} /></div>
+        <div class="header-actions"><TaskMenu /><StatusSheet route={props.route} ref={element => { statusSheet = element; }} /></div>
       </header>
       <main id="view" ref={main} tabIndex={-1}>
         <Show when={persistentIssue()}>{issue =>

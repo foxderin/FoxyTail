@@ -474,13 +474,14 @@ export default function Settings(): JSX.Element {
             )}
           </For>
         </div>
-        <label class="pending-review-safe">
+        <div class="pending-review-safe">
           <Checkbox
+            id="settings-safe-apply"
             checked={safeApply()}
             onChange={(event) => setSafeApply((event.target as HTMLInputElement).checked)}
           />
-          <span>{t('set_safe_apply')}</span>
-        </label>
+          <label for="settings-safe-apply">{t('set_safe_apply')}</label>
+        </div>
       </Dialog>
     </div>
   );

@@ -56,12 +56,13 @@ button:disabled { cursor: not-allowed; }
  * status sheet, which shares ServiceActions with the dashboard card. */
 .status-sheet { position: relative; }
 .status-sheet > summary { position: relative; z-index: 46; }
-.status-chip { display: flex; align-items: center; gap: 8px; min-height: 40px; padding: 0 13px; list-style: none; cursor: pointer; border: 1px solid var(--ft-border); border-radius: 999px; background: var(--ft-surface); color: var(--ft-text); font-size: 12px; font-weight: 650; white-space: nowrap; }
+.status-chip { display: flex; align-items: center; gap: 8px; min-height: 44px; padding: 0 13px; list-style: none; cursor: pointer; border: 1px solid var(--ft-border); border-radius: 999px; background: var(--ft-surface); color: var(--ft-text); font-size: 12px; font-weight: 650; white-space: nowrap; }
 .status-chip::-webkit-details-marker { display: none; }
 .status-chip.tone-ok { color: var(--ft-ok); }
 .status-chip.tone-warn { color: var(--md-sys-color-tertiary); }
-.status-sheet-scrim { position: fixed; inset: 0; z-index: 44; border: 0; padding: 0; background: rgb(12 18 27 / 45%); cursor: default; }
-.status-sheet-panel { position: fixed; z-index: 45; left: 12px; right: 12px; bottom: calc(var(--ft-bottom-nav-height, 74px) + 12px); max-height: 72dvh; overflow: auto; display: flex; flex-direction: column; gap: 12px; padding: 16px; border: 1px solid var(--ft-border); border-radius: 20px; background: var(--ft-surface); box-shadow: var(--ft-shadow); animation: ft-popup-in var(--ft-motion-enter) var(--ft-motion-ease); }
+.status-sheet-panel::backdrop { background: rgb(12 18 27 / 45%); }
+.status-sheet-panel { margin: 0; width: auto; max-width: none; top: auto; color: var(--ft-text); position: fixed; z-index: 45; left: 12px; right: 12px; bottom: calc(var(--ft-bottom-nav-height, 74px) + 12px); max-height: 72dvh; overflow: auto; flex-direction: column; gap: 12px; padding: 16px; border: 1px solid var(--ft-border); border-radius: 20px; background: var(--ft-surface); box-shadow: var(--ft-shadow); animation: ft-popup-in var(--ft-motion-enter) var(--ft-motion-ease); }
+.status-sheet-panel[open] { display: flex; }
 @media (min-width: 640px) { .status-sheet-panel { left: auto; right: 16px; bottom: auto; top: calc(var(--ft-header-height, 72px) + 8px); width: 392px; } }
 .status-sheet-head { display: flex; align-items: center; justify-content: space-between; font-size: 14px; }
 .status-sheet-state { display: flex; gap: 10px; align-items: flex-start; padding: 10px 12px; border-radius: 12px; background: var(--ft-panel-inset); }
@@ -298,7 +299,7 @@ canvas.chart, canvas.topo { width: 100%; display: block; touch-action: pan-y; }
  * including Back, Escape, option selection and navigation; no exit timers. */
 .menu-pop[open] > div { animation: ft-menu-in var(--ft-motion-enter) var(--ft-motion-ease); transform-origin: top center; }
 @keyframes ft-menu-in { from { opacity: 0; transform: translateY(-3px); } to { opacity: 1; transform: none; } }
-.status-sheet[open] .status-sheet-scrim, .md-dialog[open]::backdrop { animation: ft-scrim-in var(--ft-motion-enter) linear; }
+.status-sheet-panel[open]::backdrop, .md-dialog[open]::backdrop { animation: ft-scrim-in var(--ft-motion-enter) linear; }
 @keyframes ft-scrim-in { from { opacity: 0; } to { opacity: 1; } }
 @media (max-width: 639px) {
   .status-sheet[open] .status-sheet-panel { animation-name: ft-sheet-in; }
@@ -312,7 +313,7 @@ canvas.chart, canvas.topo { width: 100%; display: block; touch-action: pan-y; }
  * changes apply live, without keeping a stale JavaScript preference snapshot. */
 @media (prefers-reduced-motion: reduce) {
   .page-transition, .menu-pop > div, .status-sheet-panel, .task-menu-panel,
-  .status-sheet-scrim, .md-dialog, .md-dialog::backdrop, .toast, .pending-bar {
+  .status-sheet-panel::backdrop, .md-dialog, .md-dialog::backdrop, .toast, .pending-bar {
     animation: none !important;
   }
   .btn:active:not(:disabled), .icon-btn:active:not(:disabled), .nav-item:active .nav-pill { transform: none; }

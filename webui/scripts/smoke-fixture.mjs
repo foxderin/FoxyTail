@@ -51,7 +51,7 @@ export async function boot(options = {}) {
   const click = element => { assert(!!element && !element.disabled, 'enabled interaction target exists'); element?.click(); };
   const confirm = async accepted => {
     await flush();
-    const dialog = window.document.querySelector('[role="dialog"], dialog[open]');
+    const dialog = [...window.document.querySelectorAll('[role="dialog"], dialog[open]')].at(-1);
     assert(!!dialog, 'destructive/conflict action requires confirmation');
     click((dialog || window.document).querySelector(`[data-dialog-action="${accepted ? 'confirm' : 'cancel'}"]`));
     await flush();
