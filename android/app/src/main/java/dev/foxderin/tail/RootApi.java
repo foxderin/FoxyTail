@@ -109,7 +109,7 @@ final class RootApi {
             Process p = process;
             if (p != null) p.destroy();
             InputStream input = source;
-            if (input != null) IO.execute(() -> { try { input.close(); } catch (IOException ignored) { } });
+            if (input != null) closeAsync(input);
         }
     }
     static String quote(String value) { return "'" + value.replace("'", "'\\''") + "'"; }
@@ -138,9 +138,12 @@ final class RootApi {
         readArtifact(context, id, destination, null, new Call());
     }
     static void readArtifact(Context context, String id, OutputStream destination, Progress progress, Call call) throws Exception {
+        readArtifact(context, id, destination, progress, call, false);
+    }
+    static void readArtifact(Context context, String id, OutputStream destination, Progress progress, Call call, boolean share) throws Exception {
         context = AppPreferences.localized(context);
         if (id == null || !id.matches("art-[a-f0-9]{32}")) throw new IOException(context.getString(R.string.invalid_response));
-        execute(context, null, null, destination, MAX_FILE, progress, 1800, call, "artifact-read", id);
+        execute(context, null, null, destination, MAX_FILE, progress, 1800, call, "artifact-read", id, share ? "share" : "save");
     }
     static void readInbox(Context context, String name, OutputStream destination) throws Exception {
         readInbox(context, name, destination, null, new Call());
@@ -206,10 +209,29 @@ final class RootApi {
     static boolean localCancellationAllowed(String command) {
         switch (command) {
             // Staging only creates a private, disposable artifact; no restore has begun.
-            case "artifact-stage":
+            case "artifact-stage": case "identity-stage": case "identity-preview":
             case "backend-info": case "operation-status": case "artifact-read": case "file-read":
             case "files-browse": case "files-inbox": case "taildrop-targets": case "file-send-history": case "file-send-status": return true;
             default: return false;
+        }
+    }
+    static void closeAsync(InputStream input) {
+        IO.execute(() -> { try { input.close(); } catch (IOException ignored) { } });
+    }
+    static long copyWithTimeout(InputStream input, OutputStream output, long limit, int seconds) throws Exception {
+        Call call = new Call();
+        call.source = input;
+        Future<Long> copy = IO.submit(() -> copy(input, output, limit, null, call));
+        try { return copy.get(seconds, TimeUnit.SECONDS); }
+        catch (TimeoutException e) {
+            call.stop();
+            throw new InterruptedIOException("Import timed out");
+        } catch (ExecutionException e) {
+            Throwable cause = e.getCause();
+            if (cause instanceof Exception) throw (Exception) cause;
+            throw new IOException("Import failed", cause);
+        } finally {
+            if (!copy.isDone()) { call.stop(); copy.cancel(true); }
         }
     }
     static long copy(InputStream input, OutputStream output, long limit, Progress progress, Call call) throws IOException {

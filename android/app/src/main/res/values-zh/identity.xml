@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="identity_import_type">请选择 .state 或 .json 身份快照。</string>
+    <string name="identity_import_limit">身份快照不能超过 4 MiB。</string>
+    <string name="identity_import_failed">身份导入失败。请选择不超过 4 MiB 的有效身份快照。</string>
+</resources>

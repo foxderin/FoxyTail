@@ -23,7 +23,7 @@ public final class ExportProvider extends ContentProvider {
     }
     static Uri exportArtifact(Context context, String id, String displayName) throws Exception {
         if (id == null || !id.matches("art-[a-f0-9]{32}")) throw new IOException("Invalid artifact token");
-        return cache(context, displayName, output -> RootApi.readArtifact(context, id, output));
+        return cache(context, displayName, output -> RootApi.readArtifact(context, id, output, null, new RootApi.Call(), true));
     }
     interface Writer { void write(OutputStream output) throws Exception; }
     interface Commit { void begin() throws Exception; }

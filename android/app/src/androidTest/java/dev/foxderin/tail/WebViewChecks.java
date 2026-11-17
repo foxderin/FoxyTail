@@ -38,6 +38,11 @@ final class WebViewChecks {
         reject("control.query", new JSONObject().put("command", "sh").put("arguments", new org.json.JSONArray().put("-c").put("id")));
         reject("control.query", new JSONObject().put("command", "status").put("arguments", new org.json.JSONArray().put(";id")));
         reject("control.mutate", new JSONObject().put("command", "mode-set").put("arguments", new org.json.JSONArray().put("bridge;id")));
+        reject("identity.import", new JSONObject().put("path", "/data/private/state"));
+        reject("control.query", new JSONObject().put("command", "identity-preview").put("arguments", new org.json.JSONArray().put("/data/private/state")));
+        reject("control.mutate", new JSONObject().put("command", "identity-export").put("arguments", new org.json.JSONArray().put("raw")));
+        reject("control.mutate", new JSONObject().put("command", "identity-restore").put("arguments", new org.json.JSONArray().put("art-" + "a".repeat(32)).put("missing-hash")));
+        reject("control.mutate", new JSONObject().put("command", "account-rename").put("arguments", new org.json.JSONArray().put("profile").put("multi\nline")));
         reject("files.addShared", new JSONObject().put("handles", new org.json.JSONArray().put("/data/private")));
         reject("files.addShared", new JSONObject().put("paths", new org.json.JSONArray().put("/sdcard/file")));
         reject("app.openUrl", new JSONObject().put("url", "javascript:alert(1)"));

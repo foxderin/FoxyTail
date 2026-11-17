@@ -90,7 +90,7 @@ final class ControlClient {
                 "label", task.label, "status", task.state, "state", task.state, "cancellation", task.cancellation,
                 "detail", task.detail, "startedAt", task.startedAt, "result", task.result));
         JSONObject results = new JSONObject();
-        for (String name : new String[]{"backup", "diag", "restore", "diag-check"}) {
+        for (String name : new String[]{"backup", "diag", "restore", "diag-check", "identity-export", "identity-restore"}) {
             JSONObject result = lastResult(name);
             if (result != null) try { results.put(name, result); } catch (org.json.JSONException impossible) { throw new AssertionError(impossible); }
         }
@@ -288,10 +288,11 @@ final class ControlClient {
             }
             message = result.optBoolean("ok") ? context.getString(R.string.control_finished, label) : label + ": " + result.optString("error", context.getString(R.string.backend_failed));
             SharedPreferences.Editor finished = preferences.edit().remove("id").remove("command").remove("label");
-            if ("backup".equals(command) || "diag".equals(command) || "restore".equals(command) || "diag-check".equals(command)) {
+            if ("backup".equals(command) || "diag".equals(command) || "restore".equals(command) || "diag-check".equals(command) || "identity-export".equals(command) || "identity-restore".equals(command)) {
                 finished.putString("result." + command, result.toString()).putLong("resultTime." + command, System.currentTimeMillis());
             }
-            if ("switch".equals(command) || "logout".equals(command) || "login-authkey".equals(command)) finished.putLong("accountRevision", accountRevision() + 1);
+            if ("switch".equals(command) || "logout".equals(command) || "login-authkey".equals(command) ||
+                    result.optBoolean("ok") && ("identity-restore".equals(command) || "account-rename".equals(command))) finished.putLong("accountRevision", accountRevision() + 1);
             if (!finished.commit()) throw new IOException(context.getString(R.string.control_record_failed));
             TaskEntry task = currentTask();
             if (task != null) {

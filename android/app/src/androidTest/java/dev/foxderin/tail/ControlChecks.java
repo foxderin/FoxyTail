@@ -136,6 +136,40 @@ final class ControlChecks {
             } finally {
                 timer.shutdownNow(); providerWriter.close(); provider.close(); staging.destroy(); importing.finished = true;
             }
+            CountDownLatch spoolClosed = new CountDownLatch(1);
+            java.io.InputStream stalled = new java.io.InputStream() {
+                @Override public int read() throws IOException {
+                    try { spoolClosed.await(); } catch (InterruptedException e) { Thread.currentThread().interrupt(); }
+                    throw new IOException("Synthetic provider closed");
+                }
+                @Override public void close() { spoolClosed.countDown(); }
+            };
+            long spoolStart = System.nanoTime();
+            try {
+                RootApi.copyWithTimeout(stalled, new java.io.ByteArrayOutputStream(), IdentityRules.MAX_IMPORT_BYTES, 1);
+                throw new AssertionError("Stalled identity source must time out before staging");
+            } catch (java.io.InterruptedIOException expected) {
+                require(TimeUnit.NANOSECONDS.toSeconds(System.nanoTime() - spoolStart) < 5, "Identity spool wait is bounded");
+                require(spoolClosed.await(2, TimeUnit.SECONDS), "Identity spool timeout closes the source");
+            } finally { stalled.close(); }
+            CountDownLatch closeStarted = new CountDownLatch(1), closeRelease = new CountDownLatch(1);
+            java.io.InputStream blockingClose = new java.io.InputStream() {
+                @Override public int read() throws IOException {
+                    try { closeRelease.await(); } catch (InterruptedException e) { Thread.currentThread().interrupt(); }
+                    throw new IOException("Synthetic provider stopped");
+                }
+                @Override public void close() {
+                    closeStarted.countDown();
+                    try { closeRelease.await(); } catch (InterruptedException e) { Thread.currentThread().interrupt(); }
+                }
+            };
+            try {
+                RootApi.copyWithTimeout(blockingClose, new java.io.ByteArrayOutputStream(), IdentityRules.MAX_IMPORT_BYTES, 1);
+                throw new AssertionError("Blocking provider close must not hold the spool caller");
+            } catch (java.io.InterruptedIOException expected) {
+                require(closeStarted.await(2, TimeUnit.SECONDS), "Provider close executes outside spool caller");
+            } finally { closeRelease.countDown(); }
+            require(RootApi.localCancellationAllowed("identity-stage"), "Private identity staging supports local cancellation before restore");
             require(!RootApi.localCancellationAllowed("operation-start") && !RootApi.localCancellationAllowed("login") && !RootApi.localCancellationAllowed("file-send-start"), "Unregistered writes cannot use read cancellation");
         } finally { release.countDown(); worker.shutdownNow(); }
     }

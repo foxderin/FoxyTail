@@ -15,7 +15,7 @@ import java.util.function.*;
 
 /** Native ownership of sources, URI grants and binary exports; the document sees handles only. */
 final class FileActions {
-    static final int PICK = 10, SAVE = 11, NOTIFY = 12, NOTIFY_INCOMING = 13, PICK_BACKUP = 50, SAVE_ARTIFACT = 51;
+    static final int PICK = 10, SAVE = 11, NOTIFY = 12, NOTIFY_INCOMING = 13, PICK_BACKUP = 50, SAVE_ARTIFACT = 51, PICK_IDENTITY = 52;
     private static final ExecutorService EXPORTS = Executors.newSingleThreadExecutor();
     private static final Handler MAIN = new Handler(Looper.getMainLooper());
     private static ExportJob export;
@@ -29,7 +29,7 @@ final class FileActions {
     private final LinkedHashSet<Uri> resolving = new LinkedHashSet<>();
     private final Runnable changed = this::publish;
     private final Runnable imported = this::deliverImport;
-    private Consumer<JSONObject> pickerReply, backupReply;
+    private Consumer<JSONObject> pickerReply, backupReply, identityReply;
     private String saveName, saveToken, message = "";
     private int picker, generation, browseGeneration, sendGeneration;
     private boolean destroyed, registered, launching, recovering, preflight;
@@ -84,11 +84,12 @@ final class FileActions {
         SharedPreferences state = TransferService.state(activity);
         JSONObject transfer = null;
         try { String raw = state.getString("snapshot", null); if (raw != null) transfer = new Models.Transfer(new JSONObject(raw)).json; } catch (Exception ignored) { }
-        BackupImport backup = BackupImport.get(activity);
+        ArtifactImport backup = ArtifactImport.backup(activity), identity = ArtifactImport.identity(activity);
         return object("ok", true, "selection", selected, "busy", transferBusy(), "preparing", !resolving.isEmpty() || state.getBoolean("preparing", false),
                 "job", preflight ? null : state.getString("job", null), "unknown", state.getBoolean("unknown", false), "message", message.isEmpty() ? state.getString("message", "") : message, "transfer", transfer,
                 "export", export == null ? object("busy", false, "committing", false, "bytes", 0, "message", "") : export.snapshot(),
                 "backup", object("busy", backup.busy(), "token", backup.token(), "error", backup.error()),
+                "identity", object("busy", identity.busy(), "token", identity.token(), "error", identity.error()),
                 "receiveNotifications", ReceiveNotificationReceiver.snapshot(activity));
     }
     static void fields(JSONObject args, String... allowed) throws JSONException {
@@ -109,7 +110,7 @@ final class FileActions {
         return new ArrayList<>(values);
     }
     boolean dispatch(String action, JSONObject args, Consumer<JSONObject> reply) {
-        if (!action.startsWith("files.") && !action.startsWith("artifact.") && !action.equals("backup.import")) return false;
+        if (!action.startsWith("files.") && !action.startsWith("artifact.") && !action.equals("backup.import") && !action.equals("identity.import")) return false;
         try {
             switch (action) {
                 case "files.receiveNotifications": {
@@ -175,10 +176,11 @@ final class FileActions {
                     exportAvailable(); startExport(selected, null, null, true, reply); break;
                 }
                 case "files.cancelExport": fields(args); if (export != null && export.busy) export.cancel(); respond(reply, object("ok", true, "committing", export != null && export.committing)); break;
-                case "backup.import": {
-                    fields(args); writable(); BackupImport operation = BackupImport.get(activity);
-                    if (operation.busy()) throw new IOException(s(R.string.busy));
-                    beginPicker(PICK_BACKUP, new Intent(Intent.ACTION_OPEN_DOCUMENT).setType("*/*").addCategory(Intent.CATEGORY_OPENABLE), reply); break;
+                case "backup.import": case "identity.import": {
+                    fields(args); writable();
+                    if (ArtifactImport.backup(activity).busy() || ArtifactImport.identity(activity).busy()) throw new IOException(s(R.string.busy));
+                    beginPicker(action.equals("identity.import") ? PICK_IDENTITY : PICK_BACKUP,
+                            new Intent(Intent.ACTION_OPEN_DOCUMENT).setType("*/*").addCategory(Intent.CATEGORY_OPENABLE), reply); break;
                 }
                 case "artifact.save": case "artifact.share": {
                     fields(args, "token", "name"); String id = token(args), name = text(args, "name"); Models.requireName(name); exportAvailable();
@@ -282,7 +284,7 @@ final class FileActions {
         beginPicker(token == null ? SAVE : SAVE_ARTIFACT, new Intent(Intent.ACTION_CREATE_DOCUMENT).addCategory(Intent.CATEGORY_OPENABLE).setType(ExportProvider.mime(name)).putExtra(Intent.EXTRA_TITLE, name), reply);
     }
     void onActivityResult(int request, int result, Intent data) {
-        if (request != PICK && request != SAVE && request != PICK_BACKUP && request != SAVE_ARTIFACT) return;
+        if (request != PICK && request != SAVE && request != PICK_BACKUP && request != PICK_IDENTITY && request != SAVE_ARTIFACT) return;
         if (picker != request) return;
         Consumer<JSONObject> reply = pickerReply; pickerReply = null; picker = 0;
         String name = saveName, token = saveToken; saveName = null; saveToken = null;
@@ -295,8 +297,11 @@ final class FileActions {
                 if (uris.size() > 32) throw new IOException(s(R.string.file_limit));
                 for (Uri uri : uris) if (uri != null && (data.getFlags() & Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION) != 0) try { activity.getContentResolver().takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION); } catch (SecurityException ignored) { }
                 resolveUris(uris, reply);
-            } else if (request == PICK_BACKUP) {
-                writable(); backupReply = reply; BackupImport.get(activity).start(data.getData(), data.getFlags()); deliverImport();
+            } else if (request == PICK_BACKUP || request == PICK_IDENTITY) {
+                writable();
+                if (request == PICK_IDENTITY) { identityReply = reply; ArtifactImport.identity(activity).start(data.getData(), data.getFlags()); }
+                else { backupReply = reply; ArtifactImport.backup(activity).start(data.getData(), data.getFlags()); }
+                deliverImport();
             } else {
                 Uri target = data.getData();
                 if (name == null || target == null || !"content".equals(target.getScheme()) || activity.checkUriPermission(target, android.os.Process.myPid(), android.os.Process.myUid(), Intent.FLAG_GRANT_WRITE_URI_PERMISSION) != PackageManager.PERMISSION_GRANTED) throw new IOException(s(R.string.invalid_uri));
@@ -363,9 +368,15 @@ final class FileActions {
     }
     private void deliverImport() {
         if (destroyed) return;
-        BackupImport operation = BackupImport.get(activity);
+        ArtifactImport operation = ArtifactImport.backup(activity);
         if (!operation.busy() && backupReply != null) {
             Consumer<JSONObject> reply = backupReply; backupReply = null;
+            if (operation.error() != null) respond(reply, object("ok", false, "error", operation.error()));
+            else if (operation.token() != null) respond(reply, object("ok", true, "token", operation.token()));
+        }
+        operation = ArtifactImport.identity(activity);
+        if (!operation.busy() && identityReply != null) {
+            Consumer<JSONObject> reply = identityReply; identityReply = null;
             if (operation.error() != null) respond(reply, object("ok", false, "error", operation.error()));
             else if (operation.token() != null) respond(reply, object("ok", true, "token", operation.token()));
         }
@@ -374,7 +385,7 @@ final class FileActions {
     void resume() {
         if (!registered) {
             activity.registerReceiver(updates, new IntentFilter(TransferService.UPDATE), "dev.foxderin.tail.INTERNAL", null, Build.VERSION.SDK_INT >= 33 ? Context.RECEIVER_NOT_EXPORTED : 0);
-            client.addListener(changed); BackupImport.get(activity).observe(imported); registered = true;
+            client.addListener(changed); ArtifactImport.backup(activity).observe(imported); ArtifactImport.identity(activity).observe(imported); registered = true;
         }
         if (export != null) export.owner = new WeakReference<>(this);
         deliverImport(); recover();
@@ -439,9 +450,9 @@ final class FileActions {
         if (pending != null && pending.size() <= 32 && !pending.isEmpty()) { ArrayList<Uri> uris = new ArrayList<>(); for (String uri : pending) uris.add(Uri.parse(uri)); resolveUris(uris, null); }
     }
     void destroy() {
-        destroyed = true; pickerReply = null; backupReply = null;
+        destroyed = true; pickerReply = null; backupReply = null; identityReply = null;
         if (activity.isFinishing()) { for (Uri uri : resolving) drop(uri); for (Models.Source source : selection.values()) drop(source.uri); }
-        if (registered) { activity.unregisterReceiver(updates); client.removeListener(changed); BackupImport.get(activity).remove(imported); registered = false; }
+        if (registered) { activity.unregisterReceiver(updates); client.removeListener(changed); ArtifactImport.backup(activity).remove(imported); ArtifactImport.identity(activity).remove(imported); registered = false; }
         if (browseCall != null) browseCall.cancel();
         if (export != null && export.owner.get() == this) { export.reply = null; if (!export.committing) export.cancel(); export.owner.clear(); }
         io.shutdown(); sources.shutdown();
@@ -488,7 +499,7 @@ final class FileActions {
                         MAIN.post(() -> { bytes = count; message = context.getString(committing ? R.string.repair_files_save_committing : R.string.repair_files_saving, name, WebFormat.bytes(count)); if (names.size() > 1) message = context.getString(R.string.taildrop_share_progress, index, names.size(), name, WebFormat.bytes(count)); changed(); });
                     };
                     RootApi.Call call = new RootApi.Call(); read = call; check();
-                    ExportProvider.Writer writer = output -> { check(); if (artifact == null) RootApi.readInbox(context, name, output, progress, call); else RootApi.readArtifact(context, artifact, output, progress, call); };
+                    ExportProvider.Writer writer = output -> { check(); if (artifact == null) RootApi.readInbox(context, name, output, progress, call); else RootApi.readArtifact(context, artifact, output, progress, call, share); };
                     try {
                         if (target == null) ready.add(ExportProvider.cache(context, name, writer));
                         else ExportProvider.save(context, name, target, writer, () -> {

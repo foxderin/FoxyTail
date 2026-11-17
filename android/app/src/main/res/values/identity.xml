@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="identity_import_type">Select a .state or .json identity snapshot.</string>
+    <string name="identity_import_limit">Identity snapshots must not exceed 4 MiB.</string>
+    <string name="identity_import_failed">Identity import failed. Select a valid identity snapshot of at most 4 MiB.</string>
+</resources>

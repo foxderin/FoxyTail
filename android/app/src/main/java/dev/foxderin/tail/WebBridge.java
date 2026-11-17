@@ -199,7 +199,7 @@ final class WebBridge {
             case "control.mutate":
                 keys(args, "command", "arguments", "label");
                 String[] mutation = command(args, true);
-                if ("login-authkey".equals(mutation[0]) || "logout".equals(mutation[0]) || "switch".equals(mutation[0])) accountReady();
+                if ("login-authkey".equals(mutation[0]) || "logout".equals(mutation[0]) || "switch".equals(mutation[0]) || "identity-restore".equals(mutation[0])) accountReady();
                 String label = args.has("label") ? text(args, "label", 128) : mutation[0];
                 control.submit(label, reply, mutation); return;
             case "control.cancelRead":
@@ -222,7 +222,7 @@ final class WebBridge {
     }
     private void accountReady() throws IOException {
         JSONObject state = files.snapshot();
-        if (state.optBoolean("busy") || state.optBoolean("unknown") || BackupImport.get(activity).busy()) throw new IOException(message(activity, R.string.bridge_transfer_active));
+        if (state.optBoolean("busy") || state.optBoolean("unknown") || ArtifactImport.backup(activity).busy() || ArtifactImport.identity(activity).busy()) throw new IOException(message(activity, R.string.bridge_transfer_active));
     }
 
     private void query(String id, String[] wire, Consumer<JSONObject> reply) throws Exception {
@@ -298,6 +298,7 @@ final class WebBridge {
             case "file-send-history": case "backup-list": case "trial-status": count(a, 0); return;
             case "file-send-status": count(a, 1); pattern(a[0], "[a-fA-F0-9]{16,128}"); return;
             case "restore-preview": count(a, 1); backup(a[0]); return;
+            case "identity-preview": count(a, 1); pattern(a[0], "art-[a-f0-9]{32}"); return;
             case "logs": count(a, 1, 2); choice(a[0], "service", "daemon"); if (a.length == 2) number(a[1], 1, 100000); return;
             case "traffic":
                 count(a, 1, 2); choice(a[0], "summary", "hourly", "daily", "topn");
@@ -308,6 +309,12 @@ final class WebBridge {
     }
     private void validateMutation(String name, String[] a) throws Exception {
         switch (name) {
+            case "identity-export": count(a, 0); return;
+            case "identity-restore": count(a, 3); pattern(a[0], "art-[a-f0-9]{32}"); pattern(a[1], "[a-f0-9]{64}"); pattern(a[2], "[a-f0-9]{64}"); return;
+            case "account-rename":
+                count(a, 2); identifier(a[0]);
+                IdentityRules.nickname(a[1]);
+                return;
             case "exitnode-clear": case "logout": case "backup": case "file-clear": case "file-send-clear":
             case "speedtest-exitnodes": case "derp-speedtest": case "coexist-info": case "diag-check": case "dns-probe": case "socks-check": count(a, 0); return;
             case "control": count(a, 1); choice(a[0], "start", "stop", "restart"); return;
