@@ -39,6 +39,7 @@ export default function Settings(): JSX.Element {
   const [settingsError, setSettingsError] = createSignal<string | null>(null);
   const [reviewOpen, setReviewOpen] = createSignal(false);
   const [safeApply, setSafeApply] = createSignal(true);
+  const [applying, setApplying] = createSignal(false);
   /* The trial card exposes a confirmed-start entry for the review flow. */
   let trialStart: ((candidate: string, duration: string) => Promise<void>) | null = null;
   const [trialActive, setTrialActive] = createSignal(true);
@@ -53,7 +54,8 @@ export default function Settings(): JSX.Element {
   const serviceTask = () => getTask('service-control');
   const saving = () => saveTask()?.status === 'running' ? String(saveTask()?.args[0] ?? '') : null;
   const restartBusy = () => serviceTask()?.status === 'running';
-  const locked = () => !hasRoot || !nativeControl().canWrite || nativeControl().busy || Boolean(saving()) || restartBusy() || getTask(RESTORE_TASK)?.status === 'running' || backupBusy();
+  const backendLocked = () => !hasRoot || !nativeControl().canWrite || nativeControl().busy || Boolean(saving()) || restartBusy() || getTask(RESTORE_TASK)?.status === 'running' || backupBusy();
+  const locked = () => applying() || backendLocked();
 
   async function loadSettings(): Promise<boolean | undefined> {
     const load = ++settingsLoad;
@@ -143,31 +145,41 @@ export default function Settings(): JSX.Element {
            (value === 'hijack' && hijackAvailable() === false))) return;
     }
     const safe = safeApply();
-    setReviewOpen(false);
-    const fresh = await loadSettings();
-    if (fresh === undefined || locked()) return;
-    const stagedKeys = new Set(staged.map(entry => entry.key));
-    const conflicts = draftEntries().filter(entry => stagedKeys.has(entry.key) && entry.baseline !== settings()?.[entry.key]);
-    if (conflicts.length && !await confirmDialog({
-      title: t('confirm_conflict_title'),
-      body: t('tools_draft_conflict') + '\n\n' + conflicts.map(entry => t(entry.field!.label)).join('\n'),
-      confirmLabel: t('confirm_overwrite'),
-    })) return;
-    if (locked()) return;
-    settingsLoad++;
     let failed = false;
-    for (const entry of draftEntries()) {
-      if (!stagedKeys.has(entry.key)) continue;
-      const res = await startTask('settings-save', 'settings-set', entry.key, entry.value.trim()).promise;
-      if (disposed) return;
-      if (!res.ok) {
-        if (!res.cancelled) toastApiError(t('op_failed'), res);
-        failed = true;
-        break;
+    setApplying(true);
+    setReviewOpen(false);
+    try {
+      const fresh = await loadSettings();
+      if (fresh === undefined || backendLocked()) return;
+      const batch = staged.filter(entry => entry.value.trim() !== settings()?.[entry.key]);
+      const conflicts = batch.filter(entry => entry.baseline !== settings()?.[entry.key]);
+      if (conflicts.length && !await confirmDialog({
+        title: t('confirm_conflict_title'),
+        body: t('tools_draft_conflict') + '\n\n' + conflicts.map(entry => t(entry.field!.label)).join('\n'),
+        confirmLabel: t('confirm_overwrite'),
+      })) return;
+      if (backendLocked()) return;
+      settingsLoad++;
+      // The reviewed snapshot owns this batch, not the mutable draft store.
+      for (const entry of batch) {
+        const value = entry.value.trim();
+        const res = await startTask('settings-save', 'settings-set', entry.key, value).promise;
+        if (disposed) return;
+        if (!res.ok) {
+          if (!res.cancelled) toastApiError(t('op_failed'), res);
+          failed = true;
+          break;
+        }
+        setSettings(old => ({ ...old, [entry.key]: value }));
+        setDrafts(old => {
+          const next = { ...old };
+          if (next[entry.key]?.value === entry.value) delete next[entry.key];
+          return next;
+        });
+        if (res.applied !== true) setRestartRequired(true);
       }
-      setSettings(old => ({ ...old, [entry.key]: entry.value.trim() }));
-      discardKey(entry.key);
-      if (res.applied !== true) setRestartRequired(true);
+    } finally {
+      setApplying(false);
     }
     void loadSettings();
     if (failed || disposed || !restartRequired()) return;

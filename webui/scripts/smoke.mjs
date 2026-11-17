@@ -89,6 +89,43 @@ await scenario('account and operation revision stale-response fences', async ({ 
   assert(app.state.status()?.exitRouting === undefined, 'wrong device deep routing is rejected');
 });
 
+await scenario('settings apply owns the confirmed batch during preflight', async ({ fixture, nav, window, input, button, click, confirm }) => {
+  await nav('settings');
+  const field = () => window.document.querySelector('[data-setting="SOCKS_PORT"] input');
+  input(field(), '1100'); await flush();
+  click(button('set_apply_all')); await flush();
+  fixture.holdNext.add('settings-get');
+  await confirm(true);
+  const preflight = fixture.held.find(r => r.key === 'settings-get');
+  assert(!!preflight, 'confirmed settings batch waits for its baseline refresh');
+  assert(field().disabled, 'settings editing is locked throughout confirmed-batch preflight');
+  assert(button('set_apply_all').disabled, 'a second batch cannot start during preflight');
+  // Dispatch explicitly even on the disabled input to verify the action guard,
+  // not just the DOM attribute. This reproduces the old mutable-snapshot race.
+  input(field(), '1101'); await flush();
+  preflight.finish(); await flush();
+  const writes = fixture.log.filter(r => r.action === 'control.mutate' && r.args.command === 'settings-set');
+  assert(writes.length === 1 && writes[0].args.arguments[1] === '1100', 'only the reviewed and validated value is written once');
+  assert(fixture.settings.SOCKS_PORT === '1100', 'preflight edits cannot replace the confirmed value');
+  assert(!field().disabled, 'settings editing unlocks after the confirmed batch');
+  assert(fixture.log.some(r => r.action === 'control.mutate' && r.args.command === 'trial-start'), 'batch ownership does not block the safe-apply trial');
+});
+
+await scenario('settings preflight failure unlocks the batch for retry', async ({ fixture, nav, window, input, button, click, confirm }) => {
+  await nav('settings');
+  const field = () => window.document.querySelector('[data-setting="SOCKS_PORT"] input');
+  input(field(), '1100'); await flush();
+  fixture.overrides.set('settings-get', { ok: false, error: 'Simulated settings read failure' });
+  click(button('set_apply_all')); await confirm(true);
+  assert(fixture.settings.SOCKS_PORT === '1099', 'failed preflight does not write settings');
+  fixture.overrides.delete('settings-get');
+  click(button('retry')); await flush();
+  assert(!field().disabled && !button('set_apply_all').disabled, 'failed preflight releases editing and apply ownership');
+  assert(field().value === '1100', 'failed preflight preserves the draft through read retry');
+  click(button('set_apply_all')); await confirm(true);
+  assert(fixture.settings.SOCKS_PORT === '1100', 'the preserved batch can be reviewed and retried');
+});
+
 await scenario('settings drafts survive navigation and conflicts require consent', async ({ app, fixture, nav, window, input, button, click, confirm }) => {
   await nav('settings');
   const row = () => window.document.querySelector('[data-setting="SOCKS_PORT"]');
