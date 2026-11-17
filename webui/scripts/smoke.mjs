@@ -891,6 +891,7 @@ await scenario('untracked native busy lives in the status chip, not a page banne
 });
 
 await (await import('./smoke-motion.mjs')).runMotionSmoke();
+await (await import('./smoke-back-state.mjs')).runBackStateSmoke();
 await import('./smoke-read-recovery.mjs');
 await (await import('./smoke-dns-capability.mjs')).runDnsCapabilitySmoke();
 
