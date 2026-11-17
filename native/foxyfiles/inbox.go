@@ -21,9 +21,10 @@ type inboxEntry struct {
 }
 
 type inboxResult struct {
-	OK      bool         `json:"ok"`
-	Files   []inboxEntry `json:"files"`
-	Ignored int          `json:"ignored,omitempty"`
+	OK      bool           `json:"ok"`
+	Files   []inboxEntry   `json:"files"`
+	Ignored int            `json:"ignored,omitempty"`
+	Receive *receiveStatus `json:"receive,omitempty"`
 }
 
 func (result *inboxResult) appendEntry(inbox *os.Root, entry os.DirEntry) error {
@@ -102,6 +103,7 @@ func listInbox(rootPath string) (inboxResult, error) {
 func runInboxList(args []string) error {
 	flags := flag.NewFlagSet("inbox-list", flag.ContinueOnError)
 	root := flags.String("root", "", "inbox directory")
+	socket := flags.String("socket", "", "optional LocalAPI socket for receive health")
 	if err := flags.Parse(args); err != nil {
 		return err
 	}
@@ -111,6 +113,10 @@ func runInboxList(args []string) error {
 	result, err := listInbox(*root)
 	if err != nil {
 		return err
+	}
+	if *socket != "" {
+		status := inboxReceiveStatus(*socket)
+		result.Receive = &status
 	}
 	return json.NewEncoder(os.Stdout).Encode(result)
 }

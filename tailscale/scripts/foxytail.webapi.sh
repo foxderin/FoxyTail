@@ -59,13 +59,13 @@ esac
 case "$1:$2" in
   backend-info:* | operation-start:* | operation-status:* | owner-capability:* | hooks-get:* | artifact-stage:* | artifact-read:* | artifact-delete:*) ;;
   logs:* | control:stop | restore:* | cancel:* | diag-check:* | trial-status:* | trial-confirm:* | trial-revert:* | backup-list:* | restore-preview:*) ;;
-  taildrop-targets:* | files-browse:* | file-send-start:* | file-send-status:* | file-send-cancel:* | file-send-history:* | file-send-delete:* | file-send-clear:* | file-delete:* | file-delete-many:* | file-clear:* | file-stage:* | file-stage-delete:* | file-read:*) ;;
+  taildrop-targets:* | files-browse:* | file-send-start:* | file-send-status:* | file-send-cancel:* | file-send-history:* | file-send-delete:* | file-send-clear:* | file-receive:* | file-delete:* | file-delete-many:* | file-clear:* | file-stage:* | file-stage-delete:* | file-read:*) ;;
   peers:* | exitnodes:* | peer-ping:* | speedtest-exitnodes:* | derp-speedtest:* | accounts:* | serve-list:* | funnel-list:* | traffic:* | traffic-uids:* | apps:* | files-inbox:* | context-status:*) ;;
   status:* | exit-routing:* | tun:* | dns:* | dns-probe:* | coexist-info:* | coexist-check:* | socks-check:*) load_runtime_conf || jerr 'invalid runtime configuration; inspect the service log' ;;
   *) load_conf || jerr 'invalid configuration; inspect the service log' ;;
 esac
 case "$1" in
-  control | mode-set | exitnode-set | exitnode-clear | login | login-authkey | logout | switch | serve-set | serve-del | funnel-set | funnel-del | routes-set | subnet-routes-set | settings-set | context-set | file-send-start | file-send-delete | file-send-clear | file-stage | file-stage-delete | file-delete | file-delete-many | file-clear | backup | restore | trial-start | trial-confirm | trial-revert | dns-probe)
+  control | mode-set | exitnode-set | exitnode-clear | login | login-authkey | logout | switch | serve-set | serve-del | funnel-set | funnel-del | routes-set | subnet-routes-set | settings-set | context-set | file-send-start | file-send-delete | file-send-clear | file-stage | file-stage-delete | file-receive | file-delete | file-delete-many | file-clear | backup | restore | trial-start | trial-confirm | trial-revert | dns-probe)
     [ "$1:$2" = control:stop ] || [ ! -f "${TS_DIR}/.installing" ] || jerr 'an upgrade is in progress; retry after it completes' ;;
 esac
 
@@ -135,6 +135,7 @@ case "$1" in
   file-stage) shift; cmd_file_stage "$@" ;;
   file-stage-delete) shift; cmd_file_stage_delete "$1" ;;
   file-read) shift; cmd_file_read "$1" ;;
+  file-receive) shift; [ "$#" = 2 ] || jerr 'file-receive requires name and identity'; cmd_file_receive "$1" "$2" ;;
   file-delete) shift; cmd_file_delete "$1" ;;
   file-delete-many) shift; cmd_file_delete_many "$@" ;;
   file-clear) cmd_file_clear ;;

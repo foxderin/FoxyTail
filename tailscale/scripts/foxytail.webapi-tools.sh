@@ -235,7 +235,14 @@ _file_name_valid() {
 }
 
 cmd_files_inbox() {
-  _file_json_command 15 inbox-list --root /sdcard/Download/Taildrop
+  _file_json_command 15 inbox-list --root /sdcard/Download/Taildrop --socket "${TS_SOCKET}"
+}
+
+cmd_file_receive() {
+  _file_name_valid "$1" || jerr 'file-receive: invalid name'
+  [ -n "$2" ] || jerr 'file-receive: expected account identity'
+  taildrop_prepare_direct || jerr 'shared storage unavailable; unlock device and retry'
+  _file_json_command 1530 receive --root /sdcard/Download/Taildrop --socket "${TS_SOCKET}" --name "$1" --self "$2"
 }
 
 # Inbox item operations on the shared Taildrop directory: delete one, clear

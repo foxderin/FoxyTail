@@ -319,6 +319,7 @@ final class WebBridge {
             case "diag": count(a, 0, 1); if (a.length == 1) choice(a[0], "share", "local"); return;
             case "trial-start": count(a, 0, 1, 2); if (a.length > 0) SettingsRules.duration(a[0]); if (a.length > 1) choice(a[1], "saved", "bridge", "tun", "proxy"); return;
             case "trial-confirm": case "trial-revert": count(a, 1); pattern(a[0], "[0-9]+_[A-Za-z0-9_-]{1,128}"); return;
+            case "file-receive": count(a, 2); Models.requireName(a[0]); identifier(a[1]); return;
             case "file-delete": count(a, 1); Models.requireName(a[0]); return;
             case "file-delete-many":
                 count(a, 1); if (a[0].getBytes(StandardCharsets.UTF_8).length > 16384) throw new IOException("File selection too large");

@@ -14,6 +14,8 @@ func run(args []string) error {
 		return runArtifact(args[0][len("artifact-"):], args[1:])
 	case "extract":
 		return runArchive(args[1:])
+	case "receive":
+		return runReceive(args[1:])
 	case "receive-mode":
 		return runReceiveMode(args[1:])
 	case "stats-summary":

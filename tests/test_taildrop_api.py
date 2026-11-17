@@ -25,12 +25,33 @@ class TaildropApiTests(ApiTestCase):
     def listing(self):
         result = json.loads(self.shell('cmd_files_inbox').stdout)
         self.assertTrue(result['ok'], result)
+        receive = result.pop('receive')
+        self.assertEqual(receive['mode'], 'unavailable')
+        self.assertEqual(receive['pending'], [])
+        self.assertTrue(receive['error'])
         return result
 
     def test_missing_taildrop_directory_lists_and_clears_empty(self):
         self.inbox.rmdir()
         self.assertEqual(self.listing(), {'ok': True, 'files': []})
         self.assertEqual(json.loads(self.shell('cmd_file_clear').stdout), {'ok': True, 'removed': 0})
+
+    def test_receive_dispatch_validates_and_forwards_identity(self):
+        helper = self.base / 'bin/foxyfiles'
+        helper.write_text('#!/bin/sh\nprintf "%s\\n" "$@" >"' + str(self.run / 'receive-args') + '"\n' + "echo '{\"ok\":true,\"received\":true,\"sourceDeleted\":true}'\n")
+        helper.chmod(0o755)
+        source = (self.scripts / 'foxytail.webapi.sh').read_text()
+        with self.lib.open('a') as handle:
+            handle.write(source[source.index('_webapi_dispatch()'):source.rindex('_webapi_dispatch "$@"')])
+        result = self.shell("_webapi_dispatch file-receive 'photo.txt' self-1")
+        self.assertTrue(json.loads(result.stdout)['sourceDeleted'])
+        args = (self.run / 'receive-args').read_text().splitlines()
+        self.assertEqual(args[0], 'receive')
+        self.assertEqual(args[-4:], ['--name', 'photo.txt', '--self', 'self-1'])
+        invalid = self.shell("_webapi_dispatch file-receive '../escape' self-1", ok=False)
+        self.assertNotEqual(invalid.returncode, 0)
+        extra = self.shell("_webapi_dispatch file-receive photo.txt self-1 extra", ok=False)
+        self.assertNotEqual(extra.returncode, 0)
 
     def test_listing_skips_inflight_internal_and_non_regular_entries(self):
         entries = {'done.txt': 'complete', '.env': 'hidden',
@@ -116,7 +137,8 @@ jqr() {
 cmd_files_inbox
 ''')
         listing = json.loads(result.stdout)
-        self.assertEqual(set(listing), {'ok', 'files'})
+        self.assertEqual(set(listing), {'ok', 'files', 'receive'})
+        self.assertEqual(listing['receive']['mode'], 'unavailable')
         self.assertTrue(listing['ok'])
         self.assertEqual(len(listing['files']), 501)
         self.assertEqual(calls.read_text().splitlines(), ['inbox-list'])
