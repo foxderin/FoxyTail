@@ -48,7 +48,7 @@ const READ_COMMANDS = [
   'traffic', 'traffic-uids', 'apps', 'routes-get', 'subnet-routes-get',
   'settings-get', 'context-get', 'context-status', 'logs', 'compat', 'files-inbox',
   'taildrop-targets', 'file-send-status', 'file-send-history', 'backup-list',
-  'restore-preview', 'trial-status',
+  'restore-preview', 'identity-preview', 'trial-status',
 ];
 export function isReadCommand(command: string): boolean { return READ_COMMANDS.includes(command); }
 export type CancellationState = 'idle' | 'requested' | 'confirmed' | 'failed';

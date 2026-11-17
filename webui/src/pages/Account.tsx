@@ -17,10 +17,12 @@ import { MdIcon } from '../icons';
 import type { AccountEntry } from '../types';
 import { Button, LinearProgress, TextField } from '../components/ui';
 import AccountDetails from './AccountDetails';
+import AccountIdentity from './AccountIdentity';
 import { requestNative, onNativeEvent } from '../native';
 
 export default function Account(): JSX.Element {
   const scope = createApiScope();
+  let disposed = false;
   const [loginUrl, setLoginUrl] = createSignal<string | null>(null);
   const [already, setAlready] = createSignal(false);
   const [waiting, setWaiting] = createSignal(false);
@@ -33,7 +35,11 @@ export default function Account(): JSX.Element {
   const [switching, setSwitching] = createSignal<string | null>(null);
   const [loggingOut, setLoggingOut] = createSignal(false);
   const [checking, setChecking] = createSignal(false);
-  const actionBusy = () => checking() || waiting() || authkeyBusy() || switching() !== null || loggingOut() || !nativeControl().canWrite || nativeControl().busy;
+  const [nickname, setNickname] = createSignal('');
+  const [renaming, setRenaming] = createSignal(false);
+  const currentAccount = () => accounts()?.find(account => account.current);
+  createEffect(() => { setNickname(currentAccount()?.label || ''); });
+  const actionBusy = () => disposed || renaming() || checking() || waiting() || authkeyBusy() || switching() !== null || loggingOut() || !nativeControl().canWrite || nativeControl().busy;
   async function preflight(confirm: ConfirmOptions) {
     if (actionBusy() || !await confirmDialog({ body: t('tools_network_warning'), ...confirm })) return false;
     if (actionBusy()) return false;
@@ -53,7 +59,7 @@ export default function Account(): JSX.Element {
   const stopLifecycle = onNativeEvent('lifecycle', event => { if (event.active === false) clearSecrets(); });
   const onHash = () => { if (location.hash !== '#/account') clearSecrets(); };
   window.addEventListener('hashchange', onHash);
-  onCleanup(() => { clearSecrets(); stopNavigation(); stopLifecycle(); window.removeEventListener('hashchange', onHash); });
+  onCleanup(() => { disposed = true; clearSecrets(); stopNavigation(); stopLifecycle(); window.removeEventListener('hashchange', onHash); });
 
   async function doLogin(extraArgs: string[] = []) {
     if (!await preflight({ title: t('confirm_login_title'), confirmLabel: t('acc_login') })) return;
@@ -113,6 +119,18 @@ export default function Account(): JSX.Element {
     },
     setAccountsLoading,
   );
+
+  async function renameAccount() {
+    const current = currentAccount(), name = nickname().trim();
+    if (!current || actionBusy() || !name || name.length > 128 || /[\r\n\x00-\x1f\x7f\u2028\u2029]/.test(name)) return;
+    if (!await confirmDialog({title:t('acc_rename'), body:t('acc_rename_hint') + '\n' + name, confirmLabel:t('save')})) return;
+    if (actionBusy() || current !== currentAccount() || name !== nickname().trim()) return;
+    setRenaming(true);
+    const result = await scope.api('account-rename', current.id || current.name, name);
+    setRenaming(false);
+    if (result.ok) await loadAccounts();
+    else if (!result.cancelled) toastApiError(t('op_failed'), result);
+  }
 
   async function switchAccount(name: string) {
     if (!await preflight({ title: t('confirm_switch_title'), body: t('tools_account_list_desc'), confirmLabel: t('acc_switch') })) return;
@@ -196,6 +214,15 @@ export default function Account(): JSX.Element {
                 )}
               </For>
         </LoadGate>
+        <Show when={currentAccount()}>
+          <div class="tool-form">
+            <TextField label={t('acc_nickname')} value={nickname()} disabled={actionBusy()}
+              onInput={event => setNickname((event.target as HTMLInputElement).value)} />
+            <p class="tool-hint">{t('acc_rename_hint')}</p>
+            <Button variant="outlined" busy={renaming()} disabled={actionBusy() || !hasRoot || !nickname().trim() || nickname().trim().length > 128 || /[\r\n\x00-\x1f\x7f\u2028\u2029]/.test(nickname())}
+              onClick={() => void renameAccount()}>{t('acc_rename')}</Button>
+          </div>
+        </Show>
       </Card>
       <Card title={t('acc_login')} icon="login">
         <Show when={waiting()}>
@@ -289,6 +316,7 @@ export default function Account(): JSX.Element {
           </Card>
         </div>
       </details>
+      <AccountIdentity />
       <Show when={accounts()?.some((account) => account.current)}>
         <section class="tool-danger">
           <h2>

@@ -122,6 +122,7 @@ export function installFixture(window, { state = 'ready', lang = 'en', theme = '
       case 'trial-start': { const summary = { mode: settings.TS_MODE, dnsMode: settings.DNS_MODE, routeScope: 'all' }; data['trial-status'].trial = { id: 'preview-trial', status: 'running', remaining: Number(args[0]), reason: '', previous: summary, candidate: summary }; return { ok: true }; }
       case 'trial-confirm': case 'trial-revert': if (!data['trial-status'].trial) return fail('no trial'); data['trial-status'].trial.status = name === 'trial-confirm' ? 'confirmed' : 'rolled-back'; return { ok: true };
       case 'serve-set': case 'serve-del': case 'funnel-set': case 'funnel-del': return fail('mapping edits are not simulated');
+      case 'account-rename': case 'identity-preview': case 'identity-export': case 'identity-restore':
       case 'login-authkey': case 'switch': case 'logout': return fail('account changes are not simulated; do not enter credentials');
       default: return unsupportedResult(name);
     }
@@ -153,7 +154,7 @@ export function installFixture(window, { state = 'ready', lang = 'en', theme = '
       case 'files.addShared':
         if (!listedDownload || !Array.isArray(args.handles) || args.handles.length !== 1 || args.handles[0] !== 'preview-notes') return fail('unknown source handle');
         publishFiles({ selection: [{ key: 'preview-source', name: 'notes.txt', size: 120, source: 'path', path: '/sdcard/Download/notes.txt' }] }); return { ok: true };
-      case 'files.pick': case 'backup.import': case 'files.open': case 'files.share': case 'artifact.save': case 'artifact.share':
+      case 'files.pick': case 'backup.import': case 'identity.import': case 'files.open': case 'files.share': case 'artifact.save': case 'artifact.share':
       case 'files.send': case 'files.retry': case 'files.adopt': case 'files.cancel': case 'files.cancelExport': return fail('requires Android native file I/O; no bytes were read or transferred');
       default: return unsupportedResult(name);
     }
