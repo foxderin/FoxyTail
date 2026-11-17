@@ -11,6 +11,7 @@ import { confirmDialog } from '../components/ConfirmDialog';
 import { toastApiError } from '../components/Toast';
 import { artifactExport } from '../backup';
 import { nativeControl } from '../api';
+import DiagnosticDetails from './DiagnosticDetails';
 import './tools.css';
 const TASK_KEY = 'diag';
 const LABELS: Record<string, I18nKey> = {
@@ -90,6 +91,7 @@ export default function Diag(): JSX.Element {
           </div>}</For>
         </div>
       </Card>
+      <DiagnosticDetails locked={!nativeControl().canWrite || nativeControl().busy} />
       <Card title={t('tools_diag_collect')} icon="bug_report" description={t('tools_diag_contents')}>
         <TaskProgress taskKey={TASK_KEY} />
         <Show when={task()?.status === 'running'}>

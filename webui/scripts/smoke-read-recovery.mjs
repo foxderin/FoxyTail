@@ -48,13 +48,17 @@ await scenario('Advanced independent reads and persistent DNS probe errors', asy
   const held = fixture.held.findLast(r => r.key === 'hooks-get');
   assert(!!held, 'hook read remains pending');
   assert(!!advanced.querySelector('[data-testid="context-rules"]'), 'context rules do not wait for hook contents');
-  const diagnostics = [...advanced.querySelectorAll('details.tool-disclosure')].find(d => d.querySelector('summary')?.textContent.includes('Diagnostics'));
-  assert(!!diagnostics, 'diagnostics available before hooks settle');
+  const dnsBefore = count(fixture, 'dns');
+  assert(!!window.document.querySelector('.page-transition:not([hidden]) a[href="#/diag"]'), 'existing diagnostics link remains available before hooks settle');
+  assert(!advanced.querySelector('[data-testid="diagnostic-details"]'), 'settings no longer mounts a second diagnostics interface');
   fixture.emit('lifecycle', { active: false });
   held.finish({ ok: false, cancelled: true }); await flush();
   const paused = count(fixture, 'hooks-get');
   fixture.emit('lifecycle', { active: true }); await flush();
   assert(count(fixture, 'hooks-get') === paused + 1 && advanced.textContent.includes('echo ready'), 'hook demand recovers without closing disclosure');
+  assert(count(fixture, 'dns') === dnsBefore, 'settings maintenance does not fetch duplicate DNS facts');
+  await nav('diag');
+  const diagnostics = window.document.querySelector('[data-testid="diagnostic-details"]');
   open(window, diagnostics); await flush();
   fixture.overrides.set('dns-probe', { ok: false, error: 'Probe regression failure' });
   click(button('dns_check', diagnostics)); await flush();
@@ -66,9 +70,8 @@ await scenario('Advanced independent reads and persistent DNS probe errors', asy
 
 await scenario('DNS probe failure survives successful observation refresh', async ({ nav, window, fixture, button, click }) => {
   await nav('settings');
-  const advanced = window.document.querySelector('.page-transition:not([hidden]) details.tool-disclosure');
-  open(window, advanced); await flush();
-  const diagnostics = [...advanced.querySelectorAll('details.tool-disclosure')].find(d => d.querySelector('summary')?.textContent.includes('Diagnostics'));
+  await nav('diag');
+  const diagnostics = window.document.querySelector('[data-testid="diagnostic-details"]');
   open(window, diagnostics); await flush();
   fixture.overrides.set('dns-probe', { ok: false, error: 'Probe regression failure' });
   click(button('dns_check', diagnostics)); await flush();
