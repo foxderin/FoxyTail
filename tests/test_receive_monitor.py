@@ -207,3 +207,19 @@ receive_api() {
         self.shell('receive_round')
         self.assertEqual(len(self.broadcasts()),1)
         self.assertIn('--ei count 1 --es kind pending', self.broadcasts()[0])
+
+    def test_restart_baseline_preserves_generation_for_identical_later_arrival(self):
+        self.snapshot_file([],mode='buffered')
+        self.shell('_RECEIVE_BASELINE=1; receive_round')
+        self.snapshot_file([],mode='buffered',pending=[dict(name='same.txt',size=4)])
+        self.shell('receive_round')
+        first_generation = json.loads((self.run / 'receive-monitor.json').read_text())['generation']
+        self.snapshot_file([],mode='buffered')
+        self.shell('_RECEIVE_BASELINE=1; receive_round')
+        self.assertGreater(json.loads((self.run / 'receive-monitor.json').read_text())['generation'],first_generation)
+        self.snapshot_file([],mode='buffered',pending=[dict(name='same.txt',size=4)])
+        self.shell('receive_round; receive_round')
+        calls = self.broadcasts()
+        self.assertEqual(len(calls),2)
+        self.assertNotEqual(calls[0],calls[1])
+        self.assertTrue(all(x.endswith('--es kind pending') for x in calls))

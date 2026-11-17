@@ -48,16 +48,16 @@ receive_round() {
       pending:(.receive.pending|map(select((.name|type)=="string" and (.size|type)=="number"
         and (.name|endswith(".partial")|not) and (.name|endswith(".deleted")|not)))|sort_by(.name))}' 2>/dev/null) || return 1
   _rr_self=$(printf '%s' "${_rr_view}" | jqr -r .self) || return 1
-  if [ "${_RECEIVE_BASELINE:-0}" = 1 ] || ! jqr -e 'type=="object" and (.self|type)=="string" and (.files|type)=="array" and (.pending|type)=="array"' "${RECEIVE_STATE}" >/dev/null 2>&1; then
+  if ! jqr -e 'type=="object" and (.self|type)=="string" and (.files|type)=="array" and (.pending|type)=="array"' "${RECEIVE_STATE}" >/dev/null 2>&1; then
     printf 'null\n' | receive_save "${RECEIVE_STATE}" || return 1
   fi
-  _rr_changes=$(printf '%s' "${_rr_view}" | jqr -c --slurpfile prior "${RECEIVE_STATE}" '
+  _rr_changes=$(printf '%s' "${_rr_view}" | jqr -c --slurpfile prior "${RECEIVE_STATE}" --arg baseline "${_RECEIVE_BASELINE:-0}" '
     $prior[0] as $old |
     def changes($current;$before): ($before | map({key:.name,value:.}) | from_entries) as $byname
       | [$current[] | select(.!=$byname[.name])];
     {generation:(($old.generation // 0)+1),
-      pending:(if $old==null or .self!=$old.self then [] else changes(.pending;$old.pending) end),
-      completed:(if $old==null or .self!=$old.self then [] else
+      pending:(if $baseline=="1" or $old==null or .self!=$old.self then [] else changes(.pending;$old.pending) end),
+      completed:(if $baseline=="1" or $old==null or .self!=$old.self then [] else
         ($old.files | map({key:.name,value:true}) | from_entries) as $names
         | [.files[] | select($names[.name]!=true)] end)}') || return 1
   _rr_generation=$(printf '%s' "${_rr_changes}" | jqr .generation) || return 1
