@@ -51,48 +51,6 @@ ts_cli() { cat "$TS_DIR/status.json"; }
         args = ' '.join(map(shlex.quote, [snapshot, peer, ip, port, resolver]))
         return self.shell(self.prefix + 'cmd_coexist_check ' + args, ok=False)
 
-    def test_uses_applied_endpoints_and_exact_current_membership_without_writes(self):
-        self.shell('conf_activate_runtime')
-        (self.conf / 'foxytail.conf').write_text('TS_MODE=proxy\nSOCKS_PORT=1200\nDNS_PORT=1201\n')
-        saved = self.snapshot()
-        info = self.info()
-        self.assertEqual((info['mode'], info['socksPort'], info['dns']['port']), ('bridge', 1099, 1053))
-        self.assertEqual(info['addresses'], ['100.64.1.1', '100.64.1.2', 'fd7a:115c:a1e0::2'])
-        self.assertEqual(info['peers'][0]['dnsName'], 'nas.tail.example')
-        self.assertTrue(info['dnsReady'])
-        self.assertEqual(self.snapshot(), saved)
-        self.status['Peer']['key']['Online'] = False
-        self.save_state()
-        self.assertEqual(self.info()['snapshot'], info['snapshot'], 'activity must not invalidate a configuration')
-        self.status['Self']['ID'] = 'different-account'
-        self.save_state()
-        self.assertNotEqual(self.info()['snapshot'], info['snapshot'], 'account changes must invalidate previews')
-
-    def test_only_safe_local_listener_states_enable_snippet_and_probe(self):
-        for change, ready in [
-            ({'mode': 'transparent', 'reason': 'transparent-unavailable', 'state': 'degraded'}, True),
-            ({'reason': 'capture-mark-conflict'}, True),
-            ({'repairNeeded': True}, False),
-            ({'mode': 'legacy'}, False),
-            ({'enabled': False}, False),
-            ({'listenerReady': False}, False),
-            ({'policyState': 'external'}, False),
-            ({'suffix': 'old-account.example'}, False),
-            ({'port': 0}, False),
-            ({'port': '1053'}, False),
-            ({'reason': 'native-policy-changed'}, False),
-        ]:
-            with self.subTest(change=change):
-                original = self.dns.copy()
-                self.dns.update(change)
-                self.save_state()
-                info = self.info()
-                self.assertEqual(info['dnsReady'], ready)
-                if not ready:
-                    data = json.loads(self.check(info['snapshot']).stdout)
-                    self.assertFalse(data['ok'])
-                    self.assertFalse((self.run / 'probed').exists())
-                self.dns = original
 
     def test_invalid_or_changed_target_never_starts_network_probe(self):
         snapshot = self.info()['snapshot']

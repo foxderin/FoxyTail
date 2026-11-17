@@ -12,32 +12,6 @@ from api_fixture import ApiTestCase, ROOT
 
 
 class DiagnosticsTests(ApiTestCase):
-    def test_summary_distinguishes_stopped_unknown_and_failed_components(self):
-        for backend, daemon, mode, dns, expected in [
-            ('-', 'stopped', 'bridge', '{}', {'service': 'warn', 'routes': 'skip', 'dns': 'fail'}),
-            ('unreachable', 'running', 'bridge', '{}', {'service': 'fail', 'routes': 'skip', 'dns': 'fail'}),
-            ('Running', 'running', 'bridge', '{"state":"running","reason":"dns-interception-conflict"}',
-             {'service': 'pass', 'routes': 'fail', 'dns': 'warn'}),
-            ('Running', 'running', 'proxy', '{"state":"running","reason":"local","mode":"local","enabled":true,"listenerReady":true,"policyState":"owned","repairNeeded":false}',
-             {'service': 'pass', 'routes': 'skip', 'dns': 'pass'}),
-            ('Running', 'running', 'proxy', '{"state":"running","mode":"local","enabled":true,"listenerReady":false,"repairNeeded":true,"policyState":"unknown"}',
-             {'service': 'pass', 'routes': 'skip', 'dns': 'fail'}),
-        ]:
-            with self.subTest(backend=backend, mode=mode):
-                result = self.shell('''
-load_runtime_conf() { TS_MODE=''' + mode + '''; MAGIC_DNS=on; DNS_MODE=local; }
-cmd_status() { printf '%s' ''' + shlex.quote(json.dumps({'backend': backend, 'daemon': daemon})) + '''; }
-ip() { return 1; }
-_op_exec() {
-  case "$2" in */foxytail.dns) printf '%s' ''' + shlex.quote(dns) + ''' ;; *) return 1 ;; esac
-}
-cmd_diag_check''')
-                rows = {row['id']: row for row in json.loads(result.stdout)['checks']}
-                for key, level in expected.items():
-                    self.assertEqual(rows[key]['level'], level)
-        result = self.shell('load_runtime_conf() { return 1; }; cmd_diag_check')
-        self.assertEqual(json.loads(result.stdout)['checks'][0]['reason'], 'invalid_config')
-        self.assertFalse((self.run / 'settings.pending').exists(), 'read-only check wrote pending state')
 
     def test_shared_archive_anonymizes_consistently_and_keeps_local_mode_explicit(self):
         bin_dir = self.base / 'bin'

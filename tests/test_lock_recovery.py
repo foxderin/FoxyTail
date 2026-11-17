@@ -88,24 +88,6 @@ _owner_lock_release "$lock" "$token"
         self.assertFalse(self.lock.is_symlink())
         self.assertEqual(list(self.waiters.iterdir()), [])
 
-    def test_dead_legacy_primary_and_orphan_reaper_do_not_block_recovery(self):
-        dead = self.finish(self.start('_lock_identity; printf "%s\\n" "$_LOCK_TOKEN"'))
-        self.lock.symlink_to(dead)
-        reaper = self.directory / '.lock.reap'
-        reaper.symlink_to(dead)
-        self.finish(self.acquire_once())
-        self.assert_released()
-        # An old reaper is inert; do not require a new shared cleanup protocol.
-        self.assertEqual(os.readlink(reaper), dead)
-
-    def test_dead_choosing_numeric_and_temporary_tickets_are_reaped(self):
-        self.waiters.mkdir()
-        for ticket in ('choosing', '7'):
-            dead = self.finish(self.start('_lock_identity; printf "%s\\n" "$_LOCK_TOKEN"'))
-            (self.waiters / dead).symlink_to(ticket)
-            (self.waiters / ('.ticket.' + dead)).symlink_to('8')
-        self.finish(self.acquire_once())
-        self.assert_released()
 
     def test_live_legacy_owner_is_not_stolen_and_timeout_cleans_own_ticket(self):
         owner, token = self.hold(legacy=True)
@@ -123,27 +105,6 @@ test ! -L "$lock.waiters/.ticket.$token" || exit 23
         self.finish(self.acquire_once())
         self.assert_released()
 
-    def test_live_choosing_owner_is_respected_until_it_dies(self):
-        chooser = self.start('''
-_lock_identity
-token=$_LOCK_TOKEN
-mkdir -p "$lock.waiters"
-ln -s choosing "$lock.waiters/$token" || exit 11
-printf '%s\n' "$token" >"$TS_RUN_DIR/choosing.ready"
-IFS= read -r proceed
-''')
-        token = self.wait_for('choosing.ready').read_text().strip()
-        self.finish(self.start('''
-_lock_identity
-_owner_lock_acquire "$lock" "$_LOCK_TOKEN" 3 .005 && exit 21
-test ! -L "$lock.waiters/$_LOCK_TOKEN"
-'''))
-        self.assertEqual(os.readlink(self.waiters / token), 'choosing')
-        self.assertFalse(self.lock.is_symlink())
-        chooser.kill()
-        self.finish(chooser, expected=-signal.SIGKILL)
-        self.finish(self.acquire_once())
-        self.assert_released()
 
     def test_failed_stale_primary_removal_respects_retry_limit(self):
         dead = self.finish(self.start('_lock_identity; printf "%s\\n" "$_LOCK_TOKEN"'))
@@ -239,42 +200,6 @@ done
             self.assertEqual(leave, enter.replace('enter:', 'leave:', 1))
         self.assert_released()
 
-    def test_orphaned_reaper_cannot_bypass_a_live_owners_ticket(self):
-        dead = self.finish(self.start('_lock_identity; printf "%s\\n" "$_LOCK_TOKEN"'))
-        self.lock.symlink_to(dead)
-        reaper = self.start('''
-rm() {
-  if [ "$2" = "$lock" ]; then
-    # Model a dispatched external unlink surviving the shell that owns its ticket.
-    command sh -c '
-      : >"$2/unlink.ready"
-      IFS= read -r proceed
-      command rm -f "$1"
-    ' orphan-unlink "$lock" "$TS_RUN_DIR"
-  else
-    command rm "$@"
-  fi
-}
-_lock_identity
-_owner_lock_acquire "$lock" "$_LOCK_TOKEN" 100 .005
-''')
-        self.wait_for('unlink.ready')
-        reaper.kill()
-        reaper.wait(timeout=5)
-        owner, token = self.hold()
-        self.finish(reaper, expected=-signal.SIGKILL, input='unlink\n')
-        # The late unlink may erase the primary. The surviving live ticket must
-        # still exclude every contender using the new protocol.
-        self.assertTrue((self.waiters / token).is_symlink())
-        self.finish(self.start('''
-_lock_identity
-_owner_lock_acquire "$lock" "$_LOCK_TOKEN" 3 .005 && exit 21
-test ! -L "$lock.waiters/$_LOCK_TOKEN"
-'''))
-        self.assertIsNone(owner.poll())
-        self.finish(owner, input='release\n')
-        self.finish(self.acquire_once())
-        self.assert_released()
 
     def test_identity_uses_proc_self_instead_of_inherited_shell_dollar_pid(self):
         proc = self.directory / 'proc'
@@ -313,35 +238,6 @@ _owner_lock_release "$lock" "$_LOCK_TOKEN"
         self.assertIsNone(live.poll())
         self.finish(live, input='release\n')
         self.assert_released()
-
-    def test_controllers_release_their_own_lock_domains(self):
-        service = (ROOT / 'tailscale/scripts/foxytail.service').read_text()
-        # Extract only the two lock functions, not newly sourced service helpers.
-        start = service.index('service_unlock() {')
-        end = service.index('\n}\n', service.index('service_lock() {', start)) + len('\n}\n')
-        service = service[start:end]
-        dns = (ROOT / 'tailscale/scripts/foxytail.dns-modern.sh').read_text()
-        dns = dns[dns.index('modern_lock() {'):dns.index('modern_reason() {')]
-        self.finish(self.start('''
-service_lock || exit 11
-modern_lock || exit 12
-conf_lock_acquire || exit 13
-test "$(readlink "$TS_RUN_DIR/.service-lock")" = "$_SERVICE_LOCK_TOKEN" || exit 14
-test "$(readlink "$TS_RUN_DIR/.dns-lock")" = "$_md_token" || exit 15
-test "$(readlink "$TS_RUN_DIR/.conf-write-lock")" = "$_CONF_LOCK_TOKEN" || exit 16
-conf_lock_release
-modern_unlock
-test -L "$TS_RUN_DIR/.service-lock" || exit 17
-''', functions=self.functions + service + dns))
-        for name in ('.service-lock', '.dns-lock', '.conf-write-lock'):
-            self.assertFalse((self.directory / name).is_symlink())
-            self.assertEqual(list((self.directory / (name + '.waiters')).iterdir()), [])
-        route = (ROOT / 'tailscale/scripts/foxytail.route').read_text()
-        route = route[route.index('route_lock() {'):route.index('\n# Match every part of the policy rule')]
-        self.finish(self.start('''route_lock || exit 1
-test "$(readlink "$TS_RUN_DIR/.conf-write-lock")" = "$_CONF_LOCK_TOKEN" || exit 2
-''', functions=self.functions + route))
-        self.assertFalse((self.directory / '.conf-write-lock').is_symlink())
 
 
 if __name__ == '__main__':

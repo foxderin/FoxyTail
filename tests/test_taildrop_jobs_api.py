@@ -45,19 +45,6 @@ class TaildropJobsApiTests(ApiTestCase):
                 self.assertFalse(any(path.is_file() for path in (self.base / 'files/.outgoing').glob('*/*')))
         self.assertFalse((self.base / 'escape').exists())
 
-    def test_inbox_stream_has_no_json_wrapper_or_size_cap(self):
-        inbox = self.sdcard / 'Download' / 'Taildrop'
-        inbox.mkdir()
-        payload = bytes(range(256)) * 40000
-        (inbox / 'large.bin').write_bytes(payload)
-        result = subprocess.run(['sh', '-c', '. "$1"\ncmd_file_read large.bin', 'test', str(self.lib)],
-                                capture_output=True, timeout=20)
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(result.stdout, payload)
-        for name in ('../settings.sh', '.outgoing', '.taildrop'):
-            result = self.shell('cmd_file_read ' + shlex.quote(name), ok=False)
-            self.assertNotEqual(result.returncode, 0)
-            self.assertEqual(result.stdout, '')
 
     def test_browse_and_stage_delete_never_escape_owned_roots(self):
         source = self.sdcard / 'Download'

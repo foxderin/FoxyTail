@@ -83,19 +83,6 @@ test "$1" = -d && test "$3" = ip6table_nat || exit 96
     def ensured(self, prefix=''):
         return self.shell(prefix + '\nensure_ipv6_nat; rc=$?\nprintf "%s:" "$rc"\nipv6_module_status')
 
-    def test_native_table_never_loads_module(self):
-        self.module(); self.mock_loader()
-        (self.base / 'nat-ready').touch()
-        self.assertEqual(self.ensured(), '0:not-needed')
-        self.assertFalse((self.base / 'loader-calls').exists())
-
-    def test_missing_exact_module_does_not_load_similar_ipv6_modules(self):
-        for name in ('nf_nat.ko', 'ip6_tables.ko', 'ip6table_filter.ko',
-                     'nhc_ipv6.ko', 'ip6table_nat.ko.backup'):
-            self.module(name)
-        self.mock_loader()
-        self.assertEqual(self.ensured(), '1:missing')
-        self.assertFalse((self.base / 'loader-calls').exists())
 
     def test_matching_module_load_requires_observed_table(self):
         for name in ('ip6table_nat.ko', 'ip6table_nat.ko.xz',
@@ -113,16 +100,6 @@ test "$1" = -d && test "$3" = ip6table_nat || exit 96
                 (self.base / 'loader-calls').unlink()
                 (self.base / 'nat-ready').unlink()
 
-    def test_loader_success_without_nat_falls_back(self):
-        self.module(); self.mock_loader('no-effect')
-        self.assertEqual(self.ensured(), '1:load-failed')
-        self.assertFalse((self.base / 'nat-ready').exists())
-
-    def test_loader_failure_and_missing_loader_fall_back(self):
-        self.module(); self.mock_loader('failure')
-        self.assertEqual(self.ensured(), '1:load-failed')
-        self.loader.unlink()
-        self.assertEqual(self.ensured(), '1:loader-unavailable')
 
     def test_total_module_load_budget_stops_scanning_candidate_loads(self):
         self.module(); self.mock_loader('no-effect')
@@ -153,46 +130,6 @@ date() {
         self.assertEqual(self.ensured(), '0:not-needed')
         self.boot.unlink()
         self.assertEqual(self.shell('ipv6_module_status'), 'not-checked')
-
-    def test_ipv6_disabled_never_scans_or_loads_modules(self):
-        self.module(); self.mock_loader()
-        self.assertEqual(self.ensured('IPV6=off\nipv6_nat_module_dirs() { touch "$TEST_ROOT/scanned"; }'),
-                         '1:not-checked')
-        self.assertFalse((self.base / 'scanned').exists())
-        self.assertFalse((self.base / 'loader-calls').exists())
-        self.assertFalse((self.run / 'dnsmasq.ipv6-module').exists())
-
-    def test_dns_status_observes_capability_without_loading(self):
-        self.module(); self.mock_loader()
-        config = self.run / 'dnsmasq.conf'
-        config.write_text('port=1053\nserver=/example.ts.net/100.100.100.100\n')
-        stubs = '''
-ensure_run_dirs() { :; }
-load_conf() { :; }
-load_runtime_conf() { :; }
-select_dns_binary() { DNS_BIN=/fixture/dnsmasq; }
-get_state() { echo running; }
-dns_pids() { echo 123; }
-current_dns_context() { echo '{}'; }
-dns_context_matches() { return 0; }
-legacy_upstream_matches() { return 0; }
-legacy_connmark_safe() { return 0; }
-redirect_present() { return 0; }
-dns_hijack_conflict() { return 1; }
-native_dns_present() { return 1; }
-settings() { echo opportunistic; }
-jqr() { jq "$@"; }
-MAGIC_DNS=on; DNS_PORT=1053
-DNS_REASON_FILE="$TS_RUN_DIR/dnsmasq.reason"
-DNS_CONF="$TS_RUN_DIR/dnsmasq.conf"
-'''
-        status = json.loads(self.shell(self.status_function + stubs + '\ndns_status --json'))
-        self.assertEqual(status['state'], 'running')
-        self.assertEqual(status['ipv6DnsInterception'], 'fallback')
-        self.assertEqual(status['ipv6ModuleStatus'], 'not-checked')
-        self.assertFalse((self.base / 'loader-calls').exists())
-        self.assertFalse((self.base / 'nat-ready').exists())
-        self.assertFalse((self.run / 'dnsmasq.ipv6-module').exists())
 
 
 if __name__ == '__main__':

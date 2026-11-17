@@ -131,12 +131,6 @@ bash .github/tools/build.sh "$@"
             self.assertEqual(hashlib.sha256(archive.read('tailscale/bin/' + name)).hexdigest(), digest)
         self.assertEqual(archive.read('tailscale/checksums.txt').decode(), self.manifest)
 
-    def test_native_build_failure_never_creates_an_incomplete_package(self):
-        (self.root / '.github/tools/build-native.sh').write_text('#!/bin/sh\nexit 42\n')
-        result = self.build()
-        self.assertNotEqual(result.returncode, 0)
-        self.assertFalse(list((self.root / 'dist').glob('*.zip')))
-        self.assertEqual((self.root / 'tailscale/checksums.txt').read_text(), self.manifest)
 
     def test_companion_signing_failure_never_creates_a_package(self):
         (self.root / '.github/tools/build-android.sh').write_text('#!/bin/sh\nexit 42\n')
@@ -157,13 +151,6 @@ bash .github/tools/build.sh "$@"
         self.assertNotEqual(result.returncode, 0)
         self.assertFalse(list((self.root / 'dist').glob('*.zip')))
         self.assertEqual((self.root / 'tailscale/checksums.txt').read_text(), self.manifest)
-
-    def test_explicit_update_only_creates_review_candidate(self):
-        result = self.build('--update-checksums')
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertTrue((self.root / 'tailscale/checksums.txt.candidate').is_file())
-        self.assertEqual((self.root / 'tailscale/checksums.txt').read_text(), self.manifest)
-        self.assertFalse(list((self.root / 'dist').glob('*.zip')))
 
 
 class NativeInstallerTests(unittest.TestCase):

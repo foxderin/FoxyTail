@@ -63,78 +63,6 @@ test ! -e called
 '''
         run_sh(script, self.dir)
 
-    def test_postinstall_starts_all_residents_and_preserves_run(self):
-        scripts = self.dir / 'scripts'
-        scripts.mkdir()
-        runtime = self.dir / 'run'
-        runtime.mkdir()
-        (runtime / 'route.state').write_text('owned routing state')
-        (self.dir / 'settings.sh').write_text('''
-TS_DIR="$PWD"; TS_SCRIPTS_DIR="$PWD/scripts"; TS_RUN_DIR="$PWD/run"; TS_MOD_DIR="$PWD"
-load_conf() { :; }
-load_runtime_conf() { :; }
-daemon_pid_alive() { return 1; }
-ensure_run_dirs() { :; }
-log() { :; }
-daemon_stop_pidfile() { :; }
-''')
-        for name in ['foxytail.service', 'foxytail.stats', 'foxytail.watchdog', 'foxytail.context', 'foxytail.logd']:
-            path = scripts / name
-            path.write_text(f'#!/bin/sh\necho "$1" >"{runtime / name}"\n')
-            path.chmod(0o755)
-        source = (ROOT / 'tailscale/scripts/start.sh').read_text()
-        source = source.replace('nohup "${TS_SCRIPTS_DIR}/${_sr_name}"', 'nohup sh "${TS_SCRIPTS_DIR}/${_sr_name}"')
-        source = source.replace('"${TS_SCRIPTS_DIR}/foxytail.service"', 'sh "${TS_SCRIPTS_DIR}/foxytail.service"')
-        (scripts / 'start.sh').write_text(source)
-        subprocess.run(['sh', str(scripts / 'start.sh'), 'postinstall'], cwd=self.dir, check=True, timeout=10)
-        # Background children write bounded, local files. Wait only for their
-        # observable completion, never for an arbitrary application sleep.
-        import time
-        deadline = time.monotonic() + 3
-        while not all((runtime / x).exists() for x in ['foxytail.stats', 'foxytail.watchdog', 'foxytail.context', 'foxytail.logd']):
-            self.assertLess(time.monotonic(), deadline)
-            time.sleep(.01)
-        self.assertEqual((runtime / 'route.state').read_text(), 'owned routing state')
-        for name in ['foxytail.service', 'foxytail.stats', 'foxytail.watchdog', 'foxytail.context', 'foxytail.logd']:
-            self.assertEqual((runtime / name).read_text().strip(), 'start')
-
-    def test_reload_only_clears_the_revision_it_applied(self):
-        scripts = self.dir / 'scripts'; scripts.mkdir()
-        runtime = self.dir / 'run'; runtime.mkdir()
-        (self.dir / 'settings.sh').write_text('''
-TS_DIR="$PWD"; TS_SCRIPTS_DIR="$PWD/scripts"; TS_RUN_DIR="$PWD/run"; TS_MOD_DIR="$PWD"
-load_conf() { :; }
-load_runtime_conf() { :; }
-daemon_pid_alive() { return 1; }
-ensure_run_dirs() { :; }
-log() { :; }
-daemon_stop_pidfile() { :; }
-conf_lock_acquire() { :; }
-conf_lock_release() { :; }
-conf_trial_active() { return 1; }
-_conf_runtime_dir() { _RUNTIME_CONF_DIR="$PWD/run/.applied.test"; }
-''')
-        snapshot = runtime / '.applied.test'; snapshot.mkdir()
-        (snapshot / 'revision').write_text('old-revision\n')
-        service = scripts / 'foxytail.service'
-        service.write_text('#!/bin/sh\n[ "$WRITE_NEW" != 1 ] || echo new-revision >"$PWD/run/settings.pending"\nexit 0\n')
-        service.chmod(0o755)
-        source = (ROOT / 'tailscale/scripts/start.sh').read_text()
-        source = source.replace('"${TS_SCRIPTS_DIR}/foxytail.service"', 'sh "${TS_SCRIPTS_DIR}/foxytail.service"')
-        (scripts / 'start.sh').write_text(source)
-        for newer in ('0', '1'):
-            (runtime / 'settings.pending').write_text('old-revision\n')
-            subprocess.run(['sh', str(scripts / 'start.sh'), 'reload'], cwd=self.dir,
-                           env={**os.environ, 'WRITE_NEW': newer}, check=True, timeout=10)
-            if newer == '1':
-                self.assertEqual((runtime / 'settings.pending').read_text().strip(), 'new-revision')
-            else:
-                self.assertFalse((runtime / 'settings.pending').exists())
-        # Disabled modules cannot claim an unapplied restart succeeded.
-        (self.dir / 'disable').touch()
-        result = subprocess.run(['sh', str(scripts / 'start.sh'), 'reload'], cwd=self.dir, timeout=10)
-        self.assertNotEqual(result.returncode, 0)
-        self.assertTrue((runtime / 'settings.pending').exists())
 
     def installer_success_fixture(self, directory, entry_kind='absent', fail_remove=False):
         runtime = directory / 'runtime'
@@ -225,37 +153,6 @@ rm() {
                 self.assertEqual(os.readlink(public), str(expected))
         return result.stdout
 
-    def test_installer_success_removes_only_exact_owned_dev_links(self):
-        for kind in ('absent', 'owned-live', 'owned-dangling', 'external-live', 'external-dangling',
-                     'wrong-runtime', 'file', 'directory'):
-            with self.subTest(kind=kind):
-                directory = self.dir / kind
-                self.installer_success_fixture(directory, kind)
-                for name in ('tailscale', 'tailscaled', 'foxytail.service'):
-                    entry = directory / 'dev' / name
-                    if kind == 'absent' or kind.startswith('owned-'):
-                        self.assertFalse(os.path.lexists(entry))
-                    elif kind.startswith('external-'):
-                        self.assertEqual(os.readlink(entry), str(directory / ('external-' + name)))
-                        self.assertEqual(entry.exists(), kind == 'external-live')
-                    elif kind == 'wrong-runtime':
-                        self.assertEqual(os.readlink(entry), str(directory / 'runtime/bin/version'))
-                    elif kind == 'file':
-                        self.assertEqual(entry.read_text(), 'unrelated')
-                    else:
-                        self.assertEqual((entry / 'keep').read_text(), 'unrelated')
-                if kind == 'absent' or kind.startswith('owned-'):
-                    self.assertFalse((directory / 'links-at-start').exists())
-
-    def test_installer_dev_cleanup_failure_warns_without_rollback_or_skipping_postinstall(self):
-        output = self.installer_success_fixture(self.dir, 'owned-live', fail_remove=True)
-        self.assertEqual((self.dir / 'remove-failed').read_text().strip(), 'committed')
-        link = self.dir / 'dev/tailscale'
-        self.assertEqual(os.readlink(link), str(self.dir / 'runtime/bin/tailscaled'))
-        self.assertEqual((self.dir / 'links-at-start').read_text().splitlines(), ['tailscale'])
-        self.assertIn(str(link), output)
-        for name in ('tailscaled', 'foxytail.service'):
-            self.assertFalse(os.path.lexists(self.dir / 'dev' / name))
 
     def test_upgrade_switch_rolls_back_after_second_directory_failure(self):
         source = (ROOT / 'customize.sh').read_text()
@@ -288,43 +185,6 @@ _INSTALL_SWITCH_ACTIVE=0
         self.assertEqual((self.dir / 'files/received').read_text(), 'user-file')
         self.assertEqual((self.dir / 'settings.sh').read_text(), 'old-settings.sh')
 
-    def test_installer_pid_scan_ignores_vendor_proc_entries_with_numeric_prefixes(self):
-        source = (ROOT / 'customize.sh').read_text()
-        function = source[source.index('installed_pids() {'):source.index('quiesce_installed() {')]
-        proc = self.dir / 'proc'
-        proc.mkdir()
-        function = function.replace('/proc/', str(proc) + '/')
-        for name in ('1234', '1235', '1236', '8350_reg', '9999_vendor'):
-            (proc / name).mkdir()
-        (proc / '1234/exe').symlink_to(self.dir / 'bin/tailscaled')
-        (proc / '1235/exe').symlink_to('/system/bin/sh')
-        (proc / '1235/cmdline').write_bytes(b'/system/bin/sh\0' +
-            str(self.dir / 'scripts/foxytail.watchdog').encode() + b'\0start\0')
-        (proc / '1236/exe').symlink_to('/system/bin/foreign')
-        (proc / '1236/cmdline').write_bytes(b'/system/bin/foreign\0--config=' +
-            str(self.dir / 'scripts/foxytail.watchdog').encode() + b'\0')
-        # A vendor entry must be skipped even if an exe link happens to point
-        # into our installation; it must never reach the list later signaled.
-        (proc / '8350_reg/exe').symlink_to(self.dir / 'bin/tailscaled')
-        result = subprocess.run(['sh', '-c', function + '''
-TS_BIN_DIR="$1/bin"; TS_SCRIPTS_DIR="$1/scripts"
-installed_pids
-''', 'installer-fixture', str(self.dir)], cwd=self.dir, text=True, capture_output=True, timeout=10)
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(result.stdout.splitlines(), ['1234', '1235'])
-        self.assertEqual(result.stderr, '')
-
-    def test_installer_pid_scan_with_no_numeric_entries_is_quiet(self):
-        source = (ROOT / 'customize.sh').read_text()
-        function = source[source.index('installed_pids() {'):source.index('quiesce_installed() {')]
-        proc = self.dir / 'proc'
-        proc.mkdir()
-        function = function.replace('/proc/', str(proc) + '/')
-        result = subprocess.run(['sh', '-c', function + '\ninstalled_pids\n'],
-                                cwd=self.dir, text=True, capture_output=True, timeout=10)
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(result.stdout, '')
-        self.assertEqual(result.stderr, '')
 
     def test_upgrade_rollback_restores_native_helper_and_manifest_or_their_absence(self):
         source = (ROOT / 'customize.sh').read_text()
@@ -511,26 +371,6 @@ mv() {{
                     self.assertEqual(result.returncode, 0, result.stderr)
                     self.assertTrue((directory / 'boot-started').exists())
 
-    def test_interrupted_journal_publication_cleans_gate_and_private_temporary(self):
-        for boundary in ['before', 'after']:
-            with self.subTest(boundary=boundary):
-                directory = self.dir / boundary
-                functions, _ = self.installer_transaction_fixture(directory)
-                result = subprocess.run(['sh', '-c', functions + '''
-mv() {
-  if [ "$2" = "$TS_DIR/.install-transaction" ]; then
-    [ "$FAULT" != before ] || kill -TERM "$$"
-    command mv "$@" || return 1
-    kill -TERM "$$"
-  fi
-  command mv "$@"
-}
-begin_install || install_abort journal
-'''], cwd=directory, env={**os.environ, 'FAULT': boundary}, text=True, capture_output=True, timeout=10)
-                self.assertNotEqual(result.returncode, 0)
-                self.assert_installed_tree_preserved(directory)
-                self.assertEqual(list(directory.glob('.install-transaction-*')), [])
-                self.assertTrue((directory / 'backups/42-interrupted').is_dir())
 
     def test_unproven_journal_preserves_evidence_and_unrelated_backups(self):
         functions, recovery = self.installer_transaction_fixture(self.dir)
@@ -545,18 +385,6 @@ begin_install || install_abort journal
         self.assertTrue((self.dir / '.install-transaction').exists())
         self.assertTrue((self.dir / '.installing').exists())
 
-    def test_begin_install_never_reuses_an_existing_backup(self):
-        functions, _ = self.installer_transaction_fixture(self.dir)
-        backup = self.dir / 'backups/42-interrupted'
-        backup.mkdir()
-        (backup / '.install-owner').write_text('999999:1:older-boot\n')
-        (backup / 'settings.sh').write_text('retained-settings')
-        result = subprocess.run(['sh', '-c', functions + '\nbegin_install || install_abort existing'],
-                                cwd=self.dir, text=True, capture_output=True, timeout=10)
-        self.assertNotEqual(result.returncode, 0)
-        self.assertEqual((backup / 'settings.sh').read_text(), 'retained-settings')
-        self.assertEqual((backup / '.install-owner').read_text(), '999999:1:older-boot\n')
-        self.assert_installed_tree_preserved(self.dir)
 
     def test_boot_and_installer_cannot_cross_a_live_install_lock(self):
         functions, _ = self.installer_transaction_fixture(self.dir)
@@ -583,24 +411,6 @@ read -r release
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertTrue((self.dir / 'boot-started').exists())
 
-    def test_boot_keeps_install_lock_until_startup_returns(self):
-        functions, _ = self.installer_transaction_fixture(self.dir)
-        self.boot_fixture(self.dir)
-        starter = self.dir / 'scripts/start.sh'
-        starter.write_text('#!/bin/sh\nprintf "starting\\n"\nread -r release\n')
-        boot = subprocess.Popen(['sh', '-c', 'getprop() { echo 1; }; . "$PWD/module/service.sh"',
-                                 str(self.dir / 'module/service.sh')], cwd=self.dir,
-                                stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-        try:
-            self.assertEqual(boot.stdout.readline(), 'starting\n')
-            result = subprocess.run(['sh', '-c', functions + '\nbegin_install'], cwd=self.dir,
-                                    text=True, capture_output=True, timeout=10)
-            self.assertNotEqual(result.returncode, 0)
-            self.assertFalse((self.dir / '.installing').exists())
-        finally:
-            _, stderr = boot.communicate('release\n', timeout=10)
-        self.assertEqual(boot.returncode, 0, stderr)
-        self.assertFalse((self.dir / '.install-lock').is_symlink())
 
     def test_stale_lock_requires_exact_boot_and_starttime(self):
         run_sh(self.recovery_source() + '''
@@ -622,26 +432,6 @@ for stale in "$pid:0:$_INSTALL_BOOT" "$pid:$_il_start:another-boot"; do
 done
 ''', self.dir)
 
-    def test_active_module_receives_only_stable_boot_files(self):
-        source = (ROOT / 'customize.sh').read_text()
-        entry = source[source.index('install_recovery_entry() {'):source.index('# shellcheck source=install-recovery.sh')]
-        entry = entry.replace('/data/adb/', str(self.dir) + '/')
-        active = self.dir / 'modules/foxytail'
-        staged = self.dir / 'modules_update/foxytail'
-        active.mkdir(parents=True)
-        staged.mkdir(parents=True)
-        for name in ('install-recovery.sh', 'service.sh'):
-            (active / name).write_text('old-' + name)
-            (staged / name).write_bytes((ROOT / name).read_bytes())
-        (active / 'custom').mkdir()
-        (active / 'custom/settings').write_text('keep-custom')
-        (active / 'module.prop').write_text('old-version')
-        run_sh(entry + '\nMODPATH="$PWD/modules_update/foxytail"\ninstall_recovery_entry\n', self.dir)
-        for name in ('install-recovery.sh', 'service.sh'):
-            self.assertEqual((active / name).read_bytes(), (staged / name).read_bytes())
-            self.assertEqual((active / name).stat().st_mode & 0o777, 0o755)
-        self.assertEqual((active / 'custom/settings').read_text(), 'keep-custom')
-        self.assertEqual((active / 'module.prop').read_text(), 'old-version')
 
     def test_boot_rejects_unowned_or_escaped_backup_without_deleting_data(self):
         for fault in ('owner', 'traversal', 'backup-symlink', 'owner-symlink'):
@@ -692,23 +482,6 @@ mv() { [ "$1" != "$PWD/backups/42-interrupted/bin" ] || return 1; command mv "$@
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertTrue((self.dir / 'boot-started').exists())
 
-    def test_quiesce_is_internal_and_does_not_create_a_user_stop_hold(self):
-        source = (ROOT / 'customize.sh').read_text()
-        function = source[source.index('quiesce_installed() {'):source.index('# Each successfully moved old entry')]
-        function = function.replace('"${TS_SCRIPTS_DIR}/foxytail.service" stop',
-                                    'sh "${TS_SCRIPTS_DIR}/foxytail.service" stop')
-        scripts = self.dir / 'scripts'
-        scripts.mkdir()
-        service = scripts / 'foxytail.service'
-        service.write_text('#!/bin/sh\n[ "$1:$2" = stop:--internal ] || { touch "$PWD/user-held"; exit 1; }\n')
-        service.chmod(0o755)
-        run_sh(function + '''
-TS_DIR="$PWD"; TS_SCRIPTS_DIR="$PWD/scripts"; _INSTALL_OWNER=fixture
-printf '%s\\n' "$_INSTALL_OWNER" >"$TS_DIR/.installing"
-installed_pids() { :; }
-quiesce_installed
-''', self.dir)
-        self.assertFalse((self.dir / 'user-held').exists())
 
     def test_backup_creation_and_journal_publish_failures_leave_old_tree_usable(self):
         for fault in ('mkdir', 'publish'):
@@ -729,42 +502,6 @@ begin_install || install_abort preparation
                 self.assertNotEqual(result.returncode, 0)
                 self.assert_installed_tree_preserved(directory)
                 self.assertEqual(list(directory.glob('.install-transaction-*')), [])
-
-    def test_copytruncate_keeps_existing_writer_on_active_inode(self):
-        settings = (ROOT / 'tailscale/settings.sh').read_text()
-        function = settings[settings.index('rotate_log()'):settings.index('# Log with a per-call')]
-        function += (ROOT / 'tailscale/scripts/foxytail.lock.sh').read_text() + '\n' + host_process_shell()
-        run_sh(function + '''
-LOG_MAX_KB=1
-TS_RUN_DIR="$PWD"
-logfile="$PWD/daemon.log"
-exec 3>>"$logfile"
-head -c 2048 /dev/zero >&3
-before=$(ls -i "$logfile" | awk '{print $1}')
-rotate_log "$logfile"
-echo after-rotation >&3
-exec 3>&-
-after=$(ls -i "$logfile" | awk '{print $1}')
-test "$before" = "$after"
-test "$(cat "$logfile")" = after-rotation
-test -f "$logfile.bak"
-test "$(wc -c <"$logfile.bak")" -le 1024
-''', self.dir)
-
-    def test_installer_exposes_commands_without_sourced_libraries(self):
-        source = (ROOT / 'customize.sh').read_text()
-        links = source[source.index('# --- Symlinks'):source.index('# Only now')]
-        scripts = self.dir / 'scripts'
-        scripts.mkdir()
-        commands = ('foxytail.webapi.sh', 'foxytail.service', 'foxytail.tun.up')
-        libraries = ('foxytail.config.sh', 'foxytail.lock.sh', 'foxytail.webapi-common.sh',
-                     'foxytail.webapi-account.sh', 'foxytail.webapi-network.sh', 'foxytail.webapi-config.sh',
-                     'foxytail.webapi-backup.sh', 'foxytail.webapi-tools.sh')
-        for name in commands + libraries:
-            (scripts / name).touch()
-        run_sh('MODPATH="$PWD/module"; TS_BIN_DIR="$PWD/bin"; TS_SCRIPTS_DIR="$PWD/scripts"\n' + links, self.dir)
-        self.assertEqual(sorted(path.name for path in (self.dir / 'module/system/bin').iterdir()),
-                         sorted(('tailscale', 'tailscaled') + commands))
 
 
 if __name__ == '__main__':

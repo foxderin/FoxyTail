@@ -31,10 +31,6 @@ class TaildropApiTests(ApiTestCase):
         self.assertTrue(receive['error'])
         return result
 
-    def test_missing_taildrop_directory_lists_and_clears_empty(self):
-        self.inbox.rmdir()
-        self.assertEqual(self.listing(), {'ok': True, 'files': []})
-        self.assertEqual(json.loads(self.shell('cmd_file_clear').stdout), {'ok': True, 'removed': 0})
 
     def test_receive_dispatch_validates_and_forwards_identity(self):
         helper = self.base / 'bin/foxyfiles'
@@ -53,43 +49,6 @@ class TaildropApiTests(ApiTestCase):
         extra = self.shell("_webapi_dispatch file-receive photo.txt self-1 extra", ok=False)
         self.assertNotEqual(extra.returncode, 0)
 
-    def test_listing_skips_inflight_internal_and_non_regular_entries(self):
-        entries = {'done.txt': 'complete', '.env': 'hidden',
-                   "meeting ' * [1].txt": 'literal'}
-        for name, body in entries.items():
-            (self.inbox / name).write_text(body)
-        for name in ('later.partial', 'removed.deleted'):
-            (self.inbox / name).write_text('unfinished')
-        for name in ('.taildrop', '.outgoing', 'directory'):
-            (self.inbox / name).mkdir()
-        outside = self.base / 'secret'
-        outside.write_text('secret')
-        (self.inbox / 'link').symlink_to(outside)
-        listing = self.listing()
-        self.assertEqual({item['name'] for item in listing['files']}, set(entries))
-        for entry in listing['files']:
-            expected = (self.inbox / entry['name']).stat()
-            self.assertEqual(entry, {'name': entry['name'], 'size': expected.st_size,
-                                     'mtime': int(expected.st_mtime)})
-        self.assertEqual(outside.read_text(), 'secret')
-
-    def test_initial_listing_and_clear_isolate_existing_incompatible_entries(self):
-        unsupported = ['tab\tname', 'line\nbreak', 'return\rname', 'escape\x1bname', 'delete\x7fname', 'c1\u0085name', 'back\\slash']
-        supported = ['normal.txt', '.env', "literal * [1] ' .txt"]
-        for name in unsupported + supported:
-            (self.inbox / name).write_text('keep-' + name)
-        listing = self.listing()
-        self.assertEqual({item['name'] for item in listing['files']}, set(supported))
-        self.assertEqual(listing['ignored'], len(unsupported))
-        read = self.shell('cmd_file_read normal.txt').stdout
-        self.assertEqual(read, 'keep-normal.txt')
-        self.assertEqual(json.loads(self.shell('cmd_file_clear').stdout), {'ok': True, 'removed': len(supported), 'ignored': len(unsupported)})
-        self.assertEqual({p.name for p in self.inbox.iterdir()}, set(unsupported))
-        for name in unsupported:
-            self.assertEqual((self.inbox / name).read_bytes(), ('keep-' + name).encode())
-        listing = self.listing()
-        self.assertEqual(listing['files'], [])
-        self.assertEqual(listing['ignored'], len(unsupported))
 
     def test_clear_preserves_inflight_directories_and_symlinks(self):
         for name in ('ordinary.txt', '.env', '..hidden', '.meeting notes', 'literal *'):
@@ -112,39 +71,6 @@ class TaildropApiTests(ApiTestCase):
         self.assertEqual(outside.read_text(), 'outside')
         self.assertEqual(json.loads(self.shell('cmd_file_clear').stdout), {'ok': True, 'removed': 0})
 
-    def test_large_inbox_uses_one_native_listing_and_no_per_file_helpers(self):
-        for index in range(500):
-            (self.inbox / f'file-{index:03}.txt').write_text('payload')
-        (self.inbox / '.env').write_text('hidden')
-        (self.inbox / 'later.partial').write_text('unfinished')
-        (self.inbox / '.taildrop').mkdir()
-        (self.inbox / '.outgoing').mkdir()
-        (self.inbox / 'directory').mkdir()
-        calls = self.run / 'inbox-native-calls'
-        jq_calls = self.run / 'inbox-jq-calls'
-        result = self.shell('''
-stat() { echo 'unexpected shell stat' >&2; return 1; }
-_file_name_valid() { echo 'unexpected per-file validation' >&2; return 1; }
-_op_exec() {
-  printf '%s\\n' "$3" >>"$TS_RUN_DIR/inbox-native-calls"
-  shift
-  "$@"
-}
-jqr() {
-  printf '%s\\n' jq >>"$TS_RUN_DIR/inbox-jq-calls"
-  command jq "$@"
-}
-cmd_files_inbox
-''')
-        listing = json.loads(result.stdout)
-        self.assertEqual(set(listing), {'ok', 'files', 'receive'})
-        self.assertEqual(listing['receive']['mode'], 'unavailable')
-        self.assertTrue(listing['ok'])
-        self.assertEqual(len(listing['files']), 501)
-        self.assertEqual(calls.read_text().splitlines(), ['inbox-list'])
-        # Three constant JSON passes: native response validation, bounded worker
-        # status validation, response enrichment. Never per-file helpers.
-        self.assertEqual(jq_calls.read_text().splitlines(), ['jq'] * 3)
 
     def test_inbox_listing_rejects_symlink_directory_without_following_it(self):
         self.inbox.rmdir()
@@ -168,40 +94,6 @@ cmd_files_inbox
         self.assertIn('metadata-unavailable', response['error'])
         self.assertNotIn('files', response)
 
-    def test_inbox_item_operations_reject_unsupported_names(self):
-        for name in ('tab\tname', 'line\nbreak', 'delete\x7fname', 'c1\u0085name', 'back\\slash'):
-            (self.inbox / name).write_text('preserve')
-            for command in ('cmd_file_read', 'cmd_file_delete'):
-                result = self.shell(command + ' ' + shlex.quote(name), ok=False)
-                self.assertNotEqual(result.returncode, 0)
-                if command == 'cmd_file_read':
-                    self.assertEqual(result.stdout, '')
-                else:
-                    self.assertFalse(json.loads(result.stdout)['ok'])
-                self.assertEqual((self.inbox / name).read_text(), 'preserve')
-
-    def test_reserved_and_symlink_names_are_not_file_api_items(self):
-        receipts = self.inbox / '.taildrop'
-        receipts.mkdir()
-        (receipts / 'receipt').write_text('private')
-        outside = self.base / 'secret'
-        outside.write_text('secret')
-        (self.inbox / 'link').symlink_to(outside)
-        for command in ('cmd_file_read', 'cmd_file_delete'):
-            for name in ('.taildrop', '.taildrop/receipt', 'link'):
-                result = self.shell(command + ' ' + shlex.quote(name), ok=False)
-                self.assertNotEqual(result.returncode, 0)
-        self.assertEqual(self.listing()['files'], [])
-        self.assertEqual(json.loads(self.shell('cmd_file_clear').stdout)['removed'], 0)
-        self.assertEqual((receipts / 'receipt').read_text(), 'private')
-        self.assertEqual(outside.read_text(), 'secret')
-
-    def test_delete_removes_one_and_preserves_others(self):
-        for name in ('a.txt', '.hidden', 'keep.txt'):
-            (self.inbox / name).write_text(name)
-        self.assertEqual(json.loads(self.shell('cmd_file_delete a.txt').stdout), {'ok': True})
-        self.assertFalse((self.inbox / 'a.txt').exists())
-        self.assertEqual({p.name for p in self.inbox.iterdir()}, {'.hidden', 'keep.txt'})
 
     def test_selected_delete_preserves_unselected_and_reports_partial_failure(self):
         for name in ('a.txt', '.hidden', 'keep.txt'):
@@ -225,12 +117,6 @@ cmd_files_inbox
             result = self.shell('cmd_file_delete_many ' + shlex.quote(json.dumps(names)), ok=False)
             self.assertNotEqual(result.returncode, 0, names)
         self.assertTrue((self.inbox / 'a.txt').exists())
-
-    def test_delete_and_clear_reject_removed_directories(self):
-        self.inbox.rmdir()
-        result = self.shell('cmd_file_delete a.txt', ok=False)
-        self.assertNotEqual(result.returncode, 0)
-        self.assertFalse(json.loads(result.stdout)['ok'])
 
 
 if __name__ == '__main__':

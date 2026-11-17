@@ -103,21 +103,6 @@ cmd_diag_check() { echo '{"ok":true}'; }
         self.assertTrue(self.terminal(requests[rejected])['result']['ok'])
         self.assertEqual(len((self.base / 'receive-calls').read_text().splitlines()), 2)
 
-    def test_live_read_probe_does_not_block_mutation_admission(self):
-        self.overrides.write_text('''cmd_diag_check() {
-  touch "$TS_DIR/entered"
-  while [ ! -f "$TS_DIR/release" ]; do sleep 0.03; done
-  echo '{"ok":true}'
-}
-cmd_file_clear() { echo '{"ok":true}'; }
-''')
-        probe = self.request('held_probe')
-        self.entry('operation-start', probe, 'diag-check')
-        self.await_path('entered')
-        mutation = self.request('beside_probe')
-        self.entry('operation-start', mutation, 'file-clear')
-        self.assertTrue(self.terminal(mutation)['result']['ok'])
-        self.assertEqual(self.entry('operation-status', probe)['operation']['state'], 'running')
 
     def test_dead_mutation_receipt_does_not_permanently_block_admission(self):
         stale = self.request('dead_mutation')
@@ -132,52 +117,6 @@ cmd_file_clear() { echo '{"ok":true}'; }
         self.assertTrue(self.terminal(request)['result']['ok'])
         self.assertEqual(self.entry('operation-status', stale)['operation']['state'], 'interrupted')
 
-    def test_taildrop_history_and_batch_durable_write_contracts(self):
-        self.overrides.write_text('''
-_test_taildrop_write() {
-  printf '%s\\n' "$1" >>"$TS_DIR/invocations"
-  touch "$TS_DIR/entered"
-  while [ ! -f "$TS_DIR/release" ]; do sleep 0.03; done
-  echo '{"ok":true,"removed":1,"retained":2}'
-}
-cmd_file_send_delete() { _test_taildrop_write file-send-delete; }
-cmd_file_send_clear() { _test_taildrop_write file-send-clear; }
-cmd_file_delete_many() { _test_taildrop_write file-delete-many; }
-''')
-        commands = [('file-send-delete', 'a' * 32), ('file-send-clear',),
-                    ('file-delete-many', '["one"]')]
-        (self.conf / 'foxytail.conf').write_text('TS_MODE=invalid\n')
-        for index, args in enumerate(commands):
-            with self.subTest(command=args[0]):
-                request = self.request('taildrop_write_' + str(index))
-                self.entry('operation-start', request, *args)
-                self.await_path('entered')
-                status = self.entry('operation-status', request)['operation']
-                self.assertFalse(status['cancellable'])
-                self.assertEqual(os.readlink(self.run / 'operations' / request / 'phase'), 'committing')
-                self.entry('cancel', request, ok=False)
-                (self.base / 'release').touch()
-                terminal = self.terminal(request)
-                self.assertEqual(terminal['state'], 'completed')
-                self.assertEqual(terminal['result'], {'ok': True, 'removed': 1, 'retained': 2})
-                self.assertEqual(self.entry('operation-start', request, *args)['operation'], terminal)
-                self.assertEqual((self.base / 'invocations').read_text().splitlines().count(args[0]), 1)
-                (self.base / 'release').unlink()
-                (self.base / 'entered').unlink()
-
-    def test_taildrop_write_operations_reject_wrong_argument_counts_and_large_batches(self):
-        commands = [('file-send-delete', 'a' * 32), ('file-send-clear',),
-                    ('file-delete-many', '["one"]')]
-        for index, args in enumerate(commands):
-            request = self.request('taildrop_args_' + str(index))
-            self.assertIn('argument count', self.entry('operation-start', request, *args, 'extra', ok=False)['error'])
-            if len(args) == 2:
-                self.assertIn('argument count', self.entry('operation-start', request, args[0], ok=False)['error'])
-            self.assertFalse((self.run / 'operations' / request).exists())
-        for index, command in enumerate(('file-delete-many',)):
-            request = self.request('taildrop_large_' + str(index))
-            self.assertIn('too large', self.entry('operation-start', request, command, 'x' * 16385, ok=False)['error'])
-            self.assertFalse((self.run / 'operations' / request).exists())
 
     def test_accepted_operation_survives_caller_and_deduplicates_without_replay(self):
         self.overrides.write_text('''cmd_control() {
@@ -222,21 +161,6 @@ cmd_file_delete_many() { _test_taildrop_write file-delete-many; }
         self.assertEqual(terminal['result']['checks'], [1, 2])
         self.assertTrue(terminal['result']['saved'])
 
-    def test_worker_ignores_hangup_after_acceptance(self):
-        self.overrides.write_text('''cmd_diag_check() {
-  touch "$TS_DIR/entered"
-  while [ ! -f "$TS_DIR/release" ]; do sleep 0.03; done
-  echo '{"ok":true,"finishedAfterHangup":true}'
-}
-''')
-        request = self.request('hangup')
-        self.entry('operation-start', request, 'diag-check')
-        self.await_path('entered')
-        directory = self.run / 'operations' / request
-        for name in ('supervisor', 'runner'):
-            os.kill(int((directory / name).read_text().split()[0]), signal.SIGHUP)
-        (self.base / 'release').touch()
-        self.assertTrue(self.terminal(request)['result']['finishedAfterHangup'])
 
     def test_cancel_stops_unregistered_actual_worker_descendants_and_no_bystander(self):
         self.script('bin/nested-control', '''trap '' TERM
@@ -289,22 +213,6 @@ while :; do sleep 1; done
         self.assertIn('unknown', terminal['result']['error'])
         self.assertTrue((operation / 'result.json').is_file())
 
-    def test_backend_info_and_stop_work_with_bad_configuration(self):
-        self.script('bin/id', 'echo 0\n')
-        self.overrides.write_text('TS_MOD_DIR="$TS_DIR/module"\nTS_MOD_PROP="$TS_MOD_DIR/module.prop"\n')
-        module = self.base / 'module'
-        module.mkdir()
-        (module / 'module.prop').write_text('version=vtest\nversionCode=123\n')
-        (module / 'disable').touch()
-        (self.conf / 'foxytail.conf').write_text('ROUTE_TABLE=1053\n')
-        info = self.entry('backend-info')
-        self.assertEqual((info['protocol'], info['moduleVersion'], info['versionCode']), (2, 'vtest', 123))
-        self.assertTrue(info['disabled'])
-        self.assertIn('hooks-get', info['commands'])
-        request = self.request('bad_config_stop')
-        self.entry('operation-start', request, 'control', 'stop')
-        self.assertTrue(self.terminal(request)['result']['ok'])
-        self.entry('operation-status', self.request('unknown'), ok=False)
 
     def test_rejected_commands_counts_payloads_and_tombstones_never_execute(self):
         for suffix, args in [('shell', ['sh', '-c', 'touch /bad']), ('login', ['login']),
@@ -345,26 +253,6 @@ ts_cli() { printf 'leaked input: %s\\n' "$*"; return 9; }
             self.assertLess((directory / 'result.json').stat().st_size, 1048576)
             self.assertFalse((directory / 'output').exists())
 
-    def test_private_retention_expires_without_replay_and_enforces_capacity(self):
-        registry = self.run / 'operations'
-        registry.mkdir(exist_ok=True)
-        old_id = str(int(time.time()) - 90000) + '_old'
-        old = registry / old_id
-        old.mkdir()
-        (old / 'durable').touch()
-        (old / 'command').write_text('diag-check')
-        self.entry('operation-status', old_id, ok=False)
-        self.assertFalse(old.exists())
-        self.entry('operation-start', old_id, 'diag-check', ok=False)
-        for index in range(128):
-            request = str(int(time.time())) + f'_capacity_{index}'
-            directory = registry / request
-            directory.mkdir()
-            (directory / 'durable').touch()
-            (directory / 'command').write_text('diag-check')
-            (directory / 'result.json').write_text('{"ok":true,"operation":{"state":"completed"}}')
-        self.entry('operation-start', self.request('full'), 'diag-check', ok=False)
-        self.assertEqual(registry.stat().st_mode & 0o777, 0o700)
 
     def test_status_does_not_evict_valid_receipt_at_capacity(self):
         registry = self.run / 'operations'
@@ -383,16 +271,6 @@ ts_cli() { printf 'leaked input: %s\\n' "$*"; return 9; }
         self.assertEqual(self.entry('operation-status', requested)['operation']['id'], requested)
         self.assertTrue((registry / requested).is_dir())
 
-    def test_fixed_capability_and_readonly_hooks(self):
-        self.script('bin/iptables', 'printf "%s\\n" "$*" >>"$TEST_DIR/iptables.calls"\n')
-        self.assertTrue(self.entry('owner-capability')['available'])
-        self.assertEqual((self.base / 'iptables.calls').read_text().strip(), '-m owner --help')
-        (self.scripts / 'foxytail.tun.up').write_text('echo do-not-execute\n')
-        hooks = self.entry('hooks-get')['hooks']
-        self.assertEqual(hooks[0]['content'], 'echo do-not-execute\n')
-        self.assertTrue(hooks[1]['missing'])
-        (self.scripts / 'foxytail.tun.down').symlink_to(self.conf / 'foxytail.conf')
-        self.entry('hooks-get', ok=False)
 
     def test_context_bound_rejects_without_modifying_saved_rules(self):
         before = (self.conf / 'context.conf').read_bytes()

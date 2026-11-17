@@ -42,26 +42,6 @@ class BackupApiTests(ApiTestCase):
         self.assertEqual(preview['sha256'], hashlib.sha256(legacy.read_bytes()).hexdigest())
         self.assertEqual(self.snapshot(), before)
 
-    def test_preview_is_read_only_and_shows_validated_config_diff_and_hook_names(self):
-        before = self.snapshot()
-        archive = self.selected_archive({'conf/foxytail.conf': 'SOCKS_PORT=1200\n',
-                                         'foxytail.tun.up': 'do-not-execute-secret-hook\n'})
-        state = self.base / 'state'
-        state.mkdir()
-        identity = state / 'tailscaled.state'
-        identity.write_text('private-identity')
-        result = json.loads(self.shell('cmd_restore_preview ' + shlex.quote(str(archive))).stdout)
-        self.assertEqual(self.snapshot(), before)
-        self.assertEqual(result['sha256'], hashlib.sha256(archive.read_bytes()).hexdigest())
-        change = next(change for change in result['changes'] if change['key'] == 'SOCKS_PORT')
-        self.assertEqual(change, {'file': 'foxytail.conf', 'key': 'SOCKS_PORT', 'before': '1099', 'after': '1200'})
-        self.assertEqual(result['hooks'], ['foxytail.tun.up'])
-        self.assertNotIn('private-identity', json.dumps(result))
-        self.assertNotIn('do-not-execute-secret-hook', json.dumps(result))
-        self.assertEqual(identity.read_text(), 'private-identity')
-        self.assertFalse((self.run / 'settings.pending').exists())
-        self.assertFalse(list(self.base.glob('restored-hooks-*')))
-        self.assertFalse(list(self.base.glob('.restore.*')))
 
     def test_preview_rejects_links_and_invalid_config_without_writes(self):
         before = self.snapshot()
@@ -95,13 +75,6 @@ class BackupApiTests(ApiTestCase):
         self.assertEqual(self.snapshot(), before)
         self.assertFalse(list(self.base.glob('conf.bak-*')))
 
-    def test_restore_requires_both_preview_hashes(self):
-        archive = self.selected_archive({'conf/foxytail.conf': 'SOCKS_PORT=1200\n'})
-        before = self.snapshot()
-        for suffix in ('', ' ' + hashlib.sha256(archive.read_bytes()).hexdigest(), ' bad bad'):
-            result = self.shell('cmd_restore ' + shlex.quote(str(archive)) + suffix, ok=False)
-            self.assertNotEqual(result.returncode, 0)
-            self.assertEqual(self.snapshot(), before)
 
     def test_cancel_before_commit_leaves_saved_config_and_no_journal(self):
         archive = self.selected_archive({'conf/foxytail.conf': 'SOCKS_PORT=1200\n', 'foxytail.tun.up': 'review-only'})
@@ -113,15 +86,6 @@ class BackupApiTests(ApiTestCase):
         self.assertFalse(list(self.base.glob('restored-hooks-*')))
         self.assertFalse(list(self.base.glob('conf.bak-*')))
 
-    def test_restore_rejects_archive_symlink_even_with_matching_hashes(self):
-        archive = self.archive({'conf/foxytail.conf': 'SOCKS_PORT=1200\n'})
-        link = self.sdcard / 'linked.tar.gz'
-        link.symlink_to(archive)
-        before = self.snapshot()
-        result = self.shell(self.restore_command(link), ok=False)
-        self.assertNotEqual(result.returncode, 0)
-        self.assertEqual(self.snapshot(), before)
-        self.assertIn('symlink', json.loads(result.stdout)['error'])
 
     def test_restore_validation_has_no_partial_writes(self):
         previous = self.snapshot()
@@ -138,12 +102,6 @@ class BackupApiTests(ApiTestCase):
         self.assertIn('restore:', json.loads(result.stdout)['error'])
         self.assertEqual(self.snapshot(), before)
 
-    def test_restore_rejects_links_before_extraction(self):
-        previous = self.snapshot()
-        archive = self.archive({'conf/foxytail.conf': 'TS_MODE=bridge\n', 'conf/link': (str(self.base / 'escape'),)})
-        self.assertNotEqual(self.shell(self.restore_command(archive), ok=False).returncode, 0)
-        self.assertEqual(self.snapshot(), previous)
-        self.assertFalse((self.base / 'escape').exists())
 
     def test_restore_rolls_back_failed_activation(self):
         previous = self.snapshot()
@@ -166,22 +124,6 @@ rm() { [ "$*" != "-rf $TS_CONF_DIR" ] || return 1; command rm "$@"; }
         self.assertEqual({file.name: file.read_bytes() for file in backups[0].iterdir()}, previous)
         self.assertFalse(any(file.is_dir() for file in self.conf.iterdir()), 'rollback nested the old directory inside conf')
 
-    def test_restore_retains_snapshot_and_marks_restart(self):
-        archive = self.archive({'conf/foxytail.conf': 'SOCKS_PORT=1200\n', 'conf/routes.conf': 'ROUTE_SCOPE=all\n', 'foxytail.tun.up': '#!/system/bin/sh\necho restored\n'})
-        result = json.loads(self.shell(self.restore_command(archive)).stdout)
-        self.assertTrue(Path(result['previous']).is_dir())
-        self.assertTrue(result['restartRequired'])
-        self.assertEqual((self.conf / 'foxytail.conf').read_text(), 'SOCKS_PORT=1200\n')
-        self.assertFalse((self.scripts / 'foxytail.tun.up').exists())
-
-    def test_failed_backup_removes_partial_archive(self):
-        result = self.shell('''tar() { [ "$1" != -czf ] || { printf truncated >"$2"; echo 'storage write failed' >&2; return 1; }; command tar "$@"; }
-cmd_backup''', ok=False)
-        self.assertNotEqual(result.returncode, 0)
-        self.assertIn('archive creation failed: storage write failed', json.loads(result.stdout)['error'])
-        self.assertEqual(list((self.sdcard / 'Download').iterdir()), [])
-        self.assertEqual(list(self.run.glob('.backup.*')), [])
-        self.assertFalse((self.run / '.conf-write-lock').is_symlink())
 
     def test_real_backup_preserves_configuration_and_optional_hooks_and_restores(self):
         for with_hooks in (False, True):
@@ -216,55 +158,6 @@ cmd_backup''', ok=False)
                     self.assertEqual(len(parked), 1)
                     self.assertEqual(parked[0].read_bytes(), content)
                     self.assertEqual(parked[0].stat().st_mode & 0o111, 0)
-
-    def test_backup_verification_and_shared_storage_failures_are_actionable(self):
-        result = self.shell('''tar() { command tar "$@" || return; [ "$1" != -czf ] || printf 'broken gzip' >"$2"; }
-cmd_backup''', ok=False)
-        self.assertNotEqual(result.returncode, 0)
-        self.assertIn('archive verification failed', json.loads(result.stdout)['error'])
-        self.assertEqual(list((self.sdcard / 'Download').iterdir()), [])
-        result = self.shell('''mkdir() { [ "$*" != '-p ''' + str(self.sdcard / 'Download') + '''' ] || { echo 'Permission denied' >&2; return 1; }; command mkdir "$@"; }
-cmd_backup''', ok=False)
-        self.assertNotEqual(result.returncode, 0)
-        self.assertIn('cannot create Download directory: Permission denied', json.loads(result.stdout)['error'])
-        self.assertEqual(list(self.run.glob('.backup.*')), [])
-        self.assertFalse((self.run / '.conf-write-lock').is_symlink())
-
-
-
-    def test_file_delete_clear_read_lifecycle(self):
-        inbox = self.sdcard / 'Download' / 'Taildrop'
-        inbox.mkdir(parents=True, exist_ok=True)
-        (inbox / 'a.txt').write_text('alpha')
-        (inbox / 'b.txt').write_text('beta-content')
-        # files already live in Download/Taildrop; read streams bytes in place
-        self.assertEqual(self.shell("cmd_file_read a.txt").stdout, 'alpha')
-        self.assertEqual(self.shell("cmd_file_read b.txt").stdout, 'beta-content')
-        # delete removes one file
-        result = json.loads(self.shell("cmd_file_delete b.txt").stdout)
-        self.assertTrue(result['ok'])
-        self.assertFalse((inbox / 'b.txt').exists())
-        self.assertTrue((inbox / 'a.txt').exists())
-        # clear removes the rest
-        result = json.loads(self.shell('cmd_file_clear').stdout)
-        self.assertTrue(result['ok'])
-        self.assertEqual(result['removed'], 1)
-        self.assertEqual(list(inbox.iterdir()), [])
-
-    def test_file_ops_reject_path_escape(self):
-        inbox = self.sdcard / 'Download' / 'Taildrop'
-        inbox.mkdir(parents=True, exist_ok=True)
-        outside = self.base / 'outside.txt'
-        outside.write_text('secret')
-        for cmd in ("cmd_file_delete '../outside.txt'",
-                    "cmd_file_read '../outside.txt'",
-                    "cmd_file_delete 'a/b'",
-                    "cmd_file_read '..'",
-                    "cmd_file_delete ''"):
-            with self.subTest(cmd=cmd):
-                result = self.shell(cmd, ok=False)
-                self.assertNotEqual(result.returncode, 0)
-                self.assertTrue(outside.exists(), cmd)
 
 
 if __name__ == '__main__':

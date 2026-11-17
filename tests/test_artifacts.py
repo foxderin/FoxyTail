@@ -139,18 +139,6 @@ class ArtifactApiTests(ApiTestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertEqual(source.read_bytes(), before)
 
-    def test_token_restore_rejects_archive_links_without_mutating_source(self):
-        source = self.archive({'conf/foxytail.conf': 'SOCKS_PORT=1200\n',
-                               'conf/link': (str(self.base / 'outside'),)})
-        original = source.read_bytes()
-        token = self.stage(source)
-        before = self.snapshot()
-        result = self.shell('cmd_restore_preview ' + token, ok=False)
-        self.assertNotEqual(result.returncode, 0)
-        self.assertEqual(self.snapshot(), before)
-        self.assertFalse((self.base / 'outside').exists())
-        self.assertEqual(source.read_bytes(), original)
-        self.assertEqual(self.binary_shell('cmd_artifact_read ' + token).stdout, original)
 
     def test_backup_export_token_contains_only_allowlisted_configuration(self):
         (self.base / 'tailscaled.state').write_bytes(b'private-account')

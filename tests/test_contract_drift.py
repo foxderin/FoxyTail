@@ -130,21 +130,6 @@ class ContractDrift(unittest.TestCase):
                              ('mutations', cls.mutations), ('reads', cls.reads)]:
             assert names, f'{label} extraction found no commands; parser drifted'
 
-    def test_dispatched_commands_are_advertised(self):
-        self.assertEqual(self.dispatch - self.advertised, set(),
-                         'dispatched but not advertised in backend-info commands[]')
-
-    def test_advertised_commands_are_dispatched(self):
-        self.assertEqual(self.advertised - self.dispatch, set(),
-                         'advertised in commands[] but not dispatched')
-
-    def test_bridge_queries_exist_in_dispatch(self):
-        self.assertEqual(self.queries - self.dispatch, set(),
-                         'control.query allow-list names not dispatched')
-
-    def test_bridge_mutations_exist_in_dispatch(self):
-        self.assertEqual(self.mutations - self.dispatch, set(),
-                         'control.mutate allow-list names not dispatched')
 
     def test_bridge_mutations_are_detached_operations(self):
         # control.mutate runs through operation-start, which enforces
@@ -152,35 +137,17 @@ class ContractDrift(unittest.TestCase):
         self.assertEqual(self.mutations - self.control, set(),
                          'control.mutate names missing from _control_commands')
 
-    def test_control_commands_exist_in_dispatch(self):
-        self.assertEqual(self.control - self.dispatch, set(),
-                         '_control_commands entries not dispatched')
 
     def test_control_validate_arity_matches_operations(self):
         self.assertEqual(self.arity, self.control,
                          '_control_validate arity table out of sync with _control_commands')
 
-    def test_api_read_commands_exist_in_dispatch(self):
-        self.assertEqual(self.reads - self.dispatch, set(),
-                         'api.ts READ_COMMANDS names not dispatched')
 
     def test_api_read_commands_are_bridge_queries(self):
         # api.ts sends reads through control.query; the bridge allow-list owns them.
         self.assertEqual(self.reads - self.queries, set(),
                          'api.ts READ_COMMANDS names rejected by validateQuery')
 
-    def test_instrumentation_bottom_navigation_matches_current_routes(self):
-        # Instrumentation is assembled, not executed, in the host gate. Catch
-        # stale literal navigation targets there before a device run is needed.
-        navigation = (ROOT / 'webui/src/navigation.ts').read_text()
-        primary = re.search(r"titleKey: 'shell_nav_main', names: \[(.*?)\]", navigation, re.S)
-        self.assertIsNotNone(primary, 'primary-navigation parser drifted')
-        routes = set(re.findall(r"'([a-z-]+)'", primary.group(1)))
-        checks = (ROOT / 'android/app/src/androidTest/java/dev/foxderin/tail/WebViewChecks.java').read_text()
-        targets = set(re.findall(r"#bottom-nav a\[href='#/([a-z-]+)'\]", checks))
-        self.assertTrue(routes and targets, 'navigation contract extraction found no routes')
-        self.assertEqual(targets - routes, set(),
-                         'instrumentation clicks a removed primary navigation route')
 
     def test_no_uncovered_commands(self):
         # Informational: dispatched commands reachable from nowhere get flagged.

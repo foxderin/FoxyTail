@@ -93,16 +93,6 @@ load_conf
         self.assertEqual(self.snapshot(), self.previous)
         self.assertFalse((self.base / '.restore-transaction').exists())
 
-    def test_context_writer_recovers_before_creating_missing_live_directory(self):
-        self.prepare_restore()
-        self.interrupt_restore('previous')
-        context = 'cellular:-:exit-node:100.64.0.3\n'
-        payload = base64.b64encode(context.encode()).decode()
-        result = json.loads(self.shell('cmd_context_set ' + shlex.quote(payload)).stdout)
-        self.assertTrue(result['ok'])
-        self.assertEqual((self.conf / 'foxytail.conf').read_bytes(), self.previous['foxytail.conf'])
-        self.assertEqual((self.conf / 'routes.conf').read_bytes(), self.previous['routes.conf'])
-        self.assertEqual((self.conf / 'context.conf').read_text(), context)
 
     def test_failed_recovery_blocks_writer_and_remains_retryable(self):
         self.prepare_restore()

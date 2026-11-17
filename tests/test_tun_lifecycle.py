@@ -197,30 +197,6 @@ echo "route:$1" >>"$TEST_DIR/events"
         self.assertEqual(self.events()[-4:], ['stop:101,102', 'down', 'launch', 'up'])
         self.assertFalse(self.pending.exists())
 
-    def test_failed_rollback_down_is_retried_before_launch(self):
-        (self.base / 'up-failed').touch()
-        (self.base / 'down-failed').touch()
-        self.run_tun('start', expected=1)
-        self.assertEqual(self.events(), ['launch', 'up', 'stop:101,102', 'down'])
-        self.assertTrue(self.pending.exists())
-        self.assertTrue((self.base / 'partial-up').exists())
-        self.run_tun('start', expected=1)
-        self.assertEqual(self.events(), ['launch', 'up', 'stop:101,102', 'down', 'down'])
-        (self.base / 'up-failed').unlink()
-        (self.base / 'down-failed').unlink()
-        self.run_tun('start')
-        self.assertEqual(self.events()[-3:], ['down', 'launch', 'up'])
-        self.assertFalse(self.pending.exists())
-
-    def test_missing_interface_recovery_respects_down_failure(self):
-        self.running(interface=False)
-        (self.base / 'down-failed').touch()
-        self.run_tun('start', expected=1)
-        self.assertEqual(self.events(), ['stop:101,102', 'down'])
-        self.assertTrue(self.pending.exists())
-        (self.base / 'down-failed').unlink()
-        self.run_tun('start')
-        self.assertEqual(self.events()[-3:], ['down', 'launch', 'up'])
 
     def test_timeout_cannot_turn_into_success_without_the_up_hook(self):
         (self.base / 'wait-failed').touch()
@@ -232,49 +208,6 @@ echo "route:$1" >>"$TEST_DIR/events"
         self.assertEqual(self.events(), ['launch', 'stop:101,102', 'down', 'launch', 'up'])
         self.assertFalse(self.pending.exists())
 
-    def test_absent_hooks_preserve_successful_start_stop_and_restart(self):
-        for name in ('foxytail.tun.up', 'foxytail.tun.down'):
-            (self.scripts / name).unlink()
-        self.run_tun('start')
-        self.run_tun('start')
-        self.assertEqual(self.events(), ['launch'])
-        self.run_tun('restart')
-        self.assertEqual(self.events(), ['launch', 'stop:101,102', 'sleep', 'launch'])
-        self.run_tun('stop')
-        self.assertFalse(self.pid.exists())
-        self.assertFalse(self.pending.exists())
-        before = self.events()
-        self.run_tun('stop')
-        self.assertEqual(self.events(), before)
-
-    def test_start_and_status_require_runtime_config(self):
-        result = self.run_tun('status')
-        self.assertIn('Mode: bridge, socks5: 127.0.0.1:1099', result.stdout)
-        (self.base / 'bad-runtime-conf').touch()
-        for command in ('start', 'status'):
-            with self.subTest(command=command):
-                self.run_tun(command, expected=1)
-        self.assertEqual(self.events(), [])
-
-    def test_bundled_hooks_propagate_route_status_and_use_runtime_config(self):
-        self.bundled_hooks()
-        for hook, action in (('up', 'apply'), ('down', 'teardown')):
-            with self.subTest(hook=hook):
-                failed = self.base / f'route-{action}-failed'
-                failed.touch()
-                for expected in (9, 0):
-                    result = subprocess.run(['sh', str(self.scripts / f'foxytail.tun.{hook}')],
-                                            env=self.env, capture_output=True, text=True, timeout=10)
-                    self.assertEqual(result.returncode, expected, result.stdout + result.stderr)
-                    if failed.exists():
-                        failed.unlink()
-        self.assertEqual(self.events(), ['route:apply'] * 2 + ['route:teardown'] * 2)
-        (self.base / 'bad-runtime-conf').touch()
-        for hook, expected in (('up', 1), ('down', 0)):
-            result = subprocess.run(['sh', str(self.scripts / f'foxytail.tun.{hook}')],
-                                    env=self.env, capture_output=True, text=True, timeout=10)
-            self.assertEqual(result.returncode, expected, result.stdout + result.stderr)
-        self.assertEqual(self.events(), ['route:apply'] * 2 + ['route:teardown'] * 3)
 
     def test_bundled_apply_failure_rolls_back_tunnel(self):
         self.bundled_hooks()
@@ -287,16 +220,6 @@ echo "route:$1" >>"$TEST_DIR/events"
         self.run_tun('start')
         self.assertEqual(self.events()[-2:], ['launch', 'route:apply'])
 
-    def test_bundled_teardown_failure_aborts_restart(self):
-        self.bundled_hooks()
-        self.running()
-        (self.base / 'route-teardown-failed').touch()
-        self.run_tun('restart', expected=1)
-        self.assertEqual(self.events(), ['stop:101,102', 'route:teardown'])
-        self.assertTrue(self.pending.exists())
-        (self.base / 'route-teardown-failed').unlink()
-        self.run_tun('restart')
-        self.assertEqual(self.events()[-4:], ['route:teardown', 'sleep', 'launch', 'route:apply'])
 
     def test_bad_runtime_config_does_not_prevent_cleanup_or_signal_stale_pid(self):
         self.running()

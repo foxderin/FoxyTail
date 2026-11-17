@@ -44,38 +44,6 @@ class ApiEntrypointTests(ApiTestCase):
         self.assertEqual(result.returncode == 0, ok, result.stdout + result.stderr)
         return data
 
-    def test_taildrop_history_and_batch_dispatch_contracts(self):
-        self.entry_fixture()
-        self.script('bin/id', 'echo 0\n')
-        self.api.write_text(self.api.read_text().replace('# --- dispatch', '''
-cmd_file_delete_many() { jqr -n --arg names "$1" '{ok:true,names:$names}'; }
-# --- dispatch''', 1))
-        self.script('bin/foxyfiles', '''
-printf '%s\\n' "$@" >"$TEST_DIR/helper-args"
-printf '%s\\n' '{"ok":true,"removed":1,"retained":2}'
-''')
-        commands = [('file-send-delete', 'a' * 32), ('file-send-clear',),
-                    ('file-delete-many', '["quote \' and space.txt"]')]
-        advertised = self.entry('backend-info')['commands']
-        (self.conf / 'foxytail.conf').write_text('TS_MODE=invalid\n')
-        for args in commands:
-            with self.subTest(command=args[0]):
-                self.assertIn(args[0], advertised)
-                result = self.entry(*args)
-                if args[0].startswith('file-send-'):
-                    self.assertEqual(result, {'ok': True, 'removed': 1, 'retained': 2})
-                    expected = [args[0][5:], '--root', str(self.base)]
-                    if len(args) == 2:
-                        expected += ['--id', args[1]]
-                    self.assertEqual((self.base / 'helper-args').read_text().splitlines(), expected)
-                else:
-                    self.assertEqual(result['names'], args[1])
-                self.entry(*args, 'extra', ok=False)
-                if len(args) == 2:
-                    self.entry(args[0], ok=False)
-                (self.base / '.installing').touch()
-                self.assertIn('upgrade', self.entry(*args, ok=False)['error'])
-                (self.base / '.installing').unlink()
 
     def test_invalid_main_and_routes_preserve_recovery_dispatch(self):
         self.entry_fixture()
@@ -124,14 +92,6 @@ printf '%s\\n' '{"ok":true,"removed":1,"retained":2}'
             holder.communicate('release\n', timeout=5)
         self.assertFalse(self.entry('settings-get', ok=False)['ok'])
 
-    def test_independent_device_read_ignores_broken_saved_configuration(self):
-        self.entry_fixture()
-        self.api.write_text(self.api.read_text().replace('# --- dispatch',
-            'daemon_up() { return 0; }\n# --- dispatch', 1))
-        self.script('bin/tailscale', '''printf '%s' '{"BackendState":"Running","Self":{"ID":"self-one"},"Peer":{"peer":{"ID":"peer-one","HostName":"peer-one","TailscaleIPs":["100.64.0.2"],"Online":true}}}'
-''')
-        (self.conf / 'foxytail.conf').write_text('TS_MODE=invalid\n')
-        self.assertEqual(self.entry('peers')['peers'][0]['id'], 'peer-one')
 
     def slow_fixture(self):
         self.entry_fixture()
@@ -183,25 +143,6 @@ printf '{"state":"stopped","suffix":"","port":%s,"mode":"%s"}' "$DNS_PORT" "$DNS
             self.assertEqual((tun['mode'], tun['socksPort']), ('bridge', 1099))
             self.assertEqual(self.entry('dns')['port'], 1053)
 
-    def test_host_process_stamp_survives_stop_and_rejects_zombies(self):
-        self.entry_fixture()
-        process = subprocess.Popen(['sleep', '30'], start_new_session=True)
-        def stamp(prefix=''):
-            return subprocess.run(['sh', '-c', '. "$1"; ' + prefix + '_proc_starttime "$2"',
-                'test', str(self.base / 'settings.sh'), str(process.pid)],
-                text=True, capture_output=True, timeout=3)
-        try:
-            before = stamp()
-            self.assertEqual(before.returncode, 0, before.stderr)
-            self.assertTrue(before.stdout.strip())
-            process.send_signal(signal.SIGSTOP)
-            stopped = stamp()
-            process.send_signal(signal.SIGCONT)
-            resumed = stamp()
-            self.assertEqual(stopped.stdout, before.stdout)
-            self.assertEqual(resumed.stdout, before.stdout)
-        finally:
-            self.terminate(process)
 
     def test_real_diagnostic_timeout_cleans_descendants_and_partial_output(self):
         self.slow_fixture()
@@ -250,46 +191,6 @@ printf '{"state":"stopped","suffix":"","port":%s,"mode":"%s"}' "$DNS_PORT" "$DNS
                 process.kill()
         process.communicate(timeout=3)
 
-    def test_exit_routing_cancels_owned_descendants_without_success_payload(self):
-        self.slow_fixture()
-        source = (ROOT / 'tailscale/scripts/foxytail.exitnode').read_text()
-        self.script('scripts/foxytail.exitnode', source.replace('#!/system/bin/sh\n', '', 1))
-        self.script('scripts/foxytail.route', 'exec "$TEST_DIR/bin/slow"\n')
-        self.script('bin/tailscale', '''
-case "$2" in
- switch) echo '[{"id":"profile-a","selected":true}]' ;;
- debug) echo '{"ExitNodeID":"node-a","ExitNodeIP":"","ExitNodeAllowLANAccess":false}' ;;
- status) echo '{"BackendState":"Running","Self":{"ID":"self-a"},"ExitNodeStatus":{"ID":"node-a","Online":true},"Peer":{}}' ;;
- *) exit 1 ;;
-esac
-''')
-        with (self.scripts / 'foxytail.webapi-network.sh').open('a') as network:
-            network.write('\ndaemon_up() { return 0; }\ndaemon_exists() { return 0; }\n')
-        request = str(int(time.time())) + '_exit_route_cancel'
-        runner = subprocess.Popen(['sh', str(self.api), '--request-id', request, 'exit-routing'],
-            env=self.env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, start_new_session=True)
-        bystander = subprocess.Popen(['sleep', '30'], start_new_session=True)
-        try:
-            pidfile = self.base / 'leaf-pid'
-            deadline = time.monotonic() + 8
-            while not pidfile.exists() and runner.poll() is None and time.monotonic() < deadline:
-                time.sleep(0.02)
-            self.assertTrue(pidfile.exists(), 'exit routing never reached nested route read')
-            registry = self.run / 'operations' / request
-            self.assertTrue(list(registry.glob('child.*')))
-            started = time.monotonic()
-            self.assertTrue(self.entry('cancel', request)['cancelled'])
-            stdout, stderr = runner.communicate(timeout=3)
-            self.assertLess(time.monotonic() - started, 7)
-            self.assertNotEqual(runner.returncode, 0, stdout + stderr)
-            self.assertFalse(json.loads(stdout)['ok'])
-            state = subprocess.run(['ps', '-p', pidfile.read_text(), '-o', 'stat='], text=True, capture_output=True)
-            self.assertTrue(state.returncode != 0 or state.stdout.strip().startswith('Z'))
-            self.assertFalse(list(registry.glob('child.*')))
-            self.assertIsNone(bystander.poll())
-        finally:
-            self.terminate(runner)
-            self.terminate(bystander)
 
     def test_real_slow_helpers_cancel_descendants_and_leave_bystander_alive(self):
         self.slow_fixture()

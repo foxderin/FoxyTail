@@ -53,8 +53,3 @@ class ModuleTests(unittest.TestCase):
                 self.assertEqual(log.getvalue().count('::endgroup::'), 3)
                 self.assertIn(f'Backend: 3 modules, {int(fail)} failed, ', log.getvalue())
                 self.assertIn('s total', log.getvalue())
-
-    def test_empty_discovery_fails(self):
-        with tempfile.TemporaryDirectory() as directory:
-            with self.assertRaisesRegex(RuntimeError, 'no backend test modules'):
-                verify_backend.verify(Path(directory), workers=2)

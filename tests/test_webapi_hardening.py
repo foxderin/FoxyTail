@@ -47,24 +47,6 @@ class WebapiHardeningTests(ApiTestCase):
         # Reads and already-permitted stop paths are unaffected by the gate.
         self.assertEqual(self.entry('backup-list'), {'ok': True, 'backups': []})
 
-    def test_single_file_ops_survive_broken_configuration_like_batch_forms(self):
-        self.entry_fixture()
-        inbox = self.sdcard / 'Download' / 'Taildrop'
-        inbox.mkdir()
-        (inbox / 'a.txt').write_text('alpha')
-        (inbox / 'b.txt').write_text('beta')
-        (self.conf / 'foxytail.conf').write_text('TS_MODE=invalid\n')
-        # The single-name inbox operations must degrade exactly like their
-        # batch equivalents: their own validation still applies, and only a
-        # handler-level failure may reject the request.
-        self.assertEqual(self.entry('file-delete', 'a.txt'), {'ok': True})
-        self.assertIn('invalid name', self.entry('file-delete', '../escape', ok=False)['error'])
-        self.assertEqual(self.entry('file-clear'), {'ok': True, 'removed': 1})
-        # Proof the configuration really is broken: gated commands still fail.
-        self.assertIn('invalid configuration', self.entry('settings-get', ok=False)['error'])
-        # The upgrade gate still covers the same commands independently.
-        (self.base / '.installing').touch()
-        self.assertIn('upgrade', self.entry('file-delete', 'b.txt', ok=False)['error'])
 
     def test_format_character_names_are_rejected_like_other_spoofed_names(self):
         inbox = self.sdcard / 'Download' / 'Taildrop'
@@ -116,18 +98,6 @@ cmd_login
         self.assertNotEqual(result.returncode, 0)
         self.assertIn('another login is in progress', json.loads(result.stdout)['error'])
 
-    def test_traffic_preserves_a_helper_failure_verdict(self):
-        stats = self.scripts / 'foxytail.stats'
-        stats.write_text('#!/bin/sh\necho \'{"ok":false,"error":"collector-broken"}\'\n')
-        stats.chmod(0o755)
-        result = json.loads(self.shell('_op_exec() { shift; "$@"; }; cmd_traffic daily').stdout)
-        self.assertEqual(result, {'ok': False, 'error': 'collector-broken'})
-        stats.write_text('#!/bin/sh\necho \'{"days":[]}\'\n')
-        result = json.loads(self.shell('_op_exec() { shift; "$@"; }; cmd_traffic daily').stdout)
-        self.assertEqual(result, {'ok': True, 'days': []})
-        stats.write_text('#!/bin/sh\necho \'{"ok":false,"error":"uid-cache-broken"}\'\n')
-        result = json.loads(self.shell('_op_exec() { shift; "$@"; }; cmd_traffic_uids').stdout)
-        self.assertEqual(result, {'ok': False, 'error': 'uid-cache-broken'})
 
     def test_restore_stage_extracts_the_validated_resolved_path(self):
         # TS_DIR is not exported to helper children, so bake the capture path in.

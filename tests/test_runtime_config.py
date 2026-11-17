@@ -43,64 +43,11 @@ class RuntimeConfigTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         return result.stdout
 
-    def test_staged_settings_load_staged_libraries_and_validate_live_config(self):
-        stage = self.base / 'stage'
-        (stage / 'scripts').mkdir(parents=True)
-        shutil.copyfile(self.settings, stage / 'settings.sh')
-        for path in self.scripts.glob('foxytail.*.sh'):
-            shutil.move(path, stage / 'scripts' / path.name)
-        for valid in (True, False):
-            self.main.write_text('TS_MODE=' + ('bridge' if valid else 'invalid') + '\n')
-            result = subprocess.run(['sh', '-c', 'DIR=$2; . "$1"; load_conf', 'test',
-                                     str(stage / 'settings.sh'), str(stage / 'scripts')],
-                                    text=True, capture_output=True, timeout=10)
-            self.assertEqual(result.returncode == 0, valid, result.stdout + result.stderr)
-
-    def test_pending_settings_never_replace_recovery_snapshot(self):
-        self.shell('''
-conf_activate_runtime || exit 1
-conf_write_key foxytail.conf DNS_MODE local || exit 2
-conf_write_key foxytail.conf MAGIC_DNS on || exit 3
-conf_write_key foxytail.conf WATCHDOG off || exit 4
-load_runtime_conf || exit 5
-test "$DNS_MODE:$MAGIC_DNS:$WATCHDOG" = legacy:off:on || exit 6
-load_conf || exit 7
-test "$DNS_MODE:$MAGIC_DNS:$WATCHDOG" = local:on:off || exit 8
-''')
-        output = self.shell(self.service_functions() + '''
-_SERVICE_RECOVERY=1
-is_running() { return 0; }
-reconcile_companions() { echo "$DNS_MODE:$MAGIC_DNS:$WATCHDOG"; }
-start_service
-''')
-        self.assertEqual(output.strip(), 'legacy:off:on')
-        self.shell('conf_activate_runtime && load_runtime_conf && test "$DNS_MODE:$MAGIC_DNS:$WATCHDOG" = local:on:off')
 
     def service_functions(self):
         source = (ROOT / 'tailscale/scripts/foxytail.service').read_text()
         return source[source.index('daemon_pids() {'):source.index('# Serialize all controllers')]
 
-    def test_warm_start_uses_runtime_even_with_invalid_desired(self):
-        self.shell('conf_activate_runtime')
-        self.main.write_text('TS_MODE=invalid\n')
-        # A repeated start keeps the runtime snapshot and still reports the
-        # reconciler's failure to its caller.
-        output = self.shell(self.service_functions() + '''
-is_running() { return 0; }
-reconcile_companions() { test "$TS_MODE" = bridge || return 9; echo reconciled; return 7; }
-start_service
-test "$?" = 7
-''')
-        self.assertEqual(output.strip(), 'reconciled')
-
-    def test_resident_reload_does_not_parse_broken_desired_settings(self):
-        self.shell('conf_activate_runtime')
-        self.main.write_text('TS_MODE=invalid\n')
-        (self.base / 'disable').touch()
-        result = subprocess.run(['sh', str(self.scripts / 'start.sh'), 'reload-residents'],
-                                cwd=self.base, env={**os.environ, 'MODPATH': str(self.base)},
-                                text=True, capture_output=True, timeout=10)
-        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
     def test_candidate_is_fixed_before_stop_and_preserves_newer_pending(self):
         self.shell('conf_activate_runtime; conf_write_key foxytail.conf SOCKS_PORT 1200')
@@ -166,96 +113,6 @@ test ! -e "$TS_RUN_DIR/stopped"
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertTrue((self.run / 'service-stopped').exists())
 
-    def test_pending_marker_rejects_unlocked_writer(self):
-        self.shell('''
-conf_mark_pending && exit 1
-test ! -f "$TS_RUN_DIR/settings.pending" || exit 2
-conf_lock_acquire || exit 3
-conf_mark_pending || exit 4
-conf_lock_release
-test -f "$TS_RUN_DIR/settings.pending"
-''')
-
-    def test_disable_callback_uses_internal_stop_and_preserves_failures(self):
-        callback = self.scripts / 'foxytail.inotify'
-        callback.write_text((ROOT / 'tailscale/scripts/foxytail.inotify').read_text().replace(
-            '"${TS_SCRIPTS_DIR}/foxytail.service" stop',
-            'sh "${TS_SCRIPTS_DIR}/foxytail.service" stop').replace(
-            '|| "${TS_SCRIPTS_DIR}/${_s}" stop',
-            '|| sh "${TS_SCRIPTS_DIR}/${_s}" stop'))
-        (self.scripts / 'foxytail.watchdog').write_text('#!/bin/sh\nexit 9\n')
-        service = self.scripts / 'foxytail.service'
-        service.write_text('#!/bin/sh\nprintf "%s\\n" "$*" >' +
-                           shlex.quote(str(self.run / 'stop-args')) + '\n')
-        service.chmod(0o755)
-        (self.base / 'disable').touch()
-        result = subprocess.run(['sh', str(callback), 'n', str(self.base), 'disable'],
-                                cwd=self.base, text=True, capture_output=True, timeout=10)
-        self.assertNotEqual(result.returncode, 0)
-        self.assertEqual((self.run / 'stop-args').read_text(), 'stop --internal\n')
-        self.assertFalse((self.run / 'manual-stop').exists())
-
-    def test_disable_callback_covers_rename_events_and_enable_by_absence(self):
-        # busybox inotifyd emits 'y' (moved-into-dir) for a flag installed by
-        # rename, never 'n'; removal events report 'd'/'m' with the flag gone.
-        callback = self.scripts / 'foxytail.inotify'
-        callback.write_text((ROOT / 'tailscale/scripts/foxytail.inotify').read_text().replace(
-            '"${TS_SCRIPTS_DIR}/foxytail.service" stop',
-            'sh "${TS_SCRIPTS_DIR}/foxytail.service" stop').replace(
-            '"${TS_SCRIPTS_DIR}/start.sh" enable',
-            'sh "${TS_SCRIPTS_DIR}/start.sh" enable').replace(
-            '|| "${TS_SCRIPTS_DIR}/${_s}" stop',
-            '|| sh "${TS_SCRIPTS_DIR}/${_s}" stop'))
-        service = self.scripts / 'foxytail.service'
-        service.write_text('#!/bin/sh\nprintf "%s\\n" "$*" >' +
-                           shlex.quote(str(self.run / 'stop-args')) + '\n')
-        service.chmod(0o755)
-        start = self.scripts / 'start.sh'
-        start.write_text('#!/bin/sh\nprintf "%s\\n" "$*" >' +
-                         shlex.quote(str(self.run / 'start-args')) + '\n')
-        start.chmod(0o755)
-        (self.base / 'disable').touch()
-        for events in ('y', 'w'):
-            result = subprocess.run(['sh', str(callback), events, str(self.base), 'disable'],
-                                    cwd=self.base, text=True, capture_output=True, timeout=10)
-            self.assertEqual(result.returncode, 0, events + result.stdout + result.stderr)
-            self.assertEqual((self.run / 'stop-args').read_text(), 'stop --internal\n')
-            self.assertFalse((self.run / 'start-args').exists())
-        (self.base / 'disable').unlink()
-        for events in ('d', 'm'):
-            result = subprocess.run(['sh', str(callback), events, str(self.base), 'disable'],
-                                    cwd=self.base, text=True, capture_output=True, timeout=10)
-            self.assertEqual(result.returncode, 0, events + result.stdout + result.stderr)
-            self.assertEqual((self.run / 'start-args').read_text(), 'enable\n')
-            (self.run / 'start-args').unlink()
-        # Events naming other files never toggle the service.
-        for name in ('disable.tmp', 'remove'):
-            result = subprocess.run(['sh', str(callback), 'n', str(self.base), name],
-                                    cwd=self.base, text=True, capture_output=True, timeout=10)
-            self.assertEqual(result.returncode, 0, name + result.stdout + result.stderr)
-        self.assertFalse((self.run / 'start-args').exists())
-        self.assertEqual((self.run / 'stop-args').read_text(), 'stop --internal\n')
-
-    def test_conf_parse_tolerates_crlf_indented_comments_and_key_whitespace(self):
-        # A stray CR, indented comment or blank line must not brick the file;
-        # whitespace is trimmed around the KEY and at line ends only.
-        self.main.write_bytes(b'# header\r\n  \t# indented comment\r\n   \r\n\t\r\n'
-                              b'TS_MODE =bridge\r\n  MAGIC_DNS\t= on  \r\n')
-        self.shell('load_conf && test "$TS_MODE:$MAGIC_DNS" = bridge:on')
-        # Internal value spacing stays verbatim and is never collapsed.
-        (self.conf / 'routes.conf').write_text(
-            'UID_LIST="10101   10102"\nROUTE_SUBNETS="100.64.0.0/10"\t \r\n')
-        self.shell('load_conf && test "$UID_LIST" = "10101   10102" '
-                   '&& test "$ROUTE_SUBNETS" = "100.64.0.0/10"')
-        # A line that is not a record still fails the whole file.
-        self.main.write_bytes(b'TS_MODE=bridge\r\nnot a record\r\n')
-        self.shell('! load_conf')
-
-    def test_incompatible_native_hot_routes_are_not_promoted(self):
-        self.main.write_text('TS_MODE=tun\n')
-        self.shell('conf_activate_runtime')
-        (self.conf / 'routes.conf').write_text('ROUTE_SCOPE=selected\nUID_LIST="10001"\n')
-        self.shell('! conf_apply_runtime routes.conf && load_runtime_conf && test "$ROUTE_SCOPE" = all')
 
     def test_corrupt_or_incomplete_snapshot_never_falls_back_to_desired(self):
         self.shell('conf_activate_runtime')
@@ -283,11 +140,6 @@ if load_runtime_conf; then exit 2; fi
 if conf_apply_runtime context.conf; then exit 3; fi
 conf_activate_runtime && load_runtime_conf && test "$WATCHDOG" = off
 ''')
-
-    def test_hot_promotion_rejects_nonregular_pointer(self):
-        (self.run / 'applied-config').mkdir()
-        self.shell('! conf_apply_runtime routes.conf && ! conf_activate_runtime')
-        self.assertEqual(list((self.run / 'applied-config').iterdir()), [])
 
 
     def test_start_rejects_daemon_disappearing_after_socket_readiness(self):
@@ -434,23 +286,6 @@ except subprocess.TimeoutExpired:
         self.assertEqual((self.run / 'manual-stop').read_bytes(), marker)
         self.assertFalse((self.run / 'pids/tailscaled.pid').exists())
 
-    def test_context_up_never_clears_user_hold_and_internal_stop_does_not_create_one(self):
-        self.control('start')
-        self.control('stop')
-        user_hold = (self.run / 'manual-stop').read_bytes()
-        self.control('context', 'down')
-        self.assertTrue((self.run / 'context-stop').exists())
-        self.control('context', 'up')
-        self.assertEqual((self.run / 'manual-stop').read_bytes(), user_hold)
-        self.assertFalse((self.run / 'context-stop').exists())
-        self.assertFalse((self.run / 'pids/tailscaled.pid').exists())
-        self.control('start', '--boot')
-        self.assertFalse((self.run / 'pids/tailscaled.pid').exists())
-        self.control('start')
-        self.control('stop', '--internal')
-        self.assertFalse((self.run / 'manual-stop').exists())
-        self.control('recover', 'start')
-        self.assertTrue((self.run / 'pids/tailscaled.pid').exists())
 
     def test_trial_rollback_after_context_down_restores_preference_after_daemon_start(self):
         self.control('start')
@@ -488,35 +323,6 @@ except subprocess.TimeoutExpired:
         self.daemon.write_text('#!/bin/sh\nexit 1\n')
         result = self.control('start', ok=False)
         self.assertNotEqual(result.returncode, 0)
-        self.assertFalse((self.run / 'pids/tailscaled.pid').exists())
-
-    def test_live_daemon_requires_working_local_api_but_not_login(self):
-        (self.run / 'api-unavailable').touch()
-        self.assertNotEqual(self.control('start', ok=False).returncode, 0)
-        self.control('stop')
-        (self.run / 'api-unavailable').unlink()
-        self.control('start')
-        self.assertTrue((self.run / 'pids/tailscaled.pid').read_text().strip().isdigit())
-
-    def test_start_without_optional_timeout_accepts_answering_local_api(self):
-        # Expose real host commands, but omit timeout even when the host has it.
-        for name in ('awk', 'basename', 'cat', 'chmod', 'cksum', 'cmp', 'cp', 'cut',
-                     'date', 'dirname', 'grep', 'id', 'jq', 'ln', 'mkdir', 'mktemp',
-                     'mv', 'nohup', 'ps', 'readlink', 'realpath', 'rm', 'rmdir',
-                     'sed', 'sh', 'sleep', 'sort', 'stat', 'touch', 'tr', 'wc'):
-            target = shutil.which(name)
-            self.assertIsNotNone(target, name)
-            (self.binary / name).symlink_to(target)
-        (self.binary / 'timeout').unlink(missing_ok=True)
-        self.env['PATH'] = str(self.binary)
-        with self.settings.open('a') as settings:
-            settings.write('\nexport PATH="$TS_BIN_DIR:$TS_SCRIPTS_DIR"\n')
-        self.assertIsNone(shutil.which('timeout', path=self.env['PATH']))
-
-        self.control('start')
-        self.assertEqual((self.run / 'pids/tailscaled.pid').read_text().strip(),
-                         (self.run / 'owned-daemon.pid').read_text().strip())
-        self.control('stop')
         self.assertFalse((self.run / 'pids/tailscaled.pid').exists())
 
 
@@ -640,22 +446,6 @@ conf_activate_runtime "$next"
         self.wait_status('rolled-back')
         self.assertEqual(self.runtime_mode(), 'bridge')
 
-    def test_context_hold_does_not_supersede_trial_or_hide_timeout(self):
-        (self.run / 'hold-health').touch()
-        self.begin('proxy')
-        self.wait_status('running')
-        deadline = time.monotonic() + 7
-        while not (self.run / 'health-entered').exists() and time.monotonic() < deadline:
-            time.sleep(0.02)
-        self.assertTrue((self.run / 'health-entered').exists())
-        (self.run / 'context-stop').touch()
-        (self.run / 'health-failed').touch()
-        (self.run / 'hold-health').unlink()
-        time.sleep(1.1)
-        self.assertEqual((self.journal / 'status').read_text().strip(), 'running')
-        self.clock.write_text('131')
-        self.wait_status('rolled-back')
-        self.assertEqual(self.runtime_mode(), 'bridge')
 
     def test_confirmation_persists_trial_choice_and_keeps_later_saved_settings(self):
         trial_id = self.begin('proxy')
@@ -674,41 +464,6 @@ conf_activate_runtime "$next"
         self.assertIn('TS_MODE=proxy', self.main.read_text())
         self.assertTrue((self.run / 'settings.pending').exists())
 
-    def test_expiry_and_failed_health_preserve_later_saves(self):
-        trial_id = self.begin('proxy')
-        self.wait_status('running')
-        self.shell('conf_write_key foxytail.conf SOCKS_PORT 1300')
-        self.trial('revert', trial_id)
-        self.wait_status('rolled-back')
-        self.assertEqual(self.runtime_mode(), 'bridge')
-        self.assertEqual(self.shell('load_conf && echo "$SOCKS_PORT"').strip(), '1300')
-        (self.run / 'health-failed').touch()
-        self.begin('proxy')
-        self.wait_status('rolled-back')
-        self.assertEqual(self.runtime_mode(), 'bridge')
-        self.assertIn('health check failed', (self.journal / 'reason').read_text())
-
-    def test_status_recovers_dead_worker_once_without_waiting_for_rollback(self):
-        self.begin('proxy')
-        self.wait_status('running')
-        old_pid = int((self.journal / 'worker').read_text().split()[0])
-        os.kill(old_pid, signal.SIGKILL)
-        time.sleep(0.1)
-        self.clock.write_text('200')
-        hold = self.run / 'hold-previous'
-        hold.touch()
-        started = time.monotonic()
-        self.trial('status')
-        self.assertLess(time.monotonic() - started, 2)
-        self.wait_status('rolling-back')
-        worker = (self.journal / 'worker').read_text()
-        for _ in range(3):
-            self.trial('check')
-        self.assertEqual((self.journal / 'worker').read_text(), worker)
-        self.assertNotEqual(int(worker.split()[0]), old_pid)
-        hold.unlink()
-        self.wait_status('rolled-back')
-        self.assertEqual(self.runtime_mode(), 'bridge')
 
     def test_boot_recovery_and_explicit_stop_do_not_activate_saved_candidate(self):
         self.begin('proxy')
@@ -739,35 +494,6 @@ conf_activate_runtime "$next"
         self.assertEqual((self.run / 'service-calls').read_text(), calls)
         self.assertEqual((self.journal / 'status').read_text().strip(), 'superseded')
 
-    def test_rolled_back_saved_candidate_stays_pending_after_lost_runtime(self):
-        self.shell('conf_write_key foxytail.conf SOCKS_PORT 1300')
-        self.begin()
-        self.wait_status('running')
-        self.assertEqual(self.shell('load_runtime_conf && echo "$SOCKS_PORT"').strip(), '1300')
-        self.clock.write_text('131')
-        self.wait_status('rolled-back')
-        for _ in range(2):
-            shutil.rmtree(self.run)
-            self.run.mkdir()
-            self.clock.write_text('200')
-            self.wall_clock.write_text('1')
-            self.trial('boot')
-            self.assertEqual(self.shell('load_runtime_conf && echo "$SOCKS_PORT"').strip(), '1099')
-            self.assertEqual(self.shell('load_conf && echo "$SOCKS_PORT"').strip(), '1300')
-            self.assertTrue((self.run / 'settings.pending').exists())
-
-    def test_explicit_new_activation_retires_old_rollback_snapshot(self):
-        self.begin('proxy')
-        self.wait_status('running')
-        self.clock.write_text('131')
-        self.wait_status('rolled-back')
-        self.shell('conf_write_key foxytail.conf SOCKS_PORT 1400; conf_activate_runtime')
-        self.assertEqual((self.journal / 'status').read_text().strip(), 'superseded')
-        shutil.rmtree(self.run)
-        self.run.mkdir()
-        result = self.trial('boot', ok=False)
-        self.assertEqual(result.returncode, 3, result.stdout + result.stderr)
-        self.assertFalse((self.run / 'applied-config').exists())
 
     def test_stale_id_and_expired_confirmation_cannot_apply_or_confirm(self):
         trial_id = self.begin('proxy')

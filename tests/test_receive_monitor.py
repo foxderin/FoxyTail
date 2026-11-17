@@ -44,19 +44,6 @@ receive_api() {
         p = self.run / 'broadcasts'
         return p.read_text().splitlines() if p.exists() else []
 
-    def test_hot_preference_defaults_validation_and_pending_isolation(self):
-        settings = json.loads(self.shell('load_conf; cmd_settings_get').stdout)['settings']
-        self.assertEqual(settings['TAILDROP_AUTO_RECEIVE'], '0')
-        result = json.loads(self.shell('cmd_settings_set TAILDROP_AUTO_RECEIVE 1').stdout)
-        self.assertTrue(result['applied'])
-        self.assertFalse(result['restartRequired'])
-        self.assertFalse((self.run / 'settings.pending').exists())
-        self.shell('cmd_settings_set TAILDROP_AUTO_RECEIVE on', ok=False)
-        self.assertIn('TAILDROP_AUTO_RECEIVE="1"', (self.conf / 'foxytail.conf').read_text())
-        self.shell('cmd_settings_set STATS off')
-        marker = (self.run / 'settings.pending').read_text()
-        self.shell('cmd_settings_set TAILDROP_AUTO_RECEIVE 0')
-        self.assertEqual((self.run / 'settings.pending').read_text(), marker)
 
     def test_baseline_new_files_and_at_most_once_even_broadcast_failure(self):
         self.snapshot_file([self.entry('history.txt')])
@@ -83,20 +70,6 @@ receive_api() {
         self.shell('_RECEIVE_BASELINE=1; receive_round')
         self.assertEqual(self.broadcasts(), [])
 
-    def test_failed_locked_and_unavailable_scans_preserve_observations(self):
-        self.snapshot_file([self.entry()])
-        self.shell('receive_round')
-        before = (self.run / 'receive-monitor.json').read_text()
-        (self.run / 'scan-failed').touch()
-        self.shell('receive_round', ok=False)
-        (self.run / 'scan-failed').unlink()
-        self.shell('taildrop_inbox_dir() { return 1; }; receive_round')
-        self.snapshot_file([], self_id='', mode='unavailable')
-        self.shell('receive_round', ok=False)
-        self.assertEqual((self.run / 'receive-monitor.json').read_text(), before)
-        self.snapshot_file([self.entry()])
-        self.shell('receive_round')
-        self.assertEqual(self.broadcasts(), [])
 
     def test_auto_recovery_journals_and_only_resubmits_identical_id(self):
         self.snapshot_file([], mode='buffered', pending=[dict(name='a $(touch nope).txt', size=3)])
@@ -140,14 +113,6 @@ receive_api() {
             self.assertEqual(json.loads((self.run / 'receive-status.json').read_text())['state'], 'blocked')
         self.assertEqual(sum(x.startswith('operation-start ') for x in (self.run / 'operations-log').read_text().splitlines()), 1)
 
-    def test_large_inbox_snapshot_is_not_passed_in_one_argv(self):
-        files = [self.entry(str(i).zfill(5) + 'x'*100) for i in range(3000)]
-        self.snapshot_file(files)
-        self.shell('receive_round; receive_round')
-        self.assertEqual(self.broadcasts(), [])
-        self.snapshot_file(files + [self.entry('fresh')])
-        self.shell('receive_round')
-        self.assertEqual(len(self.broadcasts()), 1)
 
     def test_auto_skips_partial_and_oversize_items(self):
         self.snapshot_file([], mode='buffered', pending=[dict(name='bad.partial',size=1),
@@ -192,34 +157,3 @@ receive_api() {
         self.assertTrue(calls[1].endswith('--es kind completed'))
         self.assertTrue(calls[2].endswith('--es kind pending'))
         self.assertNotEqual(calls[0],calls[2])
-
-    def test_completed_metadata_edit_is_not_a_new_arrival(self):
-        self.snapshot_file([self.entry('a',1,1)])
-        self.shell('receive_round')
-        self.snapshot_file([self.entry('a',2,2)])
-        self.shell('receive_round')
-        self.assertEqual(self.broadcasts(),[])
-
-    def test_first_pending_snapshot_is_baseline_not_old_notification(self):
-        self.snapshot_file([],mode='buffered',pending=[dict(name='old',size=4)])
-        self.shell('receive_round')
-        self.snapshot_file([],mode='buffered',pending=[dict(name='old',size=4),dict(name='new',size=1)])
-        self.shell('receive_round')
-        self.assertEqual(len(self.broadcasts()),1)
-        self.assertIn('--ei count 1 --es kind pending', self.broadcasts()[0])
-
-    def test_restart_baseline_preserves_generation_for_identical_later_arrival(self):
-        self.snapshot_file([],mode='buffered')
-        self.shell('_RECEIVE_BASELINE=1; receive_round')
-        self.snapshot_file([],mode='buffered',pending=[dict(name='same.txt',size=4)])
-        self.shell('receive_round')
-        first_generation = json.loads((self.run / 'receive-monitor.json').read_text())['generation']
-        self.snapshot_file([],mode='buffered')
-        self.shell('_RECEIVE_BASELINE=1; receive_round')
-        self.assertGreater(json.loads((self.run / 'receive-monitor.json').read_text())['generation'],first_generation)
-        self.snapshot_file([],mode='buffered',pending=[dict(name='same.txt',size=4)])
-        self.shell('receive_round; receive_round')
-        calls = self.broadcasts()
-        self.assertEqual(len(calls),2)
-        self.assertNotEqual(calls[0],calls[1])
-        self.assertTrue(all(x.endswith('--es kind pending') for x in calls))

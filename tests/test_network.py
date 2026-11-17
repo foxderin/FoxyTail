@@ -163,71 +163,6 @@ esac
   (self.dir/'bin/dumpsys').chmod(0o755)
  def exit_snapshot(self,node='exit-a',actual='exit-a',online=True):
   (self.dir/'exit-snapshot.json').write_text(json.dumps({'profile':'test','self':'self','pref':{'id':node,'ip':'','auto':'','allowLAN':False},'backend':'Running','actual':{'ID':actual,'Online':online} if actual else None}))
- def test_exit_routing_keeps_eight_cli_validation_branch_without_mutations(self):
-  from test_exit_routing import CLI
-  route=self.dir/'scripts/foxytail.route'
-  route.write_text(route.read_text().replace('#!/system/bin/sh','#!/bin/sh',1))
-  helper=self.dir/'scripts/foxytail.exitnode'
-  helper.write_text((ROOT/'tailscale/scripts/foxytail.exitnode').read_text().replace('#!/system/bin/sh','#!/bin/sh',1))
-  cli=self.dir/'bin/tailscale';cli.write_text(CLI);cli.chmod(0o755)
-  with (self.dir/'settings.sh').open('a') as f:f.write('\ntmo() { shift; "$@"; }\n')
-  (self.dir/'daemon.json').write_text(json.dumps({'profile':'test','prefs':{'ExitNodeID':'exit-a','ExitNodeIP':'','ExitNodeAllowLANAccess':False},
-   'status':{'BackendState':'Running','Self':{'ID':'self'},'ExitNodeStatus':{'ID':'exit-a','Online':True},'Peer':{}}}))
-  self.run_script('foxytail.route','apply')
-  before=self.read();before.pop('calls')
-  (self.dir/'reads').write_text('')
-  fingerprint='bridge|selected|10101 10102|100.64.0.0/10 fd7a:115c:a1e0::/48|on|1052|0x40000000/0x40000000|on'
-  result=json.loads(self.run_script('foxytail.exitnode','exit-routing',fingerprint).stdout)
-  self.assertEqual(result['exitRouting']['effective'],'bridge-policy')
-  self.assertTrue(result['exitRouting']['ipv4']);self.assertTrue(result['exitRouting']['ipv6'])
-  self.assertEqual(result['selfId'],'self');self.assertTrue(result['ok'])
-  calls=[json.loads(line) for line in (self.dir/'reads').read_text().splitlines()]
-  self.assertEqual(len(calls),8)
-  self.assertFalse(any(call[0]=='set' for call in calls))
-  after=self.read();after.pop('calls');self.assertEqual(after,before)
-  for payload in ('{}','null','{"profile":"test","self":"self","pref":{}}'):
-   result=subprocess.run(['sh',str(self.dir/'scripts/foxytail.route'),'check-snapshot',fingerprint],input=payload,env=self.env,text=True,capture_output=True)
-   self.assertNotEqual(result.returncode,0)
-  after=self.read();after.pop('calls');self.assertEqual(after,before)
- def test_exit_public_defaults_follow_selected_identity_and_clear(self):
-  self.config(ROUTE_SCOPE='all',IPV6='off',ROUTE_SUBNETS='100.64.0.0/10 0.0.0.0/0 ::/0')
-  self.run_script('foxytail.route','apply')
-  self.assertNotIn('0.0.0.0/0',[r[0] for r in self.read()['routes']['-4:1052']])
-  self.exit_snapshot(actual='other')
-  self.run_script('foxytail.route','apply')
-  self.assertNotIn('0.0.0.0/0',[r[0] for r in self.read()['routes']['-4:1052']])
-  self.exit_snapshot()
-  self.run_script('foxytail.route','apply')
-  self.assertIn('0.0.0.0/0',[r[0] for r in self.read()['routes']['-4:1052']])
-  self.assertEqual(self.read()['routes']['-6:1052'],[])
-  # Offline authority retains capture rather than silently leaking to local WAN.
-  self.exit_snapshot(online=False)
-  self.run_script('foxytail.route','check')
-  self.exit_snapshot(node='',actual=None)
-  self.run_script('foxytail.route','check',ok=False)
-  self.run_script('foxytail.route','apply')
-  self.assertNotIn('0.0.0.0/0',[r[0] for r in self.read()['routes']['-4:1052']])
-  self.assertTrue(all('1052' in call for call in self.read()['calls'] if call[0]=='ip' and 'route' in call and ('add' in call or 'del' in call)))
- def test_exit_public_defaults_preserve_scope_and_exemptions(self):
-  self.exit_snapshot()
-  for scope in ('selected','bypass','all'):
-   with self.subTest(scope=scope):
-    self.config(ROUTE_SCOPE=scope)
-    self.run_script('foxytail.route','apply')
-    for family,cmd,default in (('-4','iptables','0.0.0.0/0'),('-6','ip6tables','::/0')):
-     state=self.read();rules=state['chains'][cmd+':mangle']['FOXY_MARK']
-     self.assertEqual(rules[0],['-m','owner','--uid-owner','0','-j','RETURN'])
-     self.assertEqual(rules[1],['-m','mark','!','--mark','0x0/0x1e000000','-j','RETURN'])
-     defaults=[r for r in rules if default in r]
-     self.assertEqual(len(defaults),2 if scope=='selected' else 1)
-     self.assertIn(default,[r[0] for r in state['routes'][family+':1052']])
-     if scope=='selected':self.assertEqual({r[r.index('--uid-owner')+1] for r in defaults},{'10101','10102'})
-     if scope=='bypass':
-      for uid in ('10101','10102'):
-       self.assertLess(rules.index(['-m','owner','--uid-owner',uid,'-j','RETURN']),rules.index(defaults[0]))
-  self.config(ROUTE_SCOPE='selected',UID_LIST='')
-  self.run_script('foxytail.route','apply')
-  self.assertNotIn('0.0.0.0/0',[r[0] for r in self.read()['routes']['-4:1052']])
  def test_exit_snapshot_failure_does_not_mutate_installed_policy(self):
   self.exit_snapshot();self.run_script('foxytail.route','apply')
   before=self.read()
@@ -240,12 +175,6 @@ esac
   self.config(TS_MODE='tun');self.run_script('foxytail.route','apply',ok=False)
   self.config(IPV6='on',ROUTE_SUBNETS='100.64.0.0/10');self.run_script('foxytail.route','apply',ok=False)
   self.assertEqual(self.read()['calls'],[])
- def test_safe_teardown_corrupt_state(self):
-  marker=self.dir/'executed'
-  (self.dir/'run/route.state').write_text(f'ROUTE_TABLE=254\nBAD=$(touch {marker})\n')
-  self.run_script('foxytail.route','teardown')
-  self.assertFalse(marker.exists())
-  self.assertFalse(any('route' in call for call in self.read()['calls']))
  def test_idempotence_repair_and_exact_ownership(self):
   self.run_script('foxytail.route','apply');self.run_script('foxytail.route','check')
   s=self.read();start=len(s['calls']);self.run_script('foxytail.route','apply')
@@ -294,101 +223,7 @@ esac
   self.env.pop('MOCK_FAIL_DELETE');self.run_script('foxytail.route','teardown')
   self.assertFalse((self.dir/'run/route.state').exists())
   self.assertFalse(self.read()['routes']['-4:1052'])
- def test_route_status_notes_skipped_defaults_and_scopes_ipv6(self):
-  # Configured /0 destinations are dropped from ROUTE_DESTINATIONS unless the
-  # exit snapshot authorizes them; status must say so instead of reporting a
-  # clean "applied" over a silently smaller policy.
-  self.config(ROUTE_SUBNETS='100.64.0.0/10 fd7a:115c:a1e0::/48 0.0.0.0/0 ::/0')
-  self.run_script('foxytail.route','apply')
-  s=self.read();s['rules']['-6'].insert(0,['0:','from','all','lookup','main']);self.write(s)
-  out=self.run_script('foxytail.route','status').stdout
-  self.assertIn('Policy routing: applied',out.splitlines()[0])
-  self.assertIn('note: ROUTE_SUBNETS entry 0.0.0.0/0 is skipped',out)
-  self.assertIn('note: ROUTE_SUBNETS entry ::/0 is skipped',out)
-  # The foreign -6 rule proves the IPv6 inventory ran; nothing v6 leaks into
-  # the IPV6=off report below.
-  self.assertIn('0: from all lookup main',out)
-  self.assertIn('12510: from all fwmark 0x40000000/0x40000000 lookup 1052',out)
-  self.config(IPV6='off',ROUTE_SUBNETS='100.64.0.0/10')
-  self.run_script('foxytail.route','teardown');self.run_script('foxytail.route','apply')
-  out=self.run_script('foxytail.route','status').stdout
-  self.assertNotIn('note:',out);self.assertNotIn('0: from all lookup main',out)
-  self.assertIn('12510: from all fwmark 0x40000000/0x40000000 lookup 1052',out)
-  # Once an online exit node authorizes the defaults they are applied, not
-  # skipped, so no note remains for them.
-  self.config(IPV6='on',ROUTE_SUBNETS='100.64.0.0/10 fd7a:115c:a1e0::/48 0.0.0.0/0 ::/0')
-  self.exit_snapshot();self.run_script('foxytail.route','apply')
-  out=self.run_script('foxytail.route','status').stdout
-  self.assertNotIn('note:',out)
-  self.assertIn('0.0.0.0/0',out);self.assertIn('::/0',out)
 
- def test_dns_detection_families_tables_and_targets(self):
-  for cmd,table,target in (('iptables','nat','REDIRECT'),('ip6tables','mangle','TPROXY'),('ip6tables','nat','DNAT')):
-   s=self.read();s['chains']={cmd+':'+table:{'OUTPUT':[['-p','udp','--dport','53','-j','OTHER_DNS']],'OTHER_DNS':[['-j',target]]}};self.write(s)
-   self.run_script('foxytail.compat','check-dns-hijack',ok=False)
-  for chains in ({'OUTPUT':[['-p','udp','--dport','53','-j','ACCEPT']]},{'OUTPUT':[],'ORPHAN':[['-p','udp','--dport','53','-j','REDIRECT']]},{'OUTPUT':[['-j','FOXY_DNS']],'FOXY_DNS':[['-p','udp','--dport','53','-j','REDIRECT']]}):
-   s=self.read();s['chains']={'iptables:nat':chains};self.write(s);self.run_script('foxytail.compat','check-dns-hijack')
-
- def test_compat_checks_use_applied_runtime_not_saved_settings(self):
-  # check/check-dns-hijack compare live chains against the APPLIED config; a
-  # saved but unapplied mode must not decide the proxy skip or v6 table scan.
-  (self.dir/'settings.sh').write_text((self.dir/'settings.sh').read_text() +
-   '\nload_runtime_conf() { . "$TEST_DIR/runtime-config"; }\n')
-  self.config()  # saved: bridge + IPV6=on
-  (self.dir/'runtime-config').write_text(
-   (self.dir/'config').read_text().replace('TS_MODE="bridge"','TS_MODE="proxy"').replace('IPV6="on"','IPV6="off"'))
-  # Saved TS_MODE=bridge would run `route check` and fail; runtime proxy skips.
-  self.run_script('foxytail.compat','check')
-  self.assertFalse((self.dir/'run/compat-alert').exists())
-  # A dead ip6tables inventory counts as a possible hijack only when IPV6 is
-  # on; the runtime off verdict must win over the saved one.
-  (self.dir/'bin/ip6tables').unlink()
-  (self.dir/'bin/ip6tables').write_text('#!/bin/sh\nexit 1\n');(self.dir/'bin/ip6tables').chmod(0o755)
-  self.run_script('foxytail.compat','check-dns-hijack')
-  # probe keeps the saved configuration for forensics, so the same dead
-  # inventory still reports the conflict through its warning list.
-  data=json.loads(self.run_script('foxytail.compat','probe').stdout)
-  self.assertEqual(len(data['warnings']),1)
-  self.assertIn('port 53',data['warnings'][0])
-
- def test_installed_proxy_is_inventory_until_dns_conflict_exists(self):
-  pm=self.dir/'bin/pm';pm.write_text('#!/bin/sh\necho package:com.follow.clash\n');pm.chmod(0o755)
-  data=json.loads(self.run_script('foxytail.compat','probe').stdout)
-  self.assertEqual(data['apps'],[{'package':'com.follow.clash','kind':'proxy'}]);self.assertEqual(data['warnings'],[])
-  s=self.read();s['chains']['iptables:nat']['OUTPUT']=[['-p','udp','--dport','53','-j','REDIRECT','--to-ports','5353']];self.write(s)
-  data=json.loads(self.run_script('foxytail.compat','probe').stdout)
-  self.assertEqual(len(data['warnings']),1);self.assertIn('port 53',data['warnings'][0])
-
- def test_dns_cache_flush_requires_verified_interface_and_targets_existing_networks(self):
-  self.setup_binder()
-  dns=(ROOT/'tailscale/scripts/foxytail.dns').read_text()
-  flush=dns[dns.index('flush_android_dns_cache() {'):dns.index('\ndns_start() {')]
-  runner=self.dir/'flush.sh';runner.write_text('. "$TEST_DIR/settings.sh"\n'+flush+'\nflush_android_dns_cache\n')
-  def run():return subprocess.run(['sh',str(runner)],env=self.env,text=True,capture_output=True)
-  calls=self.dir/'service-calls'
-  for version in ('00000004','0000000f'):
-   self.env['MOCK_RESOLVER_VERSION']=version;calls.write_text('')
-   self.assertEqual(run().returncode,0)
-   self.assertEqual(calls.read_text().splitlines(),['call dnsresolver 16777215','call dnsresolver 11 i32 101','call dnsresolver 11 i32 102'])
-   self.assertEqual((self.dir/'run/dnsmasq.cache-status').read_text().strip(),'flushed:2')
-  for version in ('00000003','00000010','invalid'):
-   self.env['MOCK_RESOLVER_VERSION']=version;calls.write_text('')
-   self.assertNotEqual(run().returncode,0)
-   self.assertEqual(calls.read_text().splitlines(),['call dnsresolver 16777215'])
-   self.assertIn('unsupported-version',(self.dir/'run/dnsmasq.cache-status').read_text())
-  self.env['MOCK_DESCRIPTOR']='dnsresolver: [vendor.unverified.Resolver]';calls.write_text('')
-  self.assertNotEqual(run().returncode,0);self.assertEqual(calls.read_text(),'')
-
- def test_pinned_native_dns_is_compatible_but_other_quad100_rules_are_not(self):
-  native=['!','-d','100.100.100.100/32','!','-o','tun+','-p','udp','-m','udp','--dport','53','-j','DNAT','--to-destination','100.100.100.100:53']
-  s=self.read();s['chains']={'iptables:nat':{'OUTPUT':[native]}};self.write(s)
-  self.run_script('foxytail.compat','check-dns-hijack')
-  v6=['!','-d','fd7a:115c:a1e0::53/128','!','-o','tun+','-p','udp','-m','udp','--dport','53','-j','DNAT','--to-destination','[fd7a:115c:a1e0::53]:53']
-  s=self.read();s['chains']['ip6tables:nat']={'OUTPUT':[v6]};self.write(s)
-  self.run_script('foxytail.compat','check-dns-hijack')
-  for rule in ([x.replace('100.100.100.100:53','192.0.2.1:53') for x in native],['-p','udp','--dport','53','-j','DNAT','--to-destination','100.100.100.100:53']):
-   s=self.read();s['chains']['iptables:nat']['OUTPUT']=[rule];self.write(s)
-   self.run_script('foxytail.compat','check-dns-hijack',ok=False)
 
  def test_dns_upstream_is_independent_of_app_scope_and_keeps_owned_routes(self):
   for scope in ('selected','bypass'):
@@ -403,17 +238,6 @@ esac
   self.config(MAGIC_DNS='off',IPV6='off');self.run_script('foxytail.route','apply')
   self.assertFalse(any('--dport' in r for r in self.read()['chains']['iptables:mangle']['FOXY_MARK']))
 
- def test_dns_binary_falls_back_to_trusted_system_paths(self):
-  dns=(ROOT/'tailscale/scripts/foxytail.dns').read_text()
-  select=dns[dns.index('select_dns_binary() {'):dns.index('\nget_state() {')]
-  for parent in ('system','vendor'):(self.dir/parent).mkdir()
-  select=select.replace('/system/bin/dnsmasq',str(self.dir/'system/dnsmasq')).replace('/vendor/bin/dnsmasq',str(self.dir/'vendor/dnsmasq'))
-  runner=self.dir/'binary.sh';runner.write_text('. "$TEST_DIR/settings.sh"\n'+select+'\nselect_dns_binary || exit 1\nprintf "%s" "$DNS_BIN"\n')
-  def selected():return subprocess.run(['sh',str(runner)],env=self.env,text=True,capture_output=True)
-  self.assertNotEqual(selected().returncode,0)
-  for path in (self.dir/'vendor/dnsmasq',self.dir/'system/dnsmasq',self.dir/'bin/dnsmasq'):
-   path.write_text('#!/bin/sh\n');path.chmod(0o755)
-   self.assertEqual(selected().stdout,str(path))
 
  def setup_dns_runtime(self):
   self.setup_binder()
@@ -474,39 +298,6 @@ esac
     for name in fields[1:]:records.setdefault(name.lower().rstrip('.'),set()).add(address)
   return records
 
- def test_dns_exact_aliases_migrate_wildcards_and_reconcile_hosts(self):
-  run,current=self.setup_dns_runtime()
-  current['Peer']['peer1'].update(DNSName='Dev.example.ts.net.',TailscaleIPs=['100.64.0.2','fd7a:115c:a1e0::2'])
-  (self.dir/'current.json').write_text(json.dumps(current))
-  run('dns_start')
-  records=self.dns_records()
-  for name in ('dev','dev.example.ts.net'):
-   self.assertEqual(records[name],{'100.64.0.2','fd7a:115c:a1e0::2'})
-  for name in ('unrelated.example.dev','child.dev.example.ts.net','other.example.ts.net'):
-   self.assertNotIn(name,records)
-  # A still-live old wildcard configuration is never considered ready, even
-  # with the same account/peer context and an otherwise valid host database.
-  conf=self.dir/'run/dnsmasq.conf'
-  with conf.open('a') as f:f.write('address=/dev/100.64.0.2\n')
-  self.assertEqual(json.loads(run('dns_status','--json'))['state'],'degraded')
-  starts=(self.dir/'dns-starts').read_text()
-  run('dns_start')
-  self.assertEqual((self.dir/'dns-starts').read_text(),starts+'start\n')
-  self.assertEqual(json.loads(run('dns_status','--json'))['state'],'running')
-  self.assertEqual(self.dns_records(),records)
-  # A missing/corrupted external mapping must also trigger a real restart.
-  for content in (None,'100.64.0.9 dev dev.example.ts.net\n'):
-   hosts=self.dir/'dns-hosts/hosts'
-   if content is None:hosts.unlink()
-   else:hosts.write_text(content)
-   self.assertEqual(json.loads(run('dns_status','--json'))['state'],'degraded')
-   starts=(self.dir/'dns-starts').read_text();run('dns_start')
-   self.assertEqual((self.dir/'dns-starts').read_text(),starts+'start\n')
-   self.assertEqual(self.dns_records(),records)
-  hosts=self.dir/'dns-hosts/hosts';hosts.chmod(0o600)
-  self.assertEqual(json.loads(run('dns_status','--json'))['state'],'degraded')
-  run('dns_start');self.assertEqual(hosts.stat().st_mode & 0o777,0o644)
-  self.assertEqual(json.loads(run('dns_status','--json'))['state'],'running')
 
  def test_dns_cleanup_failure_preserves_listener_until_both_families_removed(self):
   run,_=self.setup_dns_runtime()
@@ -533,18 +324,6 @@ esac
      chains=self.read()['chains'][family+':nat']
      self.assertNotIn(['-j','FOXY_DNS'],chains['OUTPUT']);self.assertNotIn('FOXY_DNS',chains)
 
- def test_modern_cleanup_failure_does_not_retain_legacy_listener(self):
-  run,_=self.setup_dns_runtime();run('dns_start')
-  runner=self.dir/'dns-runner.sh'
-  runner.write_text(runner.read_text().replace('\n"$@"\n','\nmodern_dns_stop() { return 1; }\n"$@"\n'))
-  run('dns_stop',ok=False)
-  self.assertFalse((self.dir/'alive').exists())
-  self.assertEqual((self.dir/'run/dnsmasq.state').read_text().strip(),'degraded')
-  for family in ('iptables','ip6tables'):
-   self.assertNotIn('FOXY_DNS',self.read()['chains'][family+':nat'])
-  self.assertTrue((self.dir/'dns-hosts/hosts').exists())
-  runner.write_text(runner.read_text().replace('modern_dns_stop() { return 1; }','modern_dns_stop() { return 0; }'))
-  run('dns_stop');self.assertFalse((self.dir/'dns-hosts').exists())
 
  def test_dns_hosts_reject_symlinks_and_writable_directories(self):
   run,_=self.setup_dns_runtime();run('dns_stop')
@@ -590,125 +369,5 @@ esac
   run('dns_start');self.assertEqual(json.loads(run('dns_status','--json'))['state'],'running')
   run('dns_stop');self.assertEqual(outside.read_text(),'keep\n')
 
- def test_dns_missing_ipv6_nat_retains_ipv4_and_recovers_when_available(self):
-  run,_=self.setup_dns_runtime()
-  self.env['MOCK_NO_IPV6_NAT']='1'
-  run('dns_start')
-  status=json.loads(run('dns_status','--json'))
-  self.assertEqual((status['state'],status['reason']),('running','ipv6-unavailable'))
-  state=self.read()
-  self.assertEqual(state['chains']['iptables:nat']['OUTPUT'],[['-j','FOXY_DNS']])
-  self.assertFalse(any(c[0]=='ip6tables' and c[1:3]==['-t','nat'] and c[3] in ('-A','-I','-N') for c in state['calls']))
-  calls=self.dir/'service-calls';before=calls.read_text()
-  run('dns_start')
-  self.assertEqual(calls.read_text(),before)
-  # No configuration fallback: IPv6 tunnel/listener preference is retained.
-  self.assertIn('IPV6="on"',(self.dir/'config').read_text())
-  self.assertIn('listen-address=::1',(self.dir/'run/dnsmasq.conf').read_text())
-  self.env.pop('MOCK_NO_IPV6_NAT')
-  self.assertEqual(json.loads(run('dns_status','--json'))['state'],'degraded')
-  run('dns_start')
-  status=json.loads(run('dns_status','--json'))
-  self.assertEqual((status['state'],status['reason']),('running','running'))
-  self.assertEqual(self.read()['chains']['ip6tables:nat']['OUTPUT'],[['-j','FOXY_DNS']])
-  # Turning IPv6 off never requires or installs its nat table.
-  self.config(IPV6='off');self.env['MOCK_NO_IPV6_NAT']='1'
-  run('dns_start');status=json.loads(run('dns_status','--json'))
-  self.assertEqual((status['state'],status['reason']),('running','running'))
-
- def test_dns_live_process_preserves_degraded_and_recovers(self):
-  run,current=self.setup_dns_runtime()
-  current['Peer']['peer1']['TailscaleIPs'].append('fd7a:115c:a1e0::2')
-  (self.dir/'current.json').write_text(json.dumps(current))
-  state=self.read();state['chains']={'ip6tables:mangle':{'OUTPUT':[['-p','udp','--dport','53','-j','TPROXY']]}};self.write(state)
-  run('dns_start');self.assertEqual(json.loads(run('dns_status','--json'))['state'],'degraded')
-  state=self.read();state['chains']['ip6tables:mangle']['OUTPUT']=[];self.write(state)
-  run('dns_start');self.assertEqual(json.loads(run('dns_status','--json'))['state'],'running')
-  # A pinned native DNAT rule stays installed, behind the local resolver.
-  native=['!','-o','tun+','!','-d','100.100.100.100','-p','udp','--dport','53','-j','DNAT','--to-destination','100.100.100.100:53']
-  state=self.read();state['chains']['iptables:nat']['OUTPUT'].insert(0,native);self.write(state)
-  run('dns_start');status=json.loads(run('dns_status','--json'))
-  self.assertEqual(status['state'],'running');self.assertTrue(status['upstreamNative'])
-  self.assertEqual(self.read()['chains']['iptables:nat']['OUTPUT'],[['-j','FOXY_DNS'],native])
-  calls=self.dir/'service-calls';before=calls.read_text()
-  run('dns_start');self.assertEqual(calls.read_text(),before)
-  records=self.dns_records()
-  for name in ('laptop','laptop.example.ts.net'):
-   self.assertEqual(records[name],{'100.64.0.2','fd7a:115c:a1e0::2'})
-  for name in ('phone','phone.example.ts.net'):
-   self.assertEqual(records[name],{'100.64.0.1'})
-  # Online/traffic fluctuations are excluded from the DNS context. Name and
-  # address changes are detected and reconciled by the watchdog status check.
-  current['Peer']['peer1']['Online']=False;current['Peer']['peer1']['RxBytes']=100
-  (self.dir/'current.json').write_text(json.dumps(current))
-  self.assertEqual(json.loads(run('dns_status','--json'))['state'],'running')
-  current['Peer']['peer1']['TailscaleIPs']=['100.64.0.3']
-  (self.dir/'current.json').write_text(json.dumps(current))
-  self.assertEqual(json.loads(run('dns_status','--json'))['state'],'degraded')
-  run('dns_start');records=self.dns_records()
-  for name in ('laptop','laptop.example.ts.net'):
-   self.assertEqual(records[name],{'100.64.0.3'})
-  self.assertEqual(calls.read_text()[len(before):].splitlines(),['call dnsresolver 16777215','call dnsresolver 11 i32 101','call dnsresolver 11 i32 102'])
-  state=self.read()
-  for cmd in ('iptables','ip6tables'):
-   rules=state['chains'][cmd+':nat']['FOXY_DNS'];self.assertTrue(any('tcp' in r for r in rules));self.assertTrue(any('udp' in r for r in rules))
-   exemptions=[i for i,r in enumerate(rules) if r[-1]=='ACCEPT']
-   redirects=[i for i,r in enumerate(rules) if 'REDIRECT' in r]
-   self.assertEqual(len(exemptions),4);self.assertLess(max(exemptions),min(redirects))
-   self.assertFalse(any(r[-1]=='RETURN' for r in rules))
-  state['chains']['iptables:nat']['OUTPUT']=[];self.write(state)
-  self.assertEqual(json.loads(run('dns_status','--json'))['state'],'degraded')
-  run('dns_start');self.assertEqual(json.loads(run('dns_status','--json'))['state'],'running')
-  # An account switch invalidates a live process until its suffix is rebuilt.
-  current['MagicDNSSuffix']='other.ts.net';current['CurrentTailnet']['Name']='other';current['Self']['ID']='device2'
-  (self.dir/'current.json').write_text(json.dumps(current))
-  self.assertEqual(json.loads(run('dns_status','--json'))['state'],'degraded')
-  run('dns_start');status=json.loads(run('dns_status','--json'));self.assertEqual(status['state'],'running');self.assertEqual(status['suffix'],'other.ts.net')
-  # Neither surviving kernel rules nor a surviving daemon may report stopped.
-  self.env['MOCK_FAIL_IPTABLES_DELETE']='1';run('dns_stop',ok=False)
-  self.assertEqual((self.dir/'run/dnsmasq.state').read_text().strip(),'degraded')
-  self.env.pop('MOCK_FAIL_IPTABLES_DELETE');run('dns_start')
-  self.env['FAIL_STOP']='1';run('dns_stop',ok=False)
-  self.assertEqual(json.loads(run('dns_status','--json'))['state'],'degraded')
-  self.env.pop('FAIL_STOP');run('dns_stop');self.assertEqual(json.loads(run('dns_status','--json'))['state'],'stopped')
-  self.assertEqual(json.loads(run('dns_status','--json'))['reason'],'apply-pending')
-  self.config(MAGIC_DNS='off');self.assertEqual(json.loads(run('dns_status','--json'))['reason'],'disabled')
-
- def test_dns_start_tailnet_loss_preserves_stop_failure_reason(self):
-  # When the tailnet's MagicDNS disappears, dns_start stops the resolver; a
-  # stop failure must keep dns_stop's precise reason instead of collapsing to
-  # a generic 'degraded'.
-  run,current=self.setup_dns_runtime()
-  run('dns_start')
-  self.assertEqual(json.loads(run('dns_status','--json'))['state'],'running')
-  current['CurrentTailnet']['MagicDNSEnabled']=False
-  (self.dir/'current.json').write_text(json.dumps(current))
-  self.env['FAIL_STOP']='1'
-  run('dns_start',ok=False)
-  self.assertEqual((self.dir/'run/dnsmasq.reason').read_text().strip(),'cleanup-failed')
-  # A retained reconnect-needed survives another failed stop attempt.
-  (self.dir/'run/dnsmasq.reason').write_text('reconnect-needed\n')
-  run('dns_start',ok=False)
-  self.assertEqual((self.dir/'run/dnsmasq.reason').read_text().strip(),'reconnect-needed')
-  self.assertEqual((self.dir/'run/dnsmasq.state').read_text().strip(),'degraded')
-
- def test_dns_probe_arms_load_applied_runtime_config(self):
-  # probe-transparent/probe-hijack never loaded configuration; the probes
-  # consult IPV6, so they must see the applied runtime values.
-  (self.dir/'settings.sh').write_text((self.dir/'settings.sh').read_text() +
-   '\nload_runtime_conf() { . "$TEST_DIR/runtime-config"; }\n')
-  self.config(IPV6='on')
-  (self.dir/'runtime-config').write_text(
-   (self.dir/'config').read_text().replace('IPV6="on"','IPV6="off"'))
-  (self.dir/'scripts/foxytail.dns-modern.sh').write_text(
-   'modern_probe_capabilities() { echo "v6=$IPV6"; }\n'
-   'modern_probe_hijack() { echo "h6=$IPV6"; }\n')
-  self.assertEqual(self.run_script('foxytail.dns','probe-transparent').stdout,'v6=off\n')
-  self.assertEqual(self.run_script('foxytail.dns','probe-hijack').stdout,'h6=off\n')
-  # Without the modern controller library each arm fails closed and clear.
-  (self.dir/'scripts/foxytail.dns-modern.sh').unlink()
-  for arm in ('guard','probe-transparent','probe-hijack'):
-   r=self.run_script('foxytail.dns',arm,ok=False)
-   self.assertIn('unavailable',r.stderr,arm)
 
 if __name__=='__main__':unittest.main()

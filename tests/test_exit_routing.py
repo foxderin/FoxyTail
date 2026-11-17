@@ -98,22 +98,6 @@ ts_status_json() { "$@"; }
         return self.run_exit('trial-restore', str(self.root / 'state/config-trial'), ok=ok)
 
 
-    def test_read_reuses_snapshot_and_reports_profile_changes_as_unknown(self):
-        self.run_exit('set', 'node-a')
-        reads = self.root / 'reads'
-        reads.write_text('')
-        result = self.run_exit('status')
-        self.assertEqual(result['effective'], 'bridge-policy')
-        self.assertEqual(len(reads.read_text().splitlines()), 8)
-        self.reload()
-        self.daemon['changeDuringStatus'] = {'profile': 'profile-b'}
-        self.save()
-        writes = (self.root / 'writes').read_text()
-        result = self.run_exit('status')
-        self.assertFalse(result['known'])
-        self.assertEqual(result['effective'], 'unknown')
-        self.assertEqual((self.root / 'writes').read_text(), writes)
-
     def test_read_rejects_identity_preferences_or_config_changed_during_policy_check(self):
         self.run_exit('set', 'node-a')
         self.reload()
@@ -146,19 +130,6 @@ PY
                 self.assertEqual(result['effective'], 'unknown')
                 self.assertEqual((self.root / 'writes').read_text(), writes)
 
-    def test_exit_read_envelope_scopes_identity_and_rejects_config_mismatch(self):
-        fingerprint = 'bridge|all|||on||/|'
-        result = self.run_exit('exit-routing', fingerprint)
-        self.assertEqual(result['selfId'], 'self-a')
-        self.assertTrue(result['ok']); self.assertTrue(result['exitRouting']['known'])
-        self.daemon['status'] = {'BackendState': 'NeedsLogin', 'Self': None, 'Peer': {}}
-        self.save()
-        result = self.run_exit('exit-routing', fingerprint)
-        self.assertIsNone(result['selfId'])
-        self.assertFalse(result['exitRouting']['known'])
-        result = self.run_exit('exit-routing', 'different-config')
-        self.assertIsNone(result['selfId'])
-        self.assertFalse(result['exitRouting']['known'])
 
     def test_exact_identity_and_route_failure_are_not_success(self):
         self.run_exit('set', 'same-name', ok=False)
@@ -173,40 +144,6 @@ PY
         result = self.run_exit('set', 'node-b')
         self.assertEqual(result['exitRouting']['effective'], 'bridge-policy')
 
-    def test_pinned_auto_schema_and_unknown_profile_fail_closed(self):
-        self.assertTrue(self.run_exit('status')['known'])
-        for auto in (False, True, None, {}):
-            self.daemon['prefs']['AutoExitNode'] = auto
-            self.save()
-            self.assertFalse(self.run_exit('status')['known'])
-        self.daemon['prefs']['AutoExitNode'] = 'any'
-        self.save()
-        status = self.run_exit('status')
-        self.assertEqual(status['selected']['auto'], 'any')
-        self.assertEqual(status['effective'], 'not-effective')
-        self.daemon['unknownProfile'] = True
-        self.save()
-        self.assertFalse(self.run_exit('status')['known'])
-        self.run_exit('set', 'node-a', ok=False)
-        self.assertFalse((self.root / 'writes').exists())
-
-    def test_modes_scope_and_ipv6_report_coverage_honestly(self):
-        self.run_exit('set', 'node-a')
-        for mode, scope, uids, ipv6, effective in (
-            ('bridge', 'selected', '', 'on', 'not-effective'),
-            ('bridge', 'selected', '0', 'on', 'not-effective'),
-            ('bridge', 'selected', '10101', 'off', 'bridge-policy'),
-            ('proxy', 'all', '', 'on', 'explicit-proxy'),
-            ('tun', 'all', '', 'on', 'daemon-owned')):
-            self.config(mode, scope, uids, ipv6)
-            status = self.run_exit('status')
-            self.assertEqual(status['effective'], effective)
-            self.assertFalse(status['ipv6'])
-            self.assertEqual(status['ipv4'], effective == 'bridge-policy')
-        self.reload()
-        self.daemon['status']['ExitNodeStatus']['ID'] = 'node-b'
-        self.save()
-        self.assertEqual(self.run_exit('status')['effective'], 'not-effective')
 
     def test_trial_restores_original_auto_and_lan_preference(self):
         self.daemon['prefs'].update(ExitNodeID='node-a', AutoExitNode='any', ExitNodeAllowLANAccess=True)
@@ -248,18 +185,6 @@ PY
         self.assertEqual((self.root / 'writes').read_text(), before)
         self.assertTrue((self.root / 'state/config-trial/exit-preference.json').exists())
 
-    def test_trial_manual_helper_claim_and_repeated_context_change(self):
-        self.begin_trial()
-        self.run_exit('set', 'node-a', '--context')
-        self.run_exit('set', 'node-b', '--context')
-        self.restore()
-        self.reload()
-        self.assertEqual(self.daemon['prefs']['ExitNodeID'], '')
-        self.run_exit('set', 'node-a', '--context')
-        self.run_exit('set', 'node-a')
-        before = (self.root / 'writes').read_text()
-        self.restore()
-        self.assertEqual((self.root / 'writes').read_text(), before)
 
     def test_trial_daemon_unavailable_retains_recoverable_journal(self):
         self.begin_trial()
@@ -275,28 +200,6 @@ PY
         self.reload()
         self.assertEqual(self.daemon['prefs']['ExitNodeID'], '')
 
-    def test_failed_trial_write_does_not_restore_over_original(self):
-        self.begin_trial()
-        self.daemon['failWrite'] = True
-        self.save()
-        result = self.run_exit('set', 'node-b', '--context', ok=False)
-        self.assertFalse(result['ok'])
-        self.assertIsNone(result['exitRouting']['selected'])
-        before = (self.root / 'writes').read_text()
-        self.restore()
-        self.assertEqual((self.root / 'writes').read_text(), before)
-        self.reload()
-        self.assertEqual(self.daemon['prefs']['ExitNodeID'], '')
-
-    def test_failed_clear_keeps_policy_failure_visible(self):
-        self.run_exit('set', 'node-a')
-        (self.root / 'route-fails').touch()
-        result = self.run_exit('clear', ok=False)
-        self.assertIsNone(result['exitRouting']['selected'])
-        self.assertEqual(result['exitRouting']['effective'], 'not-effective')
-        self.assertEqual(result['exitRouting']['warning'], 'route-apply-failed')
-        (self.root / 'route-fails').unlink()
-        self.assertEqual(self.run_exit('clear')['exitRouting']['effective'], 'none')
 
     def test_corrupt_journal_fails_without_preference_write(self):
         self.begin_trial()

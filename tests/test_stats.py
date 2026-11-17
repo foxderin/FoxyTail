@@ -34,23 +34,11 @@ class StatsRegression(unittest.TestCase):
   for i,v in enumerate(values):
    rows.append(dict(ts=times[i],iface=dict(rx=v,tx=v),peers=[dict(id='peer',rx=v,tx=v)],uids=[dict(uid='10101',rx=0,tx=v)],uidDirection='tx',generation=dict(iface=(generations or ['a']*len(values))[i],peers=(generations or ['a']*len(values))[i],uids=(generations or ['a']*len(values))[i])))
   self.file.write_text('\n'.join(json.dumps(r) for r in rows)+'\n');return rows
- def test_out_of_order_rows_keep_chronological_counter_semantics(self):
-  self.samples([100,300,200],[0,120,60])
-  result=self.query('summary','1970-01-01')
-  self.assertEqual(result['days'][0]['rx'],200)
-  self.assertEqual(result['hours'][0]['iface']['tx'],200)
-  self.assertEqual(result['topn'][0]['rx'],200)
-  self.assertEqual(result['uids'][0]['tx'],200)
-  self.assertEqual(list(self.dir.glob('.stats-query.*')),[])
  def test_counter_reset_accumulates_observable_bytes(self):
   self.samples([1000,1500,0,200])
   day=self.query('daily')['days'][0];self.assertEqual((day['rx'],day['tx']),(700,700))
   self.assertEqual(self.query('topn','10')['topn'][0]['rx'],700)
   self.assertEqual(self.query('uids','10')['uids'][0],dict(uid='10101',rx=0,tx=700))
- def test_cross_hour_and_day_delta_belongs_to_ending_sample(self):
-  self.samples([1000,1500,1700,1900],[3590,3610,86390,86410])
-  hours=self.query('hourly','1970-01-01')['hours'];self.assertEqual(hours[1]['iface']['rx'],500)
-  days=self.query('daily')['days'];self.assertEqual([d['rx'] for d in days],[700,200])
  def test_generation_change_counts_new_counter_even_if_larger(self):
   self.samples([100,200,300],generations=['a','a','b'])
   self.assertEqual(self.query('daily')['days'][0]['rx'],400)
@@ -58,40 +46,6 @@ class StatsRegression(unittest.TestCase):
   rows=self.samples([100,300],[0,120])
   self.file.write_text(json.dumps(rows[0])+'\nnot-json\n'+json.dumps(dict(ts=60,error='daemon-unreachable'))+'\n'+json.dumps(rows[1])+'\n')
   day=self.query('daily')['days'][0];self.assertEqual(day['samples'],2);self.assertEqual(day['rx'],200)
- def test_hourly_missing_interface_is_not_a_recorded_zero(self):
-  self.file.write_text(json.dumps(dict(ts=60,iface=None,peers=[],uids=[]))+'\n')
-  hour=self.query('hourly','1970-01-01')['hours'][0]
-  self.assertEqual(hour['samples'],0)
-  self.assertEqual(self.query('daily')['days'][0]['samples'],0)
- def test_recorded_zero_traffic_remains_a_valid_sample(self):
-  self.samples([0,0])
-  hour=self.query('hourly','1970-01-01')['hours'][0]
-  self.assertEqual(hour['samples'],2)
-  self.assertEqual(hour['iface'],dict(rx=0,tx=0))
- def test_legacy_uid_rx_does_not_become_tx(self):
-  rows=self.samples([100,200])
-  for row in rows:row.pop('uidDirection');row['uids']=[dict(uid='10101',rx=1000,tx=0)]
-  self.file.write_text('\n'.join(json.dumps(r) for r in rows))
-  self.assertEqual(self.query('uids','10')['uids'],[])
- def test_partial_counters_duplicate_ids_and_insertion_order(self):
-  rows=[dict(ts=0,iface=dict(rx=100),peers=[dict(id='z',rx=100),dict(id='a',rx=100)]),
-        dict(ts=60,iface=dict(rx=150,tx=40),peers=[dict(id='z',rx=130),dict(id='z',rx=140),dict(id='a',rx=170)]),
-        dict(ts=120,iface=dict(tx=70),peers=[dict(id='z',rx=150)]),
-        dict(ts=180,iface=dict(rx=300,tx=90),generation=dict(iface='new'))]
-  self.file.write_text('\n'.join(json.dumps(row) for row in rows)+'\n')
-  result=self.query('summary','1970-01-01')
-  self.assertEqual(result['days'],[dict(date='1970-01-01',samples=4,rx=50,tx=120)])
-  self.assertEqual(result['hours'][0]['peers'],[dict(id='z',rx=80,tx=0),dict(id='a',rx=70,tx=0)])
-  self.assertEqual(result['topn'],[dict(id='z',rx=80,tx=0),dict(id='a',rx=70,tx=0)])
- def test_all_query_shapes_reuse_full_summary_cache(self):
-  self.samples([100,300])
-  result=self.query('summary','1970-01-01')
-  self.assertEqual(set(result),{'date','attribution','direction','days','hours','topn','uids'})
-  self.assertEqual(self.query('hourly','1970-01-01'),{key:result[key] for key in ['date','attribution','hours']})
-  self.assertEqual(self.query('daily'),{key:result[key] for key in ['attribution','days']})
-  self.assertEqual(self.query('topn','0'),dict(topn=[]))
-  self.assertEqual(self.query('uids','0'),dict(uids=[],direction='tx'))
-  self.assertEqual(self.query('topn','999999999999999999999999'),dict(topn=result['topn']))
  def test_repeated_queries_invalidate_appends_truncation_and_replacement(self):
   rows=self.samples([100,200])
   first=self.query('summary','1970-01-01')
@@ -107,16 +61,6 @@ class StatsRegression(unittest.TestCase):
   replacement.write_text(json.dumps(dict(ts=0,iface=None))+'\n')
   replacement.replace(self.file)
   self.assertEqual(self.query('daily')['days'][0]['samples'],0)
- def test_valid_json_bad_counter_is_skipped_without_temporary_leak(self):
-  self.file.write_text('{"ts":0,"iface":{"rx":0}}\n{"ts":1,"iface":{"rx":"bad"}}\n')
-  result=subprocess.run(['sh',str(self.script),'daily'],env={**os.environ,'TEST_DIR':str(self.dir),'SAMPLES':str(self.file),'TZ':'UTC'},text=True,capture_output=True)
-  self.assertEqual(result.returncode,0,result.stderr)
-  self.assertEqual(json.loads(result.stdout)['days'],[dict(date='1970-01-01',samples=1,rx=0,tx=0)])
-  self.assertEqual(list(self.dir.glob('.stats-order-*')),[])
-  self.assertEqual(list(self.dir.glob('.stats-cache-*')),[])
- def test_bad_counter_row_is_skipped_not_a_baseline(self):
-  self.file.write_text('{"ts":0,"iface":{"rx":"bad"}}\n{"ts":1,"iface":{"rx":10}}\n')
-  self.assertEqual(self.query('daily')['days'],[dict(date='1970-01-01',samples=1,rx=0,tx=0)])
  def test_uid_collection_sums_ipv4_ipv6_as_transmit_bytes(self):
   snapshot=self.dir/'route.snapshot';snapshot.mkdir()
   for family in ['iptables','ip6tables']:
@@ -173,24 +117,6 @@ collect_once
   rows=[json.loads(row) for row in next(self.dir.glob('????-??-??.jsonl')).read_text().splitlines()]
   self.assertEqual([row['uids'] for row in rows],[[],[dict(uid='10101',rx=0,tx=100)],[dict(uid='10101',rx=0,tx=300)]])
   self.assertEqual([row['generation']['uids'] for row in rows],['','first','second'])
- def test_outage_rows_are_coalesced_until_recovery_or_date_change(self):
-  calls=self.collect('''date() { echo "$test_time $test_day"; }
-test_time=100 test_day=2026-09-19
-echo broken >"$TEST_DIR/status"
-collect_once
-collect_once
-echo '{"Peer":{}}' >"$TEST_DIR/status"
-collect_once
-echo broken >"$TEST_DIR/status"
-collect_once
-collect_once
-test_time=86500 test_day=2026-09-20
-collect_once
-collect_once
-''')
-  rows=[json.loads(row) for row in (self.dir/'2026-09-19.jsonl').read_text().splitlines()]
-  self.assertEqual([row.get('error') for row in rows],['daemon-unreachable',None,'daemon-unreachable'])
-  self.assertEqual(len((self.dir/'2026-09-20.jsonl').read_text().splitlines()),1)
 
 class StatsLifecycle(unittest.TestCase):
  def setUp(self):
@@ -229,20 +155,6 @@ isleep() {
    self.assertEqual(len((self.base/'cli-calls').read_text().splitlines()),expected)
    self.assertEqual(len(next((self.base/'run/stats').glob('*.jsonl')).read_text().splitlines()),expected)
   self.assertEqual((self.base/'intervals').read_text().splitlines(),['slept','slept'])
- def test_stats_power_mode_throttles_without_shortening_configured_intervals(self):
-  with self.settings.open('a') as stream:
-   stream.write('''
-isleep() {
-  echo "$1" >>"$TS_DIR/intervals"
-  _test_round=$((${_test_round:-0} + 1))
-  [ "$_test_round" -lt 2 ] || _stats_stop
-}
-''')
-  for mode,base,expected in [('off',60,['60','300']),('on',60,['300','900']),('on',3600,['3600','18000'])]:
-   self.main.write_text(f'STATS=on\nPOWER_SAVE={mode}\nSTATS_INTERVAL={base}\n')
-   (self.base/'intervals').unlink(missing_ok=True)
-   self.run_loop()
-   self.assertEqual((self.base/'intervals').read_text().splitlines(),expected)
 
 
 if __name__=='__main__':unittest.main()

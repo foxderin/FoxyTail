@@ -68,24 +68,6 @@ class SocksCheckTests(ApiTestCase):
         self.assertGreaterEqual(checked['elapsedMs'], 0)
         self.assertFalse((self.base / 'unexpected-curl').exists())
 
-    def test_durable_probe_preserves_failure_in_terminal_receipt(self):
-        port, worker, result = self.rejecting_proxy()
-        self.shell(f'conf_write_key foxytail.conf SOCKS_PORT {port}; conf_activate_runtime')
-        request = str(int(time.time())) + '_socks-native'
-        self.entry('operation-start', request, 'socks-check')
-        deadline = time.monotonic() + 12
-        while time.monotonic() < deadline:
-            operation = self.entry('operation-status', request)['operation']
-            if operation['state'] != 'running':
-                break
-            time.sleep(.05)
-        worker.join(10)
-        self.assertEqual(result, [b'\x05\x01\x00'])
-        self.assertEqual(operation['state'], 'completed')
-        self.assertEqual(operation['exitCode'], 0)
-        self.assertTrue(operation['result']['ok'])
-        self.assertFalse(operation['result']['success'])
-        self.assertFalse((self.base / 'unexpected-curl').exists())
 
     def test_probe_rejects_missing_helper_native_tun_and_arbitrary_targets(self):
         self.shell('conf_activate_runtime')

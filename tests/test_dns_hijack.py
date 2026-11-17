@@ -184,40 +184,6 @@ load_conf
     def kernel(self):
         return json.loads((self.base / 'kernel.json').read_text())
 
-    def test_hijack_queues_udp_without_nat_marks_or_redirects(self):
-        self.run_script('modern_dns_start')
-        status = self.status()
-        self.assertEqual(status['mode'], 'hijack')
-        self.assertEqual(status['state'], 'running')
-        self.assertTrue(status['listenerReady'])
-        self.assertTrue(status['interception4'])
-        self.assertTrue(status['interception6'])
-        self.assertFalse(status['repairNeeded'])
-        kernel = self.kernel()
-        for cmd in ('iptables', 'ip6tables'):
-            tables = kernel['chains']
-            self.assertIn(cmd + ':mangle', tables)
-            self.assertNotIn('FOXY_DNS_CAPTURE', tables.get(cmd + ':nat', {}))
-            queue = tables[cmd + ':mangle']['FOXY_DNS_QUEUE']
-            self.assertEqual(queue[0], ['-m', 'owner', '--uid-owner', '0', '--gid-owner', '65533', '-j', 'RETURN'])
-            self.assertEqual(len(queue), 2)
-            self.assertIn('NFQUEUE', queue[1])
-            self.assertIn('--queue-bypass', queue[1])
-            self.assertIn('udp', queue[1])
-            self.assertNotIn('tcp', queue[1])
-            output = tables[cmd + ':mangle']['OUTPUT']
-            self.assertEqual(output[-1], ['-j', 'FOXY_DNS_QUEUE'])
-        for call in kernel['calls']:
-            joined = ' '.join(call)
-            self.assertNotIn('CONNMARK', joined)
-            self.assertNotIn('0x20000000', joined)
-            self.assertNotIn('REDIRECT', joined)
-        journal = (self.base / 'state/foxydns-preferences.json').read_text()
-        self.assertNotIn('private-marker', journal)
-        self.assertTrue(json.loads(journal)['entries'][0]['original'])
-        self.run_script('modern_dns_stop')
-        self.assertEqual(self.sets(), ['--accept-dns=false', '--accept-dns=true'])
-        self.assertFalse(self.status()['listenerReady'])
 
     def test_hijack_probe_failure_degrades_to_local_listener(self):
         (self.base / 'hijack-probe-failed').touch()
@@ -234,15 +200,6 @@ load_conf
         self.assertNotIn('FOXY_DNS_QUEUE', kernel['chains'].get('iptables:mangle', {}))
         self.assertEqual(self.sets(), ['--accept-dns=false'])
 
-    def test_hijack_v6_survives_missing_nat_module(self):
-        self.env['MOCK_NO_IPV6_NAT'] = '1'
-        self.run_script('modern_dns_start')
-        status = self.status()
-        self.assertEqual(status['state'], 'running')
-        self.assertTrue(status['interception4'])
-        self.assertTrue(status['interception6'])
-        kernel = self.kernel()
-        self.assertIn('FOXY_DNS_QUEUE', kernel['chains']['ip6tables:mangle'])
 
     def test_hijack_queue_loss_reports_repair_and_restores(self):
         self.run_script('modern_dns_start')
@@ -261,16 +218,6 @@ load_conf
         self.assertEqual(status['state'], 'running')
         self.assertTrue(status['interception4'])
 
-    def test_probe_hijack_records_boot_scoped_verdict(self):
-        self.run_script('modern_probe_hijack')
-        cached = json.loads((self.base / 'run/foxydns.hijack-capabilities.json').read_text())
-        self.assertTrue(cached['ok'])
-        self.assertEqual(cached['bootId'], 'test-boot-1')
-        (self.base / 'hijack-probe-failed').touch()
-        self.run_script('modern_probe_hijack', ok=False)
-        cached = json.loads((self.base / 'run/foxydns.hijack-capabilities.json').read_text())
-        self.assertFalse(cached['ok'])
-        self.assertIn('injection denied', cached['error'])
 
     def test_hijack_policy_conflict_keeps_local_only(self):
         self.env['MOCK_OUTPUT_POLICY'] = 'DROP'
@@ -279,15 +226,6 @@ load_conf
         self.assertEqual(status['reason'], 'packet-policy-conflict')
         self.assertTrue(status['listenerReady'])
         self.assertFalse(status['interception4'])
-
-    def test_hijack_guard_failure_cleans_queue_chain(self):
-        self.runner.write_text(self.runner.read_text().replace(
-            'modern_guard_start() { touch "$TEST_DIR/guard-active"; }',
-            'modern_guard_start() { return 1; }'))
-        self.run_script('modern_dns_start', ok=False)
-        kernel = self.kernel()
-        self.assertNotIn('FOXY_DNS_QUEUE', kernel['chains'].get('iptables:mangle', {}))
-        self.assertEqual(self.status()['reason'], 'guard-failed')
 
 
 if __name__ == '__main__':

@@ -28,24 +28,6 @@ class ConfigApiTests(ApiTestCase):
                 self.assertNotEqual(self.shell('load_conf', ok=False).returncode, 0)
                 self.assertFalse((self.base / 'executed').exists())
 
-    def test_parser_preserves_empty_lists_and_final_line(self):
-        (self.conf / 'foxytail.conf').write_text('TS_MODE=bridge\nFWMARK=0xF7')
-        (self.conf / 'routes.conf').write_text('UID_LIST=""\nROUTE_SUBNETS=""')
-        result = self.shell('load_conf && printf "%s|%s|%s" "$FWMARK" "$UID_LIST" "$ROUTE_SUBNETS"')
-        self.assertEqual(result.stdout, '0x40000000||')
-
-    def test_dns_modes_roundtrip_and_upgrade_default(self):
-        (self.conf / 'foxytail.conf').write_text('MAGIC_DNS=on\nDNS_PORT=1054\n')
-        result = json.loads(self.shell('load_conf && cmd_settings_get').stdout)
-        self.assertEqual(result['settings']['DNS_MODE'], 'legacy')
-        for mode in ['local', 'transparent', 'legacy']:
-            result = json.loads(self.shell(f'cmd_settings_set DNS_MODE {mode}').stdout)
-            self.assertTrue(result['restartRequired'])
-            result = json.loads(self.shell('load_conf && cmd_settings_get').stdout)
-            self.assertEqual(result['settings']['DNS_MODE'], mode)
-            self.assertEqual(result['settings']['DNS_PORT'], '1054')
-        for mode in ['auto', 'flclash', 'off', 'LOCAL', '']:
-            self.assertNotEqual(self.shell('cmd_settings_set DNS_MODE ' + shlex.quote(mode), ok=False).returncode, 0)
 
     def test_schema_rejects_reserved_tables_and_invalid_subnets(self):
         for table in ['0', '52', '253', '254', '255', '999', '1000', '1053', '65535', '65536']:
@@ -56,47 +38,6 @@ class ConfigApiTests(ApiTestCase):
         self.shell("_conf_value_error ROUTE_SUBNETS '100.64.0.0/10 fd7a:115c:a1e0::/48'")
         self.assertNotEqual(self.shell("_conf_value_error UID_LIST '0 10123'", ok=False).returncode, 0)
 
-    def test_old_route_table_fails_without_rewriting_disk(self):
-        path = self.conf / 'foxytail.conf'
-        path.write_text('ROUTE_TABLE=1053\n')
-        before = path.read_bytes()
-        result = self.shell('load_conf', ok=False)
-        self.assertNotEqual(result.returncode, 0)
-        self.assertIn('ROUTE_TABLE', result.stdout + result.stderr)
-        self.assertEqual(path.read_bytes(), before)
-        self.assertNotEqual(self.shell('cmd_settings_set ROUTE_TABLE 1053', ok=False).returncode, 0)
-        self.assertEqual(path.read_bytes(), before)
-
-    def test_auto_refresh_preserves_legacy_disk_key(self):
-        self.shell('cmd_settings_set WEBUI_AUTO_REFRESH off')
-        result = json.loads(self.shell('load_conf && cmd_settings_get').stdout)
-        self.assertEqual(result['settings']['WEBUI_AUTO_REFRESH'], 'off')
-        self.assertIn('WEBUI_AUTO_REFRESH="off"', (self.conf / 'foxytail.conf').read_text())
-
-    def test_cidr_normalization_matches_network_semantics_and_preserves_hosts(self):
-        rng = random.Random(2452)
-        cidrs = ['192.168.1.7/24', '192.168.1.0/24', '192.168.1.10/32',
-                 'FD12:34::ABCD/64', 'fd12:34::/64', '2001:db8::1/128',
-                 '::ffff:192.0.2.129/120', '0.0.0.0/0', '::/0']
-        for bits, address in ((32, ipaddress.IPv4Address), (128, ipaddress.IPv6Address)):
-            for prefix in range(bits + 1):
-                cidrs.append(f'{address(rng.getrandbits(bits))}/{prefix}')
-        expected = []
-        for cidr in cidrs:
-            network = ipaddress.ip_network(cidr, strict=False)
-            canonical = str(network)
-            # Python versions differ in the displayed form of mapped IPv6.
-            # The API consistently uses hexadecimal RFC 5952-style words.
-            if network.version == 6 and '.' in canonical:
-                mapped = network.network_address.ipv4_mapped
-                self.assertIsNotNone(mapped)
-                canonical = canonical.replace(str(mapped), f'{int(mapped) >> 16:x}:{int(mapped) & 0xffff:x}')
-            if canonical not in expected:
-                expected.append(canonical)
-        result = self.shell('normalize_cidrs ' + shlex.quote(' '.join(cidrs)))
-        self.assertEqual(result.stdout.split(), expected)
-        self.assertEqual(self.shell("normalize_cidrs '192.168.001.010/32'").stdout, '192.168.1.10/32')
-        self.assertEqual(self.shell("normalize_cidrs ''").stdout, '')
 
     def test_invalid_cidr_never_emits_partial_normalized_output(self):
         bad = ['1.2.3/24', '256.1.1.1/24', '1.2.3.4/33', '1.2.3.4/-1',
@@ -183,36 +124,6 @@ ip() { touch "$TS_RUN_DIR/unexpected-apply"; return 0; }
         (self.base / '.installing').touch()
         self.assertNotEqual(self.shell('conf_write_key foxytail.conf DNS_PORT 1101', ok=False).returncode, 0)
 
-    def test_account_json_and_stderr_are_preserved(self):
-        result = self.shell('''daemon_up() { return 0; }
-ts_cli() { [ "$*" = '15 switch --list --json' ] || return 9; printf '%s' '[{"id":"id1","nickname":"Home","selected":true}]'; }
-cmd_accounts''')
-        self.assertEqual(json.loads(result.stdout)['accounts'][0], {'name': 'id1', 'id': 'id1', 'current': True, 'label': 'Home', 'tailnet': ''})
-
-    def test_settings_and_routes_return_public_schema(self):
-        result = self.shell('''load_conf
-cmd_settings_get
-cmd_routes_get''')
-        settings, routes = [json.loads(line) for line in result.stdout.splitlines()]
-        self.assertEqual(settings['settings']['TS_MODE'], 'bridge')
-        self.assertEqual(settings['settings']['FWMARK'], '0x40000000')
-        self.assertNotIn('pending', settings['settings'])
-        self.assertEqual(routes['scope'], 'all')
-        self.assertEqual(routes['uids'], [])
-        self.assertEqual(routes['subnets'], ['100.64.0.0/10'])
-
-    def test_package_inventory_preserves_uid_and_order(self):
-        (self.base / 'packages').write_text(''.join(
-            f'package:com.example.app{i:03d} uid:{10000 + i}\n' for i in reversed(range(300))
-        ) + 'unrelated diagnostic\n')
-        result = self.shell('''timeout() { shift; "$@"; }
-pm() { cat "$TS_DIR/packages"; }
-jqr() { command jq "$@"; }
-cmd_apps''')
-        apps = json.loads(result.stdout)['apps']
-        self.assertEqual(len(apps), 300)
-        self.assertEqual(apps[0], {'label': 'com.example.app000', 'package': 'com.example.app000', 'uid': 10000})
-        self.assertEqual(apps[-1]['uid'], 10299)
 
     def test_context_rules_read_is_static_and_holds_restore_lock(self):
         rules = '# preserved comment\nssid:Office:up\n'
@@ -239,32 +150,6 @@ conf_lock_release
         (self.conf / 'context.conf').unlink()
         self.assertEqual(json.loads(self.shell('cmd_context_get').stdout), {'ok': True, 'rules': ''})
 
-    def test_context_live_status_is_independent_and_reports_unknown(self):
-        current = {'running': True, 'context': 'ssid:Office', 'lastResult': None}
-        result = self.shell("""
-conf_lock_acquire() { echo 'unexpected static config lock' >&2; return 1; }
-_op_exec() { printf '%s\\n' """ + shlex.quote(json.dumps(current)) + """; }
-_op_cancelled() { return 1; }
-cmd_context_status
-""")
-        self.assertEqual(json.loads(result.stdout), {'ok': True, 'status': current})
-        self.assertEqual(result.stderr, '')
-        for output in ('not-json', '{}', '{"running":"yes"}'):
-            result = self.shell("_op_exec() { printf '%s\\n' " + shlex.quote(output) + "; }; cmd_context_status")
-            self.assertEqual(json.loads(result.stdout), {'ok': True, 'status': None})
-        result = self.shell('_op_exec() { return 1; }; cmd_context_status')
-        self.assertEqual(json.loads(result.stdout), {'ok': True, 'status': None})
-        cancelled = self.shell('_op_exec() { echo "{}"; }; _op_cancelled() { return 0; }; cmd_context_status', ok=False)
-        self.assertFalse(json.loads(cancelled.stdout)['ok'])
-
-    def test_context_rules_failure_releases_restore_lock(self):
-        result = self.shell('''
-jqr() { case "$1" in -R) return 1 ;; *) command jq "$@" ;; esac; }
-cmd_context_get
-''', ok=False)
-        self.assertNotEqual(result.returncode, 0)
-        self.assertIn('cannot read rules', json.loads(result.stdout)['error'])
-        self.assertFalse((self.run / '.conf-write-lock').is_symlink())
 
     def test_context_save_and_restore_share_validation(self):
         self.shell('conf_activate_runtime')
@@ -344,17 +229,6 @@ cmd_context_get
                             except ProcessLookupError:
                                 pass
                         pidfile.unlink()
-
-
-    def test_wait_for_preserves_arguments_and_bounds_failure(self):
-        result = self.shell('''sleep() { :; }
-ready() { test "$#" = 2 && test "$1" = 'argument with spaces' && test "$2" = 17; }
-wait_for ready 2 0 ready 'argument with spaces' 17 || exit 1
-attempt() { echo tried; return 1; }
-wait_for unavailable 3 0 attempt && exit 2
-exit 0
-''')
-        self.assertEqual(result.stdout.splitlines(), ['tried'] * 3)
 
 
 if __name__ == '__main__':

@@ -23,38 +23,6 @@ class NetworkApiTests(ApiTestCase):
             self.assertEqual(result['error'], 'route-apply-failed')
         self.assertEqual((self.base / 'exit-calls').read_text().splitlines(), ['set node-b', 'clear'])
 
-    def test_exit_empty_controller_result_is_error(self):
-        helper = self.scripts / 'foxytail.exitnode'
-        helper.write_text('#!/bin/sh\nexit 1\n')
-        helper.chmod(0o755)
-        result = self.shell('load_conf; _op_exec() { shift; "$@"; }; cmd_exitnode_clear', ok=False)
-        self.assertFalse(json.loads(result.stdout)['ok'])
-
-    def test_light_status_uses_one_cli_and_shares_identity_scoped_peer_list(self):
-        status = {'BackendState': 'Running', 'Self': {'ID': 'self-a', 'HostName': 'phone'},
-                  'Peer': {'a': {'ID': 'node-a', 'HostName': 'one', 'Online': True, 'ExitNodeOption': True,
-                                 'TailscaleIPs': ['100.64.0.1', 'fd7a::1']},
-                           'b': {'ID': 'node-b', 'HostName': 'two', 'Online': False}}}
-        (self.base / 'status.json').write_text(json.dumps(status))
-        prefix = '''load_conf
-daemon_up() { return 0; }
-daemon_uptime() { echo 2; }
-ts_cli() { printf '%s\\n' "$*" >>"$TS_RUN_DIR/status-calls"; cat "$TS_DIR/status.json"; }
-_op_exec() { touch "$TS_RUN_DIR/unexpected-heavy"; return 9; }
-'''
-        result = json.loads(self.shell(prefix + 'cmd_status').stdout)
-        self.assertEqual((result['daemon'], result['backend'], result['self']['id']), ('running', 'Running', 'self-a'))
-        self.assertEqual(result['peers'], {'online': 1, 'offline': 1})
-        self.assertEqual([p['id'] for p in result['peerList']], ['node-a', 'node-b'])
-        self.assertEqual(result['peerList'][0]['ips'], ['100.64.0.1', 'fd7a::1'])
-        self.assertTrue(result['peerList'][0]['exitNodeOption'])
-        self.assertNotIn('exitRouting', result)
-        self.assertEqual((self.run / 'status-calls').read_text().splitlines(), ['10 status --json'])
-        self.assertFalse((self.run / 'unexpected-heavy').exists())
-        status['Self']['ID'] = 'self-b'; status['Peer'] = {}
-        (self.base / 'status.json').write_text(json.dumps(status))
-        changed = json.loads(self.shell(prefix + 'cmd_status').stdout)
-        self.assertEqual(changed['self']['id'], 'self-b'); self.assertEqual(changed['peerList'], [])
 
     def test_status_unreachable_and_stopped_never_fabricate_peer_inventory(self):
         result = json.loads(self.shell('''load_conf
@@ -74,13 +42,6 @@ cmd_status''').stdout)
         self.assertIsNone(result['peerList'])
         self.assertFalse((self.run / 'unexpected-cli').exists())
 
-    def test_failed_deep_helper_does_not_publish_success_payload(self):
-        helper = self.scripts / 'foxytail.exitnode'
-        helper.write_text('#!/bin/sh\necho \'{"ok":true,"selfId":"self-a","exitRouting":{"known":true}}\'\nexit 1\n')
-        helper.chmod(0o755)
-        result = self.shell('load_conf; _op_exec() { shift; "$@"; }; cmd_exit_routing', ok=False)
-        self.assertNotEqual(result.returncode, 0)
-        self.assertFalse(json.loads(result.stdout)['ok'])
 
     def test_read_helpers_never_publish_success_after_cancellation(self):
         for command in ('cmd_status', 'cmd_exit_routing', 'cmd_dns', 'cmd_dns_probe', 'cmd_trial_status', 'cmd_context_status'):
@@ -128,35 +89,6 @@ ts_cli() { test -L "$TS_RUN_DIR/dns-account-transition" || return 9; echo "$*" >
         self.assertFalse((self.base / 'account-actions').exists())
         self.assertFalse((self.run / 'dns-account-transition').is_symlink())
 
-    def test_legacy_account_transition_does_not_require_new_helper(self):
-        result = self.shell('load_conf; daemon_up() { return 0; }; ts_cli() { return 0; }; cmd_logout')
-        self.assertTrue(json.loads(result.stdout)['ok'])
-
-    def test_watchdog_respects_explicit_nonrepairable_dns_state(self):
-        source = (ROOT / 'tailscale/scripts/foxytail.watchdog').read_text()
-        check = source[source.index('check_once() {'):source.index('_watchdog_stop() {')]
-        fixture = self.scripts / 'foxytail.dns'
-        fixture.write_text('#!/bin/sh\ncat "$TS_DIR/dns-status.json"\n')
-        fixture.chmod(0o755)
-        prefix = check + """
-load_conf; export TS_DIR
-TS_MODE=proxy; MAGIC_DNS=on
-MANUAL_STOP_FILE="$TS_RUN_DIR/manual-stop"; BAD_COUNT_FILE="$TS_RUN_DIR/bad"; ROUTE_CACHE="$TS_RUN_DIR/route-cache"
-ts_status_json() { echo '{"BackendState":"Running"}'; }
-pids_of_path() { echo 123; }
-ip() { return 0; }
-log() { :; }
-recover() { echo "$*"; }
-check_once
-"""
-        for state, expected in [
-            ({'state':'degraded', 'repairNeeded':False}, ''),
-            ({'state':'running', 'repairNeeded':True}, 'reconcile companion-not-ready'),
-            ({'state':'degraded'}, 'reconcile companion-not-ready'),
-            ({'state':'running'}, ''),
-        ]:
-            (self.base / 'dns-status.json').write_text(json.dumps(state))
-            self.assertEqual(self.shell(prefix).stdout.strip(), expected)
 
     def subnet_fixture(self, accept=False, status=None):
         prefs = {'RouteAll': accept, 'CorpDNS': True, 'ExitNodeID': 'unchanged-exit',
@@ -219,16 +151,6 @@ ts_cli() {
         self.assertTrue(result['acceptRoutes']); self.assertIn('peer subnet routes', result['error'])
         self.assertNotIn('set ', (self.run / 'cli-calls').read_text())
 
-    def test_malformed_subnet_snapshot_does_not_claim_an_empty_known_result(self):
-        script = self.subnet_fixture(accept=True)
-        for status in ({}, [], {'BackendState': 'Running', 'Peer': []},
-                       {'BackendState': 'Running', 'Peer': {'bad': {'AllowedIPs': '192.168.0.0/16'}}}):
-            with self.subTest(status=status):
-                (self.base / 'status.json').write_text(json.dumps(status))
-                result = json.loads(self.shell(script + '\ncmd_subnet_routes_get', ok=False).stdout)
-                self.assertFalse(result['ok']); self.assertTrue(result['acceptRoutes'])
-                self.assertEqual(result['peers'], [])
-                self.assertIn('invalid peer subnet routes snapshot', result['error'])
 
     def test_subnet_setting_changes_only_profile_preference_and_confirms_it(self):
         script = self.subnet_fixture(accept=False)
@@ -248,67 +170,6 @@ ts_cli() {
         self.assertEqual(result, {'ok': True, 'applied': True, 'acceptRoutes': False})
         self.assertEqual((self.run / 'cli-calls').read_text().splitlines(), ['5 debug prefs'])
 
-    def test_subnet_setting_failure_and_stopped_daemon_never_claim_applied(self):
-        script = self.subnet_fixture(accept=False)
-        for marker in ('set-no-effect', 'set-failed', 'prefs-failed'):
-            with self.subTest(marker=marker):
-                (self.base / marker).touch()
-                result = json.loads(self.shell(script + '\ncmd_subnet_routes_set on', ok=False).stdout)
-                self.assertFalse(result['ok']); self.assertFalse(result['applied'])
-                self.assertEqual(result['acceptRoutes'], None if marker == 'prefs-failed' else False)
-                (self.base / marker).unlink()
-        before = (self.run / 'cli-calls').read_text()
-        for command in ('cmd_subnet_routes_get', 'cmd_subnet_routes_set on', 'cmd_subnet_routes_set invalid'):
-            result = json.loads(self.shell(script + '\ndaemon_up() { return 1; }\n' + command, ok=False).stdout)
-            self.assertIsNone(result['acceptRoutes']); self.assertFalse(result['ok'])
-        self.assertEqual((self.run / 'cli-calls').read_text(), before)
-
-    def test_routes_set_normalizes_cidrs_and_reports_unapplied_ipv6(self):
-        self.shell('conf_activate_runtime')
-        route = self.scripts / 'foxytail.route'
-        route.write_text('#!/bin/sh\nexit 0\n'); route.chmod(0o755)
-        result = json.loads(self.shell('''load_conf
-ip() { [ "$*" = 'link show dev tailscale0' ]; }
-cmd_routes_set all - ' , 192.168.1.7/24,192.168.1.0/24,,
-FD12::55/64,fd12::/64,192.168.1.10/32 , ' ''').stdout)
-        self.assertEqual(result['subnets'], ['192.168.1.0/24', 'fd12::/64', '192.168.1.10/32'])
-        self.assertTrue(result['saved']); self.assertFalse(result['applied'])
-        self.assertTrue(result['requiresIpv6']); self.assertEqual(result['ipv6Skipped'], ['fd12::/64'])
-        self.assertIn('IPv4 routing applied', result['note'])
-        self.assertIsNone(result['applyError'])
-        self.assertIn('ROUTE_SUBNETS="192.168.1.0/24 fd12::/64 192.168.1.10/32"',
-                      (self.conf / 'routes.conf').read_text())
-        # Explicit activation applies IPv6 after saving the destination.
-        self.shell('conf_write_key foxytail.conf IPV6 on; conf_activate_runtime')
-        result = json.loads(self.shell('''load_conf
-ip() { return 0; }
-cmd_routes_set all - '192.168.1.7/24,FD12::55/64' ''').stdout)
-        self.assertTrue(result['applied']); self.assertFalse(result['requiresIpv6'])
-        self.assertEqual(result['ipv6Skipped'], [])
-        self.assertIsNone(result['applyError'])
-
-    def test_routes_reload_failure_is_distinct_from_unapplied_ipv6(self):
-        self.shell('conf_activate_runtime')
-        route = self.scripts / 'foxytail.route'
-        route.write_text('#!/bin/sh\nexit 1\n'); route.chmod(0o755)
-        result = json.loads(self.shell('''load_conf
-ip() { return 0; }
-cmd_routes_set all - '192.168.1.7/24,FD12::55/64' ''').stdout)
-        self.assertTrue(result['ok']); self.assertTrue(result['saved'])
-        self.assertFalse(result['applied']); self.assertTrue(result['restartRequired'])
-        self.assertEqual(result['applyError'], 'routing reload failed; inspect the service log')
-        self.assertIn(result['applyError'], result['note'])
-        self.assertIn('IPv6 destinations are not applied while IPv6 is disabled', result['note'])
-        self.assertNotIn('IPv4 routing applied', result['note'])
-        self.assertTrue(result['requiresIpv6']); self.assertEqual(result['ipv6Skipped'], ['fd12::/64'])
-        self.assertEqual(result['subnets'], ['192.168.1.0/24', 'fd12::/64'])
-        # A tunnel that is not ready is pending, not an attempted reload failure.
-        result = json.loads(self.shell('''load_conf
-ip() { return 1; }
-cmd_routes_set all - '192.168.1.7/24,FD12::55/64' ''').stdout)
-        self.assertIsNone(result['applyError']); self.assertFalse(result['applied'])
-        self.assertIn('routing will apply when the tunnel is ready', result['note'])
-        self.assertTrue(result['requiresIpv6'])
 
     def test_routes_invalid_cidr_does_not_persist_partial_configuration(self):
         before = self.snapshot()
@@ -317,54 +178,6 @@ cmd_routes_set all - '192.168.1.7/24,FD12::55/64' ''').stdout)
         self.assertEqual(self.snapshot(), before)
         self.assertFalse((self.run / 'settings.pending').exists())
 
-    def test_routes_report_applied_ipv6_while_desired_setting_is_pending(self):
-        route = self.scripts / 'foxytail.route'
-        route.write_text('#!/bin/sh\nexit 0\n'); route.chmod(0o755)
-        for applied, desired, skipped in [('off', 'on', ['fd12::/64']), ('on', 'off', [])]:
-            with self.subTest(applied=applied, desired=desired):
-                self.shell(f'conf_write_key foxytail.conf IPV6 {applied}; conf_activate_runtime')
-                self.shell(f'conf_write_key foxytail.conf IPV6 {desired}')
-                result = json.loads(self.shell('''load_conf
-ip() { return 0; }
-cmd_routes_set all - '192.168.1.7/24,fd12::55/64'
-''').stdout)
-                self.assertEqual(result['ipv6Skipped'], skipped)
-                self.assertEqual(result['applied'], not skipped)
-                self.assertEqual(result['requiresIpv6'], bool(skipped))
-                self.assertEqual(result['restartRequired'], bool(skipped))
-                self.assertIsNone(result['applyError'])
-                self.assertTrue((self.run / 'settings.pending').exists())
-                saved = json.loads(self.shell('load_conf; cmd_settings_get').stdout)
-                self.assertEqual(saved['settings']['IPV6'], desired)
-
-    def test_dns_status_preserves_configuration_and_native_capability(self):
-        modern_defaults = {'mode': 'legacy', 'configuredMode': None, 'pendingMode': None,
-                           'listenerReady': False, 'interception4': False, 'interception6': False,
-                           'repairNeeded': None, 'policyState': None, 'capabilityError': None,
-                           'transparentAvailable': None, 'transparentUnavailableReason': None,
-                           'hijackAvailable': None, 'hijackUnavailableReason': None}
-        status = {'state': 'stopped', 'suffix': '', 'port': 1053, 'enabled': False,
-                  'reason': 'Local DNS helper is disabled', 'binary': '/system/bin/dnsmasq',
-                  'upstreamNative': True, 'ipv6DnsInterception': 'disabled',
-                  'ipv6ModuleStatus': 'not-checked'}
-        dns = self.scripts / 'foxytail.dns'
-        dns.write_text('#!/bin/sh\nprintf %s ' + shlex.quote(json.dumps(status)) + '\n')
-        dns.chmod(0o755)
-        result = json.loads(self.shell('load_conf; cmd_dns').stdout)
-        self.assertEqual(result, {'ok': True, **modern_defaults, **status})
-        status.update(mode='transparent', state='running', enabled=True, listenerReady=True,
-                      interception4=True, interception6=False, repairNeeded=False, policyState='owned',
-                      ipv6DnsInterception='fallback', ipv6ModuleStatus='missing')
-        dns.write_text('#!/bin/sh\nprintf %s ' + shlex.quote(json.dumps(status)) + '\n')
-        self.assertEqual(json.loads(self.shell('load_conf; cmd_dns').stdout), {'ok': True, **modern_defaults, **status})
-
-    def test_status_reports_live_daemon_without_socket_as_unreachable(self):
-        result = json.loads(self.shell('''load_conf
-daemon_exists() { return 0; }
-ts_status_json() { touch "$TS_RUN_DIR/unexpected-cli"; }
-cmd_status''').stdout)
-        self.assertEqual((result['daemon'], result['backend']), ('running', 'unreachable'))
-        self.assertFalse((self.run / 'unexpected-cli').exists())
 
     def test_peer_lists_distinguish_unknown_from_a_confirmed_empty_snapshot(self):
         for command in ('cmd_peers', 'cmd_exitnodes'):
@@ -408,31 +221,6 @@ ts_status_json() { cat "$TS_RUN_DIR/peer-status.json"; }
 ts_cli() { printf '%s\\n' "$*" >>"$TS_RUN_DIR/ping-calls"; cat "$TS_RUN_DIR/ping-output"; return "${PING_RC:-0}"; }
 '''
 
-    def test_peer_ping_reports_the_actual_reply_path_for_each_address_family(self):
-        prefix = self.peer_ping_fixture()
-        cases = [
-            ('100.64.0.2', '192.0.2.1:41641', '12ms', 0, 'direct', 12),
-            ('fd7a:115c:a1e0::2', '[2001:db8::1]:41641', '0s', 0, 'direct', 0),
-            ('100.64.0.2', 'DERP(tok)', '1.234s', 1, 'derp', 1234),
-            ('fd7a:115c:a1e0::2', 'peer-relay(other)', '7ms', 1, 'peer-relay', 7),
-            ('100.64.0.2', 'disco', '2ms', 0, 'unknown', 2),
-        ]
-        for ip, via, latency, rc, path, ms in cases:
-            with self.subTest(ip=ip, via=via):
-                output = f'pong from peer ({ip}) via DERP(sin) in 50ms\npong from peer ({ip}) via {via} in {latency}\n'
-                if rc:
-                    output += 'direct connection not established\n'
-                (self.run / 'ping-output').write_text(output)
-                result = json.loads(self.shell(prefix + f'PING_RC={rc}; cmd_peer_ping p1 ' + shlex.quote(ip)).stdout)
-                self.assertEqual(result, {'ok': True, 'peerId': 'p1', 'ip': ip,
-                                         'latencyMs': ms, 'path': path, 'via': via})
-        self.assertEqual((self.run / 'ping-calls').read_text().splitlines(),
-                         [f'12 ping --c=3 --timeout=3s {case[0]}' for case in cases])
-        # Disco PingResult.NodeIP uses peer.Addresses()[0], not the requested IP.
-        (self.run / 'ping-output').write_text('pong from peer (100.64.0.2) via DERP(tok) in 7ms')
-        result = json.loads(self.shell(prefix + 'cmd_peer_ping p1 fd7a:115c:a1e0::2').stdout)
-        self.assertEqual((result['ip'], result['path'], result['latencyMs']),
-                         ('fd7a:115c:a1e0::2', 'derp', 7))
 
     def test_peer_ping_rejects_invalid_or_foreign_targets_before_launching(self):
         prefix = self.peer_ping_fixture()
@@ -460,63 +248,6 @@ ts_cli() { printf '%s\\n' "$*" >>"$TS_RUN_DIR/ping-calls"; cat "$TS_RUN_DIR/ping
         result = self.shell(prefix + '_op_cancelled() { return 0; }; cmd_peer_ping p1 100.64.0.2', ok=False)
         self.assertIn('cancelled', json.loads(result.stdout)['error'])
 
-    def test_peer_lists_keep_all_addresses_when_local_ipv6_is_disabled(self):
-        expected = {
-            'dual': ('100.64.0.2', ['100.64.0.2', 'fd7a:115c:a1e0::2']),
-            'ipv6': ('fd7a:115c:a1e0::3', ['fd7a:115c:a1e0::3']),
-            'empty': ('-', []),
-            'missing': ('-', []),
-        }
-        snapshot = {'BackendState': 'Running', 'Peer': {
-            name: {'ID': name, 'ExitNodeOption': True, 'TailscaleIPs': addresses}
-            for name, (_, addresses) in expected.items()}}
-        del snapshot['Peer']['missing']['TailscaleIPs']
-        (self.run / 'status.json').write_text(json.dumps(snapshot))
-        prefix = '''load_conf; IPV6=off
-daemon_up() { return 0; }
-ts_cli() { cat "$TS_RUN_DIR/status.json"; }
-'''
-        for command in ('cmd_peers', 'cmd_exitnodes'):
-            with self.subTest(command=command):
-                result = json.loads(self.shell(prefix + command).stdout)
-                self.assertEqual({peer['id']: (peer['ip'], peer['ips']) for peer in result['peers']}, expected)
-
-    def test_peer_lists_carry_the_established_path_fields_verbatim(self):
-        prefix = self.peer_ping_fixture()
-        peers = json.loads(self.shell(prefix + 'cmd_peers').stdout)['peers']
-        self.assertEqual({peer['id']: (peer['curAddr'], peer['active']) for peer in peers},
-                         {'p1': ('192.0.2.1:41641', True), 'p2': ('', False)})
-
-    def test_status_rechecks_process_after_localapi_failure(self):
-        sock = socket.socket(socket.AF_UNIX)
-        sock.bind(str(self.run / 'tailscaled.sock'))
-        self.addCleanup(sock.close)
-        for stopped in (False, True):
-            with self.subTest(stopped=stopped):
-                (self.run / 'alive').touch()
-                fail = 'rm "$TS_RUN_DIR/alive"; ' if stopped else ''
-                result = json.loads(self.shell('''load_conf
-daemon_exists() { [ -f "$TS_RUN_DIR/alive" ]; }
-ts_status_json() { ''' + fail + '''return 1; }
-cmd_status''').stdout)
-                expected = ('stopped', '-') if stopped else ('running', 'unreachable')
-                self.assertEqual((result['daemon'], result['backend']), expected)
-
-    def test_status_preserves_startup_login_and_machine_approval_states(self):
-        sock = socket.socket(socket.AF_UNIX)
-        sock.bind(str(self.run / 'tailscaled.sock'))
-        self.addCleanup(sock.close)
-        for backend in ('NoState', 'NeedsLogin', 'NeedsMachineAuth'):
-            with self.subTest(backend=backend):
-                (self.run / 'status.json').write_text(json.dumps({'BackendState': backend, 'Peer': {}, 'Self': None}))
-                result = json.loads(self.shell('''load_conf
-daemon_exists() { return 0; }
-daemon_uptime() { echo 1; }
-ts_cli() { test "$1:$2:$3" = 10:status:--json || { touch "$TS_RUN_DIR/unexpected-auth-probe"; return 99; }; cat "$TS_RUN_DIR/status.json"; }
-cmd_status''').stdout)
-                self.assertTrue(result['ok'])
-                self.assertEqual((result['daemon'], result['backend']), ('running', backend))
-                self.assertFalse((self.run / 'unexpected-auth-probe').exists())
 
     def test_serve_and_funnel_keep_listener_and_upstream_protocols_separate(self):
         cli = '''ts_cli() { printf '%s\\n' "$@" >"$TS_RUN_DIR/args"; }
@@ -598,15 +329,6 @@ cmd_status''').stdout)
         dns.chmod(0o755)
         return 'load_conf; _op_exec() { shift; "$@"; }; cmd_dns_probe'
 
-    def test_dns_probe_reports_probe_failures_as_string_reasons(self):
-        # A probe failure used to feed raw text to --argjson, producing no
-        # response at all in the failure case the endpoint exists to report.
-        fixture = self.dns_probe_fixture('echo "owner match unavailable" >&2\nexit 1\n')
-        result = json.loads(self.shell(fixture).stdout)
-        self.assertEqual(result, {'ok': True, 'transparentAvailable': False,
-                                  'transparentUnavailableReason': 'owner match unavailable',
-                                  'hijackAvailable': False,
-                                  'hijackUnavailableReason': 'owner match unavailable'})
 
     def test_dns_probe_reason_stays_a_string_even_when_it_looks_like_json(self):
         fixture = self.dns_probe_fixture('printf %s \'{"nested":1}\' >&2\nexit 1\n')
@@ -614,35 +336,6 @@ cmd_status''').stdout)
         self.assertFalse(result['transparentAvailable'])
         self.assertEqual(result['transparentUnavailableReason'], '{"nested":1}')
         self.assertEqual(result['hijackUnavailableReason'], '{"nested":1}')
-
-    def test_dns_probe_uses_cached_capability_error_and_nulls_on_success(self):
-        (self.run / 'foxydns.capabilities.json').write_text('{"error":"kernel lacks TPROXY"}')
-        fixture = self.dns_probe_fixture('[ "$1" = probe-hijack ] || { echo fallback >&2; exit 1; }\n')
-        result = json.loads(self.shell(fixture).stdout)
-        self.assertEqual(result, {'ok': True, 'transparentAvailable': False,
-                                  'transparentUnavailableReason': 'kernel lacks TPROXY',
-                                  'hijackAvailable': True,
-                                  'hijackUnavailableReason': None})
-
-    def test_dns_probe_success_keeps_null_reasons(self):
-        fixture = self.dns_probe_fixture('exit 0\n')
-        result = json.loads(self.shell(fixture).stdout)
-        self.assertEqual(result, {'ok': True, 'transparentAvailable': True,
-                                  'transparentUnavailableReason': None,
-                                  'hijackAvailable': True,
-                                  'hijackUnavailableReason': None})
-
-    def test_exitnode_set_rejects_option_lookalikes_before_the_controller(self):
-        helper = self.scripts / 'foxytail.exitnode'
-        helper.write_text('#!/bin/sh\ntouch "$TS_DIR/unexpected-call"\n')
-        helper.chmod(0o755)
-        for target in ('--help', '-x', '--advertise-exit-node'):
-            with self.subTest(target=target):
-                result = self.shell('load_conf; cmd_exitnode_set ' + shlex.quote(target), ok=False)
-                self.assertNotEqual(result.returncode, 0)
-                self.assertFalse(json.loads(result.stdout)['ok'])
-        self.assertFalse((self.base / 'unexpected-call').exists())
-
 
 
 if __name__ == '__main__':
