@@ -215,3 +215,63 @@ func TestArtifactStoreQuotaAndIncompleteExpiry(t *testing.T) {
 	}
 	artifactFixture(t, root, "import", []byte("after expiry"))
 }
+
+// An import owns only its reserved stage while waiting for the provider. Closing
+// stdin with an error models cancellation before the declared bytes arrive.
+func TestStalledArtifactDoesNotLockStoreAndCancellationRemovesStage(t *testing.T) {
+	root := t.TempDir()
+	reader, writer := io.Pipe()
+	defer reader.Close()
+	defer writer.Close()
+	done := make(chan error, 1)
+	go func() {
+		defer reader.Close()
+		_, err := createArtifact(root, "import", 2, reader)
+		done <- err
+	}()
+	// Pipe writes complete only after createArtifact reaches its streaming copy.
+	if _, err := writer.Write([]byte("x")); err != nil {
+		t.Fatal(err)
+	}
+	entries, err := os.ReadDir(filepath.Join(root, ".artifacts"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var pending string
+	for _, entry := range entries {
+		if validArtifactID(entry.Name()) {
+			pending = entry.Name()
+		}
+	}
+	if pending == "" {
+		t.Fatal("missing reserved stage")
+	}
+	store, guard, err := openArtifacts(root)
+	if err != nil {
+		t.Fatalf("stalled provider retained global store lock: %v", err)
+	}
+	// Even an artificially old active stage must not be collected.
+	count, expireErr := expireArtifacts(store, time.Now().Add(2*artifactLifetime))
+	guard.Close()
+	store.Close()
+	if expireErr != nil || count != 1 {
+		t.Fatalf("live stage expired: count=%d error=%v", count, expireErr)
+	}
+	other := artifactFixture(t, root, "import", []byte("other"))
+	if err := useArtifact(root, other.ID, "delete", "", io.Discard); err != nil {
+		t.Fatal(err)
+	}
+	writer.CloseWithError(io.ErrClosedPipe)
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Fatal("cancelled partial import succeeded")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("cancelled import did not finish")
+	}
+	if _, err := os.Stat(filepath.Join(root, ".artifacts", pending)); !os.IsNotExist(err) {
+		t.Fatalf("cancelled stage remains: %v", err)
+	}
+	artifactFixture(t, root, "import", []byte("after cancellation"))
+}

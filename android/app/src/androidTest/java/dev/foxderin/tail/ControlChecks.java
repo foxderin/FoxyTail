@@ -102,6 +102,40 @@ final class ControlChecks {
                 require(reading.waitFor(2, TimeUnit.SECONDS) && read.cancelled.get(), "Read-only local cancellation releases the process");
                 require(read.process == reading && !read.finished, "Launched read retains ownership until its waiter completes");
             } finally { reading.destroy(); read.finished = true; }
+            // Use the same timeout callback as execute, with a provider blocked
+            // before its next byte and a real subprocess waiting on stdin.
+            RootApi.Call importing = new RootApi.Call();
+            CountDownLatch providerRead = new CountDownLatch(1), providerClosed = new CountDownLatch(1);
+            java.io.PipedInputStream provider = new java.io.PipedInputStream() {
+                @Override public synchronized int read(byte[] bytes, int offset, int length) throws IOException {
+                    providerRead.countDown(); return super.read(bytes, offset, length);
+                }
+                @Override public void close() throws IOException { try { super.close(); } finally { providerClosed.countDown(); } }
+            };
+            java.io.PipedOutputStream providerWriter = new java.io.PipedOutputStream(provider);
+            java.util.concurrent.ScheduledExecutorService timer = Executors.newSingleThreadScheduledExecutor();
+            Process staging = importing.launch(context, null, "artifact-stage",
+                    RootApi.localCancellationAllowed("artifact-stage"),
+                    builder -> new ProcessBuilder("/system/bin/sh", "-c", "exec cat >/dev/null").start());
+            importing.source = provider;
+            java.util.concurrent.Future<?> copy = worker.submit(() -> {
+                try (java.io.OutputStream stdin = staging.getOutputStream()) {
+                    RootApi.copy(provider, stdin, RootApi.MAX_FILE, null, importing);
+                } catch (IOException expected) { }
+            });
+            try {
+                require(providerRead.await(2, TimeUnit.SECONDS), "Provider copy reached its blocking read");
+                timer.schedule(() -> { importing.timedOut = true; importing.cancel(); }, 50, TimeUnit.MILLISECONDS);
+                require(staging.waitFor(2, TimeUnit.SECONDS) && importing.cancelled.get() && importing.timedOut,
+                        "Backup import timeout terminates the stdin consumer without a request ID");
+                require(providerClosed.await(2, TimeUnit.SECONDS), "Timeout closes the provider source");
+                // End the synthetic provider too: Android providers may not unblock
+                // an outstanding read when another thread closes their stream.
+                providerWriter.close();
+                copy.get(2, TimeUnit.SECONDS);
+            } finally {
+                timer.shutdownNow(); providerWriter.close(); provider.close(); staging.destroy(); importing.finished = true;
+            }
             require(!RootApi.localCancellationAllowed("operation-start") && !RootApi.localCancellationAllowed("login") && !RootApi.localCancellationAllowed("file-send-start"), "Unregistered writes cannot use read cancellation");
         } finally { release.countDown(); worker.shutdownNow(); }
     }

@@ -153,6 +153,15 @@ func createArtifact(path, kind string, expected int64, input io.Reader) (artifac
 		return result, err
 	}
 	defer stage.Close()
+	// Reserve the slot under the store lock, then protect only this stage.
+	// A document provider can stall indefinitely while supplying stdin; it must
+	// not prevent reads, deletes or other imports in the artifact store.
+	lease, err := artifactLease(stage)
+	if err != nil {
+		return result, err
+	}
+	defer lease.Close()
+	guard.Close()
 	out, err := stage.OpenFile(".pending", os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
 	if err != nil {
 		return result, err

@@ -205,6 +205,8 @@ final class RootApi {
     }
     static boolean localCancellationAllowed(String command) {
         switch (command) {
+            // Staging only creates a private, disposable artifact; no restore has begun.
+            case "artifact-stage":
             case "backend-info": case "operation-status": case "artifact-read": case "file-read":
             case "files-browse": case "files-inbox": case "taildrop-targets": case "file-send-history": case "file-send-status": return true;
             default: return false;
