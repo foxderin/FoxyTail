@@ -9,6 +9,11 @@ public final class IncomingNotificationReceiptTest {
             check(!IncomingNotificationReceipt.valid(invalid, 1), "reject malformed event ID");
         for (int invalid : new int[]{-1, 0, 10001, Integer.MAX_VALUE})
             check(!IncomingNotificationReceipt.valid(id, invalid), "reject invalid completed count");
+        check("completed".equals(IncomingNotificationReceipt.kind(null)), "legacy event defaults completed");
+        check("pending".equals(IncomingNotificationReceipt.kind("pending")), "pending arrival accepted");
+        check("completed".equals(IncomingNotificationReceipt.kind("completed")), "completed arrival accepted");
+        for (String invalid : new String[]{"", "Pending", "received", "../pending"})
+            check(IncomingNotificationReceipt.kind(invalid) == null, "unknown kind rejected");
         String ledger = "";
         for (int i = 0; i < 200; i++) ledger = IncomingNotificationReceipt.remember(ledger, String.format("%064x", i));
         check(IncomingNotificationReceipt.parse(ledger).size() == 128, "ledger bounded");

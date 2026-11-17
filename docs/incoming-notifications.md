@@ -1,6 +1,6 @@
-# Incoming completion notification bridge
+# Incoming file notification bridge
 
-This bridge does not receive bytes, recover pending files, poll an inbox, or run a foreground service. The module owns reception and discovery. The app only posts a notification for a completed-file event when the user opted in and Android permits notifications.
+This bridge does not receive bytes, recover pending files, poll an inbox, or run a foreground service. The module owns reception and discovery. The app only posts a notification for a pending or completed-file event when the user opted in and Android permits notifications.
 
 ## Wire contract
 
@@ -10,10 +10,13 @@ The module sends an explicit broadcast as root for Android user 0 (the module's 
 am broadcast --user 0 --exclude-stopped-packages \
   -n dev.foxderin.tail/.ReceiveNotificationReceiver \
   -a dev.foxderin.tail.RECEIVED \
+  --es kind pending \
   --es event_id '<64 lowercase hexadecimal characters>' --ei count 1
 ```
 
-- `event_id` identifies a stable completed event or batch. Retries retain the same ID. `count` is the number of completed files, from 1 to 10000. Partial files must never generate an event.
+- `kind` is `pending` or `completed`; omitted means `completed` for compatibility. Unknown values are rejected. Pending means the daemon has a buffered file awaiting saving to the shared inbox, not successful receipt into that inbox. It is reported independently of automatic recovery being enabled. Completed means an observed final file in the inbox, not proof of its network origin. Partial files must never generate completed events.
+- `event_id` identifies a stable event or batch and must include the kind in its identity; retries retain the same ID. `count` is the number of files in that event, from 1 to 10000, not a live total.
+- Pending and completed use the same notification slot: completion replaces pending wording instead of leaving a stale pending notification. Updates use only-alert-once, so an existing notice is updated quietly; this also means later arrivals are quiet until the existing notice is dismissed. Both open the fixed inbox.
 - The module must establish a baseline without announcing historical inbox files, including after monitor restart. The app keeps the latest 128 successfully posted event IDs across process death as additional replay suppression, not an unbounded exactly-once delivery ledger.
 - The manifest requires `android.permission.DUMP` on the receiver. Ordinary apps cannot invoke it. This is not root-exclusive authentication: platform/system, privileged apps, and apps explicitly granted this development permission through adb are trusted too. The payload cannot open a supplied file, URI or command. Notifications contain only a count and open the app's fixed inbox page.
 - No intent filter is registered; the component and action above must both match. Never use `--include-stopped-packages`, launch an Activity, or clear stopped state from the module to force delivery.
@@ -31,7 +34,7 @@ am broadcast --user 0 --exclude-stopped-packages \
 
 ## Verification boundary
 
-Host tests cover the event shape, deduplication and bounded ledger; instrumentation checks the merged receiver permission/export/direct-boot contract. A device acceptance test must additionally check root delivery, denial from an ordinary third-party UID, notification permission denied/granted, channel disabled, duplicate event, process death, force-stop/exclusion, unlock, and notification navigation while an outgoing job remains active. Compilation does not prove OEM background delivery.
+Host tests cover the event shape, deduplication and bounded ledger; instrumentation checks the merged receiver permission/export/direct-boot contract. A device acceptance test must additionally check root delivery, denial from an ordinary third-party UID, notification permission denied/granted, channel disabled, duplicate event, pending while auto-receive is off, pending-to-completed wording/update, process death, force-stop/exclusion, unlock, and notification navigation while an outgoing job remains active. Compilation does not prove OEM background delivery.
 
 Platform sources:
 - [Broadcast receiver sender permissions](https://developer.android.com/develop/background-work/background-tasks/broadcasts#restrict-broadcasts-permissions)

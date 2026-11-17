@@ -14,7 +14,7 @@ import android.os.Build;
 import org.json.JSONObject;
 import java.io.IOException;
 
-/** Explicit root completion hints. No file access, root execution or persistent service here.
+/** Explicit root incoming-file hints. No file access, root execution or persistent service here.
  * The manifest's DUMP permission excludes ordinary apps, but also trusts privileged/adb-granted senders.
  */
 public final class ReceiveNotificationReceiver extends BroadcastReceiver {
@@ -50,7 +50,8 @@ public final class ReceiveNotificationReceiver extends BroadcastReceiver {
         if (!ACTION.equals(intent.getAction())) return;
         String id = intent.getStringExtra("event_id");
         int count = intent.getIntExtra("count", 0);
-        if (!IncomingNotificationReceipt.valid(id, count)) return;
+        String kind = IncomingNotificationReceipt.kind(intent.getStringExtra("kind"));
+        if (kind == null || !IncomingNotificationReceipt.valid(id, count)) return;
         SharedPreferences prefs = preferences(context);
         if (!prefs.getBoolean("enabled", false) || !allowed(context)) {
             if (isOrderedBroadcast()) setResultCode(2); // Terminal suppression, not a reason to replay after opt-in.
@@ -62,12 +63,13 @@ public final class ReceiveNotificationReceiver extends BroadcastReceiver {
         createChannel(localized);
         PendingIntent open = PendingIntent.getActivity(context, NOTIFICATION, inboxIntent(context),
                 PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
-        String message = localized.getResources().getQuantityString(R.plurals.incoming_completed, count, count);
+        boolean pending = "pending".equals(kind);
+        String message = localized.getResources().getQuantityString(pending ? R.plurals.incoming_pending : R.plurals.incoming_completed, count, count);
         Notification notification = new Notification.Builder(localized, CHANNEL)
-                .setSmallIcon(R.drawable.ic_tail).setContentTitle(localized.getString(R.string.incoming_title))
-                .setContentText(message).setContentIntent(open).setAutoCancel(true)
+                .setSmallIcon(R.drawable.ic_tail).setContentTitle(localized.getString(pending ? R.string.incoming_pending_title : R.string.incoming_title))
+                .setContentText(message).setContentIntent(open).setAutoCancel(true).setOnlyAlertOnce(true)
                 .setVisibility(Notification.VISIBILITY_PRIVATE).setCategory(Notification.CATEGORY_STATUS).build();
-        // A notification is only a completion hint. It never authorizes opening any supplied path/URI.
+        // A notification is only an incoming-file hint. It never authorizes opening any supplied path/URI.
         try { context.getSystemService(NotificationManager.class).notify(NOTIFICATION, notification); }
         catch (SecurityException denied) {
             if (isOrderedBroadcast()) setResultCode(2); // Permission may change after the availability check.
