@@ -1,0 +1,6 @@
+# Reviewed daemon source plus local patch. No mutable release tag is built.
+DAEMON_REPO=https://github.com/anasfanani/tailscale-android-cli.git
+DAEMON_COMMIT=d6a741131b0d5010797bd737ca3bd7c02f8cb511
+DAEMON_VERSION=1.98.8
+DAEMON_TOOLCHAIN=e877d973840c91ec9d4bc1921b0845789de359ae
+DAEMON_NDK=27.2.12479018

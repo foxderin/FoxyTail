@@ -1,12 +1,5 @@
-# Pinned upstream binary versions. build.sh and customize.sh both read this file.
-
-# tailscale/tailscaled Android CLI binaries (static NDK builds, userspace
-# networking capable). Release asset names are `tailscale_<ver>_<arch>.tgz`,
-# each containing a single `tailscaled` binary.
-# NOTE: if this tag does not exist upstream, the build script will fail and
-# ask you to update this file to a valid release tag.
-TAILSCALE_REPO=anasfanani/tailscale-android-cli
-TAILSCALE_VERSION=v1.98.8-android
+# Pinned downloaded dependencies. The patched daemon is built from
+# native/tailscaled/SOURCE and shipped as a FoxyTail release asset.
 
 # Static jq build for Android, used for all JSON parsing on-device.
 # Assets: jq-armv7a-linux-androideabi (arm) / jq-aarch64-linux-android (arm64).

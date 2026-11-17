@@ -9,7 +9,7 @@ Module config: [tailscale/conf/foxytail.conf](tailscale/conf/foxytail.conf), [ro
 
 ## Relationship to Magisk-Tailscaled
 
-FoxyTail is inspired by [anasfanani/Magisk-Tailscaled](https://github.com/anasfanani/Magisk-Tailscaled) — full credit for the original idea of shipping `tailscaled` as a Magisk module. FoxyTail is a clean-room rewrite, started because the original installer hid download/unzip failures behind `2>/dev/null || true`, pulled unpinned `latest` releases without integrity checks, mislabeled `/data/adb` files with the `system_file` SELinux context, used a 4-segment version scheme, and parsed GitHub API JSON with grep/sed. FoxyTail pins every upstream version ([tailscale/VERSIONS](tailscale/VERSIONS)), verifies every binary with SHA256 ([tailscale/checksums.txt](tailscale/checksums.txt)), and fails loudly.
+FoxyTail is inspired by [anasfanani/Magisk-Tailscaled](https://github.com/anasfanani/Magisk-Tailscaled) — full credit for the original idea of shipping `tailscaled` as a Magisk module. FoxyTail is a clean-room rewrite, started because the original installer hid download/unzip failures behind `2>/dev/null || true`, pulled unpinned `latest` releases without integrity checks, mislabeled `/data/adb` files with the `system_file` SELinux context, used a 4-segment version scheme, and parsed GitHub API JSON with grep/sed. FoxyTail pins dependencies ([tailscale/VERSIONS](tailscale/VERSIONS)) and daemon source ([native/tailscaled/SOURCE](native/tailscaled/SOURCE)), verifies every binary with SHA256, and fails loudly.
 
 ## Feature matrix
 
@@ -35,7 +35,7 @@ FoxyTail is inspired by [anasfanani/Magisk-Tailscaled](https://github.com/anasfa
 
 Two packages are published on the [Releases](../../releases) page:
 
-- **`FoxyTail-<version>.zip` (light)** — the installer downloads `tailscaled`, `jq` and `hev-socks5-tunnel` at install time from their pinned upstream releases and verifies each against `checksums.txt` (SHA256). Requires internet during install.
+- **`FoxyTail-<version>.zip` (light)** — the installer downloads `tailscaled`, `jq` and `hev-socks5-tunnel` at install time from pinned releases. The patched daemon comes from the matching FoxyTail release and is checked against the package’s `native-checksums.txt`; jq/hev retain reviewed upstream `checksums.txt` hashes. Requires internet during install.
 - **`FoxyTail-<version>-full.zip` (full)** — all binaries bundled; installs offline. The bundled binaries are SHA256-verified too, so a tampered zip is rejected.
 
 Flash either zip in Magisk Manager, KernelSU Manager or MMRL, then reboot (or use the absolute-path commands printed by the installer before rebooting).

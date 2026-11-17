@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # FoxyTail release builder.
 #
-# Downloads the pinned upstream binaries (tailscale/VERSIONS) for arm and
+# Downloads pinned jq/hev dependencies and builds a patched daemon for arm and
 # arm64, verifies the reviewed tailscale/checksums.txt, then produces:
-#   dist/FoxyTail-<version>.zip       light: upstream binaries downloaded at install
+#   dist/FoxyTail-<version>.zip       light: dependency binaries downloaded at install
 #   dist/FoxyTail-<version>-full.zip  full:  all binaries bundled
 # First-party foxydns and foxyfiles helpers are built from source and bundled in both.
 #
@@ -28,7 +28,7 @@ VERSION=$(sed -n 's/^version=//p' module.prop)
 DIST_DIR="$PWD/dist"
 REVIEWED_MANIFEST="$PWD/tailscale/checksums.txt"
 
-for cmd in curl jq zip unzip sha256sum tar python3; do
+for cmd in curl jq zip unzip sha256sum tar gzip git python3; do
   command -v "$cmd" >/dev/null 2>&1 || {
     echo "error: required command not found: $cmd" >&2
     exit 1
@@ -95,12 +95,6 @@ for ARCH in arm arm64; do
       ;;
   esac
 
-  echo "[${ARCH}] tailscaled (${TAILSCALE_REPO}@${TAILSCALE_VERSION})"
-  url=$(asset_url "$TAILSCALE_REPO" "$TAILSCALE_VERSION" "tailscale_.*_${ARCH}\.tgz$")
-  download "$url" "${WORK_DIR}/tailscale-${ARCH}.tgz"
-  tar -xzf "${WORK_DIR}/tailscale-${ARCH}.tgz" -C "$WORK_DIR"
-  mv "$WORK_DIR/tailscaled" "${BIN_DIR}/tailscaled-${ARCH}"
-
   echo "[${ARCH}] jq (${JQ_REPO}@${JQ_VERSION})"
   url=$(asset_url "$JQ_REPO" "$JQ_VERSION" "${JQ_ASSET}$")
   download "$url" "${BIN_DIR}/jq-${ARCH}"
@@ -109,7 +103,7 @@ for ARCH in arm arm64; do
   url=$(asset_url "$HEV_REPO" "$HEV_VERSION" "hev-socks5-tunnel-linux-${HEV_ARCH}$")
   download "$url" "${BIN_DIR}/hev-socks5-tunnel-${ARCH}"
 
-  chmod 0755 "${BIN_DIR}/tailscaled-${ARCH}" "${BIN_DIR}/jq-${ARCH}" "${BIN_DIR}/hev-socks5-tunnel-${ARCH}"
+  chmod 0755 "${BIN_DIR}/jq-${ARCH}" "${BIN_DIR}/hev-socks5-tunnel-${ARCH}"
 done &
 downloads_pid=$!
 
@@ -120,12 +114,15 @@ if [ "$UPDATE_CHECKSUMS" = true ]; then
   {
     echo '# Reviewed upstream binary hashes. Normal builds only verify this file.'
     echo '# Update explicitly with .github/tools/build.sh --update-checksums and review the diff.'
-    (cd "$BIN_DIR" && sha256sum tailscaled-* jq-* hev-socks5-tunnel-*)
+    (cd "$BIN_DIR" && sha256sum jq-* hev-socks5-tunnel-*)
   } >"${REVIEWED_MANIFEST}.candidate"
   echo "Candidate written to tailscale/checksums.txt.candidate; verify upstream provenance before replacing the reviewed manifest."
   exit 0
 fi
 
+DAEMON_DIR="${WORK_DIR}/daemon"
+bash .github/tools/build-daemon.sh "$DAEMON_DIR" >"$WORK_DIR/daemon.log" 2>&1 &
+daemon_pid=$!
 NATIVE_DIR="${WORK_DIR}/native"
 bash .github/tools/build-native.sh "$NATIVE_DIR" >"$WORK_DIR/native.log" 2>&1 &
 native_pid=$!
@@ -134,11 +131,15 @@ bash .github/tools/build-android.sh release "${DIST_DIR}/FoxyTail-${VERSION}.apk
 wait "$native_pid" && native_status=0 || native_status=$?
 cat "$WORK_DIR/native.log"
 [ "$native_status" -eq 0 ]
+wait "$daemon_pid" && daemon_status=0 || daemon_status=$?
+cat "$WORK_DIR/daemon.log"
+[ "$daemon_status" -eq 0 ]
 wait "$downloads_pid"
+cp "$DAEMON_DIR/tailscaled-arm" "$DAEMON_DIR/tailscaled-arm64" "$BIN_DIR/"
 echo "- Verifying every pinned binary against the reviewed manifest"
 awk '!/^[[:space:]]*(#|$)/' "$REVIEWED_MANIFEST" >"${WORK_DIR}/checksums.verify"
 (cd "$BIN_DIR" && sha256sum --strict -c "${WORK_DIR}/checksums.verify")
-for binary in tailscaled-arm tailscaled-arm64 jq-arm jq-arm64 hev-socks5-tunnel-arm hev-socks5-tunnel-arm64; do
+for binary in jq-arm jq-arm64 hev-socks5-tunnel-arm hev-socks5-tunnel-arm64; do
   # Missing/duplicate entries must fail even if sha256sum accepted other lines.
   test "$(awk -v name="$binary" '$2==name {n++} END {print n+0}' "$REVIEWED_MANIFEST")" = 1
  done
@@ -155,9 +156,18 @@ cp tailscale/settings.sh tailscale/VERSIONS tailscale/checksums.txt "$PACKAGE_DI
 cp "$NATIVE_DIR/foxydns-arm" "$NATIVE_DIR/foxydns-arm64" \
   "$NATIVE_DIR/foxyfiles-arm" "$NATIVE_DIR/foxyfiles-arm64" "$PACKAGE_DIR/tailscale/bin/"
 {
-  echo '# First-party helpers built from this release source with the pinned Go toolchain.'
+  echo '# Helpers and patched daemon built from pinned source/toolchains for this release.'
   (cd "$NATIVE_DIR" && sha256sum foxydns-arm foxydns-arm64 foxyfiles-arm foxyfiles-arm64)
+  cat "$DAEMON_DIR/daemon-checksums.txt"
 } >"$PACKAGE_DIR/tailscale/native-checksums.txt"
+# The light ZIP downloads this release's patched daemon, never upstream's old one.
+# Build deterministic single-member archives; installer extracts only stdout.
+for arch in arm arm64; do
+  mkdir -p "$WORK_DIR/daemon-$arch"
+  cp "$DAEMON_DIR/tailscaled-$arch" "$WORK_DIR/daemon-$arch/tailscaled"
+  tar --sort=name --mtime=@0 --owner=0 --group=0 --numeric-owner -cf - -C "$WORK_DIR/daemon-$arch" tailscaled | gzip -n -9 > "$DIST_DIR/FoxyTail-${VERSION}-daemon-${arch}.tgz"
+done
+cp "$DAEMON_DIR/daemon-build.txt" "$DIST_DIR/daemon-build.txt"
 # ZIP metadata gets a fixed timestamp from the source commit.
 SOURCE_DATE_EPOCH=${SOURCE_DATE_EPOCH:-$(git log -1 --format=%ct)}
 export SOURCE_DATE_EPOCH
@@ -178,5 +188,5 @@ for name in os.listdir(sys.argv[1]):
     os.utime(os.path.join(sys.argv[1], name), (stamp, stamp))
 PYTIME
 (cd "$PACKAGE_DIR" && LC_ALL=C find . -type f | LC_ALL=C sort | zip -X -9 "${DIST_DIR}/FoxyTail-${VERSION}-full.zip" -@ >/dev/null)
-(cd "$DIST_DIR" && sha256sum "FoxyTail-${VERSION}.zip" "FoxyTail-${VERSION}-full.zip" "FoxyTail-${VERSION}.apk" >SHA256SUMS)
+(cd "$DIST_DIR" && sha256sum "FoxyTail-${VERSION}.zip" "FoxyTail-${VERSION}-full.zip" "FoxyTail-${VERSION}.apk" "FoxyTail-${VERSION}-daemon-arm.tgz" "FoxyTail-${VERSION}-daemon-arm64.tgz" daemon-build.txt >SHA256SUMS)
 echo "Build complete: ${DIST_DIR} (reviewed manifest unchanged)"

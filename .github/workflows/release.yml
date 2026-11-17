@@ -129,7 +129,7 @@ jobs:
       - uses: android-actions/setup-android@v3
         with:
           packages: platform-tools
-      - run: sdkmanager 'platforms;android-37.0' 'build-tools;36.0.0'
+      - run: sdkmanager 'platforms;android-37.0' 'build-tools;36.0.0' 'ndk;27.2.12479018'
       - run: sudo apt-get update && sudo apt-get install -y zip jq
       - name: Build the module packages and companion APK
         env:
@@ -153,6 +153,8 @@ jobs:
           files: |
             dist/*.zip
             dist/*.apk
+            dist/*-daemon-*.tgz
+            dist/daemon-build.txt
             dist/SHA256SUMS
           generate_release_notes: true
           prerelease: ${{ inputs.prerelease || contains(inputs.tag || github.ref_name, '-rc.') }}

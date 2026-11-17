@@ -9,7 +9,7 @@ English: [README.md](README.md)
 
 ## 与原项目的关系
 
-FoxyTail 的灵感来自 [anasfanani/Magisk-Tailscaled](https://github.com/anasfanani/Magisk-Tailscaled)——感谢其首创把 `tailscaled` 打包为 Magisk 模块。FoxyTail 是全新重写，原因包括：原安装器用 `2>/dev/null || true` 掩盖下载/解包失败；拉取未固定版本的 `latest` 产物且无完整性校验；把 `/data/adb` 下文件错误打上 `system_file` SELinux 标签；使用四段版本号；用 grep/sed 解析 GitHub API JSON。FoxyTail 固定所有上游版本（[tailscale/VERSIONS](tailscale/VERSIONS)），对每个二进制做 SHA256 校验（[tailscale/checksums.txt](tailscale/checksums.txt)），并且出错即中止。
+FoxyTail 的灵感来自 [anasfanani/Magisk-Tailscaled](https://github.com/anasfanani/Magisk-Tailscaled)——感谢其首创把 `tailscaled` 打包为 Magisk 模块。FoxyTail 是全新重写，原因包括：原安装器用 `2>/dev/null || true` 掩盖下载/解包失败；拉取未固定版本的 `latest` 产物且无完整性校验；把 `/data/adb` 下文件错误打上 `system_file` SELinux 标签；使用四段版本号；用 grep/sed 解析 GitHub API JSON。FoxyTail 固定下载依赖版本（[tailscale/VERSIONS](tailscale/VERSIONS)）和 daemon 源码（[native/tailscaled/SOURCE](native/tailscaled/SOURCE)），对每个二进制做 SHA256 校验，并且出错即中止。
 
 ## 功能矩阵
 
@@ -35,7 +35,7 @@ FoxyTail 的灵感来自 [anasfanani/Magisk-Tailscaled](https://github.com/anasf
 
 [Releases](../../releases) 页面发布两种包：
 
-- **`FoxyTail-<version>.zip`（light 轻量包）** —— 安装时从固定的上游 release 下载 `tailscaled`、`jq`、`hev-socks5-tunnel`，并按 `checksums.txt` 逐个 SHA256 校验。安装过程需要联网。自研 `foxydns` 已随轻量包内置。
+- **`FoxyTail-<version>.zip`（light 轻量包）** —— 安装时下载固定版本的二进制：修补后的 `tailscaled` 来自同版本 FoxyTail release，按包内 `native-checksums.txt` 校验；`jq`、`hev-socks5-tunnel` 仍来自固定上游并按 `checksums.txt` 校验。安装过程需要联网。自研 `foxydns` 已随轻量包内置。
 - **`FoxyTail-<version>-full.zip`（full 完整包）** —— 内置全部二进制，可离线安装。内置二进制同样做 SHA256 校验，被篡改的 zip 会被拒绝。
 
 在 Magisk Manager、KernelSU Manager 或 MMRL 中刷入任一 zip，然后重启（重启前可使用安装器打印的绝对路径命令）。

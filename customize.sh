@@ -209,7 +209,8 @@ verify_bin() {
   fi
 }
 
-# First-party helpers are mandatory in both package variants. Their manifest
+# First-party helpers are mandatory in both package variants. The same manifest
+# also pins the patched daemon (bundled in full, downloaded in light). The manifest
 # is generated from the tagged source build, separate from reviewed upstream
 # hashes; installation never downloads a substitute or reuses an older helper.
 verify_native_bin() {
@@ -261,7 +262,18 @@ for _native in foxydns foxyfiles; do
   verify_native_bin "${_native}-${ARCH}"
 done
 
-install_bin tailscaled "$TAILSCALE_REPO" "$TAILSCALE_VERSION" "tailscale_.*_${ARCH}\\.tgz" tgz
+# Only a matching FoxyTail release contains the patched daemon. Full packages
+# already have it; light packages fail closed if that release asset is absent.
+_daemon_tag=$(sed -n 's/^version=//p' "$MODPATH/module.prop")
+case "$_daemon_tag" in ''|*[!A-Za-z0-9.-]*) abort "! Invalid daemon release version" ;; esac
+if [ ! -f "${STAGE}/bin/tailscaled-${ARCH}" ]; then
+  gh_download foxderin/FoxyTail "$_daemon_tag" "FoxyTail-${_daemon_tag}-daemon-${ARCH}\\.tgz" "${STAGE}/bin/daemon.download" ||
+    abort "! Cannot download the patched daemon for this FoxyTail release"
+  tar -xzOf "${STAGE}/bin/daemon.download" tailscaled >"${STAGE}/bin/tailscaled-${ARCH}" ||
+    abort "! Cannot extract patched daemon"
+  rm -f "${STAGE}/bin/daemon.download"
+fi
+verify_native_bin "tailscaled-${ARCH}"
 install_bin jq "$JQ_REPO" "$JQ_VERSION" "$JQ_ASSET"
 install_bin hev-socks5-tunnel "$HEV_REPO" "$HEV_VERSION" "hev-socks5-tunnel-linux-${HEV_ARCH}"
 

@@ -1,0 +1,255 @@
+From 7f625f49da20c2d3a917313a8e55b253403263a7 Mon Sep 17 00:00:00 2001
+From: OpenAI <noreply@openai.com>
+Date: Wed, 18 Nov 2026 02:27:17 +0800
+Subject: [PATCH] fix: decode FIB rule events and restore Android routing
+ priorities
+
+---
+ net/netmon/netmon_linux.go                    | 19 +++---
+ net/netmon/rule_linux.go                      | 49 +++++++++++++++
+ net/netmon/rule_linux_test.go                 | 63 +++++++++++++++++++
+ .../android_rule_priority_linux_test.go       | 24 +++++++
+ wgengine/router/osrouter/router_linux.go      | 13 +++-
+ 5 files changed, 154 insertions(+), 14 deletions(-)
+ create mode 100644 net/netmon/rule_linux.go
+ create mode 100644 net/netmon/rule_linux_test.go
+ create mode 100644 wgengine/router/osrouter/android_rule_priority_linux_test.go
+
+diff --git a/net/netmon/netmon_linux.go b/net/netmon/netmon_linux.go
+index 591a412..d05ebf9 100644
+--- a/net/netmon/netmon_linux.go
++++ b/net/netmon/netmon_linux.go
+@@ -19,6 +19,9 @@
+ 	"tailscale.com/util/eventbus"
+ )
+ 
++// RTNLGRP_IPV6_RULE is group 20; netlink.Config.Groups takes a bitmask.
++const ipv6RuleGroup = 1 << (20 - 1)
++
+ var debugNetlinkMessages = envknob.RegisterBool("TS_DEBUG_NETLINK")
+ 
+ // unspecifiedMessage is a minimal message implementation that should not
+@@ -32,7 +35,7 @@ func (unspecifiedMessage) ignore() bool { return false }
+ // was deleted.
+ type RuleDeleted struct {
+ 	// Table is the table number that the deleted rule referenced.
+-	Table uint8
++	Table uint32
+ 	// Priority is the lookup priority of the deleted rule.
+ 	Priority uint32
+ }
+@@ -64,7 +67,7 @@ func newOSMon(bus *eventbus.Bus, logf logger.Logf, m *Monitor) (osMon, error) {
+ 		// but all reachability would.
+ 		Groups: unix.RTMGRP_IPV4_IFADDR | unix.RTMGRP_IPV6_IFADDR |
+ 			unix.RTMGRP_IPV4_ROUTE | unix.RTMGRP_IPV6_ROUTE |
+-			unix.RTMGRP_IPV4_RULE, // no IPV6_RULE in x/sys/unix
++			unix.RTMGRP_IPV4_RULE | ipv6RuleGroup,
+ 	})
+ 	if err != nil {
+ 		// Google Cloud Run does not implement NETLINK_ROUTE RTMGRP support
+@@ -230,18 +233,10 @@ func (c *nlConn) Receive() (message, error) {
+ 	case unix.RTM_DELRULE:
+ 		// For https://github.com/tailscale/tailscale/issues/1591 where
+ 		// systemd-networkd deletes our rules.
+-		var rmsg rtnetlink.RouteMessage
+-		err := rmsg.UnmarshalBinary(msg.Data)
++		rd, err := decodeDeletedRule(msg.Data)
+ 		if err != nil {
+ 			c.logf("ip rule deleted; failed to parse netlink message: %v", err)
+-		} else {
+-			c.logf("ip rule deleted: %+v", rmsg)
+-			// On `ip -4 rule del pref 5210 table main`, logs:
+-			// monitor: ip rule deleted: {Family:2 DstLength:0 SrcLength:0 Tos:0 Table:254 Protocol:0 Scope:0 Type:1 Flags:0 Attributes:{Dst:<nil> Src:<nil> Gateway:<nil> OutIface:0 Priority:5210 Table:254 Mark:4294967295 Expires:<nil> Metrics:<nil> Multipath:[]}}
+-		}
+-		rd := RuleDeleted{
+-			Table:    rmsg.Table,
+-			Priority: rmsg.Attributes.Priority,
++			return ignoreMessage{}, nil
+ 		}
+ 		c.rulesDeleted.Publish(rd)
+ 		if debugNetlinkMessages() {
+diff --git a/net/netmon/rule_linux.go b/net/netmon/rule_linux.go
+new file mode 100644
+index 0000000..1fa95a8
+--- /dev/null
++++ b/net/netmon/rule_linux.go
+@@ -0,0 +1,49 @@
++// Copyright (c) Tailscale Inc & contributors
++// SPDX-License-Identifier: BSD-3-Clause
++
++//go:build linux
++
++package netmon
++
++import (
++	"encoding/binary"
++	"fmt"
++)
++
++// decodeDeletedRule reads fib_rule_hdr and FRA_* attributes, not rtmsg/RTA_*.
++// In particular FRA_UID_RANGE (20) is not a route expiry attribute.
++func decodeDeletedRule(data []byte) (RuleDeleted, error) {
++	if len(data) < 12 {
++		return RuleDeleted{}, fmt.Errorf("short FIB rule header")
++	}
++	out := RuleDeleted{Table: uint32(data[4])}
++	seen := map[uint16]bool{}
++	for attrs := data[12:]; len(attrs) > 0; {
++		if len(attrs) < 4 {
++			return RuleDeleted{}, fmt.Errorf("short FIB rule attribute")
++		}
++		size := int(binary.NativeEndian.Uint16(attrs[:2]))
++		kind := binary.NativeEndian.Uint16(attrs[2:4]) & 0x3fff
++		if size < 4 || size > len(attrs) {
++			return RuleDeleted{}, fmt.Errorf("invalid FIB rule attribute length")
++		}
++		if kind == 6 || kind == 15 { // FRA_PRIORITY, FRA_TABLE
++			if size != 8 || seen[kind] {
++				return RuleDeleted{}, fmt.Errorf("invalid FIB rule scalar")
++			}
++			seen[kind] = true
++			value := binary.NativeEndian.Uint32(attrs[4:8])
++			if kind == 6 {
++				out.Priority = value
++			} else {
++				out.Table = value
++			}
++		}
++		aligned := (size + 3) &^ 3
++		if aligned > len(attrs) {
++			return RuleDeleted{}, fmt.Errorf("short FIB rule padding")
++		}
++		attrs = attrs[aligned:]
++	}
++	return out, nil
++}
+diff --git a/net/netmon/rule_linux_test.go b/net/netmon/rule_linux_test.go
+new file mode 100644
+index 0000000..94c433f
+--- /dev/null
++++ b/net/netmon/rule_linux_test.go
+@@ -0,0 +1,63 @@
++// Copyright (c) Tailscale Inc & contributors
++// SPDX-License-Identifier: BSD-3-Clause
++
++//go:build linux
++
++package netmon
++
++import (
++	"encoding/binary"
++	"testing"
++)
++
++func TestDecodeDeletedRule(t *testing.T) {
++	if ipv6RuleGroup != 0x80000 {
++		t.Fatal("incorrect IPv6 rule multicast bitmap")
++	}
++	attr := func(kind uint16, value ...uint32) []byte {
++		b := make([]byte, 4+4*len(value))
++		binary.NativeEndian.PutUint16(b, uint16(len(b)))
++		binary.NativeEndian.PutUint16(b[2:], kind)
++		for i, v := range value {
++			binary.NativeEndian.PutUint32(b[4+i*4:], v)
++		}
++		return b
++	}
++	rawAttr := func(size, kind uint16, tail ...byte) []byte {
++		b := make([]byte, 4)
++		binary.NativeEndian.PutUint16(b, size)
++		binary.NativeEndian.PutUint16(b[2:], kind)
++		return append(b, tail...)
++	}
++	header := make([]byte, 12)
++	header[4] = 52
++	for _, family := range []byte{2, 10} {
++		msg := append([]byte{}, header...)
++		msg[0] = family
++		msg = append(msg, rawAttr(5, 31, 42, 0, 0, 0)...) // unknown one-byte attribute, padded to 4-byte boundary
++		msg = append(msg, attr(20, 10000, 19999)...)
++		msg = append(msg, attr(6, 12500)...)
++		msg = append(msg, attr(15, 100001)...)
++		got, err := decodeDeletedRule(msg)
++		if err != nil || got.Table != 100001 || got.Priority != 12500 {
++			t.Fatalf("family %d: got %+v, %v", family, got, err)
++		}
++	}
++	got, err := decodeDeletedRule(append(append([]byte{}, header...), attr(6, 13001)...))
++	if err != nil || got.Table != 52 || got.Priority != 13001 {
++		t.Fatalf("header table: %+v, %v", got, err)
++	}
++	for _, bad := range [][]byte{
++		header[:11], append(append([]byte{}, header...), 1),
++		append(append([]byte{}, header...), rawAttr(12, 15, 1, 0, 0, 0)...), // size beyond buffer
++		append(append([]byte{}, header...), rawAttr(5, 31, 42)...),          // missing padding
++		append(append(append([]byte{}, header...), attr(15, 52)...), attr(15, 53)...),
++		append(append([]byte{}, header...), rawAttr(3, 6)...),
++		append(append([]byte{}, header...), attr(6)...),
++		append(append(append([]byte{}, header...), attr(6, 12500)...), attr(6, 13001)...),
++	} {
++		if _, err := decodeDeletedRule(bad); err == nil {
++			t.Fatalf("accepted malformed rule %x", bad)
++		}
++	}
++}
+diff --git a/wgengine/router/osrouter/android_rule_priority_linux_test.go b/wgengine/router/osrouter/android_rule_priority_linux_test.go
+new file mode 100644
+index 0000000..c8c7a3e
+--- /dev/null
++++ b/wgengine/router/osrouter/android_rule_priority_linux_test.go
+@@ -0,0 +1,24 @@
++// Copyright (c) Tailscale Inc & contributors
++// SPDX-License-Identifier: BSD-3-Clause
++
++//go:build linux
++
++package osrouter
++
++import "testing"
++
++func TestDeletedRulePriorityOwnership(t *testing.T) {
++	for _, tc := range []struct {
++		os       string
++		priority uint32
++		owned    bool
++	}{
++		{"android", 12500, true}, {"android", 13001, true},
++		{"android", 13000, false}, {"android", 5210, false},
++		{"linux", 5210, true}, {"linux", 5300, false}, {"linux", 12500, false},
++	} {
++		if got := ownsDeletedRulePriority(tc.os, 5200, tc.priority); got != tc.owned {
++			t.Errorf("%s %d = %v", tc.os, tc.priority, got)
++		}
++	}
++}
+diff --git a/wgengine/router/osrouter/router_linux.go b/wgengine/router/osrouter/router_linux.go
+index ee1f743..cbca688 100644
+--- a/wgengine/router/osrouter/router_linux.go
++++ b/wgengine/router/osrouter/router_linux.go
+@@ -324,8 +324,8 @@ type AddIPRules struct{
+ // Note that we don't care about the table number. We don't strictly even care
+ // about the priority number. We could just do this in response to any netlink
+ // change. Filtering by known priority ranges cuts back on some logspam.
+-func (r *linuxRouter) onIPRuleDeleted(table uint8, priority uint32) {
+-	if int(priority) < r.ipPolicyPrefBase || int(priority) >= (r.ipPolicyPrefBase+100) {
++func (r *linuxRouter) onIPRuleDeleted(table uint32, priority uint32) {
++	if !ownsDeletedRulePriority(runtime.GOOS, r.ipPolicyPrefBase, priority) {
+ 		// Not our rule.
+ 		return
+ 	}
+@@ -1806,3 +1806,12 @@ func nlAddrOfPrefix(p netip.Prefix) *netlink.Addr {
+ 		IPNet: netipx.PrefixIPNet(p),
+ 	}
+ }
++
++// Android rules are offset far beyond the Linux base's first 100 priorities.
++// Match only our actual priorities, never Android netd's intervening rules.
++func ownsDeletedRulePriority(goos string, base int, priority uint32) bool {
++	if goos == "android" {
++		return int(priority) == base+7300 || int(priority) == base+7801
++	}
++	return int(priority) >= base && int(priority) < base+100
++}
+-- 
+2.52.0
+
