@@ -2,8 +2,9 @@
  * No shadow DOM, no Lit, no runtime webcomponent upgrades — just plain
  * <button>/<input>/<select>/<dialog> styled with the existing MD3 tokens.
  */
-import { createEffect, createSignal, createUniqueId, For, onCleanup, onMount, Show, type JSX, type ParentProps } from 'solid-js';
+import { createEffect, createSignal, createUniqueId, For, onCleanup, onMount, Show, useContext, type JSX, type ParentProps } from 'solid-js';
 import { MdIcon } from '../icons';
+import { RouteVisible } from '../schedule';
 
 export function Button(props: ParentProps<{
   variant?: 'filled' | 'tonal' | 'outlined' | 'text';
@@ -386,19 +387,27 @@ export function Dialog(props: {
 }): JSX.Element {
   let dialog!: HTMLDialogElement;
   const headlineId = createUniqueId();
+  const routeVisible = useContext(RouteVisible);
   let previousFocus: HTMLElement | null = null;
   const restoreFocus = () => {
     const target = previousFocus;
     previousFocus = null;
-    queueMicrotask(() => { if (target?.isConnected) target.focus({ preventScroll: true }); });
+    queueMicrotask(() => { if (target?.isConnected && !target.closest('[hidden]')) target.focus({ preventScroll: true }); });
   };
   const open = () => {
     if (dialog.open) return;
     previousFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
     dialog.showModal();
   };
-  onMount(() => { if (props.open) open(); });
+  onMount(() => { if (props.open && routeVisible()) open(); });
   createEffect(() => {
+    if (!routeVisible()) {
+      // Retained pages keep their data, not a modal in the browser top layer.
+      previousFocus = null;
+      if (dialog.open) dialog.close();
+      if (props.open) props.onClose?.();
+      return;
+    }
     if (props.open) {
       open();
     } else if (dialog.open) {

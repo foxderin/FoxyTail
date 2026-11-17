@@ -432,6 +432,30 @@ await scenario('validated task failure remains authoritative after native succes
   assert(app.tasks.getTask(app.backup.BACKUP_TASK)?.status === 'error', 'refreshing native successful receipt cannot erase consumer validation error');
 });
 
+await scenario('Native navigation dismisses retained page modal without discarding state', async ({ fixture, nav, window, click, input }) => {
+  await nav('settings');
+  const settingsPage = window.document.querySelector('.page-transition:not([hidden])');
+  input(settingsPage.querySelector('[data-setting="SOCKS_PORT"] input'), '1100'); await flush();
+  await nav('peers');
+  const peersPage = window.document.querySelector('.page-transition:not([hidden])');
+  const peer = () => [...peersPage.querySelectorAll('.network-peer-main')].find(row => row.textContent.includes('home-server'));
+  click(peer()); await flush();
+  const modal = peersPage.querySelector('dialog[open]');
+  assert(!!modal, 'peer detail starts as a modal on the active route');
+  fixture.emit('navigate', { page: 'files' }); await flush();
+  assert(window.location.hash === '#/files' && !modal.open, 'native navigation closes the old modal');
+  assert(!window.document.activeElement?.closest('[hidden]'), 'route dismissal never restores focus into the hidden page');
+  fixture.emit('back', {}); await flush();
+  assert(window.location.hash === '#/peers' && !peersPage.querySelector('dialog[open]'), 'returning does not reopen the dismissed modal');
+  assert(window.document.querySelector('.page-transition:not([hidden])') === peersPage && !!peer(), 'dismissal preserves the retained page and data');
+  click(peer()); await flush();
+  assert(!!peersPage.querySelector('dialog[open]'), 'peer detail remains available after returning');
+  fixture.emit('back', {}); await flush();
+  assert(window.location.hash === '#/peers' && !peersPage.querySelector('dialog[open]'), 'Back closes the reopened modal before navigating');
+  await nav('settings');
+  assert(settingsPage.querySelector('[data-setting="SOCKS_PORT"] input').value === '1100', 'in-session edits survive native navigation');
+});
+
 await scenario('Back ignores hidden retained disclosures', async ({ fixture, nav, window }) => {
   await nav('files');
   const details = window.document.querySelector('.menu-pop');
