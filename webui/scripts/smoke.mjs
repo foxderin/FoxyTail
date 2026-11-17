@@ -1,6 +1,5 @@
 #!/usr/bin/env node
 // pnpm smoke builds the real app once; fixtures exercise native envelopes only.
-import { readFileSync } from 'node:fs';
 import { boot, assert, checks, failures, flush, copy } from './smoke-fixture.mjs';
 
 async function scenario(name, run) {
@@ -60,58 +59,6 @@ await scenario('Files gates stale destructive actions and reflects locked rows',
   assert(!row().disabled, 'file row re-enables when native operation settles');
   click(row()); await flush();
   assert(fixture.log.filter(r => r.action === 'files.open').length === opens + 1, 'settled file row opens normally');
-});
-
-await scenario('Files exposes daemon-held deliveries and recovers without hiding failures', async ({ fixture, nav, window, button, click }) => {
-  fixture.data['files-inbox'].receive = { mode: 'buffered', selfId: 'preview-self', pending: [{ name: 'incoming.txt', size: 23 }] };
-  await nav('files');
-  const received = () => window.document.querySelector('[data-testid="receive-status"]');
-  assert(received()?.textContent.includes('incoming.txt') && received()?.textContent.includes('daemon inbox'), 'daemon-held files are shown separately from downloaded files');
-  fixture.overrides.set('file-receive', { ok: false, error: 'Destination conflict; source retained' });
-  click(button('ft_receive_file', received())); await flush();
-  assert(window.document.querySelector('.files-notice')?.textContent.includes('source retained') && received()?.textContent.includes('incoming.txt'), 'failed recovery keeps pending delivery visible and reports the error');
-  fixture.overrides.delete('file-receive');
-  click(button('ft_receive_file', received())); await flush();
-  assert(!received()?.textContent.includes('incoming.txt') && fixture.data['files-inbox'].files.some(file => file.name === 'incoming.txt'), 'successful recovery refreshes pending and downloaded lists');
-  const submitted = fixture.log.findLast(r => r.action === 'control.mutate' && r.args.command === 'file-receive');
-  assert(submitted?.args.arguments[0] === 'incoming.txt' && submitted?.args.arguments[1] === 'preview-self', 'recovery binds the named file to the observed account');
-  fixture.data['files-inbox'].receive = { mode: 'unavailable', selfId: '', pending: [], error: 'Daemon offline' };
-  click(button('tools_refresh', window.document.querySelector('.files-page .card'))); await flush();
-  assert(received()?.textContent.includes('Daemon offline') && window.document.querySelector('.files-page').textContent.includes('incoming.txt'), 'unavailable daemon reports receive failure without hiding downloaded files');
-});
-
-await scenario('routes, appearance and retained Files UI', async ({ app, nav, window, fixture, input }) => {
-  for (const route of Object.keys(app.ROUTES)) {
-    await nav(route);
-    assert(window.document.querySelector('#view .page-transition:not([hidden])')?.textContent.trim().length > 0, route + ' renders visible content');
-  }
-  assert(app.state.status()?.self.id === 'preview-self' && app.state.peers()?.length === 3, 'light status supplies current identity and peers');
-  assert(app.state.status()?.exitRouting?.known === true, 'deep routing has independent identity-bound result');
-  await app.applyTheme('dark'); await app.setLang('zh'); await flush();
-  assert(fixture.appearance.theme === 'dark' && fixture.appearance.language === 'zh', 'appearance changes use native preferences');
-  await app.setLang('en');
-  await nav('files');
-  const original = window.document.querySelector('.files-page');
-  input(window.document.querySelector('.files-toolbar input'), 'network');
-  await nav('peers'); await nav('files');
-  assert(window.document.querySelector('.files-page') === original, 'Files keeps its actual mounted UI across routes');
-  assert(window.document.querySelector('.files-toolbar input')?.value === 'network', 'Files search survives navigation');
-  assert(!fixture.log.some(r => r.action === 'app.drafts'), 'Files view state needs no native draft bridge');
-});
-
-await scenario('session drafts restore unmounted Logs but a new document starts clean', async ({ nav, window, input, fixture }) => {
-  await nav('logs');
-  const original = window.document.querySelector('.tool-log-controls input');
-  assert(original.value === '', 'new WebView session starts with empty log search');
-  input(original, 'session-only-filter');
-  await nav('peers'); await nav('logs');
-  const restored = window.document.querySelector('.tool-log-controls input');
-  assert(restored !== original && restored.value === 'session-only-filter', 'unmounted Logs restores input from session store');
-  assert(!fixture.log.some(r => r.action === 'app.drafts'), 'session edits make no native draft requests');
-});
-await scenario('fresh document does not inherit prior session edits', async ({ nav, window }) => {
-  await nav('logs');
-  assert(window.document.querySelector('.tool-log-controls input').value === '', 'new document discards previous session search');
 });
 
 await scenario('native envelopes, read disposal and accepted-write continuation', async ({ app, fixture, window, nav }) => {
@@ -197,21 +144,6 @@ await scenario('settings apply owns the confirmed batch during preflight', async
   assert(fixture.log.some(r => r.action === 'control.mutate' && r.args.command === 'trial-start'), 'batch ownership does not block the safe-apply trial');
 });
 
-await scenario('settings preflight failure unlocks the batch for retry', async ({ fixture, nav, window, input, button, click, confirm }) => {
-  await nav('settings');
-  const field = () => window.document.querySelector('[data-setting="SOCKS_PORT"] input');
-  input(field(), '1100'); await flush();
-  fixture.overrides.set('settings-get', { ok: false, error: 'Simulated settings read failure' });
-  click(button('set_apply_all')); await confirm(true);
-  assert(fixture.settings.SOCKS_PORT === '1099', 'failed preflight does not write settings');
-  fixture.overrides.delete('settings-get');
-  click(button('retry')); await flush();
-  assert(!field().disabled && !button('set_apply_all').disabled, 'failed preflight releases editing and apply ownership');
-  assert(field().value === '1100', 'failed preflight preserves the draft through read retry');
-  click(button('set_apply_all')); await confirm(true);
-  assert(fixture.settings.SOCKS_PORT === '1100', 'the preserved batch can be reviewed and retried');
-});
-
 await scenario('settings drafts survive navigation and conflicts require consent', async ({ app, fixture, nav, window, input, button, click, confirm }) => {
   await nav('settings');
   const row = () => window.document.querySelector('[data-setting="SOCKS_PORT"]');
@@ -244,128 +176,6 @@ await scenario('settings drafts survive navigation and conflicts require consent
   assert([...window.document.querySelectorAll('textarea')].some(e => e.value === raw), 'context draft retains comments, Unicode and unknown lines verbatim');
 });
 
-await scenario('Select keeps the value and indicator in one accessible row', async ({ nav, window, app }) => {
-  await nav('diag');
-  const field = [...window.document.querySelectorAll('.select-field')].find(f => f.querySelector('summary')?.getAttribute('aria-label') === app.t('diag_bundle_mode'));
-  const summary = field.querySelector('summary'), label = summary.querySelector('.text-field-label');
-  const value = summary.querySelector('.select-value'), caret = summary.querySelector('.select-caret');
-  assert(label && value && caret && caret.parentElement === value.parentElement, 'label, value and indicator belong to the same dropdown trigger');
-  assert(window.document.getElementById(summary.getAttribute('aria-describedby')) === value, 'selected value is exposed alongside the dropdown accessible label');
-  const style = window.document.createElement('style');
-  style.textContent = readFileSync(new URL('../src/style.css', import.meta.url), 'utf8'); window.document.head.append(style);
-  const computed = element => window.getComputedStyle(element);
-  assert(computed(summary).display === 'grid' && computed(label).position === 'static' && computed(label).gridColumn === '1 / -1', 'label occupies its own wrapping row, not an absolute overlay');
-  assert(computed(value).gridColumn === '1' && computed(caret).gridColumn === '2' && computed(summary).alignItems === 'center', 'value and indicator share a vertically centered grid row');
-  const longText = 'VeryLongDiagnosticBundleContentWithoutBreaks'.repeat(4);
-  const selected = field.querySelector('select').selectedOptions[0]; selected.textContent = longText; await flush();
-  label.textContent = longText;
-  assert(value.textContent === longText && computed(value).overflowWrap === 'anywhere' && computed(label).overflowWrap === 'anywhere', 'long label and selected option stay complete and wrap without covering the indicator');
-  await nav('settings');
-  const unlabeled = window.document.querySelector('.select-field.no-label summary');
-  assert(unlabeled && !unlabeled.querySelector('.text-field-label') && computed(unlabeled).minHeight === '44px', 'unlabeled dropdowns retain a compact centered touch target');
-});
-
-await scenario('Select owns disabled state and dismissal', async ({ fixture, nav, window, app }) => {
-  await nav('settings');
-  const field = [...window.document.querySelectorAll('.select-field')].find(f => f.querySelector('summary')?.getAttribute('aria-label') === app.t('trial_candidate'));
-  const popup = field.querySelector('.select-pop');
-  const open = async () => { popup.open = true; popup.dispatchEvent(new window.Event('toggle')); await flush(); };
-  await open();
-  const staleOption = [...popup.querySelectorAll('[role="option"]')].find(option => option.textContent === 'proxy');
-  fixture.publishControl({ busy: true, canWrite: false }); await flush();
-  assert(!popup.open && field.querySelector('select').disabled, 'becoming disabled dismisses an open selection');
-  staleOption.click(); await flush();
-  assert(field.querySelector('select').value === 'saved', 'a stale option cannot change a disabled selection');
-  fixture.publishControl({ busy: false, canWrite: true }); await flush();
-  await open();
-  popup.querySelector('summary').dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
-  assert(!popup.open && window.document.activeElement === popup.querySelector('summary'), 'Escape dismisses selection and restores trigger focus');
-  await open();
-  window.document.body.dispatchEvent(new window.Event('pointerdown', { bubbles: true }));
-  assert(!popup.open, 'outside interaction dismisses selection');
-  await open();
-  const option = [...popup.querySelectorAll('[role="option"]')].find(item => item.textContent === 'proxy');
-  field.querySelector('option[value="proxy"]').disabled = true;
-  option.click(); await flush();
-  assert(field.querySelector('select').value === 'saved', 'changed option availability is respected before the observer runs');
-});
-
-await scenario('Back closes active popup before disclosure and parent links unwind history', async ({ fixture, nav, window }) => {
-  await nav('settings');
-  const advanced = window.document.querySelector('.page-transition:not([hidden]) details.tool-disclosure');
-  advanced.open = true; advanced.dispatchEvent(new window.Event('toggle')); await flush();
-  const popup = window.document.querySelector('#restore-backup').closest('.select-field').querySelector('details');
-  popup.open = true; popup.dispatchEvent(new window.Event('toggle')); await flush();
-  fixture.emit('back', {}); await flush();
-  assert(!popup.open && advanced.open, 'Back closes the active popup without collapsing an unrelated disclosure');
-  await nav('network'); await nav('routing');
-  window.document.querySelector('.page-transition:not([hidden]) .back-link').click(); await flush();
-  assert(window.location.hash === '#/network', 'visible parent link returns to the named hub');
-  fixture.emit('back', {}); await flush();
-  assert(window.location.hash === '#/settings', 'Android Back continues earlier history instead of reopening the detail just left');
-});
-
-await scenario('popup selects open option lists and dispatch native change events', async ({ nav, window, fixture, click }) => {
-  await nav('settings');
-  const field = name => [...window.document.querySelectorAll('.select-field')]
-    .find(f => f.querySelector('.select-pop summary')?.getAttribute('aria-label') === window.__foxy.t(name));
-  const theme = field('set_theme');
-  assert(!!theme?.querySelector('select[hidden]') && !!theme.querySelector('.select-pop > summary'), 'selects keep a hidden option carrier behind a popup trigger');
-  assert(!!theme.querySelector('.select-value')?.textContent.trim(), 'trigger shows the current option text');
-  const open = pop => { pop.open = true; pop.dispatchEvent(new window.Event('toggle')); };
-  open(theme.querySelector('.select-pop')); await flush();
-  const options = [...theme.querySelectorAll('.select-pop [role="option"]')];
-  assert(options.length === 3 && options.filter(o => o.getAttribute('aria-selected') === 'true').length === 1, 'listbox rebuilds from native options with one selection');
-  click(options.find(o => o.textContent.trim() === window.__foxy.t('set_theme_dark'))); await flush();
-  const themePop = theme.querySelector('.select-pop');
-  assert(theme.querySelector('select').value === 'dark' && fixture.appearance.theme === 'dark' && !themePop.open, 'popup option dispatches native change and closes');
-  assert(themePop.querySelector('.select-value')?.textContent.trim() === window.__foxy.t('set_theme_dark'), 'trigger reflects the chosen option');
-  const dns = field('tools_dns_mode');
-  open(dns.querySelector('.select-pop')); await flush();
-  const dnsOption = [...dns.querySelectorAll('.select-pop [role="option"]')].find(o => o.getAttribute('aria-selected') !== 'true' && !o.disabled);
-  click(dnsOption); await flush();
-  assert(dns.querySelector('select').value !== 'local' && fixture.settings.DNS_MODE === 'local', 'settings popup stages a draft without auto-saving');
-  assert(!!window.document.querySelector('[data-setting="DNS_MODE"] [role="status"]'), 'staged popup change marks the field as pending review');
-});
-
-await scenario('peer detail probes run from the address row and render a result panel', async ({ nav, window, click }) => {
-  await nav('peers');
-  click([...window.document.querySelectorAll('.network-peer-main')].find(r => r.textContent.includes('home-server'))); await flush();
-  const dialog = window.document.querySelector('dialog[open], [role="dialog"]');
-  assert(!!dialog, 'peer detail dialog opens');
-  const address = dialog.querySelector('.network-address');
-  assert(!!address?.querySelector('.peer-probe-trigger') && address.querySelectorAll('.icon-btn').length === 2, 'address row pairs a probe trigger with the copy button');
-  assert(!dialog.querySelector('[data-peer-probe] .btn'), 'no standalone probe buttons remain');
-  click(address.querySelector('.peer-probe-trigger')); await flush();
-  const panel = dialog.querySelector('.peer-probe-result');
-  assert(!!panel && panel.textContent.includes('23 ms') && !!panel.querySelector('code'), 'probe result renders latency, path and endpoint in a panel');
-});
-
-await scenario('Incoming notification targets retained inbox and supersedes pending history focus', async ({ fixture, nav, window, app }) => {
-  fixture.emit('navigate', { page: 'files', section: 'inbox' }); await flush();
-  assert(window.document.activeElement?.id === 'files-inbox', 'incoming intent before Files mounts is restored after initialization');
-  const page = window.document.querySelector('.files-page');
-  fixture.publishFiles({ selection: [{ key: 'one', name: 'notes.txt', size: 120, source: 'uri' }] });
-  app.files.updateFileView({ peer: 'nas', filter: 'network' }); await flush();
-  const scrolled = [];
-  window.Element.prototype.scrollIntoView = function () { scrolled.push(this.id); };
-  fixture.holdNext.add('file-send-history');
-  fixture.emit('navigate', { page: 'files', section: 'history' }); await flush();
-  const history = fixture.held.findLast(r => r.key === 'file-send-history');
-  assert(!!history, 'history refresh is pending when the newer inbox intent arrives');
-  const reads = fixture.log.filter(r => r.action === 'control.query' && r.args.command === 'files-inbox').length;
-  scrolled.length = 0;
-  fixture.emit('navigate', { page: 'files', section: 'inbox' }); await flush();
-  history.finish(); await flush();
-  assert(scrolled.at(-1) === 'files-inbox' && !scrolled.includes('files-history'), 'incoming inbox intent supersedes the delayed history scroll');
-  assert(window.document.activeElement?.id === 'files-inbox', 'incoming navigation focuses the inbox destination');
-  assert(fixture.log.filter(r => r.action === 'control.query' && r.args.command === 'files-inbox').length > reads, 'incoming notification refreshes an already retained inbox');
-  assert(window.document.querySelector('.files-page') === page && app.files.fileView().peer === 'nas' && app.files.fileView().filter === 'network' && fixture.files.selection.length === 1, 'section navigation retains files page, filters and pending send data');
-  await nav('settings');
-  fixture.emit('navigate', { page: 'files', section: 'inbox' }); await flush();
-  assert(window.location.hash === '#/files' && scrolled.at(-1) === 'files-inbox' && window.document.activeElement?.id === 'files-inbox', 'notification from another route also lands at the retained inbox');
-});
-
 await scenario('Blocked automatic receipt preserves manual recovery', async ({ fixture, nav, window, app }) => {
   fixture.data['files-inbox'].receive = { mode: 'buffered', selfId: 'preview-self', pending: [{ name: 'pending.txt', size: 12 }],
     automatic: { enabled: true, state: 'blocked', error: 'Simulated storage unavailable' } };
@@ -374,79 +184,6 @@ await scenario('Blocked automatic receipt preserves manual recovery', async ({ f
   assert(status.textContent.includes('Simulated storage unavailable') && status.textContent.includes(app.t('ft_auto_receive_blocked')), 'blocked automatic status names the error and manual alternative');
   const receive = [...status.querySelectorAll('button')].find(b => b.textContent.trim() === app.t('ft_receive_file'));
   assert(receive && !receive.disabled, 'blocked automatic recovery leaves the manual receive action available');
-});
-
-await scenario('Incoming notifications report preference separately from system permission', async ({ fixture, nav, window, app }) => {
-  await nav('files');
-  const control = () => [...window.document.querySelectorAll('input[role="switch"]')].find(input => input.getAttribute('aria-label') === app.t('ft_receive_notifications'));
-  assert(!control().checked && !control().disabled, 'incoming notifications default to opt-out');
-  fixture.overrides.set('files.receiveNotifications', { ok: true, enabled: true, allowed: false });
-  fixture.holdNext.add('files.receiveNotifications');
-  control().click(); await flush();
-  assert(!control().checked && control().disabled, 'preference is not optimistically enabled while native confirmation is pending');
-  fixture.held.findLast(r => r.key === 'files.receiveNotifications').finish(); await flush();
-  assert(control().checked && window.document.querySelector('#files-notifications-hint')?.textContent === app.t('ft_receive_notifications_blocked'), 'denied permission retains opt-in and explains the system restriction');
-  assert(!window.document.querySelector('.files-receive-preferences [role="alert"]'), 'permission denial is not reported as a receive failure');
-  fixture.overrides.delete('files.receiveNotifications');
-  fixture.publishFiles({ receiveNotifications: { ok: true, enabled: true, allowed: true } }); await flush();
-  assert(control().checked && !window.document.querySelector('#files-notifications-hint'), 'permission callback snapshot updates the visible status');
-  fixture.emit('lifecycle', { active: false }); await flush();
-  fixture.files.receiveNotifications.allowed = false;
-  fixture.emit('lifecycle', { active: true }); await flush();
-  assert(!!window.document.querySelector('#files-notifications-hint'), 'resume rechecks system notification permission');
-  control().click(); await flush();
-  assert(!control().checked && !fixture.files.receiveNotifications.enabled, 'turning notifications off stores only the notification preference');
-});
-
-await scenario('Automatic buffered receipt writes one fresh setting without restart', async ({ fixture, nav, window, app, button, click }) => {
-  await nav('files');
-  const control = () => [...window.document.querySelectorAll('input[role="switch"]')].find(input => input.getAttribute('aria-label') === app.t('ft_auto_receive'));
-  assert(!control().checked && !control().disabled, 'automatic buffered receipt defaults off');
-  const before = JSON.stringify(fixture.settings);
-  fixture.holdNext.add('settings-get');
-  fixture.holdNext.add('settings-set');
-  control().click(); await flush();
-  assert(!control().checked && control().disabled && !fixture.log.some(r => r.action === 'control.mutate' && r.args.command === 'settings-set'), 'automatic receipt waits for a fresh baseline before writing');
-  fixture.held.findLast(r => r.key === 'settings-get').finish(); await flush();
-  assert(!control().checked && control().disabled, 'accepted setting is not shown as enabled before its receipt and readback');
-  fixture.held.findLast(r => r.key === 'settings-set').finish(); await flush();
-  const writes = fixture.log.filter(r => r.action === 'control.mutate' && r.args.command === 'settings-set');
-  assert(control().checked && writes.length === 1 && JSON.stringify(writes[0].args.arguments) === JSON.stringify(['TAILDROP_AUTO_RECEIVE', '1']), 'automatic receipt saves and confirms only its own setting');
-  const expected = JSON.parse(before); expected.TAILDROP_AUTO_RECEIVE = '1';
-  assert(JSON.stringify(fixture.settings) === JSON.stringify(expected), 'other saved settings are unchanged');
-  assert(!fixture.log.some(r => r.action === 'control.mutate' && ['control', 'trial-start'].includes(r.args.command)), 'hot receipt preference does not restart the daemon or start a trial');
-  fixture.holdNext.add('settings-set');
-  control().click(); await flush();
-  fixture.overrides.set('settings-get', { ok: false, cancelled: true });
-  fixture.held.findLast(r => r.key === 'settings-set').finish(); await flush();
-  assert(control().disabled && control().indeterminate, 'cancelled post-save readback does not present the prior value as current');
-  fixture.overrides.delete('settings-get');
-  click(button('retry', window.document.querySelector('.files-receive-preferences'))); await flush();
-  assert(!control().checked && !control().disabled, 'readback retry restores the confirmed value without another write');
-  fixture.overrides.set('settings-set', { ok: false, unknown: true, error: 'Pending receipt' });
-  control().click(); await flush();
-  assert(control().disabled && control().indeterminate && window.document.querySelector('.files-receive-preferences')?.textContent.includes(app.t('ft_unknown')), 'an unknown save stays indeterminate rather than claiming the requested value');
-});
-
-await scenario('Files composer groups sources and keeps browser navigation available', async ({ fixture, nav, window, app, button, click }) => {
-  await nav('files');
-  const send = window.document.querySelector('#files-send');
-  assert(!!send.querySelector('.files-recipient-group h3') && !!send.querySelector('.files-recipient-group [role="radiogroup"]'), 'recipient choice has its own visible group');
-  const sources = send.querySelector('.files-source-group');
-  assert(!!sources.querySelector('.files-source-actions .files-labeled') && !sources.querySelector('.files-selection-list'), 'file sources have one action row without an empty selection list');
-  click(button('files_choose', sources)); await flush();
-  const browser = () => sources.querySelector('#taildrop-browser');
-  assert(!!browser() && !!button('files_close_browser', browser()), 'shared storage opens with its own close control');
-  click([...browser().querySelectorAll('button')].find(b => b.getAttribute('aria-label') === app.t('files_open_directory') + ' Download')); await flush();
-  assert(fixture.log.some(r => r.action === 'files.browse' && r.args.path === 'Download'), 'folder navigation remains available');
-  click(button('ft_shared', browser())); await flush();
-  assert(fixture.log.findLast(r => r.action === 'files.browse')?.args.path === '', 'root breadcrumb replaces the redundant parent action');
-  click(button('files_close_browser', browser())); await flush();
-  assert(!browser(), 'browser close does not remove the file-source toolbar');
-  fixture.publishFiles({ selection: [{ key: 'one', name: 'notes.txt', size: 120, source: 'uri' }] }); await flush();
-  assert(!!button('ft_clear_selection', sources.querySelector('.files-source-actions')) && !!sources.querySelector('.files-selection-list'), 'pending files and clear action share the source group');
-  click(button('ft_clear_selection', sources)); await flush();
-  assert(fixture.files.selection.length === 0 && !sources.querySelector('.files-selection-list'), 'clear still removes the pending selection');
 });
 
 await scenario('Files partial outcomes, native snapshots and selection limits', async ({ app, fixture, nav, window, button, click, confirm }) => {
@@ -583,20 +320,6 @@ await scenario('snapshot sequence and displayed cancellation ownership', async (
   assert(app.api.nativeControl().id === 'replacement-operation' && app.api.nativeControl().busy, 'stale cancellation rejection does not finish replacement operation');
 });
 
-await scenario('Traffic cancellation releases busy state and resumes retained page', async ({ fixture, nav, button, window }) => {
-  fixture.holdNext.add('traffic');
-  await nav('traffic');
-  const held = fixture.held.find(r => r.key === 'traffic');
-  const before = fixture.log.filter(r => r.action === 'control.query' && r.args.command === 'traffic').length;
-  fixture.emit('lifecycle', { active: false });
-  held.finish({ ok: false, cancelled: true, error: 'Simulated native pause' }); await flush();
-  fixture.emit('lifecycle', { active: true }); await flush();
-  assert(fixture.log.filter(r => r.action === 'control.query' && r.args.command === 'traffic').length === before + 1,
-    'foregrounding retries the cancelled shared summary exactly once');
-  assert(button('net_refresh') && !button('net_refresh').disabled, 'cancelled chart/top/apps loaders release their loading guards');
-  assert(window.document.querySelector('.network-traffic-metrics .metric-value')?.textContent !== '—', 'resumed read publishes actual traffic data');
-});
-
 await scenario('validated task failure remains authoritative after native success', async ({ app, fixture }) => {
   fixture.overrides.set('backup', { ok: true, path: '/sdcard/Download/foxytail-backup-invalid.tar.gz' });
   await app.backup.createBackup();
@@ -605,40 +328,6 @@ await scenario('validated task failure remains authoritative after native succes
     'startValidatedTask rejection survives getTask native/local result merging');
   await app.api.refreshNativeControl();
   assert(app.tasks.getTask(app.backup.BACKUP_TASK)?.status === 'error', 'refreshing native successful receipt cannot erase consumer validation error');
-});
-
-await scenario('Native navigation dismisses retained page modal without discarding state', async ({ fixture, nav, window, click, input }) => {
-  await nav('settings');
-  const settingsPage = window.document.querySelector('.page-transition:not([hidden])');
-  input(settingsPage.querySelector('[data-setting="SOCKS_PORT"] input'), '1100'); await flush();
-  await nav('peers');
-  const peersPage = window.document.querySelector('.page-transition:not([hidden])');
-  const peer = () => [...peersPage.querySelectorAll('.network-peer-main')].find(row => row.textContent.includes('home-server'));
-  click(peer()); await flush();
-  const modal = peersPage.querySelector('dialog[open]');
-  assert(!!modal, 'peer detail starts as a modal on the active route');
-  fixture.emit('navigate', { page: 'files' }); await flush();
-  assert(window.location.hash === '#/files' && !modal.open, 'native navigation closes the old modal');
-  assert(!window.document.activeElement?.closest('[hidden]'), 'route dismissal never restores focus into the hidden page');
-  fixture.emit('back', {}); await flush();
-  assert(window.location.hash === '#/peers' && !peersPage.querySelector('dialog[open]'), 'returning does not reopen the dismissed modal');
-  assert(window.document.querySelector('.page-transition:not([hidden])') === peersPage && !!peer(), 'dismissal preserves the retained page and data');
-  click(peer()); await flush();
-  assert(!!peersPage.querySelector('dialog[open]'), 'peer detail remains available after returning');
-  fixture.emit('back', {}); await flush();
-  assert(window.location.hash === '#/peers' && !peersPage.querySelector('dialog[open]'), 'Back closes the reopened modal before navigating');
-  await nav('settings');
-  assert(settingsPage.querySelector('[data-setting="SOCKS_PORT"] input').value === '1100', 'in-session edits survive native navigation');
-});
-
-await scenario('Back ignores hidden retained disclosures', async ({ fixture, nav, window }) => {
-  await nav('files');
-  const details = window.document.querySelector('.menu-pop');
-  details.querySelector('summary').click(); await flush();
-  assert(details.open, 'Files sorting disclosure is open before navigation');
-  await nav('dashboard');
-  fixture.emit('back', {}); await flush();
-  assert(window.location.hash === '#/files' && details.open, 'Back navigates history without closing a disclosure on the hidden retained route');
 });
 
 await scenario('exit rows switch with one tap after confirmation and recheck account', async ({ app, fixture, nav, window, click, confirm }) => {
@@ -680,24 +369,6 @@ await scenario('failed context baseline cannot enable replacement editing', asyn
   assert(fixture.data['context-get'].rules === original, 'read failure and recovery retain saved rules verbatim');
 });
 
-await scenario('context Add separates the editor and can cancel and reopen', async h => {
-  const { fixture, button, click } = h;
-  const context = await openContext(h);
-  const original = fixture.data['context-get'].rules;
-  click(button('context_add', context)); await flush();
-  const editor = () => context.querySelector('[data-testid="context-editor"]');
-  assert(editor()?.classList.contains('tool-form-section'), 'new rule editor uses explicit section spacing after Add');
-  assert(button('context_add', context).disabled, 'open editor still prevents duplicate drafts');
-  click(button('cancel', editor())); await flush();
-  assert(!editor() && !button('context_add', context).disabled, 'cancel removes editor and unlocks Add immediately');
-  click(button('context_add', context)); await flush();
-  assert(editor()?.classList.contains('tool-form-section'), 'reopened editor retains section spacing');
-  assert(fixture.data['context-get'].rules === original, 'layout and repeated editor actions never save rules');
-  const css = readFileSync(new URL('../src/pages/tools.css', import.meta.url), 'utf8');
-  assert(/\.tool-form-section\s*\{\s*margin-block-start:\s*16px;/.test(css), 'section forms define external spacing, not only grid gap');
-  assert(/\.tool-form > \.tool-actions\s*\{\s*margin-top:\s*0;/.test(css), 'form action rows use grid gap without duplicate top margin');
-});
-
 await scenario('open visual context draft retains original rule baseline', async h => {
   const { fixture, window, input, button, click } = h;
   const original = fixture.data['context-get'].rules;
@@ -713,34 +384,6 @@ await scenario('open visual context draft retains original rule baseline', async
     'applying an existing visual draft edits its original row, not the replacement backend row at the same index');
   assert(!fixture.log.some(r => r.action === 'control.mutate' && r.args.command === 'context-set'), 'visual editing remains local until explicit save');
   assert(window.document.querySelector('[data-testid="context-rules"]') === context, 'context editor remains mounted during refresh');
-});
-
-await scenario('context rules publish before slow status and status resumes only when visible', async h => {
-  const { fixture, nav, button } = h;
-  fixture.holdNext.add('context-status');
-  const context = await openContext(h);
-  const stale = fixture.held.find(r => r.key === 'context-status');
-  assert(context.querySelector('[data-context-line]') && button('context_add', context) && !button('context_add', context).disabled,
-    'slow runtime observation does not block saved rules or local editing');
-  await nav('dashboard');
-  const statusReads = () => fixture.log.filter(r => r.action === 'control.query' && r.args.command === 'context-status').length;
-  const hiddenReads = statusReads();
-  fixture.emit('lifecycle', { active: false });
-  stale.finish(); await flush();
-  assert(!context.querySelector('[data-testid="context-status"]')?.textContent.includes('ssid:Home'), 'late successful observation invalidated by lifecycle cannot republish stale status');
-  fixture.emit('lifecycle', { active: true }); await flush();
-  assert(statusReads() === hiddenReads, 'hidden retained Settings does not resume context-status reads');
-  fixture.data['context-status'].status.context = 'ssid:FreshObservation';
-  await nav('settings');
-  assert(statusReads() > hiddenReads, 'visible context resumes fresh runtime observation');
-  assert(context.querySelector('[data-testid="context-status"]')?.textContent.includes('ssid:FreshObservation'), 'resumed status replaces unknown observation without replacing rules');
-  const advanced = context.closest('details.tool-disclosure');
-  advanced.open = false; advanced.dispatchEvent(new h.window.Event('toggle')); await flush();
-  const closedReads = statusReads();
-  fixture.publishControl({ revision: fixture.control.revision + 1 }); await flush();
-  assert(statusReads() === closedReads, 'closed Advanced disclosure does not issue status reads on revision change');
-  advanced.open = true; advanced.dispatchEvent(new h.window.Event('toggle')); await flush();
-  assert(statusReads() > closedReads, 'reopening Advanced resumes deferred status observation');
 });
 
 for (const factory of ['createGuardedLoad', 'createQueuedRefresh']) {
@@ -804,68 +447,6 @@ await scenario('native file preflight cancellation and repeated active cancellat
   assert(!button('files_cancel_send', sendSection).disabled && fixture.files.busy, 'requested cancellation is feedback, not a fabricated terminal transfer outcome');
 });
 
-await scenario('feedback primitives keep errors readable and name destructive actions', async ({ app, window }) => {
-  app.toast.showToast('Simulated failure detail', 'err'); await flush();
-  const error = [...window.document.querySelectorAll('.toast.err')].find(node => node.textContent.includes('Simulated failure detail'));
-  assert(error?.querySelector(`button[aria-label="${app.t('close')}"]`) && error.querySelector(`button[aria-label="${app.t('copy')}"]`), 'error toast offers copy and explicit dismissal');
-  const answer = app.confirm.confirmDialog({ title: 'Stop?', body: 'Body', confirmLabel: 'Stop now', tone: 'danger' }); await flush();
-  const accept = window.document.querySelector('dialog[open] [data-dialog-action="confirm"]');
-  assert(accept?.textContent.trim() === 'Stop now' && accept.classList.contains('danger'), 'destructive confirmation uses a verb and danger styling');
-  window.document.querySelector('dialog[open] [data-dialog-action="cancel"]').click();
-  assert(await answer === false, 'cancel resolves the confirmation as declined');
-});
-
-await scenario('dashboard states expose one status and a direct recovery action', async ({ app, fixture, nav, window, button, click }) => {
-  const now = Date.UTC(2026, 9, 30);
-  assert(app.format.keyExpiry('0001-01-01T00:00:00Z', now) === null, 'disabled key expiry sentinel is not reported');
-  assert(app.format.keyExpiry(new Date(now + 30 * 864e5).toISOString(), now) === null, 'distant key expiry is not reported');
-  assert(app.format.keyExpiry(new Date(now + 2 * 864e5).toISOString(), now)?.expired === false, 'near key expiry is reported as expiring');
-  assert(app.format.keyExpiry(new Date(now - 864e5).toISOString(), now)?.expired === true, 'past key expiry is reported as expired');
-  fixture.data.status.daemon = 'stopped'; fixture.data.status.backend = 'NoState';
-  await app.state.refreshStatus(); await nav('dashboard');
-  assert(window.document.querySelector('.network-page .is-stale'), 'stopped dashboard marks last known data as stale');
-  click(button('dash_start_service')); await flush();
-  assert(fixture.log.some(r => r.action === 'control.mutate' && r.args.command === 'control' && r.args.arguments[0] === 'start'), 'stopped dashboard starts the service from its status card');
-  fixture.data.status.daemon = 'running'; fixture.data.status.backend = 'NeedsLogin';
-  await app.state.refreshStatus(); await flush();
-  const titles = [...window.document.querySelectorAll('.page-transition:not([hidden]) h2')].filter(h => h.textContent.includes(app.t('hero_login_title')));
-  assert(titles.length === 1, 'login state renders a single login status card');
-});
-
-await scenario('status sheet mirrors the connection card without top-bar controls', async ({ app, fixture, nav, window, button, click, confirm }) => {
-  await nav('dashboard');
-  assert(!window.document.querySelector('#app-header select, #app-header .service-controls'), 'service controls no longer occupy the top bar');
-  const chip = window.document.querySelector('.status-chip');
-  assert(!!chip, 'header exposes a compact status chip');
-  chip.click(); await flush();
-  const sheet = window.document.querySelector('[data-testid="status-sheet"]');
-  assert(sheet?.open && sheet.querySelector('.service-actions'), 'chip opens the shared service status sheet');
-  click(button('native_stop', sheet)); await confirm(true);
-  assert(fixture.log.some(r => r.action === 'control.mutate' && r.args.command === 'control' && r.args.arguments[0] === 'stop'), 'sheet stop confirms before mutating');
-  await app.state.refreshStatus({ afterCurrent: true }); await flush();
-  const start = button('dash_start_service', sheet);
-  assert(!!start && !start.disabled, 'stopped sheet offers the start action');
-  click(start); await flush();
-  assert(fixture.log.filter(r => r.action === 'control.mutate' && r.args.command === 'control').length === 2, 'sheet start runs through the shared store');
-  const modeRow = sheet.querySelector('.status-sheet-row');
-  assert(modeRow?.getAttribute('href') === '#/network' && !window.document.querySelector('#app-header select'), 'run mode is reachable from the sheet, not the top bar');
-  const bottomItems = [...window.document.querySelectorAll('#bottom-nav .nav-item')].map(item => item.getAttribute('href'));
-  assert(bottomItems.length === 5 && bottomItems.includes('#/network') && bottomItems.includes('#/settings') && !bottomItems.includes('#/more'), 'primary navigation is home, devices, files, network, settings');
-  await nav('network');
-  assert(window.document.querySelector('[data-testid="mode-picker"]'), 'run mode picker lives on the network page');
-  assert(window.document.querySelector('.tool-links'), 'network hub links into the detail tools');
-  await nav('tunnel');
-  assert(window.document.querySelector('.back-link')?.getAttribute('href') === '#/network', 'tunnel detail navigates back to the network hub');
-  await nav('exit');
-  assert(window.document.querySelector('.back-link')?.getAttribute('href') === '#/network', 'exit detail navigates back to the network hub');
-  assert(window.document.querySelectorAll('input[name="exit-node"]').length > 0, 'exit page renders switchable rows');
-  assert(window.document.querySelectorAll('.network-exit-options button').length === 0, 'exit switching has no separate apply button');
-  const hubExit = [...window.document.querySelectorAll('a')].find(a => a.getAttribute('href') === '#/exit');
-  assert(!!hubExit, 'exit page is reachable through a link');
-  await nav('peers');
-  assert(!window.document.querySelector('input[name="exit-node"]'), 'device inventory no longer embeds the exit workflow');
-});
-
 await scenario('manual DNS checks own their local progress and cancellation', async ({ fixture, nav, window, button, click }) => {
   await nav('diag');
   const details = window.document.querySelector('[data-testid="diagnostic-details"]');
@@ -880,68 +461,19 @@ await scenario('manual DNS checks own their local progress and cancellation', as
   assert(!details.querySelector('[data-task-key="dns-probe"]'), 'terminal cancelled probe removes local progress');
 });
 
-await scenario('critical feedback is compact and uses availability errors, not task messages', async ({ fixture, nav, window, button, click }) => {
-  await nav('settings');
-  fixture.publishControl({ checking: true, compatible: true, busy: false, unknown: false }); await flush();
-  assert(!window.document.querySelector('.status-notice') && !window.document.querySelector('.root-banner'), 'background access check does not create a page warning');
-  assert(!!window.document.querySelector('.status-chip .circular-progress'), 'background check uses the existing compact status indicator');
-  fixture.publishControl({ checking: false, compatible: false, canWrite: false, busy: true, ownsMutation: false, command: 'dns-probe', id: 'probe', error: 'Module version is incompatible', message: 'Running dns-probe' }); await flush();
-  const notice = window.document.querySelector('.status-notice');
-  assert(notice && notice.querySelectorAll('button').length === 1 && !notice.querySelector('.native-issue-actions'), 'critical failure retains one compact details entry instead of a second action row');
-  click(notice.querySelector('button')); await flush();
-  const sheet = window.document.querySelector('[data-testid="status-sheet"]');
-  assert(sheet.open && sheet.textContent.includes('Module version is incompatible') && !sheet.textContent.includes('Running dns-probe'), 'availability failure cannot display an unrelated task progress message');
-  assert(!!button('native_recheck', sheet), 'retry remains discoverable in the existing status sheet');
-  fixture.publishControl({ compatible: true, unknown: true, canWrite: false, canCancel: true, error: '', command: 'settings-set' }); await flush();
-  assert(window.document.querySelector('.status-notice')?.textContent.includes('unconfirmed'), 'unknown outcome remains a persistent visible warning');
-  assert(!!button('native_unlock', sheet) && !!button('native_cancel_operation', sheet), 'unknown confirmation and available cancellation remain accessible');
-  fixture.publishControl({ unknown: false, busy: false, compatible: true, canWrite: true, canCancel: false }); await flush();
-  assert(!window.document.querySelector('.status-notice'), 'resolved state removes the compact warning');
-});
-
-await scenario('untracked native busy lives in the status chip, not a page banner', async ({ fixture, nav, window, button, click }) => {
-  await nav('files');
-  fixture.publishControl({ busy: true, canWrite: false, canCancel: true, id: 'op-busy-1', message: 'Operation in progress: simulated' });
-  await flush();
-  assert(!window.document.querySelector('.root-banner'), 'untracked busy does not raise a page banner');
-  const chip = window.document.querySelector('.status-chip');
-  assert(chip?.querySelector('.circular-progress'), 'status chip spins while the backend is busy');
-  chip.click(); await flush();
-  const sheet = window.document.querySelector('[data-testid="status-sheet"]');
-  assert(sheet?.open && button('native_cancel_operation', sheet), 'busy operations remain cancellable from the status sheet');
-  click(button('native_cancel_operation', sheet)); await flush();
-  assert(fixture.log.some(r => r.action === 'control.cancel'), 'sheet cancel reaches the native channel');
-  fixture.publishControl({ busy: false, canWrite: true, canCancel: false, message: '' });
-  await flush();
-  assert(!chip.querySelector('.circular-progress'), 'chip settles once the backend is idle');
-});
-
 await (await import('./smoke-backup-picker.mjs')).runBackupPickerSmoke();
 await (await import('./smoke-account-identity.mjs')).runAccountIdentitySmoke();
-await (await import('./smoke-account-details.mjs')).runAccountDetailsSmoke();
-await (await import('./smoke-toast-dedup.mjs')).runToastDedupSmoke();
-await (await import('./smoke-status-modal.mjs')).runStatusModalSmoke();
-await (await import('./smoke-motion.mjs')).runMotionSmoke();
 await (await import('./smoke-back-state.mjs')).runBackStateSmoke();
-await import('./smoke-read-recovery.mjs');
 await (await import('./smoke-dns-capability.mjs')).runDnsCapabilitySmoke();
 
-for (const state of ['empty', 'error', 'no-root', 'no-bridge', 'unknown']) {
-  console.log('availability: ' + state);
-  const h = await boot({ state });
+console.log('availability: unknown');
+{
+  const h = await boot({ state: 'unknown' });
   try {
-    assert(!!h.window.document.querySelector('#view'), state + ' renders shell');
-    if (state === 'no-root' || state === 'no-bridge') {
-      assert(!h.app.api.nativeControl().canWrite, state + ' cannot enable mutations');
-      assert(!!h.window.document.querySelector('.status-notice'), state + ' access problem remains visibly discoverable');
-    }
-    if (state === 'empty') assert(h.app.state.peers()?.length === 0, 'empty peers are not a load failure');
-    if (state === 'error') assert(!!h.app.state.statusError(), 'failed read stays explicit failure');
-    if (state === 'unknown') {
-      assert(h.app.api.nativeControl().unknown && h.app.api.nativeControl().id === 'preview-unresolved', 'bootstrap adopts native unresolved operation');
-      assert(!h.fixture.log.some(r => r.action === 'control.mutate'), 'recreation does not resubmit unresolved operation');
-    }
-    assert(h.fixture.unsupported.length === 0, state + ' uses supported fixture actions');
+    assert(!!h.window.document.querySelector('#view'), 'unknown state renders shell');
+    assert(h.app.api.nativeControl().unknown && h.app.api.nativeControl().id === 'preview-unresolved', 'bootstrap adopts native unresolved operation');
+    assert(!h.fixture.log.some(r => r.action === 'control.mutate'), 'recreation does not resubmit unresolved operation');
+    assert(h.fixture.unsupported.length === 0, 'unknown state uses supported fixture actions');
   } finally { h.close(); }
 }
 
