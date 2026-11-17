@@ -5,8 +5,12 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: 'Existing version tag to release (e.g. v1.6.0)'
+        description: 'Version tag to release (e.g. v1.12.0)'
         required: true
+        type: string
+      commit_sha:
+        description: 'Exact 40-character commit SHA (required for a new tag)'
+        required: false
         type: string
       prerelease:
         description: 'Publish as a pre-release'
@@ -18,12 +22,29 @@ concurrency:
   group: release-${{ inputs.tag || github.ref_name }}
   cancel-in-progress: false
 jobs:
+  resolve:
+    runs-on: ubuntu-latest
+    outputs:
+      sha: ${{ steps.source.outputs.sha }}
+      tag: ${{ steps.source.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - id: source
+        name: Resolve immutable release source
+        env:
+          RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
+          REQUESTED_SHA: ${{ inputs.commit_sha }}
+        run: |
+          bash .github/tools/release-source.sh resolve
   checks:
+    needs: resolve
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ inputs.tag || github.sha }}
+          ref: ${{ needs.resolve.outputs.sha }}
       - uses: actions/setup-go@v5
         with:
           go-version-file: native/foxydns/go.mod
@@ -57,11 +78,12 @@ jobs:
   # Timing-sensitive shell suites get a dedicated runner: sharing a CPU with
   # the compile checks starved subprocess deadlines and caused real failures.
   backend:
+    needs: resolve
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ inputs.tag || github.sha }}
+          ref: ${{ needs.resolve.outputs.sha }}
       - uses: actions/setup-go@v5
         with:
           go-version-file: native/foxydns/go.mod
@@ -71,11 +93,12 @@ jobs:
       - run: sudo apt-get update && sudo apt-get install -y jq mksh
       - run: bash .github/tools/verify.sh backend
   native-kernel:
+    needs: resolve
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ inputs.tag || github.sha }}
+          ref: ${{ needs.resolve.outputs.sha }}
       - uses: actions/setup-go@v5
         with:
           go-version-file: native/foxydns/go.mod
@@ -88,20 +111,20 @@ jobs:
           FOXYTAIL_REQUIRE_PRIVILEGED_TESTS: '1'
         run: bash .github/tools/verify-native-linux.sh
   release:
-    needs: [checks, backend, native-kernel]
+    needs: [resolve, checks, backend, native-kernel]
     runs-on: ubuntu-latest
     env:
-      RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
+      RELEASE_TAG: ${{ needs.resolve.outputs.tag }}
+      RELEASE_SHA: ${{ needs.resolve.outputs.sha }}
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-          ref: ${{ inputs.tag || github.sha }}
-      - name: Tag must name a reviewed version commit
+          ref: ${{ needs.resolve.outputs.sha }}
+      - name: Check immutable release source
         run: |
-          [[ "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-rc\.[0-9]+)?$ ]] || exit 1
-          git show-ref --verify "refs/tags/$RELEASE_TAG"
-          test "$RELEASE_TAG" = "$(git show "refs/tags/$RELEASE_TAG:module.prop" | sed -n 's/^version=//p')"
+          test "$(git rev-parse HEAD)" = "$RELEASE_SHA"
+          test "$RELEASE_TAG" = "$(sed -n 's/^version=//p' module.prop)"
       - uses: actions/setup-go@v5
         with:
           go-version-file: native/foxydns/go.mod
@@ -146,10 +169,28 @@ jobs:
           unset FOXYTAIL_KEYSTORE_BASE64
           bash .github/tools/build.sh
           test -z "$(git status --porcelain --untracked-files=no)"
+      - name: Create or verify tag after successful checks and signed build
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$RELEASE_SHA"
+          # Build must yield real artifacts before creating any release tag.
+          test -s "dist/FoxyTail-${RELEASE_TAG}.apk"
+          test -s "dist/FoxyTail-${RELEASE_TAG}.zip"
+          test -s "dist/FoxyTail-${RELEASE_TAG}-full.zip"
+          (cd dist && sha256sum -c SHA256SUMS)
+          if git ls-remote --exit-code --refs origin "refs/tags/$RELEASE_TAG" > /dev/null; then
+            git fetch --no-tags origin "refs/tags/$RELEASE_TAG"
+            test "$(git rev-parse 'FETCH_HEAD^{commit}')" = "$RELEASE_SHA"
+          else
+            rc=$?
+            test "$rc" = 2
+            git push origin "$RELEASE_SHA:refs/tags/$RELEASE_TAG"
+          fi
       - name: Publish the verified packages
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ inputs.tag || github.ref_name }}
+          tag_name: ${{ needs.resolve.outputs.tag }}
+          target_commitish: ${{ needs.resolve.outputs.sha }}
           files: |
             dist/*.zip
             dist/*.apk
