@@ -890,6 +890,7 @@ await scenario('untracked native busy lives in the status chip, not a page banne
   assert(!chip.querySelector('.circular-progress'), 'chip settles once the backend is idle');
 });
 
+await (await import('./smoke-motion.mjs')).runMotionSmoke();
 await import('./smoke-read-recovery.mjs');
 await (await import('./smoke-dns-capability.mjs')).runDnsCapabilitySmoke();
 
