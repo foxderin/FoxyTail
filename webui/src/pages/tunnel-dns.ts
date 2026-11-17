@@ -5,6 +5,7 @@ import { t, type I18nKey } from '../i18n';
 import type { StatusTone } from '../components/Basics';
 
 export interface DnsInfo extends ApiResult {
+  privateDnsMode?: 'off' | 'opportunistic' | 'hostname' | 'unknown';
   mode?: 'legacy' | 'local' | 'hijack' | 'transparent';
   enabled?: boolean;
   state?: string;
@@ -129,4 +130,12 @@ export function dnsStatusLabel(info: DnsInfo): string {
     ? info.state
     : info.reason || info.state;
   return reason && DNS_REASONS[reason] ? t(DNS_REASONS[reason]) : reason || '—';
+}
+
+// This is configured policy, not a measured encrypted-DNS connection or a
+// capability failure. Keep it separate from the resolver's health reason.
+export function privateDnsHint(info: DnsInfo): string | null {
+  if (info.privateDnsMode === 'opportunistic') return t('dns_private_dns_automatic_hint');
+  if (info.privateDnsMode === 'hostname') return t('dns_private_dns_strict_hint');
+  return null;
 }

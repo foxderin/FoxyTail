@@ -726,12 +726,13 @@ dns_status() {
     fi
     jqr -n -c --arg s "${_dst_state}" --arg sfx "${_dst_suffix}" \
       --argjson p "${DNS_PORT}" --argjson pid "${_dst_pid}" \
+      --arg privateDnsMode "$(android_private_dns_mode)" \
       --argjson enabled "${_dst_enabled}" --arg reason "${_dst_reason}" \
       --arg binary "${DNS_BIN}" --argjson native "${_dst_native}" \
       --arg v6 "${_dst_v6}" --arg module "${_dst_module}" \
       --argjson ta "${_dst_ta}" --arg taReason "${_dst_ta_reason}" \
       --argjson ha "${_dst_ha}" --arg haReason "${_dst_ha_reason}" \
-      '{state:$s,suffix:$sfx,port:$p,pid:$pid,enabled:$enabled,reason:$reason,
+      '{privateDnsMode:$privateDnsMode,state:$s,suffix:$sfx,port:$p,pid:$pid,enabled:$enabled,reason:$reason,
         binary:(if $binary=="" then null else $binary end),upstreamNative:$native,
         transparentAvailable:$ta,transparentUnavailableReason:(if $taReason=="" then null else $taReason end),
         hijackAvailable:$ha,hijackUnavailableReason:(if $haReason=="" then null else $haReason end),

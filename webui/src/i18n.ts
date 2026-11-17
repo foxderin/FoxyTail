@@ -93,6 +93,8 @@ const zh = {
   dns_tailnet_unavailable: 'Tailnet 不可用，请检查登录状态', dns_missing_binary: '找不到 dnsmasq',
   dns_conflict: '与其他 DNS 代理冲突', dns_redirect_failed: 'DNS 转发规则应用失败',
   dns_cleanup_failed: '旧 DNS 规则清理失败', dns_process_failed: 'DNS 进程启动失败',
+  dns_private_dns_automatic_hint: '系统私人 DNS 为自动模式：可用时可能使用加密 DNS，绕过本机 53 端口解析。这不代表 DNS 故障；FoxyTail 不会修改此设置。',
+  dns_private_dns_strict_hint: '系统使用指定的私人 DNS，加密查询可能绕过本机 53 端口解析。FoxyTail 不会修改此设置。',
   dns_reconcile_needed: '节点或配置变化，等待更新', dns_private_dns: '系统严格私人 DNS 可能绕过本机解析',
   dns_stopped: '已停止', dns_degraded: '状态异常，请查看服务日志',
 
@@ -253,6 +255,8 @@ const en: Record<I18nKey, string> = {
   dns_tailnet_unavailable: 'Tailnet unavailable; check login status', dns_missing_binary: 'dnsmasq not found',
   dns_conflict: 'Another DNS proxy conflicts', dns_redirect_failed: 'DNS redirect rules failed',
   dns_cleanup_failed: 'Previous DNS rules could not be removed', dns_process_failed: 'DNS process failed to start',
+  dns_private_dns_automatic_hint: 'Android Private DNS is automatic: encrypted DNS, when available, may bypass local port-53 resolution. This is not a DNS failure; FoxyTail does not change this setting.',
+  dns_private_dns_strict_hint: 'Android uses a specified Private DNS provider; encrypted queries may bypass local port-53 resolution. FoxyTail does not change this setting.',
   dns_reconcile_needed: 'Node or configuration changed; update pending', dns_private_dns: 'Strict Android Private DNS may bypass local resolution',
   dns_stopped: 'Stopped', dns_degraded: 'Degraded; check the service logs',
 

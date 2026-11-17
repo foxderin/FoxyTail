@@ -24,6 +24,19 @@ MODERN_GUARD="${TS_RUN_DIR}/foxydns.guard"
 # standalone harnesses may provide it directly.
 [ ! -r "${TS_SCRIPTS_DIR}/foxytail.dns-pref.sh" ] || . "${TS_SCRIPTS_DIR}/foxytail.dns-pref.sh"
 
+# Read configured Android policy only, not whether a TLS session is active.
+# AOSP falls back to private_dns_default_mode, then opportunistic. Failed or
+# unrecognized shell output stays unknown; never change the user's setting.
+android_private_dns_mode() {
+  _pd_mode=$(settings get global private_dns_mode 2>/dev/null) || { echo unknown; return; }
+  case "${_pd_mode}" in
+    ''|null)
+      _pd_mode=$(settings get global private_dns_default_mode 2>/dev/null) || { echo unknown; return; }
+      case "${_pd_mode}" in ''|null) _pd_mode=opportunistic ;; esac ;;
+  esac
+  case "${_pd_mode}" in off|opportunistic|hostname) printf '%s\n' "${_pd_mode}" ;; *) echo unknown ;; esac
+}
+
 modern_pids() {
   for _mp_pid in $(pids_of_path "${MODERN_BIN}"); do
     _proc_cmdline "${_mp_pid}" | grep -qxF -- "${MODERN_CONF}" && echo "${_mp_pid}"
@@ -780,6 +793,7 @@ modern_dns_status() {
 
   if [ "${1:-}" = --json ]; then
     jqr -n -c --arg state "${_mo_state}" --arg mode "${_mo_mode}" --arg configured "${DNS_MODE}" --argjson pending "${_mo_pending}" \
+      --arg privateDnsMode "$(android_private_dns_mode)" \
       --arg reason "${_mo_reason}" --arg policy "${_mo_policy:-unknown}" \
       --arg suffix "${_mo_suffix}" --arg binary "${MODERN_BIN}" --argjson port "${_mo_port}" --arg enabled "${MAGIC_DNS}" \
       --argjson ready "${_mo_ready}" --argjson v4 "${_mo_v4}" --argjson v6 "${_mo_v6}" --argjson repair "${_mo_repair}" \
@@ -787,7 +801,7 @@ modern_dns_status() {
       --arg capabilityError "${_mo_capability_error}" \
       --argjson ta "${_mo_ta}" --arg taReason "${_mo_ta_reason}" \
       --argjson ha "${_mo_ha}" --arg haReason "${_mo_ha_reason}" \
-      '{state:$state,mode:$mode,configuredMode:$configured,pendingMode:$pending,reason:$reason,policyState:$policy,suffix:$suffix,port:$port,binary:$binary,
+      '{privateDnsMode:$privateDnsMode,state:$state,mode:$mode,configuredMode:$configured,pendingMode:$pending,reason:$reason,policyState:$policy,suffix:$suffix,port:$port,binary:$binary,
         enabled:($enabled=="on"),listenerReady:$ready,interception4:$v4,interception6:$v6,repairNeeded:$repair,
         upstreamNative:$native,ipv6ModuleStatus:$module,capabilityError:(if $capabilityError=="" then null else $capabilityError end),
         transparentAvailable:$ta,transparentUnavailableReason:(if $taReason=="" then null else $taReason end),

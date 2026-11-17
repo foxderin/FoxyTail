@@ -206,11 +206,26 @@ load_conf
     def kernel(self):
         return json.loads((self.base / 'kernel.json').read_text())
 
+    def test_private_dns_policy_read_is_bounded_and_never_changes_settings(self):
+        self.executable('settings', '#!/bin/sh\n[ "$1 $2" = "get global" ] || exit 99\ncase "$3" in private_dns_mode) printf "%s\\n" "$TEST_PRIVATE_MODE"; exit "${TEST_PRIVATE_RC:-0}" ;; private_dns_default_mode) printf "%s\\n" "$TEST_PRIVATE_DEFAULT" ;; *) exit 99 ;; esac\n')
+        for mode, default, rc, expected in [
+            ('off', '', '0', 'off'), ('hostname', '', '0', 'hostname'),
+            ('opportunistic', '', '0', 'opportunistic'),
+            ('null', 'off', '0', 'off'), ('', 'null', '0', 'opportunistic'),
+            ('unrecognized', '', '0', 'unknown'), ('opportunistic', '', '1', 'unknown'),
+        ]:
+            with self.subTest(mode=mode, default=default, rc=rc):
+                self.env.update(TEST_PRIVATE_MODE=mode, TEST_PRIVATE_DEFAULT=default, TEST_PRIVATE_RC=rc)
+                self.assertEqual(self.run_script('android_private_dns_mode').strip(), expected)
+
     def test_transparent_rules_capture_only_marked_flow_and_preserve_native_preference(self):
+        self.executable('settings', '#!/bin/sh\n[ "$*" = "get global private_dns_mode" ] || exit 99\necho opportunistic\n')
         self.run_script('modern_dns_start')
         status = self.status()
         self.assertTrue(status['listenerReady']); self.assertTrue(status['interception4']); self.assertTrue(status['interception6'])
         self.assertEqual(status['state'], 'running'); self.assertFalse(status['repairNeeded'])
+        self.assertEqual(status['privateDnsMode'], 'opportunistic')
+        self.assertEqual(status['reason'], 'running')
         kernel = self.kernel()
         for cmd in ('iptables', 'ip6tables'):
             queue = kernel['chains'][cmd + ':mangle']['FOXY_DNS_QUEUE']

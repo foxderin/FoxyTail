@@ -46,6 +46,15 @@ export async function runDnsCapabilitySmoke() {
     fixture.emit('lifecycle', { active: true }); await flush();
     assert(option('hijack')?.disabled, 'interrupted cache read resumes after lifecycle recovery');
     assert(probeCount() === 0, 'return/revision/failure recovery never automatically probes');
+    fixture.data.dns.privateDnsMode = 'opportunistic';
+    await nav('tunnel');
+    h.click(h.button('dns_check')); await flush();
+    const hint = () => window.document.querySelector('[data-testid="dns-private-policy"]');
+    assert(hint()?.textContent === window.__foxy.t('dns_private_dns_automatic_hint'), 'automatic Private DNS has a non-failure explanatory hint');
+    fixture.data.dns.privateDnsMode = 'off';
+    h.click(h.button('tools_dns_check_again')); await flush();
+    assert(!hint(), 'turning Private DNS off removes its policy hint on refresh');
+    assert(probeCount() === 0, 'reading DNS policy never runs a probe');
     assert(fixture.unsupported.length === 0, 'DNS capability regression uses supported commands');
   } finally { h.close(); }
 }

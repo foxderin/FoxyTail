@@ -24,6 +24,7 @@ import { MdIcon } from '../icons';
 import { Button, IconButton, LinearProgress } from '../components/ui';
 import {
   dnsEndpoint,
+  privateDnsHint,
   dnsStatusLabel,
   dnsStatusTone,
   ipv6DnsPathLabel,
@@ -188,6 +189,9 @@ export default function Tunnel(): JSX.Element {
                 <div data-testid="dns-capability" data-dns-mode={info().mode || 'legacy'}>
                   <StatusBadge tone={dnsStatusTone(info())}>{dnsStatusLabel(info())}</StatusBadge>
                 </div>
+                <Show when={privateDnsHint(info())}>
+                  {(hint) => <p class="tool-hint" data-testid="dns-private-policy">{hint()}</p>}
+                </Show>
                 <Show when={!modernDns(info()) && ipv6DnsPathLabel(info())}>
                   {(label) => (
                     <div data-testid="dns-ipv6-path">
