@@ -316,7 +316,10 @@ _owner_lock_release "$lock" "$_LOCK_TOKEN"
 
     def test_controllers_release_their_own_lock_domains(self):
         service = (ROOT / 'tailscale/scripts/foxytail.service').read_text()
-        service = service[service.index('service_unlock() {'):service.index('\ncase "$1" in', service.index('service_unlock() {'))]
+        # Extract only the two lock functions, not newly sourced service helpers.
+        start = service.index('service_unlock() {')
+        end = service.index('\n}\n', service.index('service_lock() {', start)) + len('\n}\n')
+        service = service[start:end]
         dns = (ROOT / 'tailscale/scripts/foxytail.dns-modern.sh').read_text()
         dns = dns[dns.index('modern_lock() {'):dns.index('modern_reason() {')]
         self.finish(self.start('''

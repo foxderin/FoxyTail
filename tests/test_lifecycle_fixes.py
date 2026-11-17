@@ -299,7 +299,8 @@ class ServiceArmTests(unittest.TestCase):
         funcs = (svc[svc.index('humanize_bytes() {'):svc.index('status_service() {')] +
                  svc[svc.index('status_service() {'):svc.index('\nlog_service() {')] +
                  svc[svc.index('usage() {'):svc.index('\nhelp() {')])
-        dispatch = svc[svc.index('case "$1" in\n  start|stop|'):]
+        # Preserve the real admission/dispatch cases without coupling to their verb list.
+        dispatch = svc[svc.index('\ncase "$1" in', svc.index('service_lock() {')):]
         return status_doc + funcs + dispatch
 
     def run_status(self, args, running, backend='Running', conf_rc=1, addrs='', ipout=''):

@@ -27,6 +27,7 @@ def install_settings(base):
     settings = base / 'settings.sh'
     settings.write_text((ROOT / 'tailscale/settings.sh').read_text().replace(
         'TS_DIR="/data/adb/foxytail"', 'TS_DIR=' + shlex.quote(str(base))) + host_process_shell())
-    for name in ('foxytail.config.sh', 'foxytail.lock.sh', 'foxytail.network.sh', 'foxytail.taildrop.sh'):
+    for name in ('foxytail.config.sh', 'foxytail.lock.sh', 'foxytail.network.sh', 'foxytail.taildrop.sh',
+                 'foxytail.identity.sh'):
         shutil.copyfile(ROOT / 'tailscale/scripts' / name, base / 'scripts' / name)
     return settings
