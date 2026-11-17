@@ -8,7 +8,7 @@ import { Button, Select, TextField } from '../components/ui';
 import { dnsStatusLabel, dnsStatusTone } from './tunnel-dns';
 import { status, statusError } from '../state';
 import { savedConfigRevision } from '../config';
-import { bindNativeDraft } from '../settings';
+import { bindSessionDraft } from '../session-drafts';
 
 const CHECK_LABELS: Record<CheckId, I18nKey> = {
   'dns-udp': 'coexist_dns_udp',
@@ -33,7 +33,7 @@ export default function Coexistence(): JSX.Element {
   const [targetPort, setTargetPort] = createSignal('');
   const [resolverPort, setResolverPort] = createSignal('');
   const [result, setResult] = createSignal<CoexistCheck | null>(null);
-  void bindNativeDraft('coexist', () => ({ filterMode: filterMode(), targetPort: targetPort(), resolverPort: resolverPort() }), value => {
+  bindSessionDraft('coexist', () => ({ filterMode: filterMode(), targetPort: targetPort(), resolverPort: resolverPort() }), value => {
     if (typeof value.filterMode === 'string' && ['', 'blacklist', 'rule', 'redir-host', 'whitelist'].includes(value.filterMode)) setFilterMode(value.filterMode);
     if (typeof value.targetPort === 'string') setTargetPort(value.targetPort);
     if (typeof value.resolverPort === 'string') setResolverPort(value.resolverPort);

@@ -6,7 +6,7 @@ import { LoadGate } from '../components/LoadGate';
 import { Button, Select, TextField } from '../components/ui';
 import { showToast } from '../components/Toast';
 import { confirmDialog } from '../components/ConfirmDialog';
-import { bindNativeDraft } from '../settings';
+import { bindSessionDraft } from '../session-drafts';
 import { savedConfigRevision } from '../config';
 import { createGuardedLoad, createQueuedRefresh } from './tools-refresh';
 import { pollWhileVisible } from '../schedule';
@@ -51,7 +51,7 @@ export default function ContextRules(props: { locked: boolean; onPending: () => 
   const [draft, setDraft] = createSignal<Rule | null>(null);
   const [editing, setEditing] = createSignal<number | null>(null);
   const [draftError, setDraftError] = createSignal('');
-  const draftReady = bindNativeDraft('context', () => ({ rules: rules(), baseline: baseline(), draft: draft(), editing: editing(), textMode: textMode() }), value => {
+  bindSessionDraft('context', () => ({ rules: rules(), baseline: baseline(), draft: draft(), editing: editing(), textMode: textMode() }), value => {
     if (typeof value.rules === 'string') setRules(value.rules);
     if (typeof value.baseline === 'string') setBaseline(value.baseline);
     if (value.draft && typeof value.draft === 'object') {
@@ -103,8 +103,8 @@ export default function ContextRules(props: { locked: boolean; onPending: () => 
     void loadStatus();
     return loadRules();
   }
-  onMount(() => { void draftReady.then(loadRules); });
-  createEffect(on(savedConfigRevision, () => { void draftReady.then(() => load(true)); }, { defer: true }));
+  onMount(() => { void loadRules(); });
+  createEffect(on(savedConfigRevision, () => { void load(true); }, { defer: true }));
   createEffect(on(() => nativeControl().revision + ':' + nativeControl().accountRevision, () => { void loadStatus(); }, { defer: true }));
   pollWhileVisible(loadStatus, () => 10000);
 

@@ -8,7 +8,7 @@ import { Button, Select } from '../components/ui';
 import { toastApiError } from '../components/Toast';
 import { refreshStatus } from '../state';
 import { confirmDialog } from '../components/ConfirmDialog';
-import { bindNativeDraft } from '../settings';
+import { bindSessionDraft } from '../session-drafts';
 
 type Trial = {
   id: string;
@@ -46,7 +46,7 @@ export default function SettingsTrial(props: {
   const [busy, setBusy] = createSignal(false);
   const [mode, setMode] = createSignal('saved');
   const [duration, setDuration] = createSignal('120');
-  const draftReady = bindNativeDraft('trial', () => ({ mode: mode(), duration: duration() }), value => {
+  bindSessionDraft('trial', () => ({ mode: mode(), duration: duration() }), value => {
     if (typeof value.mode === 'string' && ['saved', 'bridge', 'tun', 'proxy'].includes(value.mode)) setMode(value.mode);
     if (typeof value.duration === 'string' && ['30', '60', '120', '300'].includes(value.duration)) setDuration(value.duration);
   });
@@ -105,7 +105,7 @@ export default function SettingsTrial(props: {
   props.expose?.({
     start: async (candidate, duration) => action('trial-start', { confirmed: true, candidate, duration }),
   });
-  pollWhileVisible(() => draftReady.then(() => busy() ? undefined : load()), () =>
+  pollWhileVisible(() => busy() ? undefined : load(), () =>
     (!known() && !error()) || (active() && trial()?.status !== 'rollback-failed') ? TRIAL_POLL_MS : false);
   pollWhileVisible(() => setNow(performance.now()), () => trial()?.status === 'running' ? TRIAL_COUNTDOWN_MS : false);
   return <Card title={t('trial_title')} icon="sync" description={t('trial_description')}>

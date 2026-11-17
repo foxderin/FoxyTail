@@ -2,7 +2,7 @@
 import { createEffect, createSignal, For, on, onCleanup, onMount, Show, type JSX } from 'solid-js';
 import { createApiScope, hasRoot, nativeControl } from '../api';
 import { t, tf, languageMode, setLang, type Lang } from '../i18n';
-import { NETWORK, BACKGROUND, bindNativeDraft, type Field } from '../settings';
+import { NETWORK, BACKGROUND, type Field } from '../settings';
 import { settingsDrafts, setSettingsDrafts, restartRequired, setRestartRequired, applyRequested, setApplyRequested } from '../pending';
 import SettingsMaintenance from './SettingsMaintenance';
 import SettingsTrial from './SettingsTrial';
@@ -28,14 +28,6 @@ export default function Settings(): JSX.Element {
   const [settings, setSettings] = createSignal<Record<string, string> | null>(null);
   const drafts = settingsDrafts;
   const setDrafts = setSettingsDrafts;
-  const draftReady = bindNativeDraft('settings', () => ({ drafts: drafts() }), value => {
-    if (value.drafts && typeof value.drafts === 'object' && !Array.isArray(value.drafts)) {
-      const valid = Object.entries(value.drafts).filter(([key, item]) =>
-        [...NETWORK, ...BACKGROUND].some(field => field.key === key) &&
-        item && typeof item === 'object' && typeof item.baseline === 'string' && typeof item.value === 'string');
-      setDrafts(Object.fromEntries(valid));
-    }
-  });
   const [settingsError, setSettingsError] = createSignal<string | null>(null);
   const [reviewOpen, setReviewOpen] = createSignal(false);
   const [safeApply, setSafeApply] = createSignal(true);
@@ -230,7 +222,7 @@ export default function Settings(): JSX.Element {
   onMount(() => {
     void loadTransparentCapability();
   });
-  pollWhileVisible(() => draftReady.then(() => saving() ? undefined : loadSettings()), () => viewPollInterval(10000));
+  pollWhileVisible(() => saving() ? undefined : loadSettings(), () => viewPollInterval(10000));
   function fieldRow(field: Field): JSX.Element {
     const value = () => drafts()[field.key]?.value ?? settings()?.[field.key] ?? field.defaultValue ?? '';
     const changed = () => drafts()[field.key] && value() !== settings()?.[field.key];

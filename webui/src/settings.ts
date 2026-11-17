@@ -1,7 +1,3 @@
-import { createEffect, createSignal, onCleanup } from 'solid-js';
-import { requestNative } from './native';
-import { toastApiError } from './components/Toast';
-import { t } from './i18n';
 import type { I18nKey } from './i18n';
 
 export type Field = {
@@ -38,29 +34,3 @@ export const BACKGROUND: Field[] = [
   { key: 'STATS_INTERVAL', label: 'tools_stats_interval', range: [10, 3600] },
   { key: 'LOG_MAX_KB', label: 'tools_log_limit', range: [64, 10240] },
 ];
-
-/** Nonsecret session state survives page remounts, never Activity recreation. */
-export function bindNativeDraft(
-  key: 'settings' | 'routes' | 'context' | 'serve' | 'logs' | 'coexist' | 'trial' | 'exit',
-  snapshot: () => Record<string, unknown>,
-  restore: (value: Record<string, unknown>) => void,
-): Promise<void> {
-  const [ready, setReady] = createSignal(false);
-  let disposed = false;
-  let reported = false;
-  onCleanup(() => { disposed = true; });
-  createEffect(() => {
-    const value = snapshot();
-    if (!ready()) return;
-    void requestNative('app.drafts', { key, value }).then(result => {
-      if (!result.ok && !reported && !disposed) { reported = true; toastApiError(t('op_failed'), result); }
-    });
-  });
-  return requestNative('app.drafts', { key }).then(result => {
-    if (disposed) return;
-    if (result.ok && result.value && typeof result.value === 'object' && !Array.isArray(result.value))
-      restore(result.value as Record<string, unknown>);
-    else if (!result.ok) toastApiError(t('op_failed'), result);
-    setReady(true);
-  });
-}

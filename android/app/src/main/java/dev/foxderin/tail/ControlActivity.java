@@ -30,11 +30,9 @@ import org.json.JSONObject;
 import java.io.ByteArrayInputStream;
 import java.io.IOException;
 import java.net.URI;
-import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashMap;
-import java.util.Iterator;
 import java.util.Map;
 
 public class ControlActivity extends Activity {
@@ -46,7 +44,6 @@ public class ControlActivity extends Activity {
     private FileActions files;
     private FrameLayout content;
     // Session-only form state: preserves tab navigation, never Activity recreation.
-    private JSONObject drafts = new JSONObject();
     private String destination = "dashboard", section;
     private android.window.OnBackInvokedCallback backCallback;
 
@@ -193,40 +190,6 @@ public class ControlActivity extends Activity {
             bridge.emit("navigate", WebBridge.object("ok", true, "page", destination, "section", section));
             section = null;
         }
-    }
-    JSONObject draft(String key, JSONObject args) throws Exception {
-        WebBridge.choice(key, "settings", "routes", "context", "serve", "files", "logs", "coexist", "trial", "exit");
-        if (!args.has("value")) return drafts.optJSONObject(key);
-        Object value = args.get("value");
-        if (value != JSONObject.NULL && !(value instanceof JSONObject)) throw new IOException("Draft must be an object");
-        if (value != JSONObject.NULL) {
-            if ("exit".equals(key)) {
-                JSONObject exit = (JSONObject) value;
-                WebBridge.keys(exit, "identity", "id");
-                WebBridge.text(exit, "identity", 4096);
-                WebBridge.text(exit, "id", 1024);
-            }
-            checkDraft(value);
-            if (value.toString().getBytes(StandardCharsets.UTF_8).length > 256 * 1024) throw new IOException("Draft exceeds 256 KiB");
-        }
-        JSONObject next = new JSONObject(drafts.toString());
-        if (value == JSONObject.NULL) next.remove(key); else next.put(key, value);
-        if (next.toString().getBytes(StandardCharsets.UTF_8).length > 512 * 1024) throw new IOException("Drafts exceed 512 KiB");
-        drafts = next; return drafts.optJSONObject(key);
-    }
-    private static void checkDraft(Object value) throws Exception {
-        if (value instanceof JSONObject) {
-            JSONObject object = (JSONObject) value;
-            Iterator<String> names = object.keys();
-            while (names.hasNext()) {
-                String key = names.next();
-                if (key.toLowerCase(java.util.Locale.ROOT).matches(".*(authkey|password|credential|secret|sourceuri|token|key|apikey|passwd|auth).*")) throw new IOException("Credentials and source URIs cannot be saved as drafts");
-                checkDraft(object.get(key));
-            }
-        } else if (value instanceof org.json.JSONArray) {
-            org.json.JSONArray array = (org.json.JSONArray) value;
-            for (int i = 0; i < array.length(); i++) checkDraft(array.get(i));
-        } else if (value instanceof String && ((String) value).startsWith("content://")) throw new IOException("Source URIs cannot be saved as drafts");
     }
     void openExternal(URI uri) { startActivity(new Intent(Intent.ACTION_VIEW, Uri.parse(uri.toString())).addCategory(Intent.CATEGORY_BROWSABLE)); }
     void applyAppearance() {

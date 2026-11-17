@@ -96,7 +96,22 @@ await scenario('routes, appearance and retained Files UI', async ({ app, nav, wi
   await nav('peers'); await nav('files');
   assert(window.document.querySelector('.files-page') === original, 'Files keeps its actual mounted UI across routes');
   assert(window.document.querySelector('.files-toolbar input')?.value === 'network', 'Files search survives navigation');
-  assert(fixture.drafts.files?.filter === 'network', 'Files view state stays in the current native session');
+  assert(!fixture.log.some(r => r.action === 'app.drafts'), 'Files view state needs no native draft bridge');
+});
+
+await scenario('session drafts restore unmounted Logs but a new document starts clean', async ({ nav, window, input, fixture }) => {
+  await nav('logs');
+  const original = window.document.querySelector('.tool-log-controls input');
+  assert(original.value === '', 'new WebView session starts with empty log search');
+  input(original, 'session-only-filter');
+  await nav('peers'); await nav('logs');
+  const restored = window.document.querySelector('.tool-log-controls input');
+  assert(restored !== original && restored.value === 'session-only-filter', 'unmounted Logs restores input from session store');
+  assert(!fixture.log.some(r => r.action === 'app.drafts'), 'session edits make no native draft requests');
+});
+await scenario('fresh document does not inherit prior session edits', async ({ nav, window }) => {
+  await nav('logs');
+  assert(window.document.querySelector('.tool-log-controls input').value === '', 'new document discards previous session search');
 });
 
 await scenario('native envelopes, read disposal and accepted-write continuation', async ({ app, fixture, window, nav }) => {
@@ -211,10 +226,13 @@ await scenario('settings drafts survive navigation and conflicts require consent
   assert(!fixture.log.some(r => r.action === 'control.mutate' && r.args.command === 'control'), 'saving configuration never silently applies it');
   fixture.data['trial-status'].trial = null;
   const raw = '# Unrecognized lines are user data\nssid:家:up\nfuture:format:keep\n';
-  await app.native.requestNative('app.drafts', { key: 'context', value: { rules: raw, baseline: fixture.data['context-get'].rules, textMode: true } });
+
   await nav('peers'); await nav('settings');
   const advanced = window.document.querySelector('.page-transition:not([hidden]) details.tool-disclosure');
   advanced.open = true; advanced.dispatchEvent(new window.Event('toggle')); await flush();
+  click(button('context_text')); await flush();
+  input(window.document.querySelector('[data-testid="context-rules"] textarea'), raw);
+  await nav('peers'); await nav('settings');
   assert([...window.document.querySelectorAll('textarea')].some(e => e.value === raw), 'context draft retains comments, Unicode and unknown lines verbatim');
 });
 
@@ -523,7 +541,7 @@ await scenario('account transfer preflight, secret disposal and trial recovery',
   input(window.document.querySelector('input[type="password"]'), 'SIMULATED-NOT-A-CREDENTIAL');
   fixture.emit('lifecycle', { active: false }); await flush();
   assert(window.document.querySelector('input[type="password"]')?.value === '', 'backgrounding clears account secrets');
-  assert(!JSON.stringify(fixture.drafts).includes('SIMULATED-NOT-A-CREDENTIAL'), 'auth input never enters session drafts');
+  assert(!fixture.log.some(r => r.action === 'app.drafts'), 'auth input never crosses a native draft bridge');
   fixture.emit('lifecycle', { active: true });
   fixture.data['trial-status'] = { ok: true, trial: { status: 'running' } };
   await nav('settings');

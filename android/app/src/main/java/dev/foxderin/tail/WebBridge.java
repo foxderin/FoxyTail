@@ -171,9 +171,6 @@ final class WebBridge {
                 return;
             case "app.navigate":
                 keys(args, "page"); activity.navigate(text(args, "page", 32)); reply.accept(object("ok", true)); return;
-            case "app.drafts":
-                keys(args, "key", "value");
-                reply.accept(object("ok", true, "value", activity.draft(text(args, "key", 16), args))); return;
             case "app.close":
                 keys(args); reply.accept(object("ok", true)); main.post(activity::finish); return;
             case "app.openUrl":

@@ -11,7 +11,7 @@ import { MdIcon } from '../icons';
 import { TextField } from '../components/ui';
 import './tools.css';
 import { createQueuedRefresh } from './tools-refresh';
-import { bindNativeDraft } from '../settings';
+import { bindSessionDraft } from '../session-drafts';
 
 type Src = 'daemon' | 'service';
 type Level = 'all' | 'warn' | 'error';
@@ -38,7 +38,7 @@ export default function Logs(): JSX.Element {
   const [busy, setBusy] = createSignal(false);
   const [error, setError] = createSignal<string | null>(null);
   const [updated, setUpdated] = createSignal('');
-  const draftReady = bindNativeDraft('logs', () => ({ source: src(), limit: limit(), level: level(), live: live(), follow: follow(), wrap: wrap(), matchCase: matchCase(), query: query() }), value => {
+  bindSessionDraft('logs', () => ({ source: src(), limit: limit(), level: level(), live: live(), follow: follow(), wrap: wrap(), matchCase: matchCase(), query: query() }), value => {
     if (value.source === 'daemon' || value.source === 'service') setSrc(value.source);
     if ([100, 200, 500, 1000].includes(Number(value.limit))) setLimit(Number(value.limit));
     if (value.level === 'all' || value.level === 'warn' || value.level === 'error') setLevel(value.level);
@@ -83,7 +83,7 @@ export default function Logs(): JSX.Element {
     },
     setBusy,
   );
-  pollWhileVisible(() => draftReady.then(() => busy() ? undefined : load()), () => live() ? viewPollInterval(LOGS_POLL_MS) : false);
+  pollWhileVisible(() => busy() ? undefined : load(), () => live() ? viewPollInterval(LOGS_POLL_MS) : false);
   function copyResults() {
     copyWithToast(filtered().map((row) => row.line).join('\n'), 'info');
   }

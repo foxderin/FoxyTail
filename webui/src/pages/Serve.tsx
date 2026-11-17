@@ -10,7 +10,7 @@ import { Button, IconButton, Select, TextField } from '../components/ui';
 import { serveMappings, serveDeleteArgs, type ServeMapping as Mapping } from '../serve';
 import './tools.css';
 import { createQueuedRefresh } from './tools-refresh';
-import { bindNativeDraft } from '../settings';
+import { bindSessionDraft } from '../session-drafts';
 type Kind = 'serve' | 'funnel';
 const protocols: Record<Kind, string[]> = {
   serve: ['https', 'http', 'tcp', 'tls-terminated-tcp'],
@@ -33,7 +33,7 @@ export default function Serve(): JSX.Element {
   const [delBusy, setDelBusy] = createSignal<string | null>(null);
   const [formError, setFormError] = createSignal('');
   const mutationBusy = () => addBusy() || delBusy() !== null || !nativeControl().canWrite || nativeControl().busy;
-  const draftReady = bindNativeDraft('serve', () => ({ kind: kind(), proto: proto(), port: port(), target: target() }), value => {
+  bindSessionDraft('serve', () => ({ kind: kind(), proto: proto(), port: port(), target: target() }), value => {
     if ((value.kind === 'serve' || value.kind === 'funnel') && typeof value.proto === 'string' &&
         protocols[value.kind].includes(value.proto) && typeof value.port === 'string' && typeof value.target === 'string') {
       setKind(value.kind); setProto(value.proto); setPort(value.port); setTarget(value.target);
@@ -119,7 +119,7 @@ export default function Serve(): JSX.Element {
   }
   createEffect(on(() => nativeControl().accountRevision, () => {
     setMappings({ serve: null, funnel: null });
-    void draftReady.then(() => { void loadKind('serve'); void loadKind('funnel'); });
+    void loadKind('serve'); void loadKind('funnel');
   }));
   function section(k: Kind): JSX.Element {
     return (

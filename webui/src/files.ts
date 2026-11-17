@@ -51,35 +51,11 @@ export function acceptSnapshot(value: NativeResult) {
 export type FileViewState = {filter: string; sort: number; selected: string[]; peer: string; directory: string; opened: boolean; expanded: string[]};
 export const [fileView, setFileView] = createSignal<FileViewState>({filter: '', sort: 0, selected: [], peer: '', directory: '', opened: false, expanded: []});
 let initialized: Promise<void> | undefined;
-let saving = false;
-let pendingSave: FileViewState | undefined;
 export function updateFileView(patch: Partial<FileViewState>) {
-  const next = {...fileView(), ...patch}; setFileView(next); pendingSave = next; void saveView();
-}
-async function saveView() {
-  if (saving) return;
-  saving = true;
-  while (pendingSave) {
-    const value = pendingSave; pendingSave = undefined;
-    const result = await requestNative('app.drafts', {key: 'files', value});
-    if (!result.ok) setSnapshotError(result.error || t('error'));
-  }
-  saving = false;
+  setFileView(value => ({...value, ...patch}));
 }
 export function initializeFiles(): Promise<void> {
-  return initialized ??= (async () => {
-    const [snapshot, draft] = await Promise.all([requestNative('files.snapshot'), requestNative('app.drafts', {key: 'files'})]);
-    acceptSnapshot(snapshot);
-    const value = draft.value;
-    if (draft.ok && record(value)) setFileView({
-      filter: typeof value.filter === 'string' ? value.filter : '',
-      sort: count(value.sort) && value.sort < 4 ? value.sort : 0,
-      selected: Array.isArray(value.selected) && value.selected.length <= MAX_FILES && value.selected.every(fileName) ? value.selected : [],
-      peer: typeof value.peer === 'string' ? value.peer : '', directory: relative(value.directory) ? value.directory : '',
-      opened: value.opened === true,
-      expanded: Array.isArray(value.expanded) ? value.expanded.filter((id): id is string => typeof id === 'string' && /^[a-f0-9]+$/.test(id)).slice(0, 100) : [],
-    });
-  })();
+  return initialized ??= requestNative('files.snapshot').then(acceptSnapshot);
 }
 export function resultError(result: NativeResult): string {
   return result.unknown ? [result.error, t('ft_unknown')].filter(Boolean).join('\n') : result.error || t('error');

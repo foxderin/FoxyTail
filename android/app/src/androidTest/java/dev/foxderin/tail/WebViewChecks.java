@@ -43,10 +43,7 @@ final class WebViewChecks {
         reject("app.openUrl", new JSONObject().put("url", "javascript:alert(1)"));
         reject("app.openUrl", new JSONObject().put("url", "https://user:password@example.invalid/"));
         reject("app.navigate", new JSONObject().put("page", "unknown"));
-        reject("app.drafts", new JSONObject().put("key", "settings").put("value", new JSONObject().put("nested", new JSONObject().put("authKey", "not-a-secret"))));
-        reject("app.drafts", new JSONObject().put("key", "files").put("value", new JSONObject().put("uri", "content://example.invalid/private")));
-        String oversized = String.join("", java.util.Collections.nCopies(256 * 1024, "x"));
-        reject("app.drafts", new JSONObject().put("key", "context").put("value", new JSONObject().put("text", oversized)));
+        reject("app.drafts", new JSONObject().put("key", "logs")); // Removed native state-copy API.
         rejectedOrigins();
         incomingShare();
 
@@ -56,16 +53,7 @@ final class WebViewChecks {
         waitFor("location.hash === '#/settings'", "Settings page opens");
         click("#view a[href='#/logs']");
         waitFor("location.hash === '#/logs' && !!document.querySelector('.tool-log-controls input')", "Logs filters remain editable without backend access");
-        require(request("app.drafts", new JSONObject().put("key", "logs")).getBoolean("ok"), "Initial draft hydration reaches the native reply queue before editing");
         evaluate("(()=>{const input=document.querySelector('.tool-log-controls input'); input.value='instrumentation draft'; input.dispatchEvent(new Event('input',{bubbles:true})); return true})()");
-        long deadline = SystemClock.uptimeMillis() + 10000;
-        boolean saved = false;
-        while (SystemClock.uptimeMillis() < deadline) {
-            JSONObject value = request("app.drafts", new JSONObject().put("key", "logs")).optJSONObject("value");
-            if (value != null && "instrumentation draft".equals(value.optString("query"))) { saved = true; break; }
-            SystemClock.sleep(50);
-        }
-        require(saved, "Editing the bundled Logs input updates native nonsecret drafts");
         click("#bottom-nav a[href='#/settings']");
         waitFor("location.hash === '#/settings'", "Primary navigation responds");
         instrumentation.runOnMainSync(activity::onBackPressed);
@@ -75,12 +63,9 @@ final class WebViewChecks {
         instrumentation.runOnMainSync(activity::onBackPressed);
         waitFor("!document.querySelector('.task-menu').open && location.hash === '#/logs'", "Back closes the menu before navigating");
 
-        String large = String.join("", java.util.Collections.nCopies(80 * 1024, "x"));
-        require(request("app.drafts", new JSONObject().put("key", "context").put("value", new JSONObject().put("rules", large))).getBoolean("ok"), "Large in-session edits remain accepted");
         android.os.Bundle savedState = new android.os.Bundle();
         instrumentation.runOnMainSync(() -> activity.onSaveInstanceState(savedState));
         require(!savedState.containsKey("webDrafts"), "Unsaved form edits never enter Activity saved state");
-        require(large.equals(request("app.drafts", new JSONObject().put("key", "context")).getJSONObject("value").getString("rules")), "Saving lifecycle state does not discard active edits");
 
         Instrumentation.ActivityMonitor monitor = instrumentation.addMonitor(ControlActivity.class.getName(), null, false);
         try {
@@ -91,12 +76,11 @@ final class WebViewChecks {
         } finally { instrumentation.removeMonitor(monitor); }
         loaded();
         waitFor("location.hash === '#/logs' && document.querySelector('.tool-log-controls input')?.value === ''", "Recreation restores the route but not unsaved form edits");
-        require(request("app.drafts", new JSONObject().put("key", "context")).isNull("value"), "Recreation starts a fresh session even for large edits");
 
         for (String url : new String[]{"https://example.invalid/", "file:///data/local/tmp/private", "content://example.invalid/private", WebBridge.ORIGIN + "/assets/not-index.html"}) {
             evaluate("location.href=" + JSONObject.quote(url));
             waitFor("location.origin === " + JSONObject.quote(WebBridge.ORIGIN) + " && location.pathname === '/assets/index.html' && !!document.querySelector('#bottom-nav')", "Untrusted navigation cannot replace the bundled document");
-            require(request("app.drafts", new JSONObject().put("key", "logs")).getBoolean("ok"), "The trusted document remains usable after blocked navigation");
+            require(request("files.snapshot", new JSONObject()).getBoolean("ok"), "The trusted document remains usable after blocked navigation");
         }
     }
 

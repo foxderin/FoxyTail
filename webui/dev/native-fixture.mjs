@@ -46,7 +46,7 @@ export function installFixture(window, { state = 'ready', lang = 'en', theme = '
   };
   let control = { ok: true, compatible: true, canWrite: true, canStop: true, busy: false, ownsMutation: false, unknown: false, canCancel: false, id: null, command: '', label: '', message: '', sequence: 0, revision: 0, accountRevision: 0, result: null, tasks: [], checking: false };
   let files = { ok: true, selection: [], busy: false, preparing: false, unknown: false, job: null, message: '', transfer: null, receiveNotifications: { ok: true, enabled: false, allowed: true } };
-  const drafts = {}, log = [], held = [], holdNext = new Set(), overrides = new Map(), unsupported = [];
+  const log = [], held = [], holdNext = new Set(), overrides = new Map(), unsupported = [];
   const appearance = { theme, language: lang };
   let sequence = 0;
   let listedDownload = false;
@@ -131,7 +131,6 @@ export function installFixture(window, { state = 'ready', lang = 'en', theme = '
       case 'app.bootstrap': return { ok: true, appearance, page, control, files };
       case 'app.navigate': page = args.page; return { ok: true };
       case 'app.appearance': Object.assign(appearance, args); emit('appearance', { appearance }); return { ok: true, appearance };
-      case 'app.drafts': if (Object.hasOwn(args, 'value')) drafts[args.key] = clone(args.value); return { ok: true, value: drafts[args.key] ?? null };
       case 'app.close': return { ok: true };
       case 'app.copy': return { ok: true, simulated: true };
       case 'app.openUrl': return fail('external navigation disabled in preview');
@@ -182,5 +181,5 @@ export function installFixture(window, { state = 'ready', lang = 'en', theme = '
       else window.setTimeout(finish, state === 'slow' ? 1500 : delay);
     },
   };
-  return { data, settings, token, transfer, drafts, appearance, log, held, holdNext, overrides, unsupported, emit, publishControl, publishFiles, command, get control() { return control; }, get files() { return files; } };
+  return { data, settings, token, transfer, appearance, log, held, holdNext, overrides, unsupported, emit, publishControl, publishFiles, command, get control() { return control; }, get files() { return files; } };
 }

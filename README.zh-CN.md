@@ -148,7 +148,7 @@ App 区分 root 启动失败、授权不足、模块不可读、协议不兼容�
 
 `android/` 是唯一图形控制面。`ControlActivity` 承载内置 SolidJS WebView 页面；`ControlClient` 负责操作身份和结果接管；`RootApi` 负责可信 su、JSON 与二进制管道；`FoxyTailNative` 具名桥校验来源、框架和参数。`TransferService` 仅负责文件准备及观察，不托管网络服务。
 
-所有标签页（包括文件页）都在同一个 `ControlActivity` 内切换到内置 WebView 文档；非敏感表单编辑经仅限本次会话的 `app.drafts` 在切页时保留，Activity 重建仅恢复页面和原生文件选择，不恢复未保存的表单编辑。系统分享、文件选择器结果与传输通知仍由该 Activity 接收，已保存配置、操作回执和已接受的传输不变。
+所有标签页（包括文件页）都在同一个 `ControlActivity` 内切换到内置 WebView 文档；非敏感表单编辑仅保存在 WebView 会话内存中以在切页时保留，不再经原生草稿接口复制，Activity 重建仅恢复页面和原生文件选择，不恢复未保存的表单编辑。系统分享、文件选择器结果与传输通知仍由该 Activity 接收，已保存配置、操作回执和已接受的传输不变。
 
 App 与常驻进程经 `operation-start` 提交的持久写操作共用串行准入；只读探测和状态读取保持独立，涉及内核及缓存的 DNS 能力探测保守地按写操作处理。此门禁不涵盖外部直接 CLI/daemon 命令；恢复文件时不要通过外部命令切换账号。
 

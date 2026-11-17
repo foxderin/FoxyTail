@@ -21,7 +21,7 @@ import RoutingApps from './RoutingApps';
 import { subnetRoutes, subnetRoutesError, ipv6Unavailable, ipv6Notice } from '../subnet-routes';
 import './tools.css';
 type Scope = 'all' | 'selected' | 'bypass';
-import { bindNativeDraft } from '../settings';
+import { bindSessionDraft } from '../session-drafts';
 import { confirmDialog } from '../components/ConfirmDialog';
 import { pollWhileVisible } from '../schedule';
 import { viewPollInterval } from '../state';
@@ -47,7 +47,7 @@ export default function Routing(): JSX.Element {
   const dirty = () => loaded() && JSON.stringify(snapshot()) !== JSON.stringify(current());
   const [baseline, setBaseline] = createSignal<RoutesInfo | null>(null);
   const conflict = () => baseline() !== null && JSON.stringify(baseline()) !== JSON.stringify(snapshot()) && dirty();
-  const draftReady = bindNativeDraft('routes', () => ({ baseline: baseline(), current: current(), newSubnet: newSubnet() }), value => {
+  bindSessionDraft('routes', () => ({ baseline: baseline(), current: current(), newSubnet: newSubnet() }), value => {
     const draft = value.current as RoutesInfo | undefined;
     if (draft && ['all', 'selected', 'bypass'].includes(draft.scope) &&
         Array.isArray(draft.uids) && draft.uids.every(uid => typeof uid === 'string' && /^\d+$/.test(uid)) &&
@@ -104,7 +104,7 @@ export default function Routing(): JSX.Element {
     else { setOwner('unknown'); setOwnerError(result.error || t('net_unknown')); }
   }
   onMount(() => { void loadOwner(); });
-  pollWhileVisible(() => draftReady.then(() => loadRoutes()), () => viewPollInterval(10000));
+  pollWhileVisible(() => loadRoutes(), () => viewPollInterval(10000));
   function toggleUid(uid: number, checked: boolean) {
     const value = String(uid);
     setUids((old) => (checked ? [...new Set([...old, value])] : old.filter((x) => x !== value)));
