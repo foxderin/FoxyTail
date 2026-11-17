@@ -24,6 +24,7 @@ ensure_run_dirs
 . "${DIR}/foxytail.webapi-control.sh"
 # shellcheck source=foxytail.webapi-account.sh
 . "${DIR}/foxytail.webapi-account.sh"
+. "${DIR}/foxytail.webapi-identity.sh"
 # shellcheck source=foxytail.webapi-network.sh
 . "${DIR}/foxytail.webapi-network.sh"
 # shellcheck source=foxytail.webapi-config.sh
@@ -54,10 +55,10 @@ case "$1" in
   artifact-delete|cancel)
     [ "$#" = 2 ] || jerr 'command requires one identifier' ;;
   artifact-read)
-    [ "$#" = 2 ] || { echo 'artifact-read requires one identifier' >&2; return 1; } ;;
+    { [ "$#" = 2 ] || [ "$#" = 3 ]; } || { echo 'artifact-read requires one identifier' >&2; return 1; } ;;
 esac
 case "$1:$2" in
-  backend-info:* | operation-start:* | operation-status:* | owner-capability:* | hooks-get:* | artifact-stage:* | artifact-read:* | artifact-delete:*) ;;
+  identity-stage:* | identity-export:* | identity-preview:* | identity-restore:* | backend-info:* | operation-start:* | operation-status:* | owner-capability:* | hooks-get:* | artifact-stage:* | artifact-read:* | artifact-delete:*) ;;
   logs:* | control:stop | restore:* | cancel:* | diag-check:* | trial-status:* | trial-confirm:* | trial-revert:* | backup-list:* | restore-preview:*) ;;
   taildrop-targets:* | files-browse:* | file-send-start:* | file-send-status:* | file-send-cancel:* | file-send-history:* | file-send-delete:* | file-send-clear:* | file-receive:* | file-delete:* | file-delete-many:* | file-clear:* | file-stage:* | file-stage-delete:* | file-read:*) ;;
   peers:* | exitnodes:* | peer-ping:* | speedtest-exitnodes:* | derp-speedtest:* | accounts:* | serve-list:* | funnel-list:* | traffic:* | traffic-uids:* | apps:* | files-inbox:* | context-status:*) ;;
@@ -65,7 +66,7 @@ case "$1:$2" in
   *) load_conf || jerr 'invalid configuration; inspect the service log' ;;
 esac
 case "$1" in
-  control | mode-set | exitnode-set | exitnode-clear | login | login-authkey | logout | switch | serve-set | serve-del | funnel-set | funnel-del | routes-set | subnet-routes-set | settings-set | context-set | file-send-start | file-send-delete | file-send-clear | file-stage | file-stage-delete | file-receive | file-delete | file-delete-many | file-clear | backup | restore | trial-start | trial-confirm | trial-revert | dns-probe)
+  identity-export | identity-restore | account-rename | control | mode-set | exitnode-set | exitnode-clear | login | login-authkey | logout | switch | serve-set | serve-del | funnel-set | funnel-del | routes-set | subnet-routes-set | settings-set | context-set | file-send-start | file-send-delete | file-send-clear | file-stage | file-stage-delete | file-receive | file-delete | file-delete-many | file-clear | backup | restore | trial-start | trial-confirm | trial-revert | dns-probe)
     [ "$1:$2" = control:stop ] || [ ! -f "${TS_DIR}/.installing" ] || jerr 'an upgrade is in progress; retry after it completes' ;;
 esac
 
@@ -77,7 +78,12 @@ case "$1" in
   socks-check) [ "$#" = 1 ] || jerr 'socks-check takes no arguments'; cmd_socks_check ;;
   hooks-get) cmd_hooks_get ;;
   artifact-stage) shift; [ "$#" = 2 ] || jerr 'artifact-stage requires filename and length'; cmd_artifact_stage "$1" "$2" ;;
-  artifact-read) shift; cmd_artifact_read "$1" ;;
+  artifact-read) shift; cmd_artifact_read "$1" "${2:-save}" ;;
+  identity-stage) shift; [ "$#" = 2 ] || jerr "identity-stage requires filename and size"; cmd_identity_stage "$1" "$2" ;;
+  identity-export) [ "$#" = 1 ] || jerr "identity-export takes no arguments"; cmd_identity export ;;
+  identity-preview) [ "$#" = 2 ] || jerr "identity-preview requires token"; cmd_identity preview "$2" ;;
+  identity-restore) shift; [ "$#" = 3 ] || jerr "identity-restore requires token and two digests"; cmd_identity restore "$@" ;;
+  account-rename) shift; [ "$#" = 2 ] || jerr "account-rename requires profile ID and nickname"; cmd_account_rename "$1" "$2" ;;
   artifact-delete) shift; cmd_artifact_delete "$1" ;;
   cancel) shift; cmd_cancel "$1" ;;
   status) cmd_status ;;

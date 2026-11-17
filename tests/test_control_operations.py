@@ -86,7 +86,9 @@ cmd_diag_check() { echo '{"ok":true}'; }
         self.assertEqual(self.entry('operation-start', requests[accepted], 'file-receive',
                                     'photo.txt', 'self-1')['operation']['state'], 'running')
         for suffix, args in [('switch', ('switch', 'profile')), ('clear', ('file-clear',)),
-                             ('logout', ('logout',)), ('dns', ('dns-probe',)), ('restore', ('restore', 'a', 'b', 'c'))]:
+                             ('logout', ('logout',)), ('dns', ('dns-probe',)),
+                             ('identity', ('identity-export',)), ('identity_restore', ('identity-restore', 'a','b','c')),
+                             ('rename', ('account-rename','abcd','Work')), ('restore', ('restore', 'a', 'b', 'c'))]:
             other = self.request('blocked_' + suffix)
             self.assertIn('no work started', self.entry('operation-start', other, *args, ok=False)['error'])
             self.assertFalse((self.run / 'operations' / other).exists())

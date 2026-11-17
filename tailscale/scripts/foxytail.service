@@ -140,6 +140,12 @@ prepare_service_config() {
 
 start_service() {
   ensure_run_dirs
+  # Interrupted identity publication must recover before any daemon consumes it.
+  if [ -e "${TS_DIR}/state/.identity-transaction" ] || [ -L "${TS_DIR}/state/.identity-transaction" ]; then
+    [ -z "$(daemon_pids)" ] && "${TS_BIN_DIR}/foxyfiles" identity-recover --root "${TS_DIR}" || {
+      log Error 'Identity recovery failed; service remains stopped.'; return 1;
+    }
+  fi
   if [ -f "${TS_DIR}/.installing" ]; then
     log Error "installation in progress; start deferred"
     return 1
@@ -658,8 +664,10 @@ service_lock() {
   trap 'exit 1' INT TERM HUP
 }
 
+. "${DIR}/foxytail.identity.sh"
+
 case "$1" in
-  start|stop|restart|mode|recover|trial|context) service_lock || exit 1 ;;
+  identity|start|stop|restart|mode|recover|trial|context) service_lock || exit 1 ;;
 esac
 
 if conf_trial_active; then
@@ -672,6 +680,7 @@ if conf_trial_active; then
 fi
 
 case "$1" in
+  identity) shift; identity_service "$@" ;;
   trial)
     _TRIAL_ID="$2"
     _SERVICE_CANDIDATE=$("${TS_SCRIPTS_DIR}/foxytail.trial" prepare "$2" "$3") || exit 1

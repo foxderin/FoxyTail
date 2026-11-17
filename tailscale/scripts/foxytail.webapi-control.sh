@@ -1,14 +1,14 @@
 #!/system/bin/sh
 # Private receipts and detached workers; only the fixed dispatcher can run work.
 
-_control_commands='control mode-set exitnode-set exitnode-clear login-authkey logout switch serve-set serve-del funnel-set funnel-del routes-set subnet-routes-set settings-set context-set backup restore trial-start trial-confirm trial-revert file-receive file-delete file-delete-many file-clear file-send-start file-send-cancel file-send-delete file-send-clear peer-ping speedtest-exitnodes derp-speedtest coexist-check coexist-info diag diag-check dns-probe socks-check'
+_control_commands='identity-export identity-restore account-rename control mode-set exitnode-set exitnode-clear login-authkey logout switch serve-set serve-del funnel-set funnel-del routes-set subnet-routes-set settings-set context-set backup restore trial-start trial-confirm trial-revert file-receive file-delete file-delete-many file-clear file-send-start file-send-cancel file-send-delete file-send-clear peer-ping speedtest-exitnodes derp-speedtest coexist-check coexist-info diag diag-check dns-probe socks-check'
 
 _control_validate() {
   _cv_command=$1
   shift
   case " ${_control_commands} " in *" ${_cv_command} "*) ;; *) jerr 'command is not allowed as a detached operation' ;; esac
   case "${_cv_command}:$#" in
-    control:1|mode-set:1|exitnode-set:1|login-authkey:1|switch:1|subnet-routes-set:1|context-set:1|trial-confirm:1|trial-revert:1|file-delete:1|file-delete-many:1|file-send-cancel:1|file-send-delete:1|diag:1) ;;
+    identity-export:0|identity-restore:3|account-rename:2|control:1|mode-set:1|exitnode-set:1|login-authkey:1|switch:1|subnet-routes-set:1|context-set:1|trial-confirm:1|trial-revert:1|file-delete:1|file-delete-many:1|file-send-cancel:1|file-send-delete:1|diag:1) ;;
     file-receive:2|settings-set:2|peer-ping:2|trial-start:2|serve-set:3|serve-del:2|serve-del:3|funnel-set:3|funnel-del:2|funnel-del:3|routes-set:3|restore:3|file-send-start:3|coexist-check:5) ;;
     exitnode-clear:0|logout:0|backup:0|file-clear:0|file-send-clear:0|speedtest-exitnodes:0|derp-speedtest:0|coexist-info:0|diag:0|diag-check:0|dns-probe:0|socks-check:0|trial-start:0|trial-start:1) ;;
     *) jerr 'invalid operation argument count' ;;
@@ -292,7 +292,7 @@ cmd_backend_info() {
   [ ! -f "${TS_MOD_DIR}/disable" ] || _bi_disabled=true
   [ ! -f "${TS_DIR}/.installing" ] || _bi_upgrade=true
   jqr -n -c --arg version "${_bi_version}" --argjson code "${_bi_code}" --argjson disabled "${_bi_disabled}" --argjson upgrading "${_bi_upgrade}" \
-    --arg commands "${_control_commands} backend-info operation-start operation-status cancel status exit-routing peers exitnodes tun dns login accounts serve-list funnel-list traffic traffic-uids apps routes-get subnet-routes-get settings-get context-get context-status logs compat files-inbox taildrop-targets files-browse file-send-status file-send-history file-stage file-stage-delete file-read backup-list restore-preview trial-status owner-capability hooks-get artifact-stage artifact-read artifact-delete" \
+    --arg commands "${_control_commands} identity-stage identity-preview backend-info operation-start operation-status cancel status exit-routing peers exitnodes tun dns login accounts serve-list funnel-list traffic traffic-uids apps routes-get subnet-routes-get settings-get context-get context-status logs compat files-inbox taildrop-targets files-browse file-send-status file-send-history file-stage file-stage-delete file-read backup-list restore-preview trial-status owner-capability hooks-get artifact-stage artifact-read artifact-delete" \
     '{ok:true,protocol:2,moduleVersion:$version,versionCode:$code,disabled:$disabled,upgrading:$upgrading,commands:($commands|split(" "))}'
 }
 

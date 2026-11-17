@@ -22,7 +22,7 @@ cmd_artifact_stage() {
 cmd_artifact_read() {
   # Even failures stay off stdout: the caller owns a binary stream, not JSON.
   _artifact_id_valid "$1" || { echo 'artifact-read: invalid token' >&2; return 1; }
-  "${TS_BIN_DIR}/foxyfiles" artifact-read --root "${TS_DIR}" --id "$1"
+  "${TS_BIN_DIR}/foxyfiles" artifact-read --root "${TS_DIR}" --id "$1" --purpose "${2:-save}"
 }
 
 cmd_artifact_delete() {

@@ -158,3 +158,14 @@ cmd_switch() {
     jerr "switch failed: ${_sw_out:-timeout}"
   fi
 }
+
+cmd_account_rename() {
+  printf '%s' "$1" | jqr -R -s -e 'test("^[A-Za-z0-9_-]{1,64}$")' >/dev/null 2>&1 || jerr 'invalid profile ID'
+  printf '%s' "$2" | jqr -R -s -e 'length>0 and length<=128 and (test("[\\x00-\\x1f\\x7f]")|not)' >/dev/null 2>&1 || jerr 'nickname must be 1 to 128 characters on one line'
+  _ar_profiles=$(ts_cli 10 switch --list --json 2>/dev/null) || jerr 'cannot verify current profile'
+  printf '%s' "${_ar_profiles}" | jqr -e --arg id "$1" '[.[]|select(.selected==true)] | length==1 and .[0].id==$id' >/dev/null 2>&1 || jerr 'current profile changed; refresh before renaming'
+  ts_cli 15 set --nickname="$2" >/dev/null 2>&1 || jerr 'nickname update failed; refresh current account before retry'
+  _ar_profiles=$(ts_cli 10 switch --list --json 2>/dev/null) || jerr 'nickname outcome unconfirmed; refresh current account'
+  printf '%s' "${_ar_profiles}" | jqr -e --arg id "$1" --arg name "$2" 'any(.[];.selected==true and .id==$id and .nickname==$name)' >/dev/null 2>&1 || jerr 'nickname outcome unconfirmed; refresh current account'
+  echo '{"ok":true,"renamed":true}'
+}

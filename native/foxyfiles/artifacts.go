@@ -105,7 +105,17 @@ type artifactResult struct {
 	Size int64  `json:"size"`
 }
 
+func artifactFilename(kind string) string {
+	if kind == "identity" {
+		return "identity.state"
+	}
+	return kind + ".tar.gz"
+}
+
 func artifactLimit(kind string) int64 {
+	if kind == "identity" {
+		return maxIdentity
+	}
 	if kind == "diagnostic" {
 		return maxDiagnosticArtifact
 	}
@@ -114,7 +124,7 @@ func artifactLimit(kind string) int64 {
 
 func createArtifact(path, kind string, expected int64, input io.Reader) (artifactResult, error) {
 	result := artifactResult{}
-	if kind != "import" && kind != "backup" && kind != "diagnostic" {
+	if kind != "import" && kind != "backup" && kind != "diagnostic" && kind != "identity" {
 		return result, errors.New("unknown artifact kind")
 	}
 	limit := artifactLimit(kind)
@@ -183,7 +193,7 @@ func createArtifact(path, kind string, expected int64, input io.Reader) (artifac
 	if closeErr != nil {
 		return result, closeErr
 	}
-	if err = stage.Rename(".pending", kind+".tar.gz"); err != nil {
+	if err = stage.Rename(".pending", artifactFilename(kind)); err != nil {
 		return result, err
 	}
 	if err = syncRoot(stage); err != nil {
@@ -204,8 +214,8 @@ func openArtifact(root *os.Root, id string) (*os.Root, *os.File, string, error) 
 	if err != nil {
 		return nil, nil, "", err
 	}
-	for _, kind := range []string{"import", "backup", "diagnostic"} {
-		file, err := stage.OpenFile(kind+".tar.gz", taildropReadFlags(), 0)
+	for _, kind := range []string{"import", "backup", "diagnostic", "identity"} {
+		file, err := stage.OpenFile(artifactFilename(kind), taildropReadFlags(), 0)
 		if errors.Is(err, os.ErrNotExist) {
 			continue
 		}
@@ -259,7 +269,10 @@ func useArtifact(path, id, action, destination string, output io.Writer) error {
 	defer stage.Close()
 	defer file.Close()
 	switch action {
-	case "read":
+	case "read", "share":
+		if action == "share" && kind == "identity" {
+			return errors.New("identity artifacts may only be saved through the document picker")
+		}
 		_, err = io.Copy(output, &boundedReader{r: file, left: artifactLimit(kind)})
 		return err
 	case "delete":
@@ -284,10 +297,10 @@ func useArtifact(path, id, action, destination string, output io.Writer) error {
 		}
 		return taildropLock(lease)
 	case "extract":
-		if kind == "diagnostic" {
-			return errors.New("diagnostic artifacts cannot be restored")
+		if kind == "diagnostic" || kind == "identity" {
+			return errors.New("this artifact is not a configuration backup")
 		}
-		sum, err := extract(filepath.Join(path, ".artifacts", id, kind+".tar.gz"), destination)
+		sum, err := extract(filepath.Join(path, ".artifacts", id, artifactFilename(kind)), destination)
 		if err != nil {
 			return err
 		}
@@ -305,6 +318,7 @@ func runArtifact(action string, args []string) error {
 	name := flags.String("name", "", "import display name")
 	size := flags.Int64("size", -1, "declared stdin size")
 	kind := flags.String("kind", "import", "artifact kind")
+	purpose := flags.String("purpose", "save", "binary export purpose")
 	source := flags.String("source", "", "internally generated archive")
 	destination := flags.String("destination", "", "new private extraction directory")
 	if err := flags.Parse(args); err != nil {
@@ -347,6 +361,12 @@ func runArtifact(action string, args []string) error {
 			return err
 		}
 		return json.NewEncoder(os.Stdout).Encode(result)
+	}
+	if *purpose != "save" && *purpose != "share" {
+		return errors.New("invalid artifact purpose")
+	}
+	if action == "read" && *purpose == "share" {
+		action = "share"
 	}
 	if err := useArtifact(*root, *id, action, *destination, os.Stdout); err != nil {
 		return err
