@@ -99,7 +99,7 @@ export function TextField(props: {
 }): JSX.Element {
   const isArea = () => props.rows !== undefined && props.rows > 0;
   return (
-    <label class={'text-field' + (props.disabled ? ' is-disabled' : '') + (!props.label ? ' no-label' : '') + (props.class ? ' ' + props.class : '')} style={props.style}>
+    <label class={'text-field input-field' + (props.disabled ? ' is-disabled' : '') + (!props.label ? ' no-label' : '') + (props.class ? ' ' + props.class : '')} style={props.style}>
       <Show when={props.label}><span class="text-field-label">{props.label}</span></Show>
       {props['leading-icon'] ? <span class="text-field-leading">{props['leading-icon']}</span> : null}
       {isArea() ? (
@@ -194,33 +194,63 @@ export function Select(props: ParentProps<{
     const value = String(props.value ?? '');
     return options().find(o => o.value === value)?.text ?? value;
   };
+  const focusOption = (item: HTMLButtonElement | undefined) => {
+    if (!item) return;
+    for (const option of menuEl.querySelectorAll<HTMLButtonElement>('button')) option.tabIndex = option === item ? 0 : -1;
+    item.focus({ preventScroll: true });
+    item.scrollIntoView({ block: 'nearest' });
+  };
+  const enabledOptions = () => Array.from(menuEl.querySelectorAll<HTMLButtonElement>('button:not(:disabled)'));
+  const optionDisabled = (option: HTMLOptionElement) => option.disabled ||
+    (option.parentElement instanceof HTMLOptGroupElement && option.parentElement.disabled);
+  let openingEdge: 'first' | 'last' | undefined;
   const syncMenu = () => {
     menuEl.replaceChildren(...options().map(opt => {
       const item = document.createElement('button');
       item.type = 'button';
       item.setAttribute('role', 'option');
       item.setAttribute('aria-selected', String(opt.value === String(props.value ?? '')));
-      item.disabled = opt.disabled;
+      item.disabled = optionDisabled(opt);
+      item.tabIndex = -1;
       item.textContent = opt.text;
       item.onclick = () => {
-        if (!popup.open || props.disabled || selectEl.disabled || opt.disabled || !selectEl.contains(opt)) return;
+        if (!popup.open || props.disabled || selectEl.disabled || optionDisabled(opt) || !selectEl.contains(opt)) return;
         selectEl.value = opt.value;
         selectEl.dispatchEvent(new Event('change', { bubbles: true }));
         closeMenu(true);
       };
       return item;
     }));
+    const enabled = enabledOptions();
+    focusOption(openingEdge === 'first' ? enabled[0] : openingEdge === 'last' ? enabled.at(-1) :
+      enabled.find(item => item.getAttribute('aria-selected') === 'true') ?? enabled[0]);
+    openingEdge = undefined;
   };
   return (
     <div class={'text-field select-field' + (props.disabled ? ' is-disabled' : '') + (!props.label ? ' no-label' : '') + (props.class ? ' ' + props.class : '')} style={props.style}>
       <details ref={popup} class="menu-pop select-pop"
         onToggle={() => { if (popup.open) { if (props.disabled) closeMenu(); else syncMenu(); } }}
         onKeyDown={event => {
-          if (event.key === 'Escape' && popup.open) {
+          if (['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key) && !props.disabled) {
+            event.preventDefault(); event.stopPropagation();
+            if (!popup.open) {
+              openingEdge = event.key === 'Home' ? 'first' : event.key === 'End' ? 'last' : undefined;
+              popup.open = true; return;
+            }
+            const enabled = enabledOptions();
+            const current = enabled.indexOf(document.activeElement as HTMLButtonElement);
+            const next = event.key === 'Home' ? 0 : event.key === 'End' ? enabled.length - 1 :
+              event.key === 'ArrowDown' ? Math.min(current + 1, enabled.length - 1) : Math.max(current - 1, 0);
+            focusOption(enabled[next]);
+          } else if (event.key === 'Escape' && popup.open) {
             event.preventDefault(); event.stopPropagation(); closeMenu(true);
           }
-        }}>
+        }}
+        onFocusOut={() => queueMicrotask(() => {
+          if (popup.open && !popup.contains(document.activeElement)) closeMenu();
+        })}>
         <summary
+          tabIndex={props.disabled ? -1 : 0}
           aria-label={props['aria-label'] || props.label}
           aria-describedby={props.label || props['aria-label'] ? valueId : undefined}
           aria-haspopup="listbox"

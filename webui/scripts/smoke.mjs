@@ -923,6 +923,8 @@ for (const state of ['empty', 'error', 'no-root', 'no-bridge', 'unknown']) {
   } finally { h.close(); }
 }
 
+await (await import('./smoke-fields.mjs')).runFieldsSmoke();
+
 if (failures.length) {
   console.error('SMOKE FAILURES:\n' + failures.map(failure => ' - ' + failure).join('\n'));
   process.exitCode = 1;
