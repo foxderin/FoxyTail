@@ -24,6 +24,7 @@ export interface ExitNodeProbe {
 }
 
 export interface ExitRouting {
+  strictReversePath?: boolean | null;
   known: boolean;
   selected: { id: string; ip: string; auto: string; allowLAN: boolean } | null;
   profile?: string;

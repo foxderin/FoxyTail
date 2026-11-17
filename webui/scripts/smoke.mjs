@@ -341,6 +341,20 @@ await scenario('exit rows switch with one tap after confirmation and recheck acc
   await app.state.refreshStatus(); await nav('dashboard'); await flush();
   assert([...window.document.querySelectorAll('.conn-row')].find(r => r.textContent.includes(window.__foxy.t('dash_exitnode')))?.textContent.includes('home-server'), 'dashboard exit row shows the peer hostname instead of the raw node id');
   await nav('exit');
+  const observation = () => window.document.querySelector('[data-testid="exit-reverse-path"]');
+  for (const strict of [true, null, false]) {
+    fixture.data['exit-routing'].exitRouting.strictReversePath = strict;
+    await app.state.refreshExitRouting(); await flush();
+    assert(Boolean(observation()) === (strict === true), 'only observed strict filtering gets a compatibility hint');
+    assert(writes().length === 1, 'compatibility observation never changes exit preferences');
+  }
+  fixture.data.status.mode = 'proxy';
+  fixture.data['exit-routing'].exitRouting.strictReversePath = true;
+  await app.state.refreshStatus(); await flush();
+  assert(!observation(), 'proxy mode does not claim kernel exit compatibility');
+  fixture.data.status.mode = 'tun';
+  fixture.data['exit-routing'].exitRouting.strictReversePath = null;
+  await app.state.refreshStatus(); await flush();
   choose(''); await confirm(false);
   assert(writes().length === 1, 'declined exit clear retains current exit');
   choose(''); await confirm(true);

@@ -152,6 +152,9 @@ export default function ExitNodes(): JSX.Element {
       <Show when={status()?.exitRouting?.selected && status()?.mode === 'bridge'}>
         <p class="network-supporting">{t('net_exit_scope')}: {status()?.exitRouting?.scope} {status()?.exitRouting?.uids?.join(', ')}</p>
       </Show>
+      <Show when={statusKnown() && status()?.exitRouting?.selected && ['tun', 'bridge'].includes(status()?.mode || '') && status()?.exitRouting?.strictReversePath === true}>
+        <p class="network-supporting" data-testid="exit-reverse-path">{t('net_exit_reverse_path')}</p>
+      </Show>
       <Show when={task()?.status === 'error'}>
         <div class="banner warn">
           <MdIcon name="error" size={18} />
