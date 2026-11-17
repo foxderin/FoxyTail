@@ -666,6 +666,8 @@ await scenario('untracked native busy lives in the status chip, not a page banne
   assert(!chip.querySelector('.circular-progress'), 'chip settles once the backend is idle');
 });
 
+await import('./smoke-read-recovery.mjs');
+
 for (const state of ['empty', 'error', 'no-root', 'no-bridge', 'unknown']) {
   console.log('availability: ' + state);
   const h = await boot({ state });

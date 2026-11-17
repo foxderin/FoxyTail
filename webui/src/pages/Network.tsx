@@ -1,6 +1,6 @@
 /* Network hub: run-mode picker plus links into the detail tools. */
-import { createSignal, For, onMount, type JSX } from 'solid-js';
-import { createApiScope } from '../api';
+import { createEffect, createSignal, For, on, useContext, type JSX } from 'solid-js';
+import { createApiScope, nativeControl } from '../api';
 import { t } from '../i18n';
 import { exitNodeLabel } from '../service';
 import { ModePicker } from '../components/ServiceControls';
@@ -8,17 +8,22 @@ import { Card } from '../components/Basics';
 import { MdIcon, type IconName } from '../icons';
 import type { RouteName } from '../navigation';
 import './tools.css';
+import { RouteVisible } from '../schedule';
+import { createQueuedRefresh } from './tools-refresh';
 
 interface TunSummary { ifaceUp?: boolean }
 
 export default function Network(): JSX.Element {
   const scope = createApiScope();
   const [tun, setTun] = createSignal<TunSummary | null>(null);
-  onMount(() => {
-    void scope.api('tun').then(res => {
-      if (!res.cancelled && res.ok) setTun(res as TunSummary);
-    });
-  });
+  const routeVisible = useContext(RouteVisible);
+  const load = createQueuedRefresh(() => scope.api('tun'), res => {
+    setTun(res.ok ? res as TunSummary : null);
+  }, () => {});
+  createEffect(on([routeVisible, () => nativeControl().revision, () => nativeControl().accountRevision], () => {
+    setTun(null);
+    void load();
+  }));
   const links = (): { route: RouteName; icon: IconName; label: string; desc: string }[] => [
     { route: 'exit', icon: 'logout', label: t('dash_exitnode'), desc: exitNodeLabel() },
     { route: 'tunnel', icon: 'router', label: t('tun_title'), desc: tun() ? `tailscale0 · ${t(tun()!.ifaceUp ? 'tun_up' : 'tun_down')}` : t('tools_tunnel_desc') },

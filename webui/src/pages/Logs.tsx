@@ -10,6 +10,7 @@ import { copyWithToast } from '../clipboard';
 import { MdIcon } from '../icons';
 import { TextField } from '../components/ui';
 import './tools.css';
+import { createQueuedRefresh } from './tools-refresh';
 import { bindNativeDraft } from '../settings';
 
 type Src = 'daemon' | 'service';
@@ -49,7 +50,6 @@ export default function Logs(): JSX.Element {
   });
   const refreshing = () => live() && status()?.autoRefresh !== false;
   let logView: HTMLDivElement | undefined;
-  let rerun = false;
   const rows = createMemo(() => (lines() ?? []).map((line, i) => ({ line, number: i + 1, level: levelOf(line) })));
   const counts = createMemo(() => ({
     all: rows().length,
@@ -62,16 +62,13 @@ export default function Logs(): JSX.Element {
       .filter((row) => level() === 'all' || (level() === 'warn' ? row.level !== 'info' : row.level === 'error'))
       .filter((row) => !needle || (matchCase() ? row.line : row.line.toLocaleLowerCase()).includes(needle));
   });
-  async function load() {
-    if (busy()) {
-      rerun = true;
-      return;
-    }
-    setBusy(true);
-    const source = src();
-    const count = limit();
-    const res = await scope.api('logs', source, count);
-    if (!res.cancelled && source === src() && count === limit()) {
+  const load = createQueuedRefresh(
+    async () => {
+      const source = src(), count = limit();
+      return { ...await scope.api('logs', source, count), source, count };
+    },
+    res => {
+      if (res.source !== src() || res.count !== limit()) return;
       if (res.ok && Array.isArray(res.lines) && res.lines.every(line => typeof line === 'string')) {
         const next = res.lines as string[];
         const changed = next.length !== lines()?.length || next.some((line, index) => line !== lines()?.[index]);
@@ -83,13 +80,9 @@ export default function Logs(): JSX.Element {
             if (logView) logView.scrollTop = logView.scrollHeight;
           });
       } else setError(res.error || t('error'));
-    }
-    setBusy(false);
-    if (rerun && !res.cancelled) {
-      rerun = false;
-      void load();
-    }
-  }
+    },
+    setBusy,
+  );
   pollWhileVisible(() => draftReady.then(() => busy() ? undefined : load()), () => live() ? viewPollInterval(LOGS_POLL_MS) : false);
   function copyResults() {
     copyWithToast(filtered().map((row) => row.line).join('\n'), 'info');
