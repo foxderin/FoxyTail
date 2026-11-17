@@ -151,6 +151,7 @@ mkdir -p "$PACKAGE_DIR/tailscale/bin"
 cp -R META-INF "$PACKAGE_DIR/"
 cp customize.sh service.sh install-recovery.sh uninstall.sh module.prop update.json LICENSE "$PACKAGE_DIR/"
 cp native/foxydns/THIRD_PARTY_NOTICES.txt "$PACKAGE_DIR/THIRD_PARTY_NOTICES.txt"
+cp native/tailscaled/LICENSE "$PACKAGE_DIR/TAILSCALED-LICENSE.txt"
 cp -R tailscale/scripts tailscale/conf "$PACKAGE_DIR/tailscale/"
 cp tailscale/settings.sh tailscale/VERSIONS tailscale/checksums.txt "$PACKAGE_DIR/tailscale/"
 cp "$NATIVE_DIR/foxydns-arm" "$NATIVE_DIR/foxydns-arm64" \
@@ -165,7 +166,8 @@ cp "$NATIVE_DIR/foxydns-arm" "$NATIVE_DIR/foxydns-arm64" \
 for arch in arm arm64; do
   mkdir -p "$WORK_DIR/daemon-$arch"
   cp "$DAEMON_DIR/tailscaled-$arch" "$WORK_DIR/daemon-$arch/tailscaled"
-  tar --sort=name --mtime=@0 --owner=0 --group=0 --numeric-owner -cf - -C "$WORK_DIR/daemon-$arch" tailscaled | gzip -n -9 > "$DIST_DIR/FoxyTail-${VERSION}-daemon-${arch}.tgz"
+  cp native/tailscaled/LICENSE "$WORK_DIR/daemon-$arch/LICENSE"
+  tar --sort=name --mtime=@0 --owner=0 --group=0 --numeric-owner -cf - -C "$WORK_DIR/daemon-$arch" LICENSE tailscaled | gzip -n -9 > "$DIST_DIR/FoxyTail-${VERSION}-daemon-${arch}.tgz"
 done
 cp "$DAEMON_DIR/daemon-build.txt" "$DIST_DIR/daemon-build.txt"
 # ZIP metadata gets a fixed timestamp from the source commit.

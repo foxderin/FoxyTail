@@ -20,7 +20,7 @@ class ReleaseTests(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
         self.root = Path(self.tmp.name)
-        for relative in ['.github/tools', 'native/foxydns', 'tailscale/scripts', 'tailscale/conf', 'META-INF', 'webroot', 'unwanted']:
+        for relative in ['.github/tools', 'native/foxydns', 'native/tailscaled', 'tailscale/scripts', 'tailscale/conf', 'META-INF', 'webroot', 'unwanted']:
             (self.root / relative).mkdir(parents=True)
         shutil.copy(ROOT / '.github/tools/build.sh', self.root / '.github/tools/build.sh')
         # Packaging tests intentionally mock compilation. The verification gate
@@ -55,7 +55,7 @@ printf 'signed-companion-fixture\\n' >"$2"
         shutil.copy(ROOT / 'tailscale/VERSIONS', self.root / 'tailscale/VERSIONS')
         for relative in ['customize.sh', 'service.sh', 'install-recovery.sh', 'uninstall.sh', 'update.json', 'LICENSE',
                          'tailscale/settings.sh', 'webroot/index.html',
-                         'native/foxydns/THIRD_PARTY_NOTICES.txt',
+                         'native/foxydns/THIRD_PARTY_NOTICES.txt', 'native/tailscaled/LICENSE',
                          'unwanted/private-data']:
             (self.root / relative).write_text('fixture\n')
         shutil.copytree(ROOT / 'tailscale/scripts', self.root / 'tailscale/scripts', dirs_exist_ok=True)
@@ -145,7 +145,8 @@ bash .github/tools/build.sh "$@"
             else:
                 self.assertTrue(name.startswith('tailscaled-'))
                 with tarfile.open(self.root / 'dist' / f'FoxyTail-v1.0.3-daemon-{name.split("-")[-1]}.tgz') as daemon:
-                    self.assertEqual(daemon.getnames(), ['tailscaled'])
+                    self.assertEqual(daemon.getnames(), ['LICENSE', 'tailscaled'])
+                    self.assertEqual(daemon.extractfile('LICENSE').read(), b'fixture\n')
                     payload = daemon.extractfile('tailscaled').read()
             self.assertEqual(hashlib.sha256(payload).hexdigest(), digest)
         self.assertEqual(archive.read('tailscale/checksums.txt').decode(), self.manifest)
