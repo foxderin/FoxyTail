@@ -13,12 +13,12 @@ import { toastApiError } from '../components/Toast';
 import { t } from '../i18n';
 import { artifactExport } from '../backup';
 
-interface IdentityPreview { artifactId: string; sha256: string; baselineSha256: string; size: number; profileCount: number; currentProfileId: string; format: string }
+interface IdentityPreview { artifactId: string; sha256: string; baselineSha256: string; baselineExists: boolean; size: number; profileCount: number; currentProfileId: string; format: string }
 const token = (value: unknown): value is string => typeof value === 'string' && /^art-[a-f0-9]{32}$/.test(value);
 function validPreview(value: unknown): value is IdentityPreview {
   if (!value || typeof value !== 'object') return false;
   const p = value as IdentityPreview;
-  return token(p.artifactId) && /^[a-f0-9]{64}$/.test(p.sha256) && /^[a-f0-9]{64}$/.test(p.baselineSha256) &&
+  return typeof p.baselineExists === 'boolean' && token(p.artifactId) && /^[a-f0-9]{64}$/.test(p.sha256) && /^[a-f0-9]{64}$/.test(p.baselineSha256) &&
     Number.isSafeInteger(p.size) && p.size > 0 && p.size <= 4 * 1024 * 1024 &&
     Number.isSafeInteger(p.profileCount) && p.profileCount >= 0 && typeof p.currentProfileId === 'string' && p.currentProfileId.length <= 128 && p.format === 'tailscale-file-store-v1';
 }
@@ -85,11 +85,11 @@ export default function AccountIdentity(): JSX.Element {
   async function restore() {
     const choice = preview();
     if (locked() || !choice || choice.artifactId !== selected()) return;
-    if (!await confirmDialog({title:t('acc_identity_restore'), body:t('acc_identity_replace_warning') + '\nSHA-256: ' + choice.sha256, confirmLabel:t('acc_identity_restore'),tone:'danger'})) return;
+    if (!await confirmDialog({title:t('acc_identity_restore'), body:t('acc_identity_replace_warning') + (!choice.baselineExists ? '\n' + t('acc_identity_no_previous') : '') + '\nSHA-256: ' + choice.sha256, confirmLabel:t('acc_identity_restore'),tone:'danger'})) return;
     if (locked() || choice !== preview() || choice.artifactId !== selected()) return;
     setPreview(null); setError('');
     const result = await startValidatedTask('identity-restore','identity-restore', result =>
-      result.restored === true && result.restartRequired === true && token(result.rollbackArtifactId) ? result : {ok:false,error:t('backup_invalid_response')},
+      result.restored === true && result.restartRequired === true && (result.rollbackArtifactId === '' || token(result.rollbackArtifactId)) ? result : {ok:false,error:t('backup_invalid_response')},
       choice.artifactId,choice.sha256,choice.baselineSha256).promise;
     invalidateAccountState(); void refreshStatus({afterCurrent:true});
     if (!result.ok && !result.cancelled) setError(result.error || t('op_failed'));
